@@ -91,10 +91,10 @@ loop(#state{parent = Parent, sock = Sock, tail = Tail} = State, Debug0) ->
                         dict:erase(CorrId, NewMethods)
                       end, State#state.methods, Msgs),
       ?MODULE:loop(State#state{tail = Tail, methods = Methods}, Debug);
-    {tcp_closed, Sock} = Msg ->
+    {tcp_closed, _Sock} = Msg ->
       sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
       exit(tcp_closed);
-    {tcp_error, Sock, Reason} = Msg ->
+    {tcp_error, _Sock, Reason} = Msg ->
       sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
       exit({tcp_error, Reason});
     stop ->
