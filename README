@@ -1,2 +1,3 @@
 Erlang client for kafka, supports v0.8+.
 Why "brod"? http://en.wikipedia.org/wiki/Max_Brod
+

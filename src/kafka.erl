@@ -8,14 +8,13 @@
 
 %% API
 -export([ pre_parse_stream/1
-        , metadata_request/2
-        , metadata_response/1
-        , produce_request/4
-        , produce_response/1
+        , encode/3
+        , decode/2
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
 -include_lib("brod/include/brod.hrl").
+-include("brod_int.hrl").
 
 %%%_* Macros -------------------------------------------------------------------
 
@@ -46,34 +45,21 @@
 pre_parse_stream(Bin) ->
   pre_parse_stream(Bin, []).
 
-pre_parse_stream(<<Length:32/integer, Bin0:Length/binary, Tail/binary>>, Acc) ->
+pre_parse_stream(<<Size:32/integer, Bin0:Size/binary, Tail/binary>>, Acc) ->
   <<CorrId:32/integer, Bin/binary>> = Bin0,
   pre_parse_stream(Tail, [{CorrId, Bin} | Acc]);
 pre_parse_stream(Bin, Acc) ->
   {Acc, Bin}.
 
-metadata_request(CorrId, Topics) ->
-  Header = header(?API_KEY_METADATA, CorrId),
-  Body = metadata_request_body(Topics),
+encode(Method, CorrId, Data) ->
+  Header = header(api_key(Method), CorrId),
+  Body = do_encode_request(Method, Data),
   Request = <<Header/binary, Body/binary>>,
   Size = byte_size(Request),
   <<Size:32/integer, Request/binary>>.
 
-metadata_response(Bin0) ->
-  {Brokers, Bin} = parse_array(Bin0, fun parse_broker_metadata/1),
-  {Topics, _} = parse_array(Bin, fun parse_topic_metadata/1),
-  #metadata{brokers = Brokers, topics = Topics}.
-
-produce_request(CorrId, Data, Acks, Timeout) ->
-  Header = header(?API_KEY_PRODUCE, CorrId),
-  Body = produce_request_body(Acks, Timeout, Data),
-  Request = <<Header/binary, Body/binary>>,
-  Size = byte_size(Request),
-  <<Size:32/integer, Request/binary>>.
-
-produce_response(Bin) ->
-  {TopicOffsets, _} = parse_array(Bin, fun parse_topic_offsets/1),
-  TopicOffsets.
+decode(?METADATA, Bin) -> metadata_response(Bin);
+decode(?PRODUCE, Bin)  -> produce_response(Bin).
 
 %%%_* Internal functions -------------------------------------------------------
 header(ApiKey, CorrId) ->
@@ -82,6 +68,18 @@ header(ApiKey, CorrId) ->
     CorrId:32/integer,
     ?CLIENT_ID_SIZE:16/integer,
     ?CLIENT_ID/binary>>.
+
+api_key(?PRODUCE)        -> ?API_KEY_PRODUCE;
+api_key(?FETCH)          -> ?API_KEY_FETCH;
+api_key(?OFFSET)         -> ?API_KEY_OFFSET;
+api_key(?METADATA)       -> ?API_KEY_METADATA;
+api_key(?LEADER_AND_ISR) -> ?API_KEY_LEADER_AND_ISR;
+api_key(?STOP_REPLICA)   -> ?API_KEY_STOP_REPLICA;
+api_key(?OFFSET_COMMIT)  -> ?API_KEY_OFFSET_COMMIT;
+api_key(?OFFSET_FETCH)   -> ?API_KEY_OFFSET_FETCH.
+
+do_encode_request(?METADATA, Data) -> metadata_request_body(Data);
+do_encode_request(?PRODUCE, Data)  -> produce_request_body(Data).
 
 metadata_request_body([]) ->
   <<0:32/integer, -1:16/integer>>;
@@ -94,16 +92,27 @@ metadata_request_body(Topics) ->
   Bin = lists:foldl(F, <<>>, Topics),
   <<Length:32/integer, Bin/binary>>.
 
-produce_request_body(Acks, Timeout, Data) ->
-  TopicsCount = erlang:length(Data),
-  TopicsBin = encode_topics(Data, <<>>),
+produce_request_body(#produce{acks = Acks, timeout = Timeout} = Produce) ->
+  Topics = dict:to_list(Produce#produce.topics),
+  TopicsCount = erlang:length(Topics),
+  TopicsBin = encode_topics(Topics, <<>>),
   <<Acks:16/integer, Timeout:32/integer,
     TopicsCount:32/integer, TopicsBin/binary>>.
 
+metadata_response(Bin0) ->
+  {Brokers, Bin} = parse_array(Bin0, fun parse_broker_metadata/1),
+  {Topics, _} = parse_array(Bin, fun parse_topic_metadata/1),
+  {Brokers, Topics}.
+
+produce_response(Bin) ->
+  {TopicOffsets, _} = parse_array(Bin, fun parse_topic_offsets/1),
+  TopicOffsets.
+
 encode_topics([], Acc) ->
   Acc;
-encode_topics([#data{topic = Topic, partitions = Partitions} | T], Acc0) ->
+encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
   Size = erlang:size(Topic),
+  Partitions = dict:to_list(PartitionsDict),
   PartitionsCount = erlang:length(Partitions),
   PartitionsBin = encode_partitions(Partitions, <<>>),
   Acc = <<Size:16/integer, Topic/binary,
@@ -112,8 +121,8 @@ encode_topics([#data{topic = Topic, partitions = Partitions} | T], Acc0) ->
 
 encode_partitions([], Acc) ->
   Acc;
-encode_partitions([#partition_messages{id = Id} = P | T], Acc0) ->
-  MessageSet = encode_message_set(P#partition_messages.messages),
+encode_partitions([{Id, Messages} | T], Acc0) ->
+  MessageSet = encode_message_set(Messages),
   MessageSetSize = erlang:size(MessageSet),
   Acc = <<Id:32/integer,
           MessageSetSize:32/integer,
@@ -132,7 +141,7 @@ encode_message_set(Messages) ->
   MessageSet = lists:foldr(F, <<>>, Messages),
   <<MessageSet/binary>>.
 
-encode_message(#message{key = Key, value = Value}) ->
+encode_message({Key, Value}) ->
   KeySize = kafka_size(Key),
   ValSize = kafka_size(Value),
   Payload = <<KeySize:32/integer,
@@ -158,7 +167,7 @@ parse_broker_metadata(<<NodeID:32/integer,
                         Port:32/integer,
                         Bin/binary>>) ->
   Broker = #broker_metadata{ node_id = NodeID
-                           , host = Host
+                           , host = binary_to_list(Host)
                            , port = Port},
   {Broker, Bin}.
 
