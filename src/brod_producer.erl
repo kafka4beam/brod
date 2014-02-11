@@ -4,7 +4,7 @@
 %%% @end
 %%%=============================================================================
 
--module(brod_srv).
+-module(brod_producer).
 
 -behaviour(gen_server).
 

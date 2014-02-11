@@ -7,8 +7,8 @@
 -module(brod).
 
 %% API
--export([ connect/3
-        , close_connection/1
+-export([ start_producer/3
+        , stop_producer/1
         , produce/3
         , produce/4
         , produce/5
@@ -20,21 +20,22 @@
 %%%_* Types --------------------------------------------------------------------
 
 %%%_* API ----------------------------------------------------------------------
-%% @doc Open connection to kafka brokers.
+%% @doc Start a process which manages connections to kafka brokers and
+%%      specialized in publishing messages.
 %%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
 %%      RequiredAcks: how many kafka nodes must acknowledge a message
 %%      before sending a response
 %%      Timeout: maximum time in milliseconds the server can await the
 %%      receipt of the number of acknowledgements in RequiredAcks
--spec connect([{string(), integer()}], integer(), integer()) ->
-                 {ok, pid()} | {error, any()}.
-connect(Hosts, RequiredAcks, Timeout) ->
-  brod_srv:start_link(Hosts, RequiredAcks, Timeout).
+-spec start_producer([{string(), integer()}], integer(), integer()) ->
+                        {ok, pid()} | {error, any()}.
+start_producer(Hosts, RequiredAcks, Timeout) ->
+  brod_producer:start_link(Hosts, RequiredAcks, Timeout).
 
-%% @doc Close connection to kafka brokers
--spec close_connection(pid()) -> ok.
-close_connection(Pid) ->
-  brod_srv:stop(Pid).
+%% @doc Stop producer process
+-spec stop_producer(pid()) -> ok.
+stop_producer(Pid) ->
+  brod_producer:stop(Pid).
 
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
 -spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
@@ -52,7 +53,7 @@ produce(Pid, Topic, Partition, Value) ->
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
                  ok | {error, any()}.
 produce(Pid, Topic, Partition, Key, Value) ->
-  brod_srv:produce(Pid, Topic, Partition, Key, Value).
+  brod_producer:produce(Pid, Topic, Partition, Key, Value).
 
 %%%_* Internal functions -------------------------------------------------------
 
