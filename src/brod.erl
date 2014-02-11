@@ -10,6 +10,7 @@
 -export([ connect/3
         , close_connection/1
         , produce/3
+        , produce/4
         , produce/5
         ]).
 
@@ -19,7 +20,7 @@
 %%%_* Types --------------------------------------------------------------------
 
 %%%_* API ----------------------------------------------------------------------
-%% @doc Open connection to kafka broker
+%% @doc Open connection to kafka brokers.
 %%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
 %%      RequiredAcks: how many kafka nodes must acknowledge a message
 %%      before sending a response
@@ -30,7 +31,7 @@
 connect(Hosts, RequiredAcks, Timeout) ->
   brod_srv:start_link(Hosts, RequiredAcks, Timeout).
 
-%% @doc Close connection to kafka broker
+%% @doc Close connection to kafka brokers
 -spec close_connection(pid()) -> ok.
 close_connection(Pid) ->
   brod_srv:stop(Pid).
@@ -38,7 +39,12 @@ close_connection(Pid) ->
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
 -spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
 produce(Pid, Topic, Value) ->
-  produce(Pid, Topic, 0, <<>>, Value).
+  produce(Pid, Topic, 0, Value).
+
+%% @equiv produce(Pid, Topic, Partition, <<>>, Value)
+-spec produce(pid(), binary(), integer(), binary()) -> ok | {error, any()}.
+produce(Pid, Topic, Partition, Value) ->
+  produce(Pid, Topic, Partition, <<>>, Value).
 
 %% @doc Send message to a broker.
 %%      Internally it's a gen_server:call to brod_srv process. Returns
