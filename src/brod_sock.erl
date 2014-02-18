@@ -10,10 +10,13 @@
 
 %%%_* Exports ==================================================================
 
+%% API
 -export([ start_link/4
         , loop/2
         , init/4
-        , send/3
+        , send/2
+        , send_sync/3
+        , stop/1
         ]).
 
 %% system calls support for worker process
@@ -31,11 +34,11 @@
 -define(TIMEOUT,     1000).
 
 %%%_* Records ==================================================================
--record(state, { parent               :: pid()
-               , sock                 :: port()
-               , corr_id = 0          :: integer()
-               , tail    = <<>>       :: binary()
-               , methods = dict:new() :: dict()    % corr_id -> method
+-record(state, { parent                :: pid()
+               , sock                  :: port()
+               , corr_id = 0           :: integer()
+               , tail    = <<>>        :: binary()
+               , api_keys = dict:new() :: dict()    % corr_id -> api_key
                }).
 
 %%%_* API ======================================================================
@@ -44,15 +47,24 @@
 start_link(Parent, Host, Port, Debug) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, Debug]).
 
--spec send(pid(), atom(), term()) -> {ok, integer()} | {error, timeout}.
-send(Pid, Method, Data) ->
-  Ref = erlang:make_ref(),
-  Pid ! {send, self(), Ref, Method, Data},
+-spec send(pid(), term()) -> {ok, integer()} | {error, any()}.
+send(Pid, Request) ->
+  call(Pid, {send, Request}, ?TIMEOUT).
+
+-spec send_sync(pid(), term(), integer()) -> {ok, term()} | {error, any()}.
+send_sync(Pid, Request, Timeout) ->
+  {ok, CorrId} = send(Pid, Request),
   receive
-    {Pid, Ref, Reply} -> Reply
+    {msg, Pid, CorrId, Response} -> {ok, Response}
   after
-    ?TIMEOUT -> {error, timeout}
+    Timeout -> {error, timeout}
   end.
+
+-spec stop(pid()) -> ok | {error, any()}.
+stop(Pid) when is_pid(Pid) ->
+  call(Pid, stop, 5000);
+stop(_) ->
+  ok.
 
 %%%_* Internal functions =======================================================
 init(Parent, Host, Port, Debug0) ->
@@ -66,39 +78,63 @@ init(Parent, Host, Port, Debug0) ->
       proc_lib:init_ack(Parent, {error, Error})
   end.
 
-loop(#state{parent = Parent, sock = Sock, tail = Tail} = State, Debug0) ->
+call(Pid, Request, Timeout) ->
+  Mref = erlang:monitor(process, Pid),
+  erlang:send(Pid, {{self(), Mref}, Request}),
+  receive
+    {Mref, Reply} ->
+      erlang:demonitor(Mref, [flush]),
+      Reply;
+    {'DOWN', Mref, _, _, Reason} ->
+      {error, {process_down, Reason}}
+  after Timeout ->
+      erlang:demonitor(Mref),
+      receive
+        {'DOWN', Mref, _, _, _} -> true
+      after 0 -> true
+      end,
+      {error, timeout}
+  end.
+
+reply({To, Tag}, Reply) ->
+  To ! {Tag, Reply}.
+
+loop(#state{parent = Parent, sock = Sock, tail = Tail0} = State, Debug0) ->
   receive
     {system, From, Msg} ->
       sys:handle_system_msg(Msg, From, Parent, ?MODULE, Debug0, State);
-    {send, Pid, Ref, Method, Data} = Msg ->
-      Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      CorrId = next_corr_id(State#state.corr_id),
-      %% reply to parent faster
-      Pid ! {self(), Ref, {ok, CorrId}},
-      Request = kafka:encode(Method, CorrId, Data),
-      ok = gen_tcp:send(Sock, Request),
-      Methods = dict:store(CorrId, Method, State#state.methods),
-      ?MODULE:loop(State#state{corr_id = CorrId, methods = Methods}, Debug);
     {tcp, Sock, Bin} = Msg ->
       Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      Stream = <<Tail/binary, Bin/binary>>,
+      Stream = <<Tail0/binary, Bin/binary>>,
       {Msgs, Tail} = kafka:pre_parse_stream(Stream),
-      Methods =
-        lists:foldl(fun({CorrId, MsgBin}, NewMethods) ->
-                        Method = dict:fetch(CorrId, NewMethods),
-                        Response = kafka:decode(Method, MsgBin),
-                        Parent ! {msg, self(), CorrId, Method, Response},
-                        dict:erase(CorrId, NewMethods)
-                      end, State#state.methods, Msgs),
-      ?MODULE:loop(State#state{tail = Tail, methods = Methods}, Debug);
+      NewApiKeys =
+        lists:foldl(fun({CorrId, MsgBin}, ApiKeys) ->
+                        ApiKey = dict:fetch(CorrId, ApiKeys),
+                        Response = kafka:decode(ApiKey, MsgBin),
+                        Parent ! {msg, self(), CorrId, Response},
+                        dict:erase(CorrId, ApiKeys)
+                      end, State#state.api_keys, Msgs),
+      ?MODULE:loop(State#state{tail = Tail, api_keys = NewApiKeys}, Debug);
     {tcp_closed, _Sock} = Msg ->
       sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
       exit(tcp_closed);
     {tcp_error, _Sock, Reason} = Msg ->
       sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
       exit({tcp_error, Reason});
-    stop ->
+    {From, {send, Request}} = Msg ->
+      Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
+      CorrId = next_corr_id(State#state.corr_id),
+      RequestBin = kafka:encode(CorrId, Request),
+      ok = gen_tcp:send(Sock, RequestBin),
+      %% reply as soon as request is handled by socket
+      reply(From, {ok, CorrId}),
+      ApiKey = kafka:api_key(Request),
+      ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
+      ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
+    {From, stop} ->
+      sys:handle_debug(Debug0, fun print_msg/3, State, stop),
       gen_tcp:close(Sock),
+      reply(From, ok),
       ok;
     Msg ->
       Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
@@ -121,14 +157,16 @@ system_code_change(State, _Module, _Vsn, _Extra) ->
 format_status(Opt, Status) ->
   {Opt, Status}.
 
-print_msg(Device, {send, _Pid, _Ref, Method, Data}, State) ->
-  do_print_msg(Device, "send: ~p ~p", [Method, Data], State);
+print_msg(Device, {_From, {send, Request}}, State) ->
+  do_print_msg(Device, "send: ~p", [Request], State);
 print_msg(Device, {tcp, _Sock, Bin}, State) ->
   do_print_msg(Device, "tcp: ~p", [Bin], State);
 print_msg(Device, {tcp_closed, _Sock}, State) ->
   do_print_msg(Device, "tcp_closed", [], State);
 print_msg(Device, {tcp_error, _Sock, Reason}, State) ->
   do_print_msg(Device, "tcp_error: ~p", [Reason], State);
+print_msg(Device, stop, State) ->
+  do_print_msg(Device, "stop", [], State);
 print_msg(Device, Msg, State) ->
   do_print_msg(Device, "unknown msg: ~p", [Msg], State).
 

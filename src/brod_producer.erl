@@ -32,7 +32,6 @@
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
--include_lib("brod/include/brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
@@ -81,16 +80,8 @@ debug(Pid, Debug) ->
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, RequiredAcks, Timeout]) ->
   erlang:process_flag(trap_exit, true),
-  %% try to connect to any of bootstrapped nodes and fetch metadata
-  SockOpts = [{active, false}, {packet, raw}, binary, {nodelay, true}],
-  {ok, Sock} = try_connect(Hosts, SockOpts),
-  CorrId = 0,
-  Request = kafka:encode(?METADATA, CorrId, []),
-  ok = gen_tcp:send(Sock, Request),
-  {ok, Bin} = gen_tcp:recv(Sock, 0),
-  gen_tcp:close(Sock),
-  {[{CorrId, Response}], <<>>} = kafka:pre_parse_stream(Bin),
-  {Brokers, Topics} = kafka:decode(?METADATA, Response),
+  {ok, Metadata} = brod_utils:fetch_metadata(Hosts),
+  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   %% connect to all known nodes which are alive and map node id to connection
   BrokersMap = lists:foldl(
                  fun(#broker_metadata{node_id = Id, host = H, port = P}, D) ->
@@ -144,7 +135,8 @@ handle_call(Request, _From, State) ->
 handle_cast(Msg, State) ->
   {stop, {unsupported_cast, Msg}, State}.
 
-handle_info({msg, Pid, CorrId, produce, _Response}, State0) ->
+handle_info({msg, Pid, CorrId, #produce_response{}}, State0) ->
+  %% TODO: keep offsets?
   UnackedTopics0 = dict:fetch(Pid, State0#state.unacked),
   UnackedTopics = dict:erase(CorrId, UnackedTopics0),
   Unacked = dict:store(Pid, UnackedTopics, State0#state.unacked),
@@ -157,6 +149,7 @@ handle_info(Info, State) ->
   {stop, {unsupported_info, Info}, State}.
 
 terminate(_Reason, _State) ->
+  %% TODO: close connections
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -172,10 +165,10 @@ maybe_send(#state{buffers = Buffers, unacked = Unacked} = State) ->
           case dict:size(UnackedTopics0) of
             0 ->
               Topics = dict:fetch(Pid, NewBuffers),
-              Produce = #produce{ acks = State#state.acks
-                                , timeout = State#state.timeout
-                                , topics = Topics},
-              {ok, CorrId} = brod_sock:send(Pid, produce, Produce),
+              Produce = #produce_request{ acks = State#state.acks
+                                        , timeout = State#state.timeout
+                                        , topics = Topics},
+              {ok, CorrId} = brod_sock:send(Pid, Produce),
               UnackedTopics = dict:store(CorrId, Topics, UnackedTopics0),
               { dict:erase(Pid, NewBuffers)
               , dict:store(Pid, UnackedTopics, NewUnacked)};
@@ -192,17 +185,6 @@ try_fetch(Key, Dict, Default) ->
   case dict:find(Key, Dict) of
     {ok, Value} -> Value;
     error       -> Default
-  end.
-
-try_connect(Hosts, SockOpts) ->
-  try_connect(Hosts, SockOpts, []).
-
-try_connect([], _, LastError) ->
-  LastError;
-try_connect([{Host, Port} | Hosts], SockOpts, _) ->
-  case gen_tcp:connect(Host, Port, SockOpts) of
-    {ok, Sock} -> {ok, Sock};
-    Error      -> try_connect(Hosts, SockOpts, Error)
   end.
 
 %%% Local Variables:

@@ -1,12 +1,12 @@
 -ifndef(__BROD_INT_HRL).
 -define(__BROD_INT_HRL, true).
 
-%%%_* metadata response --------------------------------------------------------
--record(broker_metadata, { node_id :: integer()
-                         , host    :: binary()
-                         , port    :: integer()
-                         }).
+-include("brod.hrl").
 
+%%%_* metadata request ---------------------------------------------------------
+-record(metadata_request, {topics = [] :: [binary()]}).
+
+%%%_* metadata response --------------------------------------------------------
 %% 'isrs' - 'in sync replicas', the subset of the replicas
 %% that are "caught up" to the leader
 -record(partition_metadata, { error_code :: integer()
@@ -20,31 +20,80 @@
                         , name       :: binary()
                         , partitions :: [#partition_metadata{}]}).
 
+-record(broker_metadata, { node_id :: integer()
+                         , host    :: binary()
+                         , port    :: integer()
+                         }).
+
+-record(metadata_response, { brokers = [] :: [#broker_metadata{}]
+                           , topics  = [] :: [#topic_metadata{}]
+                           }).
+
 %%%_* produce request ----------------------------------------------------------
--record(produce, { acks    :: integer()
-                 , timeout :: integer()
-                 , topics  :: dict() % Topic -> dict(Partition -> [{K, V}])
-                 }).
+-record(produce_request, { acks    :: integer()
+                         , timeout :: integer()
+                         , topics  :: dict() % Topic -> dict()
+                         }).
 
 %%%_* produce response ---------------------------------------------------------
--record(offset, { partition_id :: integer()
-                , error_code   :: integer()
-                , offset       :: integer()
-                }).
+-record(produce_offset, { partition  :: integer()
+                        , error_code :: integer()
+                        , offset     :: integer()
+                        }).
 
--record(topic_offsets, { topic   :: binary()
-                       , offsets :: [#offset{}]
+-record(produce_topic, { topic   :: binary()
+                       , offsets :: [#produce_offset{}]
                        }).
 
-%%%_* methods ------------------------------------------------------------------
--define(PRODUCE,        produce).
--define(FETCH,          fetch).
--define(OFFSET,         offset).
--define(METADATA,       metadata).
--define(LEADER_AND_ISR, leader_and_isr).
--define(STOP_REPLICA,   stop_replica).
--define(OFFSET_COMMIT,  offset_commit).
--define(OFFSET_FETCH,   offset_fetch).
+-record(produce_response, {topics = [] :: [#produce_topic{}]}).
+
+%%%_* offset request -----------------------------------------------------------
+%% Protocol allows to request offsets for any number of topics and partitions
+%% at once, but we use only single pair assuming the most cases users spawn
+%% separate connections for each topic-partition.
+-record(offset_request, { topic     :: binary()
+                        , partition :: integer()
+                        , time      :: integer()
+                        }).
+
+%%%_* offset response ----------------------------------------------------------
+-record(partition_offsets, { partition  :: integer()
+                           , error_code :: integer()
+                           , offsets    :: [integer()]
+                           }).
+
+-record(offset_topic, { topic      :: binary()
+                      , partitions :: [#partition_offsets{}]
+                      }).
+
+-record(offset_response, {topics :: [#offset_topic{}]}).
+
+%%%_* fetch request ------------------------------------------------------------
+%% Protocol allows to subscribe on data from any number of topics and partitions
+%% at once, but we use only single pair assuming the most cases users spawn
+%% separate connections for each topic-partition.
+-record(fetch_request, { max_wait_time :: integer()
+                       , min_bytes     :: integer()
+                       , topic         :: binary()
+                       , partition     :: integer()
+                       , offset        :: integer()
+                       , max_bytes     :: integer()
+                       }).
+
+%%%_* fetch response -----------------------------------------------------------
+%% definition of #message{} is in include/brod.hrl
+-record(partition_messages, { partition      :: integer()
+                            , error_code     :: integer()
+                            , high_wm_offset :: integer()
+                            , last_offset    :: integer()
+                            , messages       :: [#message{}]
+                            }).
+
+-record(topic_fetch_data, { topic      :: binary()
+                          , partitions :: [#partition_messages{}]
+                          }).
+
+-record(fetch_response, {topics = [#topic_fetch_data{}]}).
 
 -endif. % include brod_int.hrl
 
