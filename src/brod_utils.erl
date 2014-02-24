@@ -16,25 +16,23 @@
 %%%_* Code ---------------------------------------------------------------------
 %% try to connect to any of bootstrapped nodes and fetch metadata
 fetch_metadata(Hosts) ->
-  SockOpts = [{active, false}, {packet, raw}, binary, {nodelay, true}],
-  {ok, Sock} = try_connect(Hosts, SockOpts),
-  CorrId = 0,
-  RequestBin = kafka:encode(CorrId, #metadata_request{}),
-  ok = gen_tcp:send(Sock, RequestBin),
-  {ok, Bin} = gen_tcp:recv(Sock, 0),
-  gen_tcp:close(Sock),
-  {[{CorrId, ResponseBin}], <<>>} = kafka:pre_parse_stream(Bin),
-  {ok, kafka:decode_metadata(ResponseBin)}.
+  {ok, Pid} = try_connect(Hosts),
+  {ok, Response} = brod_sock:send_sync(Pid, #metadata_request{}, 10000),
+  brod_sock:stop(Pid),
+  {ok, Response}.
 
-try_connect(Hosts, SockOpts) ->
-  try_connect(Hosts, SockOpts, []).
+try_connect(Hosts) ->
+  try_connect(Hosts, []).
 
-try_connect([], _, LastError) ->
+try_connect([], LastError) ->
   LastError;
-try_connect([{Host, Port} | Hosts], SockOpts, _) ->
-  case gen_tcp:connect(Host, Port, SockOpts) of
-    {ok, Sock} -> {ok, Sock};
-    Error      -> try_connect(Hosts, SockOpts, Error)
+try_connect([{Host, Port} | Hosts], _) ->
+  %% Do not 'start_link' to avoid unexpected 'EXIT' message.
+  %% Should be ok since we're using a single blocking request which
+  %% monitors the process anyway.
+  case brod_sock:start(self(), Host, Port, []) of
+    {ok, Pid} -> {ok, Pid};
+    Error     -> try_connect(Hosts, Error)
   end.
 
 %%% Local Variables:

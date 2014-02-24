@@ -12,6 +12,7 @@
 
 %% API
 -export([ start_link/4
+        , start/4
         , loop/2
         , init/4
         , send/2
@@ -46,6 +47,11 @@
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, Debug) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, Debug]).
+
+-spec start(pid(), string(), integer(), term()) ->
+               {ok, pid()} | {error, any()}.
+start(Parent, Host, Port, Debug) ->
+  proc_lib:start(?MODULE, init, [Parent, Host, Port, Debug]).
 
 -spec send(pid(), term()) -> {ok, integer()} | {error, any()}.
 send(Pid, Request) ->
@@ -99,47 +105,49 @@ call(Pid, Request, Timeout) ->
 reply({To, Tag}, Reply) ->
   To ! {Tag, Reply}.
 
-loop(#state{parent = Parent, sock = Sock, tail = Tail0} = State, Debug0) ->
-  receive
-    {system, From, Msg} ->
-      sys:handle_system_msg(Msg, From, Parent, ?MODULE, Debug0, State);
-    {tcp, Sock, Bin} = Msg ->
-      Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      Stream = <<Tail0/binary, Bin/binary>>,
-      {Msgs, Tail} = kafka:pre_parse_stream(Stream),
-      NewApiKeys =
-        lists:foldl(fun({CorrId, MsgBin}, ApiKeys) ->
-                        ApiKey = dict:fetch(CorrId, ApiKeys),
-                        Response = kafka:decode(ApiKey, MsgBin),
-                        Parent ! {msg, self(), CorrId, Response},
-                        dict:erase(CorrId, ApiKeys)
-                      end, State#state.api_keys, Msgs),
-      ?MODULE:loop(State#state{tail = Tail, api_keys = NewApiKeys}, Debug);
-    {tcp_closed, _Sock} = Msg ->
-      sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      exit(tcp_closed);
-    {tcp_error, _Sock, Reason} = Msg ->
-      sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      exit({tcp_error, Reason});
-    {From, {send, Request}} = Msg ->
-      Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      CorrId = next_corr_id(State#state.corr_id),
-      RequestBin = kafka:encode(CorrId, Request),
-      ok = gen_tcp:send(Sock, RequestBin),
-      %% reply as soon as request is handled by socket
-      reply(From, {ok, CorrId}),
-      ApiKey = kafka:api_key(Request),
-      ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
-      ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
-    {From, stop} ->
-      sys:handle_debug(Debug0, fun print_msg/3, State, stop),
-      gen_tcp:close(Sock),
-      reply(From, ok),
-      ok;
-    Msg ->
-      Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
-      ?MODULE:loop(State, Debug)
+loop(State, Debug) ->
+  Msg = receive Input -> Input end,
+  try
+    decode_msg(Msg, State, Debug)
+  catch
+    _:E ->
+      exit({E, erlang:get_stacktrace()})
   end.
+
+decode_msg({system, From, Msg}, #state{parent = Parent} = State, Debug) ->
+  sys:handle_system_msg(Msg, From, Parent, ?MODULE, Debug, State);
+decode_msg(Msg, State, [] = Debug) ->
+  handle_msg(Msg, State, Debug);
+decode_msg(Msg, State, Debug0) ->
+  Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
+  handle_msg(Msg, State, Debug).
+
+handle_msg({tcp, _Sock, Bin}, #state{tail = Tail0} = State, Debug) ->
+  Stream = <<Tail0/binary, Bin/binary>>,
+  {Tail, Responses, ApiKeys} = kafka:parse_stream(Stream, State#state.api_keys),
+  lists:foreach(fun({CorrId, Response}) ->
+                    State#state.parent ! {msg, self(), CorrId, Response}
+                end, Responses),
+  ?MODULE:loop(State#state{tail = Tail, api_keys = ApiKeys}, Debug);
+handle_msg({tcp_closed, _Sock}, _State, _) ->
+  exit(tcp_closed);
+handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
+  exit({tcp_error, Reason});
+handle_msg({From, {send, Request}}, #state{sock = Sock} = State, Debug) ->
+  CorrId = next_corr_id(State#state.corr_id),
+  RequestBin = kafka:encode(CorrId, Request),
+  %% reply faster, don't block on gen_tcp:send
+  reply(From, {ok, CorrId}),
+  ok = gen_tcp:send(Sock, RequestBin),
+  ApiKey = kafka:api_key(Request),
+  ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
+  ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
+handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
+  gen_tcp:close(Sock),
+  reply(From, ok),
+  ok;
+handle_msg(_Msg, State, Debug) ->
+  ?MODULE:loop(State, Debug).
 
 next_corr_id(?MAX_CORR_ID) -> 0;
 next_corr_id(CorrId)       -> CorrId + 1.
@@ -172,8 +180,8 @@ print_msg(Device, Msg, State) ->
 
 do_print_msg(Device, Fmt, Args, State) ->
   CorrId = State#state.corr_id,
-  io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~n",
-            [ts(), self(), CorrId] ++ Args).
+  io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~nstate: ~p~n",
+            [ts(), self(), CorrId] ++ Args ++ [State]).
 
 ts() ->
   Now = erlang:now(),

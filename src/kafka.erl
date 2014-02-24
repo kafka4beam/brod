@@ -8,10 +8,9 @@
 
 %% API
 -export([ api_key/1
-        , pre_parse_stream/1
+        , parse_stream/2
         , encode/2
         , decode/2
-        , decode_metadata/1
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -43,16 +42,22 @@
 -define(COMPRESS_SNAPPY, 2).
 
 %%%_* API ----------------------------------------------------------------------
-%% @doc Split binary stream in list of tuples {CorrellationId, Response}.
-%%      Returns resulting list and remaining binary.
-pre_parse_stream(Bin) ->
-  pre_parse_stream(Bin, []).
+%% @doc Parse binary stream of kafka responses.
+%%      Returns list of {CorrId, Response} tuples and remaining binary.
+%%      CorrIdDict: dict(CorrId -> ApiKey)
+parse_stream(Bin, CorrIdDict) ->
+  parse_stream(Bin, [], CorrIdDict).
 
-pre_parse_stream(<<Size:32/integer, Bin0:Size/binary, Tail/binary>>, Acc) ->
+parse_stream(<<Size:32/integer,
+               Bin0:Size/binary,
+               Tail/binary>>, Acc, CorrIdDict0) ->
   <<CorrId:32/integer, Bin/binary>> = Bin0,
-  pre_parse_stream(Tail, [{CorrId, Bin} | Acc]);
-pre_parse_stream(Bin, Acc) ->
-  {Acc, Bin}.
+  ApiKey = dict:fetch(CorrId, CorrIdDict0),
+  Response = decode(ApiKey, Bin),
+  CorrIdDict = dict:erase(CorrId, CorrIdDict0),
+  parse_stream(Tail, [{CorrId, Response} | Acc], CorrIdDict);
+parse_stream(Bin, Acc, CorrIdDict) ->
+  {Bin, lists:reverse(Acc), CorrIdDict}.
 
 encode(CorrId, Request) ->
   Header = header(api_key(Request), CorrId),
@@ -65,11 +70,6 @@ api_key(#metadata_request{}) -> ?API_KEY_METADATA;
 api_key(#produce_request{})  -> ?API_KEY_PRODUCE;
 api_key(#offset_request{})   -> ?API_KEY_OFFSET;
 api_key(#fetch_request{})    -> ?API_KEY_FETCH.
-
-%% Used only by producer and consumer processes, because they
-%% know exactly what they need.
-%% An alternative to this special function is to expose api keys.
-decode_metadata(Bin) -> decode(?API_KEY_METADATA, Bin).
 
 decode(?API_KEY_METADATA, Bin) -> metadata_response(Bin);
 decode(?API_KEY_PRODUCE, Bin)  -> produce_response(Bin);
@@ -97,7 +97,7 @@ parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
   parse_array(Length, Bin, [], Fun).
 
 parse_array(0, Bin, Acc, _Fun) ->
-  {Acc, Bin};
+  {lists:reverse(Acc), Bin};
 parse_array(Length, Bin0, Acc, Fun) ->
   {Item, Bin} = Fun(Bin0),
   parse_array(Length - 1, Bin, [Item | Acc], Fun).
@@ -336,7 +336,10 @@ parse_message_set(<<Offset:64/integer,
                 , attributes = Attributes
                 , key        = Key
                 , value      = Value},
-  parse_message_set(Bin, [Msg | Acc]).
+  parse_message_set(Bin, [Msg | Acc]);
+parse_message_set(_Bin, [Msg | _] = Acc) ->
+  %% the last message in response was sent only partially, dropping
+  {Msg#message.offset, lists:reverse(Acc)}.
 
 parse_bytes(-1, Bin) ->
   {<<>>, Bin};

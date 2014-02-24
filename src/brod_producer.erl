@@ -175,6 +175,7 @@ maybe_send(#state{buffers = Buffers, unacked = Unacked} = State) ->
             _N ->
               %% do not send new message if there are still unacked for
               %% this broker
+              %% TODO: use configurable size of max message buffer instead?
               {NewBuffers, NewUnacked}
           end
       end,
