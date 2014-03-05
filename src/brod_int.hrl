@@ -32,7 +32,9 @@
 %%%_* produce request ----------------------------------------------------------
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()
-                         , topics  :: dict() % Topic -> dict()
+                         %% {Topic, Partition} -> [{Key, Value}]
+                         , data    :: [{{binary(), integer()},
+                                        [{binary(), binary()}]}]
                          }).
 
 %%%_* produce response ---------------------------------------------------------

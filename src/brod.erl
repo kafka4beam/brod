@@ -7,7 +7,8 @@
 -module(brod).
 
 %% API
--export([ start_producer/3
+-export([ start_producer/1
+        , start_producer/2
         , stop_producer/1
         , produce/3
         , produce/4
@@ -19,22 +20,58 @@
         , consume/6
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
-
-%%%_* Types --------------------------------------------------------------------
-
 %%%_* API ----------------------------------------------------------------------
-%% @doc Start a process which manages connections to kafka brokers and
-%%      specialized in publishing messages.
-%%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
-%%      RequiredAcks: how many kafka nodes must acknowledge a message
-%%      before sending a response
-%%      Timeout: maximum time in milliseconds the server can await the
-%%      receipt of the number of acknowledgements in RequiredAcks
--spec start_producer([{string(), integer()}], integer(), integer()) ->
+%% @equiv start_producer(Hosts, [])
+-spec start_producer([{string(), integer()}]) ->
                         {ok, pid()} | {error, any()}.
-start_producer(Hosts, RequiredAcks, Timeout) ->
-  brod_producer:start_link(Hosts, RequiredAcks, Timeout).
+start_producer(Hosts) ->
+  start_producer(Hosts, []).
+
+%% @doc Start a process to publish messages to kafka.
+%%      <br/>
+%%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
+%%      <br/>
+%%      Options:
+%%      <dl>
+%%        <dt>``{required_acks, integer()}''</dt>
+%%          <dd>How many acknowledgements the servers should receive
+%%              before responding to the request. If it is 0 the
+%%              server will not send any response (this is the only
+%%              case where the server will not reply to a request). If
+%%              it is 1, the server will wait the data is written to
+%%              the local log before sending a response. If it is -1
+%%              the server will block until the message is committed
+%%              by all in sync replicas before sending a response. For
+%%              any number > 1 the server will block waiting for this
+%%              number of acknowledgements to occur (but the server
+%%              will never wait for more acknowledgements than there
+%%              are in-sync replicas).<br/>Default: 1</dd>
+%%        <dt>``{timeout, integer()}''</dt>
+%%          <dd>Maximum time in milliseconds the server can await the
+%%              receipt of the number of acknowledgements in
+%%              required_acks. The timeout is not an exact limit on
+%%              the request time for a few reasons: (1) it does not
+%%              include network latency, (2) the timer begins at the
+%%              beginning of the processing of this request so if many
+%%              requests are queued due to server overload that wait
+%%              time will not be included, (3) we will not terminate a
+%%              local write so if the local write time exceeds this
+%%              timeout it will not be respected.<br/>Default:
+%%              1000.</dd>
+%%        <dt>``{flush_threshold, integer()}''</dt>
+%%          <dd>Producer keeps incoming messages in a buffer until
+%%              buffer size reaches flush_threshold limit. Then
+%%              producer sends everything to kafka.<br/>Default:
+%%              100000.</dd>
+%%        <dt>``{flush_timeout, integer()}''</dt>
+%%          <dd>If no message comes in during this time (in ms),
+%%              producer will try to flush buffer anyway, regardless
+%%              of flush_threshold setting.<br/>Default: 100.</dd>
+%%      </dl>
+-spec start_producer([{string(), integer()}], [{atom(), integer()}]) ->
+                        {ok, pid()} | {error, any()}.
+start_producer(Hosts, Options) ->
+  brod_producer:start_link(Hosts, Options).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.

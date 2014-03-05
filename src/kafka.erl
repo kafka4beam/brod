@@ -163,17 +163,26 @@ parse_partition_metadata(<<ErrorCode:16/signed-integer,
 produce_request_body(#produce_request{} = Produce) ->
   Acks = Produce#produce_request.acks,
   Timeout = Produce#produce_request.timeout,
-  Topics = dict:to_list(Produce#produce_request.topics),
+  Topics = group_by_topic(Produce#produce_request.data, []),
   TopicsCount = erlang:length(Topics),
   TopicsBin = encode_topics(Topics, <<>>),
   <<Acks:16/signed-integer, Timeout:32/integer,
     TopicsCount:32/integer, TopicsBin/binary>>.
 
+group_by_topic([], Acc) ->
+  Acc;
+group_by_topic([{{Topic, Partition}, Msgs} | Rest], Acc) ->
+  Data0 = case lists:keyfind(Topic, 1, Acc) of
+            {_, X} -> X;
+            false  -> []
+          end,
+  Data = [{Partition, Msgs} | Data0],
+  group_by_topic(Rest, lists:keystore(Topic, 1, Acc, {Topic, Data})).
+
 encode_topics([], Acc) ->
   Acc;
-encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
+encode_topics([{Topic, Partitions} | T], Acc0) ->
   Size = erlang:size(Topic),
-  Partitions = dict:to_list(PartitionsDict),
   PartitionsCount = erlang:length(Partitions),
   PartitionsBin = encode_partitions(Partitions, <<>>),
   Acc = <<Size:16/integer, Topic/binary,
