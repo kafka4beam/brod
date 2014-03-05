@@ -17,9 +17,14 @@
 %% try to connect to any of bootstrapped nodes and fetch metadata
 fetch_metadata(Hosts) ->
   {ok, Pid} = try_connect(Hosts),
-  {ok, Response} = brod_sock:send_sync(Pid, #metadata_request{}, 10000),
-  brod_sock:stop(Pid),
-  {ok, Response}.
+  try
+    {ok, Response} = brod_sock:send_sync(Pid, #metadata_request{}, 10000),
+    {ok, Response}
+  catch _:Err ->
+      Err
+  after
+    brod_sock:stop(Pid)
+  end.
 
 try_connect(Hosts) ->
   try_connect(Hosts, []).
