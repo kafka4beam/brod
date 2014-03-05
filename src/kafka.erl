@@ -1,5 +1,7 @@
 %%%=============================================================================
-%%% @doc Kafka protocol
+%%% @doc A kafka protocol implementation.
+%%%      [https://cwiki.apache.org/confluence/display/KAFKA/
+%%%       A+Guide+To+The+Kafka+Protocol].
 %%% @copyright 2014 Klarna AB
 %%% @end
 %%%=============================================================================
