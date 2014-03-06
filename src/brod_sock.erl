@@ -11,12 +11,13 @@
 %%%_* Exports ==================================================================
 
 %% API
--export([ start_link/4
-        , start/4
-        , loop/2
+-export([ get_tcp_sock/1
         , init/4
+        , loop/2
         , send/2
         , send_sync/3
+        , start/4
+        , start_link/4
         , stop/1
         ]).
 
@@ -71,6 +72,10 @@ stop(Pid) when is_pid(Pid) ->
   call(Pid, stop, 5000);
 stop(_) ->
   ok.
+
+-spec get_tcp_sock(pid()) -> {ok, port()}.
+get_tcp_sock(Pid) ->
+  call(Pid, get_tcp_sock, 5000).
 
 %%%_* Internal functions =======================================================
 init(Parent, Host, Port, Debug0) ->
@@ -142,6 +147,9 @@ handle_msg({From, {send, Request}}, #state{sock = Sock} = State, Debug) ->
   ApiKey = kafka:api_key(Request),
   ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
   ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
+handle_msg({From, get_tcp_sock}, State, Debug) ->
+  reply(From, {ok, State#state.sock}),
+  ?MODULE:loop(State, Debug);
 handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
   gen_tcp:close(Sock),
   reply(From, ok),
@@ -173,15 +181,15 @@ print_msg(Device, {tcp_closed, _Sock}, State) ->
   do_print_msg(Device, "tcp_closed", [], State);
 print_msg(Device, {tcp_error, _Sock, Reason}, State) ->
   do_print_msg(Device, "tcp_error: ~p", [Reason], State);
-print_msg(Device, stop, State) ->
+print_msg(Device, {_From, stop}, State) ->
   do_print_msg(Device, "stop", [], State);
 print_msg(Device, Msg, State) ->
   do_print_msg(Device, "unknown msg: ~p", [Msg], State).
 
 do_print_msg(Device, Fmt, Args, State) ->
   CorrId = State#state.corr_id,
-  io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~nstate: ~p~n",
-            [ts(), self(), CorrId] ++ Args ++ [State]).
+  io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~n",
+            [ts(), self(), CorrId] ++ Args).
 
 ts() ->
   Now = erlang:now(),

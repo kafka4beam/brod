@@ -10,6 +10,7 @@
 
 %% Server API
 -export([ start_link/2
+        , start_link/3
         , stop/1
         ]).
 
@@ -19,6 +20,7 @@
 
 %% Debug API
 -export([ debug/2
+        , get_sockets/1
         ]).
 
 
@@ -40,7 +42,7 @@
                , timeout              :: integer()
                , flush_threshold      :: integer()
                , flush_timeout        :: integer()
-               , brokers              :: [{integer(), pid()}]
+               , sockets              :: [#socket{}]
                , leaders              :: [{{binary(), integer()}, pid()}]
                , buffer  = dict:new() :: dict() % {Topic, Partition} -> [msg]
                , unacked = []         :: [{integer(), term()}]
@@ -48,7 +50,6 @@
                }).
 
 %%%_* Macros -------------------------------------------------------------------
--define(empty_dict, dict:new()).
 -define(acks, 1).       % default required acks
 -define(timeout, 1000). % default broker timeout to wait for required acks
 
@@ -59,7 +60,12 @@
 -spec start_link([{string(), integer()}], [term()]) ->
                     {ok, pid()} | {error, any()}.
 start_link(Hosts, Options) ->
-  gen_server:start_link(?MODULE, [Hosts, Options], []).
+  start_link(Hosts, Options, []).
+
+-spec start_link([{string(), integer()}], [term()], [term()]) ->
+                    {ok, pid()} | {error, any()}.
+start_link(Hosts, Options, Debug) ->
+  gen_server:start_link(?MODULE, [Hosts, Options, Debug], [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
@@ -70,33 +76,46 @@ stop(Pid) ->
 produce(Pid, Topic, Partition, Key, Value) ->
   gen_server:call(Pid, {produce, Topic, Partition, Key, Value}).
 
--spec debug(pid(), [sys:dbg_opt()]) -> ok.
-%% @doc Enable/disabling debugging on brod_srv and on all connections
-%%      to brokers managed by the given brod_srv instance.
+-spec debug(pid(), sys:dbg_opt()) -> ok.
+%% @doc Enable/disabling debugging on brod_producer and on all connections
+%%      to brokers managed by the given brod_producer instance.
 %%      Enable:
-%%        brod_srv:debug(Conn, {log, print}).
-%%        brod_srv:debug(Conn, {trace, true}).
+%%        brod_producer:debug(Conn, {log, print}).
+%%        brod_producer:debug(Conn, {trace, true}).
 %%      Disable:
-%%        brod_srv:debug(Conn, no_debug).
+%%        brod_producer:debug(Conn, no_debug).
 debug(Pid, Debug) ->
-  ok = gen_server:call(Pid, {debug, Debug}),
+  {ok, Sockets} = get_sockets(Pid),
+  lists:foreach(
+    fun(#socket{pid = SocketPid}) ->
+        {ok, _} = gen:call(SocketPid, system, {debug, Debug})
+    end, Sockets),
   {ok, _} = gen:call(Pid, system, {debug, Debug}),
   ok.
 
+-spec get_sockets(pid()) -> {ok, [#socket{}]}.
+get_sockets(Pid) ->
+  gen_server:call(Pid, get_sockets).
+
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, Options]) ->
+init([Hosts, Options, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, Metadata} = brod_utils:fetch_metadata(Hosts),
-  #metadata_response{brokers = BrokersMetadata, topics = Topics} = Metadata,
+  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   %% connect to all known nodes which are alive and map node id to connection
-  Brokers = lists:foldl(
-                 fun(#broker_metadata{node_id = Id, host = H, port = P}, Acc) ->
-                     %% keep alive nodes only
-                     case brod_sock:start_link(self(), H, P, []) of
-                       {ok, Pid} -> [{Id, Pid} | Acc];
-                       _         -> Acc
-                     end
-                 end, [], BrokersMetadata),
+  Sockets = lists:foldl(
+              fun(#broker_metadata{node_id = Id, host = H, port = P}, Acc) ->
+                  %% keep alive nodes only
+                  case brod_sock:start_link(self(), H, P, Debug) of
+                    {ok, Pid} ->
+                      [#socket{ pid = Pid
+                              , host = H
+                              , port = P
+                              , node_id = Id} | Acc];
+                    _ ->
+                      Acc
+                  end
+              end, [], Brokers),
   %% map {Topic, Partition} to connection, crash if a node which must be
   %% a leader is not alive
   Leaders =
@@ -104,7 +123,8 @@ init([Hosts, Options]) ->
       fun(#topic_metadata{name = Topic, partitions = Ps}, AccExt) ->
           lists:foldl(
             fun(#partition_metadata{id = Id, leader_id = LeaderId}, AccInt) ->
-                {_, Pid} = lists:keyfind(LeaderId, 1, Brokers),
+                #socket{pid = Pid} =
+                  lists:keyfind(LeaderId, #socket.node_id, Sockets),
                 [{{Topic, Id}, Pid} | AccInt]
             end, AccExt, Ps)
       end, [], Topics),
@@ -115,7 +135,7 @@ init([Hosts, Options]) ->
                  proplists:get_value(flush_threshold, Options, ?flush_threshold)
              , flush_timeout =
                  proplists:get_value(flush_timeout, Options, ?flush_timeout)
-             , brokers = Brokers
+             , sockets = Sockets
              , leaders = Leaders}}.
 
 handle_call({produce, Topic, Partition, Key, Value}, _From, State0) ->
@@ -125,13 +145,9 @@ handle_call({produce, Topic, Partition, Key, Value}, _From, State0) ->
   {ok, State} = maybe_send(State0#state{buffer = Buffer}),
   {reply, ok, State, State#state.flush_timeout};
 handle_call(stop, _From, State) ->
-  close_sockets(State#state.brokers),
   {stop, normal, ok, State};
-handle_call({debug, Debug}, _From, State) ->
-  lists:foreach(fun({_, Pid}) ->
-                    {ok, _} = gen:call(Pid, system, {debug, Debug})
-                end, State#state.brokers),
-  {reply, ok, State};
+handle_call(get_sockets, _From, State) ->
+  {reply, {ok, State#state.sockets}, State};
 handle_call(Request, _From, State) ->
   {stop, {unsupported_call, Request}, State}.
 
@@ -156,8 +172,8 @@ handle_info(Info, State) ->
   {stop, {unsupported_info, Info}, State}.
 
 terminate(_Reason, State) ->
-  close_sockets(State#state.brokers),
-  ok.
+  F = fun(#socket{pid = Pid}) -> brod_sock:stop(Pid) end,
+  lists:foreach(F, State#state.sockets).
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
@@ -174,24 +190,20 @@ maybe_send(#state{buffer = Buffer} = State) ->
 do_send(#state{buffer = Buffer, unacked = Unacked0} = State) ->
   %% distribute buffered data on corresponding leaders
   F1 = fun({_Topic, _Partition} = Key, Msgs, Dict) ->
-          {_, Leader} = lists:keyfind(Key, 1, State#state.leaders),
-          dict:append(Leader, {Key, Msgs}, Dict)
+          {_, Pid} = lists:keyfind(Key, 1, State#state.leaders),
+          dict:append(Pid, {Key, Msgs}, Dict)
       end,
   LeadersData = dict:fold(F1, dict:new(), Buffer),
   %% send out buffered data
-  F2 = fun(Leader, Data, Acc) ->
+  F2 = fun(Pid, Data, Acc) ->
            Produce = #produce_request{ acks = State#state.acks
                                      , timeout = State#state.timeout
                                      , data = Data},
-           {ok, CorrId} = brod_sock:send(Leader, Produce),
-           [{{Leader, CorrId}, Data} | Acc]
+           {ok, CorrId} = brod_sock:send(Pid, Produce),
+           [{{Pid, CorrId}, Data} | Acc]
        end,
   Unacked = dict:fold(F2, Unacked0, LeadersData),
   {ok, State#state{buffer = dict:new(), unacked = Unacked}}.
-
-close_sockets(Brokers) ->
-  F = fun({_, Pid}) -> brod_sock:stop(Pid) end,
-  lists:foreach(F, Brokers).
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

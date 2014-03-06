@@ -3,6 +3,12 @@
 
 -include("brod.hrl").
 
+-record(socket, { pid     :: pid()
+                , host    :: string()
+                , port    :: integer()
+                , node_id :: integer()
+                }).
+
 %%%_* metadata request ---------------------------------------------------------
 -record(metadata_request, {topics = [] :: [binary()]}).
 
