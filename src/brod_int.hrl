@@ -59,9 +59,10 @@
 %% Protocol allows to request offsets for any number of topics and partitions
 %% at once, but we use only single pair assuming the most cases users spawn
 %% separate connections for each topic-partition.
--record(offset_request, { topic     :: binary()
-                        , partition :: integer()
-                        , time      :: integer()
+-record(offset_request, { topic             :: binary()
+                        , partition         :: integer()
+                        , time              :: integer()
+                        , max_n_offsets = 1 :: integer()
                         }).
 
 %%%_* offset response ----------------------------------------------------------

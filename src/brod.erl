@@ -6,7 +6,7 @@
 
 -module(brod).
 
-%% API
+%% Producer API
 -export([ start_producer/1
         , start_producer/2
         , stop_producer/1
@@ -15,10 +15,21 @@
         , produce/5
         ]).
 
+%% Consumer API
 -export([ start_consumer/3
         , stop_consumer/1
         , consume/6
         ]).
+
+%% Management and testing API
+-export([ get_metadata/1
+        , get_metadata/2
+        , get_offsets/5
+        , fetch/7
+        ]).
+
+%%%_* Includes -----------------------------------------------------------------
+-include("brod_int.hrl").
 
 %%%_* API ----------------------------------------------------------------------
 %% @equiv start_producer(Hosts, [])
@@ -138,7 +149,50 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   brod_consumer:consume(Pid, Subscriber, Offset,
                         MaxWaitTime, MinBytes, MaxBytes).
 
+get_metadata(Hosts) ->
+  get_metadata(Hosts, []).
+
+get_metadata(Hosts, Topics) ->
+  {ok, Pid} = brod_utils:try_connect(Hosts),
+  Request = #metadata_request{topics = Topics},
+  Response = brod_sock:send_sync(Pid, Request, 10000),
+  brod_sock:stop(Pid),
+  Response.
+
+get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
+  {ok, Pid} = connect_leader(Hosts, Topic, Partition),
+  Request = #offset_request{ topic = Topic
+                           , partition = Partition
+                           , time = Time
+                           , max_n_offsets = MaxNOffsets},
+  Response = brod_sock:send_sync(Pid, Request, 10000),
+  brod_sock:stop(Pid),
+  Response.
+
+fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  {ok, Pid} = connect_leader(Hosts, Topic, Partition),
+  Request = #fetch_request{ topic = Topic
+                          , partition = Partition
+                          , offset = Offset
+                          , max_wait_time = MaxWaitTime
+                          , min_bytes = MinBytes
+                          , max_bytes = MaxBytes},
+  Response = brod_sock:send_sync(Pid, Request, 10000),
+  brod_sock:stop(Pid),
+  Response.
+
 %%%_* Internal functions -------------------------------------------------------
+connect_leader(Hosts, Topic, Partition) ->
+  {ok, Metadata} = get_metadata(Hosts),
+  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
+  #topic_metadata{partitions = Partitions} =
+    lists:keyfind(Topic, #topic_metadata.name, Topics),
+  #partition_metadata{leader_id = Id} =
+    lists:keyfind(Partition, #partition_metadata.id, Partitions),
+  Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
+  Host = Broker#broker_metadata.host,
+  Port = Broker#broker_metadata.port,
+  brod_sock:start_link(self(), Host, Port, []).
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

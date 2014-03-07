@@ -246,7 +246,7 @@ offset_request_body(#offset_request{} = Offset) ->
   Topic = Offset#offset_request.topic,
   Partition = Offset#offset_request.partition,
   Time = Offset#offset_request.time,
-  MaxNumberOfOffsets = 1,
+  MaxNumberOfOffsets = Offset#offset_request.max_n_offsets,
   PartitionsBin = <<Partition:32/integer,
                     Time:64/signed-integer,
                     MaxNumberOfOffsets:32/integer>>,

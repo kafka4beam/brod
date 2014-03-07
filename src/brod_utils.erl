@@ -8,6 +8,7 @@
 
 %% Exports
 -export([ fetch_metadata/1
+        , try_connect/1
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
