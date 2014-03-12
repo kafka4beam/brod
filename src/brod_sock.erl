@@ -140,9 +140,9 @@ handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
   exit({tcp_error, Reason});
 handle_msg({From, {send, Request}}, #state{sock = Sock} = State, Debug) ->
   CorrId = next_corr_id(State#state.corr_id),
-  RequestBin = kafka:encode(CorrId, Request),
-  %% reply faster, don't block on gen_tcp:send
+  %% reply faster
   reply(From, {ok, CorrId}),
+  RequestBin = kafka:encode(CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   ApiKey = kafka:api_key(Request),
   ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),

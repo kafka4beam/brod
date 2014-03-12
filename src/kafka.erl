@@ -350,7 +350,12 @@ parse_message_set(<<Offset:64/integer,
   parse_message_set(Bin, [Msg | Acc]);
 parse_message_set(_Bin, [Msg | _] = Acc) ->
   %% the last message in response was sent only partially, dropping
-  {Msg#message.offset, lists:reverse(Acc)}.
+  {Msg#message.offset, lists:reverse(Acc)};
+parse_message_set(_Bin, []) ->
+  %% The only case when I managed to get there is when max_bytes option
+  %% is too small to for a whole message.
+  %% For some reason kafka does not report error.
+  throw("max_bytes option is too small").
 
 parse_bytes(-1, Bin) ->
   {<<>>, Bin};
