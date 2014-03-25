@@ -57,7 +57,7 @@ start_producer(Hosts) ->
 %%              number of acknowledgements to occur (but the server
 %%              will never wait for more acknowledgements than there
 %%              are in-sync replicas).<br/>Default: 1</dd>
-%%        <dt>``{timeout, integer()}''</dt>
+%%        <dt>``{ack_timeout, integer()}''</dt>
 %%          <dd>Maximum time in milliseconds the server can await the
 %%              receipt of the number of acknowledgements in
 %%              required_acks. The timeout is not an exact limit on
@@ -67,17 +67,17 @@ start_producer(Hosts) ->
 %%              requests are queued due to server overload that wait
 %%              time will not be included, (3) we will not terminate a
 %%              local write so if the local write time exceeds this
-%%              timeout it will not be respected.<br/>Default:
-%%              1000.</dd>
-%%        <dt>``{flush_threshold, integer()}''</dt>
-%%          <dd>Producer keeps incoming messages in a buffer until
-%%              buffer size reaches flush_threshold limit. Then
-%%              producer sends everything to kafka.<br/>Default:
-%%              100000.</dd>
-%%        <dt>``{flush_timeout, integer()}''</dt>
+%%              timeout it will not be respected.<br/>
+%%              Default: 1000.</dd>
+%%        <dt>``{batch_size, integer()}''</dt>
+%%          <dd>Number of messages to collect before sending in a
+%%              batch produce request. Set to 1 to disable batches.<br/>
+%%              Default: 20.</dd>
+%%        <dt>``{batch_timeout, integer()}''</dt>
 %%          <dd>If no message comes in during this time (in ms),
-%%              producer will try to flush buffer anyway, regardless
-%%              of flush_threshold setting.<br/>Default: 100.</dd>
+%%              producer will try to send already bufferred messages,
+%%              regardless of batch_size setting.<br/>
+%%              Default: 200.</dd>
 %%      </dl>
 -spec start_producer([{string(), integer()}], [{atom(), integer()}]) ->
                         {ok, pid()} | {error, any()}.
@@ -129,17 +129,17 @@ stop_consumer(Pid) ->
 %%              available at the time the request is issued.
 %% MinBytes: This is the minimum number of bytes of messages that must
 %%           be available to give a response. If the client sets this
-%%           to 0 the server will always respond immediately, however
-%%           if there is no new data since their last request they
-%%           will just get back empty message sets. If this is set to
-%%           1, the server will respond as soon as at least one
-%%           partition has at least 1 byte of data or the specified
-%%           timeout occurs. By setting higher values in combination
-%%           with the timeout the consumer can tune for throughput and
-%%           trade a little additional latency for reading only large
-%%           chunks of data (e.g. setting MaxWaitTime to 100 ms and
-%%           setting MinBytes to 64k would allow the server to wait up
-%%           to 100ms to try to accumulate 64k of data before
+%%           to 0, the server will always respond immediately. If
+%%           there is no new data since their last request, clients
+%%           will get back empty message sets. If this is set to 1,
+%%           the server will respond as soon as at least one partition
+%%           has at least 1 byte of data or the specified timeout
+%%           occurs. By setting higher values in combination with the
+%%           timeout the consumer can tune for throughput and trade a
+%%           little additional latency for reading only large chunks
+%%           of data (e.g. setting MaxWaitTime to 100 ms and setting
+%%           MinBytes to 64k would allow the server to wait up to
+%%           100ms to try to accumulate 64k of data before
 %%           responding).
 %% MaxBytes: The maximum bytes to include in the message set for this
 %%           partition. This helps bound the size of the response.

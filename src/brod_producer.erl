@@ -37,24 +37,22 @@
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
--record(state, { hosts                :: [{string(), integer()}]
-               , acks                 :: integer()
+-record(state, { acks                 :: integer()
                , timeout              :: integer()
-               , flush_threshold      :: integer()
-               , flush_timeout        :: integer()
+               , batch_size           :: integer()
+               , batch_timeout        :: integer()
                , sockets              :: [#socket{}]
                , leaders              :: [{{binary(), integer()}, pid()}]
-               , buffer  = dict:new() :: dict() % {Topic, Partition} -> [msg]
+               , buffer = dict:new()  :: dict() % {Topic, Partition} -> [msg]
+               , buffer_size = 0      :: integer() % number of messages
                , unacked = []         :: [{integer(), term()}]
-               , buffering = false    :: boolean()
                }).
 
 %%%_* Macros -------------------------------------------------------------------
--define(acks, 1).       % default required acks
--define(timeout, 1000). % default broker timeout to wait for required acks
-
--define(flush_threshold, 100000). % default buffer limit in bytes
--define(flush_timeout, 100).      % default buffer flush timeout
+-define(DEFAULT_ACKS,            1). % default required acks
+-define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
+-define(DEFAULT_BATCH_SIZE,     20). % default batch size (N of messages)
+-define(DEFAULT_BATCH_TIMEOUT, 200). % default batch timeout (ms)
 
 %%%_* API ----------------------------------------------------------------------
 -spec start_link([{string(), integer()}], [term()]) ->
@@ -100,6 +98,60 @@ get_sockets(Pid) ->
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, Options, Debug]) ->
   erlang:process_flag(trap_exit, true),
+  {ok, State} = connect(Hosts, Debug, #state{}),
+  Acks = proplists:get_value(required_acks, Options, ?DEFAULT_ACKS),
+  Timeout = proplists:get_value(ack_timeout, Options, ?DEFAULT_ACK_TIMEOUT),
+  BatchSize = proplists:get_value(batch_size, Options, ?DEFAULT_BATCH_SIZE),
+  BatchTimeout = proplists:get_value(batch_timeout, Options,
+                                     ?DEFAULT_BATCH_TIMEOUT),
+  {ok, State#state{ acks = Acks
+                  , timeout = Timeout
+                  , batch_size = BatchSize
+                  , batch_timeout = BatchTimeout}}.
+
+handle_call({produce, Topic, Partition, Key, Value}, _From, State0) ->
+  Buffer0 = State0#state.buffer,
+  Buffer = dict:append({Topic, Partition}, {Key, Value}, Buffer0),
+  BufferSize = State0#state.buffer_size + 1,
+  %% may be flush buffer
+  {ok, State} = maybe_send(State0#state{buffer = Buffer,
+                                        buffer_size = BufferSize}),
+  {reply, ok, State, State#state.batch_timeout};
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
+handle_call(get_sockets, _From, State) ->
+  {reply, {ok, State#state.sockets}, State};
+handle_call(Request, _From, State) ->
+  {reply, {error, {unsupported_call, Request}}, State}.
+
+handle_cast(_Msg, State) ->
+  {noreply, State}.
+
+handle_info({msg, Pid, CorrId, #produce_response{}}, State) ->
+  %% TODO: keep offsets?
+  Unacked = lists:keydelete({Pid, CorrId}, 1, State#state.unacked),
+  {noreply, State#state{unacked = Unacked}};
+handle_info(timeout, #state{buffer_size = Size} = State0) ->
+  {ok, State} = case Size > 0 of
+                  true  -> do_send(State0);
+                  false -> {ok, State0}
+                end,
+  {noreply, State};
+handle_info({'EXIT', Pid, Reason}, State) ->
+  Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
+  {stop, {socket_down, Reason}, State#state{sockets = Sockets}};
+handle_info(_Info, State) ->
+  {noreply, State}.
+
+terminate(_Reason, State) ->
+  F = fun(#socket{pid = Pid}) -> brod_sock:stop(Pid) end,
+  lists:foreach(F, State#state.sockets).
+
+code_change(_OldVsn, State, _Extra) ->
+  {ok, State}.
+
+%%%_* Internal functions -------------------------------------------------------
+connect(Hosts, Debug, State) ->
   {ok, Metadata} = brod_utils:fetch_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   %% connect to all known nodes which are alive and map node id to connection
@@ -128,64 +180,12 @@ init([Hosts, Options, Debug]) ->
                 [{{Topic, Id}, Pid} | AccInt]
             end, AccExt, Ps)
       end, [], Topics),
-  {ok, #state{ hosts   = Hosts
-             , acks    = proplists:get_value(required_acks, Options, ?acks)
-             , timeout = proplists:get_value(timeout, Options, ?timeout)
-             , flush_threshold =
-                 proplists:get_value(flush_threshold, Options, ?flush_threshold)
-             , flush_timeout =
-                 proplists:get_value(flush_timeout, Options, ?flush_timeout)
-             , sockets = Sockets
-             , leaders = Leaders}}.
+  {ok, State#state{sockets = Sockets, leaders = Leaders}}.
 
-handle_call({produce, Topic, Partition, Key, Value}, _From, State0) ->
-  Buffer0 = State0#state.buffer,
-  Buffer = dict:append({Topic, Partition}, {Key, Value}, Buffer0),
-  %% may be flush buffer
-  {ok, State} = maybe_send(State0#state{buffer = Buffer}),
-  {reply, ok, State, State#state.flush_timeout};
-handle_call(stop, _From, State) ->
-  {stop, normal, ok, State};
-handle_call(get_sockets, _From, State) ->
-  {reply, {ok, State#state.sockets}, State};
-handle_call(Request, _From, State) ->
-  {stop, {unsupported_call, Request}, State}.
-
-handle_cast(Msg, State) ->
-  {stop, {unsupported_cast, Msg}, State}.
-
-handle_info({msg, Pid, CorrId, #produce_response{}}, State0) ->
-  %% TODO: keep offsets?
-  Unacked = lists:keydelete({Pid, CorrId}, 1, State0#state.unacked),
-  {ok, State} = maybe_send(State0#state{unacked = Unacked}),
-  {noreply, State};
-handle_info(timeout, State0) ->
-  {ok, State} = case dict:size(State0#state.buffer) of
-                  X when X > 0 -> do_send(State0);
-                  _            -> {ok, State0}
-                end,
-  {noreply, State};
-handle_info({'EXIT', _Pid, Reason}, State) ->
-  %% TODO: reconnect and re-send
-  {stop, {socket_down, Reason}, State};
-handle_info(Info, State) ->
-  {stop, {unsupported_info, Info}, State}.
-
-terminate(_Reason, State) ->
-  F = fun(#socket{pid = Pid}) -> brod_sock:stop(Pid) end,
-  lists:foreach(F, State#state.sockets).
-
-code_change(_OldVsn, State, _Extra) ->
+maybe_send(State) when State#state.buffer_size >= State#state.batch_size ->
+  do_send(State);
+maybe_send(State) ->
   {ok, State}.
-
-%%%_* Internal functions -------------------------------------------------------
-maybe_send(#state{buffering = true} = State) ->
-  {ok, State};
-maybe_send(#state{buffer = Buffer} = State) ->
-  case byte_size(term_to_binary(Buffer)) of
-    X when X >= State#state.flush_threshold -> do_send(State);
-    _                                       -> {ok, State}
-  end.
 
 do_send(#state{buffer = Buffer, unacked = Unacked0} = State) ->
   %% distribute buffered data on corresponding leaders
@@ -203,7 +203,9 @@ do_send(#state{buffer = Buffer, unacked = Unacked0} = State) ->
            [{{Pid, CorrId}, Data} | Acc]
        end,
   Unacked = dict:fold(F2, Unacked0, LeadersData),
-  {ok, State#state{buffer = dict:new(), unacked = Unacked}}.
+  {ok, State#state{ buffer = dict:new()
+                  , buffer_size = 0
+                  , unacked = Unacked}}.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

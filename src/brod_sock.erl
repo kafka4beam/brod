@@ -33,7 +33,6 @@
 
 %%%_* Macros -------------------------------------------------------------------
 -define(MAX_CORR_ID, 4294967295). % 2^32 - 1
--define(TIMEOUT,     10000).
 
 %%%_* Records ==================================================================
 -record(state, { parent                :: pid()
@@ -56,7 +55,7 @@ start(Parent, Host, Port, Debug) ->
 
 -spec send(pid(), term()) -> {ok, integer()} | {error, any()}.
 send(Pid, Request) ->
-  call(Pid, {send, Request}, ?TIMEOUT).
+  call(Pid, {send, Request}).
 
 -spec send_sync(pid(), term(), integer()) -> {ok, term()} | {error, any()}.
 send_sync(Pid, Request, Timeout) ->
@@ -69,13 +68,13 @@ send_sync(Pid, Request, Timeout) ->
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) when is_pid(Pid) ->
-  call(Pid, stop, 5000);
+  call(Pid, stop);
 stop(_) ->
   ok.
 
 -spec get_tcp_sock(pid()) -> {ok, port()}.
 get_tcp_sock(Pid) ->
-  call(Pid, get_tcp_sock, 5000).
+  call(Pid, get_tcp_sock).
 
 %%%_* Internal functions =======================================================
 init(Parent, Host, Port, Debug0) ->
@@ -89,7 +88,7 @@ init(Parent, Host, Port, Debug0) ->
       proc_lib:init_ack(Parent, {error, Error})
   end.
 
-call(Pid, Request, Timeout) ->
+call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
   erlang:send(Pid, {{self(), Mref}, Request}),
   receive
@@ -98,13 +97,6 @@ call(Pid, Request, Timeout) ->
       Reply;
     {'DOWN', Mref, _, _, Reason} ->
       {error, {process_down, Reason}}
-  after Timeout ->
-      erlang:demonitor(Mref),
-      receive
-        {'DOWN', Mref, _, _, _} -> true
-      after 0 -> true
-      end,
-      {error, timeout}
   end.
 
 reply({To, Tag}, Reply) ->
