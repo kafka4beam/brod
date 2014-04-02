@@ -59,7 +59,7 @@ parse_stream(<<Size:32/integer,
   CorrIdDict = dict:erase(CorrId, CorrIdDict0),
   parse_stream(Tail, [{CorrId, Response} | Acc], CorrIdDict);
 parse_stream(Bin, Acc, CorrIdDict) ->
-  {Bin, lists:reverse(Acc), CorrIdDict}.
+  {Bin, Acc, CorrIdDict}.
 
 encode(CorrId, Request) ->
   Header = header(api_key(Request), CorrId),
@@ -99,14 +99,14 @@ parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
   parse_array(Length, Bin, [], Fun).
 
 parse_array(0, Bin, Acc, _Fun) ->
-  {lists:reverse(Acc), Bin};
+  {Acc, Bin};
 parse_array(Length, Bin0, Acc, Fun) ->
   {Item, Bin} = Fun(Bin0),
   parse_array(Length - 1, Bin, [Item | Acc], Fun).
 
-parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
+parse_int32(<<X:32/integer, Bin/binary>>) -> {X, binary:copy(Bin)}.
 
-parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
+parse_int64(<<X:64/integer, Bin/binary>>) -> {X, binary:copy(Bin)}.
 
 kafka_size(<<"">>) -> -1;
 kafka_size(Bin)    -> size(Bin).
@@ -134,7 +134,7 @@ parse_broker_metadata(<<NodeID:32/integer,
                         Port:32/integer,
                         Bin/binary>>) ->
   Broker = #broker_metadata{ node_id = NodeID
-                           , host = binary_to_list(Host)
+                           , host = binary_to_list(binary:copy(Host))
                            , port = Port},
   {Broker, Bin}.
 
@@ -144,7 +144,7 @@ parse_topic_metadata(<<ErrorCode:16/integer,
                        Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_metadata/1),
   Topic = #topic_metadata{ error_code = ErrorCode
-                         , name = Name
+                         , name = binary:copy(Name)
                          , partitions = Partitions},
   {Topic, Bin}.
 
@@ -167,9 +167,10 @@ produce_request_body(#produce_request{} = Produce) ->
   Timeout = Produce#produce_request.timeout,
   Topics = group_by_topic(Produce#produce_request.data, []),
   TopicsCount = erlang:length(Topics),
-  TopicsBin = encode_topics(Topics, <<>>),
-  <<Acks:16/signed-integer, Timeout:32/integer,
-    TopicsCount:32/integer, TopicsBin/binary>>.
+  Head = <<Acks:16/signed-integer,
+           Timeout:32/integer,
+           TopicsCount:32/integer>>,
+  encode_topics(Topics, Head).
 
 group_by_topic([], Acc) ->
   Acc;
@@ -186,9 +187,9 @@ encode_topics([], Acc) ->
 encode_topics([{Topic, Partitions} | T], Acc0) ->
   Size = erlang:size(Topic),
   PartitionsCount = erlang:length(Partitions),
-  PartitionsBin = encode_partitions(Partitions, <<>>),
-  Acc = <<Size:16/integer, Topic/binary,
-          PartitionsCount:32/integer, PartitionsBin/binary, Acc0/binary>>,
+  Acc1 = <<Acc0/binary, Size:16/integer, Topic/binary,
+           PartitionsCount:32/integer>>,
+  Acc = encode_partitions(Partitions, Acc1),
   encode_topics(T, Acc).
 
 encode_partitions([], Acc) ->
@@ -196,31 +197,34 @@ encode_partitions([], Acc) ->
 encode_partitions([{Id, Messages} | T], Acc0) ->
   MessageSet = encode_message_set(Messages),
   MessageSetSize = erlang:size(MessageSet),
-  Acc = <<Id:32/integer,
+  Acc = <<Acc0/binary,
+          Id:32/integer,
           MessageSetSize:32/integer,
-          MessageSet/binary,
-          Acc0/binary>>,
+          MessageSet/binary>>,
   encode_partitions(T, Acc).
 
 encode_message_set(Messages) ->
-  F = fun(X, Acc) ->
-          Message = encode_message(X),
-          Size = size(Message),
-          %% 0 is for offset which is unknown until message is handled by
-          %% server, we can put any number here actually
-          <<0:64/integer, Size:32/integer, Message/binary, Acc/binary>>
-      end,
-  MessageSet = lists:foldr(F, <<>>, Messages),
-  <<MessageSet/binary>>.
+  encode_message_set(Messages, <<>>).
+
+encode_message_set([], Acc) ->
+  Acc;
+encode_message_set([Msg | Messages], Acc0) ->
+  MsgBin = encode_message(Msg),
+  Size = size(MsgBin),
+  %% 0 is for offset which is unknown until message is handled by
+  %% server, we can put any number here actually
+  Acc = <<Acc0/binary, 0:64/integer, Size:32/integer, MsgBin/binary>>,
+  encode_message_set(Messages, Acc).
 
 encode_message({Key, Value}) ->
   KeySize = kafka_size(Key),
   ValSize = kafka_size(Value),
-  Payload = <<KeySize:32/signed-integer,
+  Message = <<?MAGIC_BYTE:8/integer,
+              ?COMPRESS_NONE:8/integer,
+              KeySize:32/signed-integer,
               Key/binary,
               ValSize:32/signed-integer,
               Value/binary>>,
-  Message = <<?MAGIC_BYTE:8/integer, ?COMPRESS_NONE:8/integer, Payload/binary>>,
   Crc32 = erlang:crc32(Message),
   <<Crc32:32/integer, Message/binary>>.
 
@@ -230,7 +234,7 @@ produce_response(Bin) ->
 
 parse_produce_topic(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
   {Offsets, Bin} = parse_array(Bin0, fun parse_produce_offset/1),
-  {#produce_topic{topic = Name, offsets = Offsets}, Bin}.
+  {#produce_topic{topic = binary:copy(Name), offsets = Offsets}, Bin}.
 
 parse_produce_offset(<<Partition:32/integer,
                        ErrorCode:16/signed-integer,
@@ -247,17 +251,17 @@ offset_request_body(#offset_request{} = Offset) ->
   Partition = Offset#offset_request.partition,
   Time = Offset#offset_request.time,
   MaxNumberOfOffsets = Offset#offset_request.max_n_offsets,
-  PartitionsBin = <<Partition:32/integer,
-                    Time:64/signed-integer,
-                    MaxNumberOfOffsets:32/integer>>,
-  PartitionsCount = 1,
   TopicSize = erlang:size(Topic),
-  TopicsBin = <<TopicSize:16/integer,
-                Topic/binary,
-                PartitionsCount:32/integer,
-                PartitionsBin/binary>>,
+  PartitionsCount = 1,
   TopicsCount = 1,
-  <<?REPLICA_ID:32/signed-integer, TopicsCount:32/integer, TopicsBin/binary>>.
+  <<?REPLICA_ID:32/signed-integer,
+    TopicsCount:32/integer,
+    TopicSize:16/integer,
+    Topic/binary,
+    PartitionsCount:32/integer,
+    Partition:32/integer,
+    Time:64/signed-integer,
+    MaxNumberOfOffsets:32/integer>>.
 
 offset_response(Bin) ->
   {Topics, _} = parse_array(Bin, fun parse_offset_topic/1),
@@ -265,7 +269,7 @@ offset_response(Bin) ->
 
 parse_offset_topic(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_offsets/1),
-  {#offset_topic{topic = Name, partitions = Partitions}, Bin}.
+  {#offset_topic{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
 parse_partition_offsets(<<Partition:32/integer,
                           ErrorCode:16/signed-integer,
@@ -284,21 +288,19 @@ fetch_request_body(#fetch_request{} = Fetch) ->
                 , partition     = Partition
                 , offset        = Offset
                 , max_bytes     = MaxBytes} = Fetch,
-  PartitionsBin = <<Partition:32/integer,
-                    Offset:64/integer,
-                    MaxBytes:32/integer>>,
   PartitionsCount = 1,
-  TopicSize = erlang:size(Topic),
-  TopicsBin = <<TopicSize:16/integer,
-                Topic/binary,
-                PartitionsCount:32/integer,
-                PartitionsBin/binary>>,
   TopicsCount = 1,
+  TopicSize = erlang:size(Topic),
   <<?REPLICA_ID:32/signed-integer,
     MaxWaitTime:32/integer,
     MinBytes:32/integer,
     TopicsCount:32/integer,
-    TopicsBin/binary>>.
+    TopicSize:16/integer,
+    Topic/binary,
+    PartitionsCount:32/integer,
+    Partition:32/integer,
+    Offset:64/integer,
+    MaxBytes:32/integer>>.
 
 fetch_response(Bin) ->
   {Topics, _} = parse_array(Bin, fun parse_topic_fetch_data/1),
@@ -361,7 +363,7 @@ parse_bytes(-1, Bin) ->
   {<<>>, Bin};
 parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
-  {Bytes, Bin}.
+  {binary:copy(Bytes), Bin}.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
