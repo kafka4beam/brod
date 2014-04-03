@@ -94,7 +94,7 @@ get_socket(Pid) ->
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, Topic, Partition, Debug]) ->
   erlang:process_flag(trap_exit, true),
-  {ok, Metadata} = brod_utils:fetch_metadata(Hosts),
+  {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   try
     %% detect a leader for the given partition and connect it
@@ -168,7 +168,6 @@ handle_info(timeout, State) ->
   ok = send_fetch_request(State),
   {noreply, State};
 handle_info({'EXIT', _Pid, Reason}, State) ->
-  %% TODO: reconnect
   {stop, {socket_down, Reason}, State};
 handle_info(Info, State) ->
   {stop, {unsupported_info, Info}, State}.

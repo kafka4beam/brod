@@ -100,8 +100,8 @@ produce(Pid, Topic, Partition, Value) ->
   produce(Pid, Topic, Partition, <<>>, Value).
 
 %% @doc Send message to a broker.
-%%      Internally it's a gen_server:call to brod_srv process. Returns
-%%      when the message is handled by brod_srv.
+%%      Internally it's a gen_server:call to brod_producer process. Returns
+%%      when the message is handled by brod_producer.
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
                  ok | {error, any()}.
 produce(Pid, Topic, Partition, Key, Value) ->
@@ -150,14 +150,10 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                         MaxWaitTime, MinBytes, MaxBytes).
 
 get_metadata(Hosts) ->
-  get_metadata(Hosts, []).
+  brod_utils:get_metadata(Hosts).
 
 get_metadata(Hosts, Topics) ->
-  {ok, Pid} = brod_utils:try_connect(Hosts),
-  Request = #metadata_request{topics = Topics},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
-  Response.
+  brod_utils:get_metadata(Hosts, Topics).
 
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),

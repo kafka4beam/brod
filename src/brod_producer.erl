@@ -152,7 +152,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%%_* Internal functions -------------------------------------------------------
 connect(Hosts, Debug, State) ->
-  {ok, Metadata} = brod_utils:fetch_metadata(Hosts),
+  {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   %% connect to all known nodes which are alive and map node id to connection
   Sockets = lists:foldl(

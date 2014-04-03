@@ -7,7 +7,8 @@
 -module(brod_utils).
 
 %% Exports
--export([ fetch_metadata/1
+-export([ get_metadata/1
+        , get_metadata/2
         , try_connect/1
         ]).
 
@@ -16,11 +17,15 @@
 
 %%%_* Code ---------------------------------------------------------------------
 %% try to connect to any of bootstrapped nodes and fetch metadata
-fetch_metadata(Hosts) ->
+get_metadata(Hosts) ->
+  get_metadata(Hosts, []).
+
+get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
-  Res = brod_sock:send_sync(Pid, #metadata_request{}, 10000),
+  Request = #metadata_request{topics = Topics},
+  Response = brod_sock:send_sync(Pid, Request, 10000),
   brod_sock:stop(Pid),
-  Res.
+  Response.
 
 try_connect(Hosts) ->
   try_connect(Hosts, []).
