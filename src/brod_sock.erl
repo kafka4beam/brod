@@ -104,12 +104,7 @@ reply({To, Tag}, Reply) ->
 
 loop(State, Debug) ->
   Msg = receive Input -> Input end,
-  try
-    decode_msg(Msg, State, Debug)
-  catch
-    _:E ->
-      exit({E, erlang:get_stacktrace()})
-  end.
+  decode_msg(Msg, State, Debug).
 
 decode_msg({system, From, Msg}, #state{parent = Parent} = State, Debug) ->
   sys:handle_system_msg(Msg, From, Parent, ?MODULE, Debug, State);

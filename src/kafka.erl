@@ -104,9 +104,9 @@ parse_array(Length, Bin0, Acc, Fun) ->
   {Item, Bin} = Fun(Bin0),
   parse_array(Length - 1, Bin, [Item | Acc], Fun).
 
-parse_int32(<<X:32/integer, Bin/binary>>) -> {X, binary:copy(Bin)}.
+parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
 
-parse_int64(<<X:64/integer, Bin/binary>>) -> {X, binary:copy(Bin)}.
+parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
 
 kafka_size(<<"">>) -> -1;
 kafka_size(Bin)    -> size(Bin).
@@ -134,7 +134,7 @@ parse_broker_metadata(<<NodeID:32/integer,
                         Port:32/integer,
                         Bin/binary>>) ->
   Broker = #broker_metadata{ node_id = NodeID
-                           , host = binary_to_list(binary:copy(Host))
+                           , host = binary_to_list(Host)
                            , port = Port},
   {Broker, Bin}.
 
@@ -308,7 +308,7 @@ fetch_response(Bin) ->
 
 parse_topic_fetch_data(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_messages/1),
-  {#topic_fetch_data{topic = Name, partitions = Partitions}, Bin}.
+  {#topic_fetch_data{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
 parse_partition_messages(<<Partition:32/integer,
                            ErrorCode:16/integer,
