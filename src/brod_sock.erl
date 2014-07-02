@@ -90,9 +90,10 @@ init(Parent, Host, Port, Debug0) ->
 
 call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
-  erlang:send(Pid, {{self(), Mref}, Request}),
+  Ref = erlang:make_ref(),
+  erlang:send(Pid, {{self(), Ref}, Request}),
   receive
-    {Mref, Reply} ->
+    {Ref, Reply} ->
       erlang:demonitor(Mref, [flush]),
       Reply;
     {'DOWN', Mref, _, _, Reason} ->
