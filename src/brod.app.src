@@ -1,0 +1,12 @@
+{application, brod,
+ [
+  {description, "Kafka client"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { brod_app, []}},
+  {env, []}
+ ]}.
