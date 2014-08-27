@@ -365,6 +365,43 @@ parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
   {binary:copy(Bytes), Bin}.
 
+%% Tests -----------------------------------------------------------------------
+-include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+
+parse_array_test() ->
+  F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) -> {binary_to_list(X), Bin} end,
+  ?assertMatch({["BARR", "FOO"], <<>>}, parse_array(<<2:32/integer, 3:32/integer, "FOO", 4:32/integer, "BARR">>, F)),
+  ?assertMatch({["FOO"], <<4:32/integer, "BARR">>}, parse_array(<<1:32/integer, 3:32/integer, "FOO", 4:32/integer, "BARR">>, F)),
+  ok.
+
+parse_int32_test() ->
+  ?assertMatch({0, <<"123">>}, parse_int32(<<0:32/integer, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int32(<<0:32/integer>>)),
+  ?assertError(function_clause, parse_int32(<<0:16/integer>>)),
+  ok.
+
+parse_int64_test() ->
+  ?assertMatch({0, <<"123">>}, parse_int64(<<0:64/integer, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int64(<<0:64/integer>>)),
+  ?assertError(function_clause, parse_int64(<<0:32/integer>>)),
+  ok.
+
+kafka_size_test() ->
+  ?assertMatch(-1, kafka_size(<<>>)),
+  ?assertMatch(4, kafka_size(<<0:32/integer>>)),
+  ok.
+
+parse_bytes_test() ->
+  ?assertMatch({<<"1234">>, <<"5678">>}, parse_bytes(4, <<"12345678">>)),
+  ?assertMatch({<<"1234">>, <<"">>}, parse_bytes(4, <<"1234">>)),
+  ?assertMatch({<<"">>, <<"1234">>}, parse_bytes(-1, <<"1234">>)),
+  ?assertError({badmatch, <<"123">>}, parse_bytes(4, <<"123">>)),
+  ok.
+
+-endif. % TEST
+
 %%% Local Variables:
 %%% erlang-indent-level: 2
 %%% End:
