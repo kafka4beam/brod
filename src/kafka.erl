@@ -371,9 +371,18 @@ parse_bytes(Size, Bin0) ->
 -ifdef(TEST).
 
 parse_array_test() ->
-  F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) -> {binary_to_list(X), Bin} end,
-  ?assertMatch({["BARR", "FOO"], <<>>}, parse_array(<<2:32/integer, 3:32/integer, "FOO", 4:32/integer, "BARR">>, F)),
-  ?assertMatch({["FOO"], <<4:32/integer, "BARR">>}, parse_array(<<1:32/integer, 3:32/integer, "FOO", 4:32/integer, "BARR">>, F)),
+  F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) ->
+          {binary_to_list(X), Bin}
+      end,
+  ?assertMatch({["BARR", "FOO"], <<>>},
+               parse_array(<<2:32/integer, 3:32/integer, "FOO",
+                                           4:32/integer, "BARR">>, F)),
+  ?assertMatch({["FOO"], <<4:32/integer, "BARR">>},
+               parse_array(<<1:32/integer, 3:32/integer, "FOO",
+                                           4:32/integer, "BARR">>, F)),
+  ?assertMatch({[], <<>>}, parse_array(<<0:32/integer>>, F)),
+  ?assertError(function_clause, parse_array(<<-1:32/integer>>, F)),
+  ?assertError(function_clause, parse_array(<<1:32/integer>>, F)),
   ok.
 
 parse_int32_test() ->
@@ -398,6 +407,124 @@ parse_bytes_test() ->
   ?assertMatch({<<"1234">>, <<"">>}, parse_bytes(4, <<"1234">>)),
   ?assertMatch({<<"">>, <<"1234">>}, parse_bytes(-1, <<"1234">>)),
   ?assertError({badmatch, <<"123">>}, parse_bytes(4, <<"123">>)),
+  ok.
+
+metadata_request_body_test() ->
+  ?assertMatch(<<0:32/integer, -1:16/signed-integer>>,
+               metadata_request_body(#metadata_request{})),
+  ?assertMatch(<<2:32/integer, 4:16/integer, "BARR", 3:16/integer, "FOO">>,
+               metadata_request_body(
+                 #metadata_request{topics = [<<"FOO">>, <<"BARR">>]})),
+  ok.
+
+mk_test_broker() ->
+  mk_test_broker(0).
+
+mk_test_broker(NodeId) ->
+  #broker_metadata{node_id = NodeId, host = "localhost", port = 1234}.
+
+mk_test_broker_bin() ->
+  mk_test_broker_bin(0).
+
+mk_test_broker_bin(NodeId) ->
+  <<NodeId:32/integer,
+    (length("localhost")):16/integer,
+    (list_to_binary("localhost"))/binary,
+    1234:32/integer>>.
+
+parse_broker_metadata_test() ->
+  B = mk_test_broker(),
+  Bin1 = mk_test_broker_bin(),
+  ?assertMatch({B, <<>>}, parse_broker_metadata(Bin1)),
+  Bin2 = <<Bin1/binary, <<"FOO">>/binary>>,
+  ?assertMatch({B, <<"FOO">>}, parse_broker_metadata(Bin2)),
+  ok.
+
+empty_array() -> <<0:32/integer>>.
+
+mk_array(L, F) ->
+  Bin = mk_array(L, F, <<>>),
+  <<(length(L)):32/integer, Bin/binary>>.
+
+mk_array([], _F, Acc) ->
+  Acc;
+mk_array([H | T], F, Acc) ->
+  mk_array(T, F, <<(F(H))/binary, Acc/binary>>).
+
+mk_test_partition(Id) ->
+  mk_test_partition(Id, 0, 0, [], []).
+
+mk_test_partition(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
+  #partition_metadata{ id         = Id
+                     , error_code = ErrorCode
+                     , leader_id  = LeaderId
+                     , replicas   = Replicas
+                     , isrs       = Isrs}.
+
+mk_test_partition_bin(Id) ->
+  mk_test_partition_bin(Id, 0, 0, [], []).
+
+mk_test_partition_bin(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
+  F = fun(I) -> <<I:32/integer>> end,
+  <<ErrorCode:16/signed-integer,
+    Id:32/integer,
+    LeaderId:32/signed-integer,
+    (mk_array(Replicas, F))/binary,
+    (mk_array(Isrs, F))/binary>>.
+
+parse_partition_metadata_test() ->
+  P1 = mk_test_partition(0),
+  P1Bin = mk_test_partition_bin(0),
+  ?assertMatch({P1, <<>>}, parse_partition_metadata(P1Bin)),
+  P2 = mk_test_partition(0, 0, 0, [0,1,2], [0,1]),
+  P2Bin = <<(mk_test_partition_bin(0, 0, 0, [0,1,2], [0,1]))/binary,
+            <<"FOO">>/binary>>,
+  ?assertMatch({P2, <<"FOO">>}, parse_partition_metadata(P2Bin)),
+  P3 = mk_test_partition(0, -1, -1, [0,1,2], []),
+  P3Bin = mk_test_partition_bin(0, -1, -1, [0,1,2], []),
+  ?assertMatch({P3, <<>>}, parse_partition_metadata(P3Bin)),
+  ok.
+
+mk_test_topic(Name) ->
+  mk_test_topic(Name, []).
+
+mk_test_topic(Name, Partitions) ->
+  #topic_metadata{name = Name, error_code = 0,
+                  partitions = [mk_test_partition(P) || P <- Partitions]}.
+
+mk_test_topic_bin(Name) ->
+  mk_test_topic_bin(Name, []).
+
+mk_test_topic_bin(Name, Partitions) ->
+  <<0:16/integer,
+    (size(Name)):16/integer,
+    Name/binary,
+    (mk_array(Partitions, fun mk_test_partition_bin/1))/binary>>.
+
+parse_topic_metadata_test() ->
+  Name = <<"FOO">>,
+  Topic0 = mk_test_topic(Name),
+  Topic0Bin = mk_test_topic_bin(Name),
+  ?assertMatch({Topic0, <<>>}, parse_topic_metadata(Topic0Bin)),
+  Topic1 = mk_test_topic(Name, [0, 1]),
+  Topic1Bin = <<(mk_test_topic_bin(Name, [0, 1]))/binary, <<"BAR">>/binary>>,
+  ?assertMatch({Topic1, <<"BAR">>}, parse_topic_metadata(Topic1Bin)),
+  ok.
+
+metadata_response_test() ->
+  EmptyArray = empty_array(),
+  Bin1 = <<EmptyArray/binary, EmptyArray/binary>>,
+  ?assertMatch(#metadata_response{brokers = [], topics = []},
+               metadata_response(Bin1)),
+  BrokerIds = [0, 1],
+  Brokers = [mk_test_broker(N) || N <- BrokerIds],
+  BrokersBin = mk_array(BrokerIds, fun mk_test_broker_bin/1),
+  TopicNames = [<<"t1">>, <<"t2">>],
+  Topics = [mk_test_topic(T) || T <- TopicNames],
+  TopicsBin = mk_array(TopicNames, fun mk_test_topic_bin/1),
+  Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
+  ?assertMatch(#metadata_response{brokers = Brokers, topics = Topics},
+               metadata_response(Bin2)),
   ok.
 
 -endif. % TEST
