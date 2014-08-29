@@ -175,17 +175,18 @@ produce_request_body(#produce_request{} = Produce) ->
 group_by_topic([], Acc) ->
   Acc;
 group_by_topic([{{Topic, Partition}, Msgs} | Rest], Acc) ->
-  Data0 = case lists:keyfind(Topic, 1, Acc) of
-            {_, X} -> X;
-            false  -> []
-          end,
-  Data = [{Partition, Msgs} | Data0],
-  group_by_topic(Rest, lists:keystore(Topic, 1, Acc, {Topic, Data})).
+  Partitions0 = case lists:keyfind(Topic, 1, Acc) of
+                  {Topic, X} -> X;
+                  false      -> dict:new()
+                end,
+  Partitions = dict:append_list(Partition, Msgs, Partitions0),
+  group_by_topic(Rest, lists:keystore(Topic, 1, Acc, {Topic, Partitions})).
 
 encode_topics([], Acc) ->
   Acc;
-encode_topics([{Topic, Partitions} | T], Acc0) ->
+encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
   Size = erlang:size(Topic),
+  Partitions = dict:to_list(PartitionsDict),
   PartitionsCount = erlang:length(Partitions),
   Acc1 = <<Acc0/binary, Size:16/integer, Topic/binary,
            PartitionsCount:32/integer>>,
@@ -525,6 +526,65 @@ metadata_response_test() ->
   Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
   ?assertMatch(#metadata_response{brokers = Brokers, topics = Topics},
                metadata_response(Bin2)),
+  ok.
+
+encode_message_test() ->
+  <<Crc1:32/integer, Msg1/binary>> = encode_message({<<>>, <<>>}),
+  ?assertEqual(Crc1, erlang:crc32(Msg1)),
+  ?assertMatch(<<?MAGIC_BYTE:8/integer,
+                 ?COMPRESS_NONE:8/integer,
+                 -1:32/signed-integer,
+                 -1:32/signed-integer>>, Msg1),
+  Key = <<"FOO">>,
+  Val = <<"FOOBAR">>,
+  <<Crc2:32/integer, Msg2/binary>> = encode_message({Key, Val}),
+  ?assertEqual(Crc2, erlang:crc32(Msg2)),
+  ?assertMatch(<<?MAGIC_BYTE:8/integer,
+                 ?COMPRESS_NONE:8/integer,
+                 3:32/integer,
+                 Key:3/binary,
+                 6:32/integer,
+                 Val:6/binary>>, Msg2),
+  ok.
+
+encode_message_set_test() ->
+  ?assertMatch(<<>>, encode_message_set([])),
+  %% empty msg size: CRC32 + 2x8 magic bytes + 2x32 sizes = 14 bytes
+  ?assertMatch(<<0:64/integer, 14:32/integer, _:14/binary,
+                 0:64/integer, 23:32/integer, _:23/binary>>,
+               encode_message_set([{<<>>, <<>>}, {<<"FOO">>, <<"FOOBAR">>}])),
+  ok.
+
+encode_partitions_test() ->
+  ?assertMatch(<<>>, encode_partitions([], <<>>)),
+  ?assertMatch(<<"FOO", 1:32/integer, 0:32/integer, 2:32/integer, 0:32/integer>>,
+               encode_partitions([{1, []}, {2, []}], <<"FOO">>)),
+  ok.
+
+encode_topics_test() ->
+  ?assertMatch(<<>>, encode_topics([], <<>>)),
+  Topics1 = encode_topics([{<<"FOO">>, dict:new()}], <<"BAR">>),
+  ?assertMatch(<<"BAR", 3:16/integer, "FOO", 0:32/integer>>, Topics1),
+  Topics2 = encode_topics([ {<<"FOO">>, dict:from_list([{0, []}, {1, []}])}
+                          , {<<"FOOBAR">>, dict:from_list([{3, [{<<"K">>, <<"V">>}]}])}], <<>>),
+  %% 2 empty partitions: 8 x 2 = 16
+  %% 1 partition with msg: 14 + 2 + 8 + 8 = 36
+  %% (msg service bytes + 2 bytes content +
+  %%  msg set service bytes + partition service bytes)
+  ?assertMatch(<<3:16/integer, "FOO", 2:32/integer, _:16/binary,
+                 6:16/integer, "FOOBAR", 1:32/integer, _:36/binary>>,
+              Topics2),
+  ok.
+
+group_by_topic_test() ->
+  ?assertMatch([], group_by_topic([], [])),
+  T1 = <<"t1">>,
+  T2 = <<"t2">>,
+  Data = [{{T1, 0}, [foo, bar]}, {{T2, 0}, [1, 2]}, {{T1, 0}, [foobar]},
+          {{T1, 1}, [3, 4]},     {{T2, 0}, []}],
+  [{T1, Dict1}, {T2, Dict2}] = group_by_topic(Data, []),
+  ?assertMatch([{0, [foo, bar, foobar]}, {1, [3, 4]}], dict:to_list(Dict1)),
+  ?assertMatch([{0, [1, 2]}], dict:to_list(Dict2)),
   ok.
 
 -endif. % TEST
