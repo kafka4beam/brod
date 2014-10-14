@@ -1,27 +1,39 @@
-.PHONY:	all compile check clean conf_clean docs test
+.PHONY:	all build test shell dialyze
 
-all: compile
+INCLUDE_DIR ?= include
+SRC_DIR ?= src
+TEST_DIR ?= test
+ERLC ?= erlc
+ERLC_FLAGS ?= +debug_info +warn_obsolete_guard +warn_export_all -Werror
+ERLC_FLAGS += -I $(INCLUDE_DIR)
 
-compile:
-	./rebar compile
+SOURCES := $(wildcard $(SRC_DIR)/*.erl)
+TEST_SOURCES := $(wildcard $(TEST_DIR)/*.erl)
+EBIN_DIR ?= ebin
+OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(SOURCES:%.erl=%.beam)))
+TEST_OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(TEST_SOURCES:%.erl=%.beam)))
 
-check:
-	@:
+all: build
+
+build: $(OBJECTS)
+
+test: export ERLC_FLAGS := -DTEST $(ERLC_FLAGS)
+test: $(OBJECTS) $(TEST_OBJECTS)
+	erl -noshell -pa $(EBIN_DIR) \
+		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \
+		-s init stop
+
+$(EBIN_DIR)/%.beam: $(SRC_DIR)/%.erl
+	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
+
+$(EBIN_DIR)/%.beam: $(TEST_DIR)/%.erl
+	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
 
 clean:
-	./rebar clean
-	$(RM) doc/*
+	rm $(OBJECTS)
+	rm $(TEST_OBJECTS)
 
-conf_clean:
-	@:
-
-docs:
-	./rebar doc
-
-test:
-	@:
-
-debug-shell:
+shell:
 	erl -pa ebin
 
 dialyze:

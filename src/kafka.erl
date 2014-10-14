@@ -11,37 +11,14 @@
 %% API
 -export([ api_key/1
         , parse_stream/2
+        , encode/1
         , encode/2
         , decode/2
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
-
-%%%_* Macros -------------------------------------------------------------------
-
--define(CLIENT_ID,      <<"brod">>).
--define(CLIENT_ID_SIZE, 4).
-
--define(API_VERSION, 0).
--define(MAGIC_BYTE, 0).
-
--define(REPLICA_ID, -1).
-
-%% Api keys
--define(API_KEY_PRODUCE,        0).
--define(API_KEY_FETCH,          1).
--define(API_KEY_OFFSET,         2).
--define(API_KEY_METADATA,       3).
--define(API_KEY_LEADER_AND_ISR, 4).
--define(API_KEY_STOP_REPLICA,   5).
--define(API_KEY_OFFSET_COMMIT,  6).
--define(API_KEY_OFFSET_FETCH,   7).
-
-%% Compression
--define(COMPRESS_NONE, 0).
--define(COMPRESS_GZIP, 1).
--define(COMPRESS_SNAPPY, 2).
+-include("kafka.hrl").
 
 %%%_* API ----------------------------------------------------------------------
 %% @doc Parse binary stream of kafka responses.
@@ -63,7 +40,7 @@ parse_stream(Bin, Acc, CorrIdDict) ->
 
 encode(CorrId, Request) ->
   Header = header(api_key(Request), CorrId),
-  Body = do_encode_request(Request),
+  Body = encode(Request),
   Bin = <<Header/binary, Body/binary>>,
   Size = byte_size(Bin),
   <<Size:32/integer, Bin/binary>>.
@@ -86,13 +63,13 @@ header(ApiKey, CorrId) ->
     ?CLIENT_ID_SIZE:16/integer,
     ?CLIENT_ID/binary>>.
 
-do_encode_request(#metadata_request{} = Request) ->
+encode(#metadata_request{} = Request) ->
   metadata_request_body(Request);
-do_encode_request(#produce_request{} = Request)  ->
+encode(#produce_request{} = Request)  ->
   produce_request_body(Request);
-do_encode_request(#offset_request{} = Request)  ->
+encode(#offset_request{} = Request)  ->
   offset_request_body(Request);
-do_encode_request(#fetch_request{} = Request)  ->
+encode(#fetch_request{} = Request)  ->
   fetch_request_body(Request).
 
 parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
@@ -367,9 +344,9 @@ parse_bytes(Size, Bin0) ->
   {binary:copy(Bytes), Bin}.
 
 %% Tests -----------------------------------------------------------------------
--include_lib("eunit/include/eunit.hrl").
-
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 parse_array_test() ->
   F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) ->
@@ -398,193 +375,11 @@ parse_int64_test() ->
   ?assertError(function_clause, parse_int64(<<0:32/integer>>)),
   ok.
 
-kafka_size_test() ->
-  ?assertMatch(-1, kafka_size(<<>>)),
-  ?assertMatch(4, kafka_size(<<0:32/integer>>)),
-  ok.
-
 parse_bytes_test() ->
   ?assertMatch({<<"1234">>, <<"5678">>}, parse_bytes(4, <<"12345678">>)),
   ?assertMatch({<<"1234">>, <<"">>}, parse_bytes(4, <<"1234">>)),
   ?assertMatch({<<"">>, <<"1234">>}, parse_bytes(-1, <<"1234">>)),
   ?assertError({badmatch, <<"123">>}, parse_bytes(4, <<"123">>)),
-  ok.
-
-metadata_request_body_test() ->
-  ?assertMatch(<<0:32/integer, -1:16/signed-integer>>,
-               metadata_request_body(#metadata_request{})),
-  ?assertMatch(<<2:32/integer, 4:16/integer, "BARR", 3:16/integer, "FOO">>,
-               metadata_request_body(
-                 #metadata_request{topics = [<<"FOO">>, <<"BARR">>]})),
-  ok.
-
-mk_test_broker() ->
-  mk_test_broker(0).
-
-mk_test_broker(NodeId) ->
-  #broker_metadata{node_id = NodeId, host = "localhost", port = 1234}.
-
-mk_test_broker_bin() ->
-  mk_test_broker_bin(0).
-
-mk_test_broker_bin(NodeId) ->
-  <<NodeId:32/integer,
-    (length("localhost")):16/integer,
-    (list_to_binary("localhost"))/binary,
-    1234:32/integer>>.
-
-parse_broker_metadata_test() ->
-  B = mk_test_broker(),
-  Bin1 = mk_test_broker_bin(),
-  ?assertMatch({B, <<>>}, parse_broker_metadata(Bin1)),
-  Bin2 = <<Bin1/binary, <<"FOO">>/binary>>,
-  ?assertMatch({B, <<"FOO">>}, parse_broker_metadata(Bin2)),
-  ok.
-
-empty_array() -> <<0:32/integer>>.
-
-mk_array(L, F) ->
-  Bin = mk_array(L, F, <<>>),
-  <<(length(L)):32/integer, Bin/binary>>.
-
-mk_array([], _F, Acc) ->
-  Acc;
-mk_array([H | T], F, Acc) ->
-  mk_array(T, F, <<(F(H))/binary, Acc/binary>>).
-
-mk_test_partition(Id) ->
-  mk_test_partition(Id, 0, 0, [], []).
-
-mk_test_partition(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
-  #partition_metadata{ id         = Id
-                     , error_code = ErrorCode
-                     , leader_id  = LeaderId
-                     , replicas   = Replicas
-                     , isrs       = Isrs}.
-
-mk_test_partition_bin(Id) ->
-  mk_test_partition_bin(Id, 0, 0, [], []).
-
-mk_test_partition_bin(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
-  F = fun(I) -> <<I:32/integer>> end,
-  <<ErrorCode:16/signed-integer,
-    Id:32/integer,
-    LeaderId:32/signed-integer,
-    (mk_array(Replicas, F))/binary,
-    (mk_array(Isrs, F))/binary>>.
-
-parse_partition_metadata_test() ->
-  P1 = mk_test_partition(0),
-  P1Bin = mk_test_partition_bin(0),
-  ?assertMatch({P1, <<>>}, parse_partition_metadata(P1Bin)),
-  P2 = mk_test_partition(0, 0, 0, [0,1,2], [0,1]),
-  P2Bin = <<(mk_test_partition_bin(0, 0, 0, [0,1,2], [0,1]))/binary,
-            <<"FOO">>/binary>>,
-  ?assertMatch({P2, <<"FOO">>}, parse_partition_metadata(P2Bin)),
-  P3 = mk_test_partition(0, -1, -1, [0,1,2], []),
-  P3Bin = mk_test_partition_bin(0, -1, -1, [0,1,2], []),
-  ?assertMatch({P3, <<>>}, parse_partition_metadata(P3Bin)),
-  ok.
-
-mk_test_topic(Name) ->
-  mk_test_topic(Name, []).
-
-mk_test_topic(Name, Partitions) ->
-  #topic_metadata{name = Name, error_code = 0,
-                  partitions = [mk_test_partition(P) || P <- Partitions]}.
-
-mk_test_topic_bin(Name) ->
-  mk_test_topic_bin(Name, []).
-
-mk_test_topic_bin(Name, Partitions) ->
-  <<0:16/integer,
-    (size(Name)):16/integer,
-    Name/binary,
-    (mk_array(Partitions, fun mk_test_partition_bin/1))/binary>>.
-
-parse_topic_metadata_test() ->
-  Name = <<"FOO">>,
-  Topic0 = mk_test_topic(Name),
-  Topic0Bin = mk_test_topic_bin(Name),
-  ?assertMatch({Topic0, <<>>}, parse_topic_metadata(Topic0Bin)),
-  Topic1 = mk_test_topic(Name, [0, 1]),
-  Topic1Bin = <<(mk_test_topic_bin(Name, [0, 1]))/binary, <<"BAR">>/binary>>,
-  ?assertMatch({Topic1, <<"BAR">>}, parse_topic_metadata(Topic1Bin)),
-  ok.
-
-metadata_response_test() ->
-  EmptyArray = empty_array(),
-  Bin1 = <<EmptyArray/binary, EmptyArray/binary>>,
-  ?assertMatch(#metadata_response{brokers = [], topics = []},
-               metadata_response(Bin1)),
-  BrokerIds = [0, 1],
-  Brokers = [mk_test_broker(N) || N <- BrokerIds],
-  BrokersBin = mk_array(BrokerIds, fun mk_test_broker_bin/1),
-  TopicNames = [<<"t1">>, <<"t2">>],
-  Topics = [mk_test_topic(T) || T <- TopicNames],
-  TopicsBin = mk_array(TopicNames, fun mk_test_topic_bin/1),
-  Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
-  ?assertMatch(#metadata_response{brokers = Brokers, topics = Topics},
-               metadata_response(Bin2)),
-  ok.
-
-encode_message_test() ->
-  <<Crc1:32/integer, Msg1/binary>> = encode_message({<<>>, <<>>}),
-  ?assertEqual(Crc1, erlang:crc32(Msg1)),
-  ?assertMatch(<<?MAGIC_BYTE:8/integer,
-                 ?COMPRESS_NONE:8/integer,
-                 -1:32/signed-integer,
-                 -1:32/signed-integer>>, Msg1),
-  Key = <<"FOO">>,
-  Val = <<"FOOBAR">>,
-  <<Crc2:32/integer, Msg2/binary>> = encode_message({Key, Val}),
-  ?assertEqual(Crc2, erlang:crc32(Msg2)),
-  ?assertMatch(<<?MAGIC_BYTE:8/integer,
-                 ?COMPRESS_NONE:8/integer,
-                 3:32/integer,
-                 Key:3/binary,
-                 6:32/integer,
-                 Val:6/binary>>, Msg2),
-  ok.
-
-encode_message_set_test() ->
-  ?assertMatch(<<>>, encode_message_set([])),
-  %% empty msg size: CRC32 + 2x8 magic bytes + 2x32 sizes = 14 bytes
-  ?assertMatch(<<0:64/integer, 14:32/integer, _:14/binary,
-                 0:64/integer, 23:32/integer, _:23/binary>>,
-               encode_message_set([{<<>>, <<>>}, {<<"FOO">>, <<"FOOBAR">>}])),
-  ok.
-
-encode_partitions_test() ->
-  ?assertMatch(<<>>, encode_partitions([], <<>>)),
-  ?assertMatch(<<"FOO", 1:32/integer, 0:32/integer, 2:32/integer, 0:32/integer>>,
-               encode_partitions([{1, []}, {2, []}], <<"FOO">>)),
-  ok.
-
-encode_topics_test() ->
-  ?assertMatch(<<>>, encode_topics([], <<>>)),
-  Topics1 = encode_topics([{<<"FOO">>, dict:new()}], <<"BAR">>),
-  ?assertMatch(<<"BAR", 3:16/integer, "FOO", 0:32/integer>>, Topics1),
-  Topics2 = encode_topics([ {<<"FOO">>, dict:from_list([{0, []}, {1, []}])}
-                          , {<<"FOOBAR">>, dict:from_list([{3, [{<<"K">>, <<"V">>}]}])}], <<>>),
-  %% 2 empty partitions: 8 x 2 = 16
-  %% 1 partition with msg: 14 + 2 + 8 + 8 = 36
-  %% (msg service bytes + 2 bytes content +
-  %%  msg set service bytes + partition service bytes)
-  ?assertMatch(<<3:16/integer, "FOO", 2:32/integer, _:16/binary,
-                 6:16/integer, "FOOBAR", 1:32/integer, _:36/binary>>,
-              Topics2),
-  ok.
-
-group_by_topic_test() ->
-  ?assertMatch([], group_by_topic([], [])),
-  T1 = <<"t1">>,
-  T2 = <<"t2">>,
-  Data = [{{T1, 0}, [foo, bar]}, {{T2, 0}, [1, 2]}, {{T1, 0}, [foobar]},
-          {{T1, 1}, [3, 4]},     {{T2, 0}, []}],
-  [{T1, Dict1}, {T2, Dict2}] = group_by_topic(Data, []),
-  ?assertMatch([{0, [foo, bar, foobar]}, {1, [3, 4]}], dict:to_list(Dict1)),
-  ?assertMatch([{0, [1, 2]}], dict:to_list(Dict2)),
   ok.
 
 -endif. % TEST
