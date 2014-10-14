@@ -14,6 +14,8 @@
 -define(i32s(I), I:32/signed-integer).
 -define(i64(I),  I:64/integer).
 
+-define(l2b(L), erlang:list_to_binary(L)).
+
 api_key_test() ->
   ?assertMatch(?API_KEY_METADATA, kafka:api_key(#metadata_request{})),
   ?assertMatch(?API_KEY_PRODUCE, kafka:api_key(#produce_request{})),
@@ -37,16 +39,48 @@ encode_metadata_test() ->
   ok.
 
 decode_metadata_test() ->
-  EmptyArray = empty_array(),
-  Bin1 = <<EmptyArray/binary, EmptyArray/binary>>,
+  %% array: 32b length (number of items), [item]
+  %% metadata response: array of brokers, array of topics
+  %% broker: 32b node id, 16b host size, host, 32b port
+  %% topic: 16b error code, 16b name size, name, array of partitions
+  %% partition: 16b error code, 32b partition, 32b leader,
+  %%            array of replicas, array of in-sync-replicas
+  %% replica: 32b node id
+  %% isr: 32b node id
+  Bin1 = <<?i32(0), ?i32(0)>>,
   ?assertMatch(#metadata_response{brokers = [], topics = []},
                kafka:decode(?API_KEY_METADATA, Bin1)),
-  BrokerIds = [0, 1],
-  Brokers = [mk_test_broker(N) || N <- BrokerIds],
-  BrokersBin = mk_array(BrokerIds, fun mk_test_broker_bin/1),
-  TopicNames = [<<"t1">>, <<"t2">>],
-  Topics = [mk_test_topic(T) || T <- TopicNames],
-  TopicsBin = mk_array(TopicNames, fun mk_test_topic_bin/1),
+  Host = "localhost",
+  Brokers = [ #broker_metadata{node_id = 1, host = Host, port = ?PORT}
+            , #broker_metadata{node_id = 0, host = Host, port = ?PORT}],
+  BrokersBin = <<?i32(2),
+                 ?i32(0), ?i16((length(Host))),
+                 (?l2b(Host))/binary, ?i32(?PORT),
+                 ?i32(1), ?i16((length(Host))),
+                 (?l2b(Host))/binary, ?i32(?PORT)>>,
+  Partitions = [ #partition_metadata{ error_code = 2
+                                    , id = 1
+                                    , leader_id = 2
+                                    , replicas = []
+                                    , isrs = []}
+               , #partition_metadata{ error_code = 1
+                                    , id = 0
+                                    , leader_id = 1
+                                    , replicas = [1,2,3]
+                                    , isrs = [1,2]}],
+  T1 = <<"t1">>,
+  T2 = <<"t2">>,
+  Topics = [ #topic_metadata{name = T2, error_code = -1,
+                             partitions = Partitions}
+           , #topic_metadata{name = T1, error_code = 0, partitions = []}],
+  TopicsBin = <<?i32(2),
+                ?i16s(0), ?i16((size(T1))), T1/binary, ?i32(0),
+                ?i16s(-1), ?i16((size(T2))), T2/binary, ?i32(2),
+                ?i16s(1), ?i32(0), ?i32s(1),
+                ?i32(3), ?i32(3), ?i32(2), ?i32(1),
+                ?i32(2), ?i32(2), ?i32(1),
+                ?i16s(2), ?i32(1), ?i32s(2), ?i32(0), ?i32(0)
+              >>,
   Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
   ?assertMatch(#metadata_response{brokers = Brokers, topics = Topics},
                kafka:decode(?API_KEY_METADATA, Bin2)),
@@ -188,63 +222,6 @@ decode_produce_test() ->
   ?assertEqual(#produce_response{topics = [ProduceTopic3, ProduceTopic2]},
               kafka:decode(?API_KEY_PRODUCE, Bin2)),
   ok.
-
-mk_test_broker(NodeId) ->
-  #broker_metadata{node_id = NodeId, host = "localhost", port = ?PORT}.
-
-mk_test_broker_bin(NodeId) ->
-  <<?i32(NodeId),
-    ?i16((length("localhost"))),
-    (list_to_binary("localhost"))/binary,
-    ?i32(?PORT)>>.
-
-empty_array() -> <<?i32(0)>>.
-
-mk_array(L, F) ->
-  Bin = mk_array(L, F, <<>>),
-  <<?i32((length(L))), Bin/binary>>.
-
-mk_array([], _F, Acc) ->
-  Acc;
-mk_array([H | T], F, Acc) ->
-  mk_array(T, F, <<(F(H))/binary, Acc/binary>>).
-
-mk_test_partition(Id) ->
-  mk_test_partition(Id, 0, 0, [], []).
-
-mk_test_partition(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
-  #partition_metadata{ id         = Id
-                     , error_code = ErrorCode
-                     , leader_id  = LeaderId
-                     , replicas   = Replicas
-                     , isrs       = Isrs}.
-
-mk_test_partition_bin(Id) ->
-  mk_test_partition_bin(Id, 0, 0, [], []).
-
-mk_test_partition_bin(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
-  F = fun(I) -> <<?i32(I)>> end,
-  <<?i16s(ErrorCode),
-    ?i32(Id),
-    ?i32s(LeaderId),
-    (mk_array(Replicas, F))/binary,
-    (mk_array(Isrs, F))/binary>>.
-
-mk_test_topic(Name) ->
-  mk_test_topic(Name, []).
-
-mk_test_topic(Name, Partitions) ->
-  #topic_metadata{name = Name, error_code = 0,
-                  partitions = [mk_test_partition(P) || P <- Partitions]}.
-
-mk_test_topic_bin(Name) ->
-  mk_test_topic_bin(Name, []).
-
-mk_test_topic_bin(Name, Partitions) ->
-  <<?i16(0),
-    ?i16((size(Name))),
-    Name/binary,
-    (mk_array(Partitions, fun mk_test_partition_bin/1))/binary>>.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

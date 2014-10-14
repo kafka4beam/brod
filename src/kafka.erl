@@ -115,7 +115,7 @@ parse_broker_metadata(<<NodeID:32/integer,
                            , port = Port},
   {Broker, Bin}.
 
-parse_topic_metadata(<<ErrorCode:16/integer,
+parse_topic_metadata(<<ErrorCode:16/signed-integer,
                        Size:16/integer,
                        Name:Size/binary,
                        Bin0/binary>>) ->
@@ -125,6 +125,7 @@ parse_topic_metadata(<<ErrorCode:16/integer,
                          , partitions = Partitions},
   {Topic, Bin}.
 
+%% isrs = "in sync replicas"
 parse_partition_metadata(<<ErrorCode:16/signed-integer,
                            Id:32/integer,
                            LeaderId:32/signed-integer,
