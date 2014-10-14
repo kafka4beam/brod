@@ -83,13 +83,6 @@ encode_produce_test() ->
          , {{T1, 1}, [{<<>>, <<>>}, {<<>>, <<?i16(3)>>}]}
          , {{T2, 0}, [{<<>>, <<"foobar">>}]}
          , {{T3, 0}, []}],
-  %% metadata: 16b acks, 32b timeout, 32b topics count, topics
-  %% topic: 16b name size, name, 32b partitions count, partitions
-  %% partition: 32b id, 32b msg set size, msg set
-  %% message set: [message]
-  %% message: 64b offset, 32b message size, CRC32,
-  %%          8b magic byte, 8b compress mode,
-  %%          32b key size, key, 32b value size, value
   R2 = #produce_request{acks = 0, timeout = 10, data = Data},
   Crc1 = erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
                         ?i32s(-1), ?i32s(-1)>>),
@@ -101,6 +94,13 @@ encode_produce_test() ->
                         ?i32s(-1), ?i32s(2), ?i16(3)>>),
   Crc5 = erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
                         ?i32s(-1), ?i32s(6), "foobar">>),
+  %% metadata: 16b acks, 32b timeout, 32b topics count, topics
+  %% topic: 16b name size, name, 32b partitions count, partitions
+  %% partition: 32b id, 32b msg set size, msg set
+  %% message set: [message]
+  %% message: 64b offset, 32b message size, CRC32,
+  %%          8b magic byte, 8b compress mode,
+  %%          32b key size, key, 32b value size, value
   ?assertEqual(<<?i16s(0), ?i32(10), ?i32(3),    % metadata
                  ?i16(2), T1/binary, ?i32(3),    % t1 start
                  ?i32(0), ?i32(0),               % p0 start/end
@@ -145,12 +145,56 @@ encode_produce_test() ->
                >>, kafka:encode(R2)),
   ok.
 
+decode_produce_test() ->
+  %% array: 32b length (number of items), [item]
+  %% produce response: array of topics
+  %% topic: 16b name size, name, array of offsets
+  %% offset: 32b partition, 16b error code, 64b offset
+  ?assertEqual(#produce_response{topics = []},
+               kafka:decode(?API_KEY_PRODUCE, <<?i32(0)>>)),
+  Topic1 = <<"t1">>,
+  Offset1 = 2 bsl 63 - 1,
+  ProduceOffset1 = #produce_offset{ partition = 0
+                                  , error_code = -1
+                                  , offset = Offset1},
+  ProduceTopic1 = #produce_topic{ topic = Topic1
+                                , offsets = [ProduceOffset1]},
+  Bin1 = <<?i32(1), ?i16(2), Topic1/binary, ?i32(1),
+           ?i32(0), ?i16s(-1), ?i64(Offset1)>>,
+  ?assertEqual(#produce_response{topics = [ProduceTopic1]},
+              kafka:decode(?API_KEY_PRODUCE, Bin1)),
+
+  Topic2 = <<"t2">>,
+  Topic3 = <<"t3">>,
+  Offset2 = 0,
+  Offset3 = 1,
+  ProduceOffset2 = #produce_offset{ partition = 0
+                                  , error_code = 1
+                                  , offset = Offset2},
+  ProduceOffset3 = #produce_offset{ partition = 2
+                                  , error_code = 2
+                                  , offset = Offset3},
+  ProduceTopic2 = #produce_topic{ topic = Topic2
+                                , offsets = [ ProduceOffset3
+                                            , ProduceOffset2]},
+  ProduceTopic3 = #produce_topic{ topic = Topic3
+                                , offsets = []},
+  Bin2 = <<?i32(2),
+           ?i16(2), Topic2/binary, ?i32(2),
+           ?i32(0), ?i16s(1), ?i64(Offset2),
+           ?i32(2), ?i16s(2), ?i64(Offset3),
+           ?i16(2), Topic3/binary, ?i32(0)
+         >>,
+  ?assertEqual(#produce_response{topics = [ProduceTopic3, ProduceTopic2]},
+              kafka:decode(?API_KEY_PRODUCE, Bin2)),
+  ok.
+
 mk_test_broker(NodeId) ->
   #broker_metadata{node_id = NodeId, host = "localhost", port = ?PORT}.
 
 mk_test_broker_bin(NodeId) ->
-  <<NodeId:32/integer,
-    (length("localhost")):16/integer,
+  <<?i32(NodeId),
+    ?i16((length("localhost"))),
     (list_to_binary("localhost"))/binary,
     ?i32(?PORT)>>.
 
@@ -179,10 +223,10 @@ mk_test_partition_bin(Id) ->
   mk_test_partition_bin(Id, 0, 0, [], []).
 
 mk_test_partition_bin(Id, ErrorCode, LeaderId, Replicas, Isrs) ->
-  F = fun(I) -> <<I:32/integer>> end,
-  <<ErrorCode:16/signed-integer,
-    Id:32/integer,
-    LeaderId:32/signed-integer,
+  F = fun(I) -> <<?i32(I)>> end,
+  <<?i16s(ErrorCode),
+    ?i32(Id),
+    ?i32s(LeaderId),
     (mk_array(Replicas, F))/binary,
     (mk_array(Isrs, F))/binary>>.
 
@@ -197,8 +241,8 @@ mk_test_topic_bin(Name) ->
   mk_test_topic_bin(Name, []).
 
 mk_test_topic_bin(Name, Partitions) ->
-  <<0:16/integer,
-    (size(Name)):16/integer,
+  <<?i16(0),
+    ?i16((size(Name))),
     Name/binary,
     (mk_array(Partitions, fun mk_test_partition_bin/1))/binary>>.
 
