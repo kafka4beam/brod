@@ -9,10 +9,11 @@
 
 -define(i8(I),   I:8/integer).
 -define(i16(I),  I:16/integer).
--define(i32(I),  I:32/integer).
 -define(i16s(I), I:16/signed-integer).
+-define(i32(I),  I:32/integer).
 -define(i32s(I), I:32/signed-integer).
 -define(i64(I),  I:64/integer).
+-define(i64s(I), I:64/signed-integer).
 
 -define(l2b(L), erlang:list_to_binary(L)).
 
@@ -221,6 +222,49 @@ decode_produce_test() ->
          >>,
   ?assertEqual(#produce_response{topics = [ProduceTopic3, ProduceTopic2]},
               kafka:decode(?API_KEY_PRODUCE, Bin2)),
+  ok.
+
+encode_offset_test() ->
+  Topic = <<"topic">>,
+  Partition = 0,
+  Time1 = -1,
+  MaxNOffsets = 1,
+  R1 = #offset_request{ topic = Topic
+                      , partition = Partition
+                      , time = Time1
+                      , max_n_offsets = MaxNOffsets},
+  Bin1 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
+         ?i32(1), ?i32(Partition), ?i64s(Time1), ?i32(MaxNOffsets)>>,
+  ?assertEqual(Bin1, kafka:encode(R1)),
+  Time2 = 2 bsl 63 - 1,
+  R2 = R1#offset_request{time = Time2},
+  Bin2 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
+         ?i32(1), ?i32(Partition), ?i64s(Time2), ?i32(MaxNOffsets)>>,
+  ?assertEqual(Bin2, kafka:encode(R2)),
+  ok.
+
+decode_offset_test() ->
+  %% array: 32b length (number of items), [item]
+  %% offset response: array of topics
+  %% topic: 16b name size, name, array of partitions
+  %% partition: 32b partition, 16b error code, array of offsets
+  %% offset: 64b int
+  ?assertEqual(#offset_response{topics = []},
+               kafka:decode(?API_KEY_OFFSET, <<?i32(0)>>)),
+  Topic = <<"t1">>,
+  Partition = 0,
+  ErrorCode = -1,
+  Offsets = [0, 1, 2 bsl 63 - 1, 3],
+  OffsetsBin = << << ?i64(X) >> || X <- lists:reverse(Offsets) >>,
+  Partitions = [#partition_offsets{ partition = Partition
+                                  , error_code = ErrorCode
+                                  , offsets = Offsets}],
+  R = #offset_response{topics = [#offset_topic{ topic = Topic
+                                              , partitions = Partitions}]},
+  Bin = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+        ?i32(Partition), ?i16s(ErrorCode), ?i32((length(Offsets))),
+        OffsetsBin/binary>>,
+  ?assertEqual(R, kafka:decode(?API_KEY_OFFSET, Bin)),
   ok.
 
 %%% Local Variables:

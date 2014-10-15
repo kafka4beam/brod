@@ -30,8 +30,8 @@ $(EBIN_DIR)/%.beam: $(TEST_DIR)/%.erl
 	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
 
 clean:
-	rm $(OBJECTS)
-	rm $(TEST_OBJECTS)
+	@rm -f $(OBJECTS)
+	@rm -f $(TEST_OBJECTS)
 
 shell:
 	erl -pa ebin
