@@ -72,22 +72,6 @@ encode(#offset_request{} = Request)  ->
 encode(#fetch_request{} = Request)  ->
   fetch_request_body(Request).
 
-parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
-  parse_array(Length, Bin, [], Fun).
-
-parse_array(0, Bin, Acc, _Fun) ->
-  {Acc, Bin};
-parse_array(Length, Bin0, Acc, Fun) ->
-  {Item, Bin} = Fun(Bin0),
-  parse_array(Length - 1, Bin, [Item | Acc], Fun).
-
-parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
-
-parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
-
-kafka_size(<<"">>) -> -1;
-kafka_size(Bin)    -> size(Bin).
-
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
   <<0:32/integer, -1:16/signed-integer>>;
@@ -290,7 +274,7 @@ parse_topic_fetch_data(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
   {#topic_fetch_data{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
 parse_partition_messages(<<Partition:32/integer,
-                           ErrorCode:16/integer,
+                           ErrorCode:16/signed-integer,
                            HighWmOffset:64/integer,
                            MessageSetSize:32/integer,
                            MessageSetBin:MessageSetSize/binary,
@@ -337,6 +321,22 @@ parse_message_set(_Bin, []) ->
   %% is too small to for a whole message.
   %% For some reason kafka does not report error.
   throw("max_bytes option is too small").
+
+parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
+  parse_array(Length, Bin, [], Fun).
+
+parse_array(0, Bin, Acc, _Fun) ->
+  {Acc, Bin};
+parse_array(Length, Bin0, Acc, Fun) ->
+  {Item, Bin} = Fun(Bin0),
+  parse_array(Length - 1, Bin, [Item | Acc], Fun).
+
+parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
+
+parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
+
+kafka_size(<<"">>) -> -1;
+kafka_size(Bin)    -> size(Bin).
 
 parse_bytes(-1, Bin) ->
   {<<>>, Bin};

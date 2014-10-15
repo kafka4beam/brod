@@ -17,6 +17,27 @@
 
 -define(l2b(L), erlang:list_to_binary(L)).
 
+-define(max8,  1 bsl 8 - 1).
+-define(max16, 1 bsl 16 - 1).
+-define(max32, 1 bsl 32 - 1).
+-define(max64, 1 bsl 64 - 1).
+
+%% make it print full binaries on tty when a test fails
+%% to simplify debugging
+-undef(assertEqual).
+-define(assertEqual(Expect, Expr),
+  ((fun (__X) ->
+      case (Expr) of
+    __X -> ok;
+    __V -> .erlang:error({assertEqual_failed,
+              [{module, ?MODULE},
+               {line, ?LINE},
+               {expression, (??Expr)},
+               {expected, lists:flatten(io_lib:format("~1000p", [__X]))},
+               {value, lists:flatten(io_lib:format("~1000p", [__V]))}]})
+      end
+    end)(Expect))).
+
 api_key_test() ->
   ?assertMatch(?API_KEY_METADATA, kafka:api_key(#metadata_request{})),
   ?assertMatch(?API_KEY_PRODUCE, kafka:api_key(#produce_request{})),
@@ -52,21 +73,27 @@ decode_metadata_test() ->
   ?assertMatch(#metadata_response{brokers = [], topics = []},
                kafka:decode(?API_KEY_METADATA, Bin1)),
   Host = "localhost",
-  Brokers = [ #broker_metadata{node_id = 1, host = Host, port = ?PORT}
-            , #broker_metadata{node_id = 0, host = Host, port = ?PORT}],
+  Node1 = 0,
+  Node2 = ?max32,
+  Leader1 = -1,
+  Leader2 = ?max16,
+  ErrorCode1 = -1,
+  ErrorCode2 = ?max8,
+  Brokers = [ #broker_metadata{node_id = Node2, host = Host, port = ?PORT}
+            , #broker_metadata{node_id = Node1, host = Host, port = ?PORT}],
   BrokersBin = <<?i32(2),
-                 ?i32(0), ?i16((length(Host))),
+                 ?i32(Node1), ?i16((length(Host))),
                  (?l2b(Host))/binary, ?i32(?PORT),
-                 ?i32(1), ?i16((length(Host))),
+                 ?i32(Node2), ?i16((length(Host))),
                  (?l2b(Host))/binary, ?i32(?PORT)>>,
-  Partitions = [ #partition_metadata{ error_code = 2
-                                    , id = 1
-                                    , leader_id = 2
+  Partitions = [ #partition_metadata{ error_code = ErrorCode2
+                                    , id = Node2
+                                    , leader_id = Leader2
                                     , replicas = []
                                     , isrs = []}
-               , #partition_metadata{ error_code = 1
-                                    , id = 0
-                                    , leader_id = 1
+               , #partition_metadata{ error_code = ErrorCode1
+                                    , id = Node1
+                                    , leader_id = Leader1
                                     , replicas = [1,2,3]
                                     , isrs = [1,2]}],
   T1 = <<"t1">>,
@@ -77,31 +104,16 @@ decode_metadata_test() ->
   TopicsBin = <<?i32(2),
                 ?i16s(0), ?i16((size(T1))), T1/binary, ?i32(0),
                 ?i16s(-1), ?i16((size(T2))), T2/binary, ?i32(2),
-                ?i16s(1), ?i32(0), ?i32s(1),
+                ?i16s(ErrorCode1), ?i32(Node1), ?i32s(Leader1),
                 ?i32(3), ?i32(3), ?i32(2), ?i32(1),
                 ?i32(2), ?i32(2), ?i32(1),
-                ?i16s(2), ?i32(1), ?i32s(2), ?i32(0), ?i32(0)
+                ?i16s(ErrorCode2), ?i32(Node2), ?i32s(Leader2),
+                ?i32(0), ?i32(0)
               >>,
   Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
-  ?assertMatch(#metadata_response{brokers = Brokers, topics = Topics},
+  ?assertEqual(#metadata_response{brokers = Brokers, topics = Topics},
                kafka:decode(?API_KEY_METADATA, Bin2)),
   ok.
-
-%% make it print full binaries on tty when a test fails
-%% to simplify debugging
--undef(assertEqual).
--define(assertEqual(Expect, Expr),
-  ((fun (__X) ->
-      case (Expr) of
-    __X -> ok;
-    __V -> .erlang:error({assertEqual_failed,
-              [{module, ?MODULE},
-               {line, ?LINE},
-               {expression, (??Expr)},
-               {expected, lists:flatten(io_lib:format("~1000p", [__X]))},
-               {value, lists:flatten(io_lib:format("~1000p", [__V]))}]})
-      end
-    end)(Expect))).
 
 encode_produce_test() ->
   R1 = #produce_request{acks = -1, timeout = 1, data = []},
@@ -188,7 +200,7 @@ decode_produce_test() ->
   ?assertEqual(#produce_response{topics = []},
                kafka:decode(?API_KEY_PRODUCE, <<?i32(0)>>)),
   Topic1 = <<"t1">>,
-  Offset1 = 2 bsl 63 - 1,
+  Offset1 = ?max64,
   ProduceOffset1 = #produce_offset{ partition = 0
                                   , error_code = -1
                                   , offset = Offset1},
@@ -236,7 +248,7 @@ encode_offset_test() ->
   Bin1 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
          ?i32(1), ?i32(Partition), ?i64s(Time1), ?i32(MaxNOffsets)>>,
   ?assertEqual(Bin1, kafka:encode(R1)),
-  Time2 = 2 bsl 63 - 1,
+  Time2 = ?max64,
   R2 = R1#offset_request{time = Time2},
   Bin2 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
          ?i32(1), ?i32(Partition), ?i64s(Time2), ?i32(MaxNOffsets)>>,
@@ -252,19 +264,82 @@ decode_offset_test() ->
   ?assertEqual(#offset_response{topics = []},
                kafka:decode(?API_KEY_OFFSET, <<?i32(0)>>)),
   Topic = <<"t1">>,
+  R1 = #offset_response{topics = [#offset_topic{ topic = Topic
+                                               , partitions = []}]},
+  Bin1 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(0)>>,
+  ?assertEqual(R1, kafka:decode(?API_KEY_OFFSET, Bin1)),
   Partition = 0,
   ErrorCode = -1,
-  Offsets = [0, 1, 2 bsl 63 - 1, 3],
+  Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+           ?i32(Partition), ?i16s(ErrorCode), ?i32(0)>>,
+  Partitions2 = [#partition_offsets{ partition = Partition
+                                   , error_code = ErrorCode
+                                   , offsets = []}],
+  R2 = #offset_response{
+                  topics = [#offset_topic{ topic = Topic
+                                         , partitions = Partitions2}]},
+  ?assertEqual(R2, kafka:decode(?API_KEY_OFFSET, Bin2)),
+  Offsets = [0, 1, ?max64, 3],
   OffsetsBin = << << ?i64(X) >> || X <- lists:reverse(Offsets) >>,
-  Partitions = [#partition_offsets{ partition = Partition
-                                  , error_code = ErrorCode
-                                  , offsets = Offsets}],
-  R = #offset_response{topics = [#offset_topic{ topic = Topic
-                                              , partitions = Partitions}]},
-  Bin = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
-        ?i32(Partition), ?i16s(ErrorCode), ?i32((length(Offsets))),
-        OffsetsBin/binary>>,
-  ?assertEqual(R, kafka:decode(?API_KEY_OFFSET, Bin)),
+  Partitions3 = [#partition_offsets{ partition = Partition
+                                   , error_code = ErrorCode
+                                   , offsets = Offsets}],
+  R3 = #offset_response{topics = [#offset_topic{ topic = Topic
+                                               , partitions = Partitions3}]},
+  Bin3 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+           ?i32(Partition), ?i16s(ErrorCode), ?i32((length(Offsets))),
+           OffsetsBin/binary>>,
+  ?assertEqual(R3, kafka:decode(?API_KEY_OFFSET, Bin3)),
+  ok.
+
+encode_fetch_test() ->
+  MaxWaitTime = ?max32,
+  MinBytes = ?max32,
+  Topic = <<"topic">>,
+  Partition = ?max32,
+  Offset = ?max64,
+  MaxBytes = ?max32,
+  R = #fetch_request{ max_wait_time = MaxWaitTime
+                    , min_bytes     = MinBytes
+                    , topic         = Topic
+                    , partition     = Partition
+                    , offset        = Offset
+                    , max_bytes     = MaxBytes},
+  Bin = <<?i32s(?REPLICA_ID), ?i32(MaxWaitTime), ?i32(MinBytes),
+          ?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+          ?i32(Partition), ?i64(Offset), ?i32(MaxBytes)>>,
+  ?assertEqual(Bin, kafka:encode(R)),
+  ok.
+
+decode_fetch_test() ->
+  %% array: 32b length (number of items), [item]
+  %% offset response: array of topics
+  %% topic: 16b name size, name, array of partition message sets
+  %% partition message set: 32b partition, 16b error code,
+  %%   64b high watermark offset, 32b message set size, message set
+  %% message set: [message]
+  %% message: 64b offset, 32b message size, 32b crc, 8b magic byte,
+  %%          8b attributes, 32b key size, key, 32b value size, value
+  ?assertEqual(#fetch_response{topics = []},
+               kafka:decode(?API_KEY_FETCH, <<?i32(0)>>)),
+  Topic = <<"t1">>,
+  R1 = #fetch_response{topics = [#topic_fetch_data{ topic = Topic
+                                                  , partitions = []}]},
+  Bin1 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(0)>>,
+  ?assertEqual(R1, kafka:decode(?API_KEY_FETCH, Bin1)),
+  Partition = 0,
+  ErrorCode = -1,
+  HighWmOffset = ?max64,
+  Partitions2 = [#partition_messages{ partition = Partition
+                                    , error_code = ErrorCode
+                                    , high_wm_offset = HighWmOffset
+                                    , last_offset = 0
+                                    , messages = []}],
+  R2 = #fetch_response{topics = [#topic_fetch_data{ topic = Topic
+                                                  , partitions = Partitions2}]},
+  Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+           ?i32(Partition), ?i16s(ErrorCode), ?i64(HighWmOffset), ?i32(0)>>,
+  ?assertEqual(R2, kafka:decode(?API_KEY_FETCH, Bin2)),
   ok.
 
 %%% Local Variables:
