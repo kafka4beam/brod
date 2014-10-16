@@ -75,9 +75,9 @@ decode_metadata_test() ->
   Host = "localhost",
   Node1 = 0,
   Node2 = ?max32,
-  Leader1 = -1,
+  Leader1 = -(?max16),
   Leader2 = ?max16,
-  ErrorCode1 = -1,
+  ErrorCode1 = -(?max8),
   ErrorCode2 = ?max8,
   Brokers = [ #broker_metadata{node_id = Node2, host = Host, port = ?PORT}
             , #broker_metadata{node_id = Node1, host = Host, port = ?PORT}],
@@ -98,12 +98,13 @@ decode_metadata_test() ->
                                     , isrs = [1,2]}],
   T1 = <<"t1">>,
   T2 = <<"t2">>,
-  Topics = [ #topic_metadata{name = T2, error_code = -1,
+  Topics = [ #topic_metadata{name = T2, error_code = ErrorCode2,
                              partitions = Partitions}
-           , #topic_metadata{name = T1, error_code = 0, partitions = []}],
+           , #topic_metadata{name = T1, error_code = ErrorCode1,
+                             partitions = []}],
   TopicsBin = <<?i32(2),
-                ?i16s(0), ?i16((size(T1))), T1/binary, ?i32(0),
-                ?i16s(-1), ?i16((size(T2))), T2/binary, ?i32(2),
+                ?i16s(ErrorCode1), ?i16((size(T1))), T1/binary, ?i32(0),
+                ?i16s(ErrorCode2), ?i16((size(T2))), T2/binary, ?i32(2),
                 ?i16s(ErrorCode1), ?i32(Node1), ?i32s(Leader1),
                 ?i32(3), ?i32(3), ?i32(2), ?i32(1),
                 ?i32(2), ?i32(2), ?i32(1),
@@ -116,8 +117,10 @@ decode_metadata_test() ->
   ok.
 
 encode_produce_test() ->
-  R1 = #produce_request{acks = -1, timeout = 1, data = []},
-  ?assertMatch(<<?i16s(-1), ?i32(1), ?i32(0)>>, kafka:encode(R1)),
+  Acks1 = -(?max8),
+  Timeout1 = 0,
+  R1 = #produce_request{acks = Acks1, timeout = Timeout1, data = []},
+  ?assertMatch(<<?i16s(Acks1), ?i32(Timeout1), ?i32(0)>>, kafka:encode(R1)),
   T1 = <<"t1">>,
   T2 = <<"t2">>,
   T3 = <<"topic3">>,
@@ -130,7 +133,9 @@ encode_produce_test() ->
          , {{T1, 1}, [{<<>>, <<>>}, {<<>>, <<?i16(3)>>}]}
          , {{T2, 0}, [{<<>>, <<"foobar">>}]}
          , {{T3, 0}, []}],
-  R2 = #produce_request{acks = 0, timeout = 10, data = Data},
+  Acks2 = ?max8,
+  Timeout2 = ?max32,
+  R2 = #produce_request{acks = Acks2, timeout = Timeout2, data = Data},
   Crc1 = erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
                         ?i32s(-1), ?i32s(-1)>>),
   Crc2 = erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
@@ -148,7 +153,7 @@ encode_produce_test() ->
   %% message: 64b offset, 32b message size, CRC32,
   %%          8b magic byte, 8b compress mode,
   %%          32b key size, key, 32b value size, value
-  ?assertEqual(<<?i16s(0), ?i32(10), ?i32(3),    % metadata
+  ?assertEqual(<<?i16s(Acks2), ?i32(Timeout2), ?i32(3), % metadata
                  ?i16(2), T1/binary, ?i32(3),    % t1 start
                  ?i32(0), ?i32(0),               % p0 start/end
                  %% in kafka:group_by_topics/2 dict puts p2 before p0
@@ -327,20 +332,143 @@ decode_fetch_test() ->
                                                   , partitions = []}]},
   Bin1 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(0)>>,
   ?assertEqual(R1, kafka:decode(?API_KEY_FETCH, Bin1)),
-  Partition = 0,
-  ErrorCode = -1,
-  HighWmOffset = ?max64,
-  Partitions2 = [#partition_messages{ partition = Partition
-                                    , error_code = ErrorCode
-                                    , high_wm_offset = HighWmOffset
-                                    , last_offset = 0
-                                    , messages = []}],
-  R2 = #fetch_response{topics = [#topic_fetch_data{ topic = Topic
-                                                  , partitions = Partitions2}]},
+
+  R2 = #fetch_response{
+    topics = [#topic_fetch_data{ topic = Topic
+                               , partitions =
+                                 [#partition_messages{ partition = 0
+                                                     , error_code = 0
+                                                     , high_wm_offset = 0
+                                                     , last_offset = 0
+                                                     , messages = []}]}]},
   Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
-           ?i32(Partition), ?i16s(ErrorCode), ?i64(HighWmOffset), ?i32(0)>>,
+           ?i32(0), ?i16s(0), ?i64(0), ?i32(0)>>,
   ?assertEqual(R2, kafka:decode(?API_KEY_FETCH, Bin2)),
+
+  Bin3 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
+           ?i32(0), ?i16s(0), ?i64(0), ?i32(13), ?i64(0), ?i32(16), "x">>,
+  ?assertThrow("max_bytes option is too small",
+               kafka:decode(?API_KEY_FETCH, Bin3)),
+
+  Topic1 = <<"t1">>,
+  Topic2 = crypto:rand_bytes(?max16),
+  %% Topic2 = <<"t2">>,
+  Topic3 = <<"t3">>,
+  Partition1 = 1, Partition2 = ?max32,
+  ErrorCode1 = 0, ErrorCode2 = ?max8,
+  HighWmOffset1 = 1, HighWmOffset2 = ?max64,
+  K2 = crypto:rand_bytes(?max16),
+  V2 = crypto:rand_bytes(?max16),
+  %% K2 = <<"a">>,
+  %% V2 = <<"b">>,
+  Message1 = #message{ offset = 0
+                     , magic_byte = ?MAGIC_BYTE
+                     , attributes = 0
+                     , crc = msgcrc(<<"1">>, <<"2">>)
+                     , key = <<"1">>
+                     , value = <<"2">>},
+  Message2 = #message{ offset = ?max64
+                     , magic_byte = ?MAGIC_BYTE
+                     , attributes = 0
+                     , crc = msgcrc(K2, V2)
+                     , key = K2
+                     , value = V2},
+  Message3 = #message{ offset = 0
+                     , magic_byte = ?MAGIC_BYTE
+                     , attributes = 0
+                     , crc = msgcrc(<<>>, <<"0">>)
+                     , key = <<>>
+                     , value = <<"0">>},
+  Message4 = #message{ offset = 0
+                     , magic_byte = ?MAGIC_BYTE
+                     , attributes = 0
+                     , crc = msgcrc(<<>>, <<>>)
+                     , key = <<>>
+                     , value = <<>>},
+  Partitions1 = [ #partition_messages{ partition = Partition2
+                                     , error_code = ErrorCode2
+                                     , high_wm_offset = HighWmOffset2
+                                     , last_offset = 0
+                                     , messages = []}
+                , #partition_messages{ partition = Partition1
+                                     , error_code = ErrorCode1
+                                     , high_wm_offset = HighWmOffset1
+                                     , last_offset = ?max64
+                                     , messages = [Message1, Message2]}],
+  Partitions3 = [ #partition_messages{ partition = Partition1
+                                     , error_code = ErrorCode1
+                                     , high_wm_offset = HighWmOffset1
+                                     , last_offset = 0
+                                     , messages = [Message1, Message2,
+                                                   Message3, Message4]}],
+  R3 = #fetch_response{topics = [ #topic_fetch_data{ topic = Topic3
+                                                   , partitions = Partitions3}
+                                , #topic_fetch_data{ topic = Topic2
+                                                   , partitions = []}
+                                , #topic_fetch_data{ topic = Topic1
+                                                   , partitions = Partitions1}
+                                ]
+                      },
+  %% size of a message in a message set excluding key/value: 26 bytes
+  Bin4 = <<?i32(3),                             % number of topics
+           ?i16((size(Topic1))), Topic1/binary, % topic 1 start
+           ?i32(2),                             % partitions in topic
+                                                % partition 1 start
+           ?i32(Partition1), ?i16s(ErrorCode1), ?i64(HighWmOffset1),
+           ?i32((26 * 2 + 2 + size(K2) + size(V2))), % message set start
+           ?i64(0), ?i32(16), ?i32((msgcrc(<<"1">>, <<"2">>))), % msg1
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(1),
+           <<"1">>/binary, ?i32s(1), <<"2">>/binary,
+           ?i64((?max64)), ?i32((14 + size(K2) + size(V2))),    % msg2
+           ?i32((msgcrc(K2, V2))),
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s((size(K2))),
+           K2/binary, ?i32s((size(V2))), V2/binary,
+                                                % partition 1 end
+                                                % partition 2 start
+           ?i32(Partition2), ?i16s(ErrorCode2), ?i64(HighWmOffset2), ?i32(0),
+                                                % partition 2 end
+                                                % topic 1 end
+           ?i16((size(Topic2))), Topic2/binary, % topic 2 start
+           ?i32(0),                             % partitions in topic
+                                                % topic 2 end
+           ?i16((size(Topic3))), Topic3/binary, % topic 3 start
+           ?i32(1),                             % partitions in topic
+                                                % partition 1 start
+           ?i32(Partition1), ?i16s(ErrorCode1), ?i64(HighWmOffset1),
+           ?i32((26 * 4 + 2 + 1 + size(K2) + size(V2))), % message set start
+           ?i64(0), ?i32(16), ?i32((msgcrc(<<"1">>, <<"2">>))), % msg1
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(1),
+           <<"1">>/binary, ?i32s(1), <<"2">>/binary,
+           ?i64((?max64)), ?i32((14 + size(K2) + size(V2))),    % msg2
+           ?i32((msgcrc(K2, V2))),
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s((size(K2))),
+           K2/binary, ?i32s((size(V2))), V2/binary,
+           ?i64(0), ?i32((14 + 1)),             % msg3
+           ?i32((msgcrc(<<>>, <<"0">>))),
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(-1),
+           ?i32s(1), <<"0">>/binary,
+           ?i64(0), ?i32(14),                   % msg4
+           ?i32((msgcrc(<<>>, <<>>))),
+           ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(-1),
+           ?i32s(-1)
+                                                % partition 1 end
+                                                % topic 3 end
+           >>,
+  ?assertEqual(R3, kafka:decode(?API_KEY_FETCH, Bin4)),
   ok.
+
+msgcrc(<<>>, <<>>) ->
+  erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(-1),
+                 ?i32s(-1)>>);
+msgcrc(<<>>, V) ->
+  erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s(-1),
+                 ?i32s((size(V))), V/binary>>);
+msgcrc(K, <<>>) ->
+  erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s((size(K))),
+                 K/binary, ?i32s(-1)>>);
+msgcrc(K, V) ->
+  erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32s((size(K))),
+                 K/binary, ?i32s((size(V))), V/binary>>).
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
