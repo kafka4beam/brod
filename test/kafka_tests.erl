@@ -124,15 +124,17 @@ encode_produce_test() ->
   T1 = <<"t1">>,
   T2 = <<"t2">>,
   T3 = <<"topic3">>,
-  Data = [ {{T1, 0}, []}
-         , {{T1, 1}, [{<<>>, <<>>}]}
-         , {{T2, 0}, [{<<?i32(1)>>, <<?i32(2)>>}]}
-         , {{T1, 2}, []}
-         , {{T1, 2}, [{<<"foo">>, <<"bar">>}]}
-         , {{T2, 0}, []}
-         , {{T1, 1}, [{<<>>, <<>>}, {<<>>, <<?i16(3)>>}]}
-         , {{T2, 0}, [{<<>>, <<"foobar">>}]}
-         , {{T3, 0}, []}],
+  T1Dict1 = dict:append_list(0, [], dict:new()),
+  T1Dict2 = dict:append_list(1, [ {<<>>, <<>>}
+                                , {<<>>, <<>>}
+                                , {<<>>, <<?i16(3)>>}], T1Dict1),
+  T1Dict = dict:append(2, {<<"foo">>, <<"bar">>}, T1Dict2),
+  T2Dict = dict:append_list(0, [ {<<?i32(1)>>, <<?i32(2)>>}
+                               , {<<>>, <<"foobar">>}], dict:new()),
+  T3Dict = dict:append_list(0, [], dict:new()),
+  Data = [ {T1, T1Dict}
+         , {T2, T2Dict}
+         , {T3, T3Dict}],
   Acks2 = ?max8,
   Timeout2 = ?max32,
   R2 = #produce_request{acks = Acks2, timeout = Timeout2, data = Data},

@@ -127,22 +127,12 @@ parse_partition_metadata(<<ErrorCode:16/signed-integer,
 produce_request_body(#produce_request{} = Produce) ->
   Acks = Produce#produce_request.acks,
   Timeout = Produce#produce_request.timeout,
-  Topics = group_by_topic(Produce#produce_request.data, []),
+  Topics = Produce#produce_request.data,
   TopicsCount = erlang:length(Topics),
   Head = <<Acks:16/signed-integer,
            Timeout:32/integer,
            TopicsCount:32/integer>>,
   encode_topics(Topics, Head).
-
-group_by_topic([], Acc) ->
-  Acc;
-group_by_topic([{{Topic, Partition}, Msgs} | Rest], Acc) ->
-  Partitions0 = case lists:keyfind(Topic, 1, Acc) of
-                  {Topic, X} -> X;
-                  false      -> dict:new()
-                end,
-  Partitions = dict:append_list(Partition, Msgs, Partitions0),
-  group_by_topic(Rest, lists:keystore(Topic, 1, Acc, {Topic, Partitions})).
 
 encode_topics([], Acc) ->
   Acc;

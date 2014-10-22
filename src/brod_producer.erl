@@ -37,22 +37,24 @@
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
--record(state, { acks                 :: integer()
-               , timeout              :: integer()
-               , batch_size           :: integer()
-               , batch_timeout        :: integer()
-               , sockets              :: [#socket{}]
-               , leaders              :: [{{binary(), integer()}, pid()}]
-               , buffer = dict:new()  :: dict() % {Topic, Partition} -> [msg]
-               , buffer_size = 0      :: integer() % number of messages
-               , unacked = []         :: [{integer(), term()}]
+-type topic()     :: binary().
+-type partition() :: non_neg_integer().
+-type leader()    :: pid(). % brod_sock pid
+-type corr_id()   :: non_neg_integer().
+-type from()      :: {pid(), reference()}.
+
+-record(state, { acks                   :: integer()
+               , timeout                :: integer()
+               , sockets = []           :: [#socket{}]
+               , leaders = []           :: [{{topic(), partition()}, leader()}]
+               , data_buffer = []       :: [{leader(), [{topic(), dict()}]}]
+               , from_buffer = dict:new() :: dict() % (leader(), [from()])
+               , pending = []           :: [{{leader(), corr_id()}, [from()]}]
                }).
 
 %%%_* Macros -------------------------------------------------------------------
 -define(DEFAULT_ACKS,            1). % default required acks
 -define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
--define(DEFAULT_BATCH_SIZE,     20). % default batch size (N of messages)
--define(DEFAULT_BATCH_TIMEOUT, 200). % default batch timeout (ms)
 
 %%%_* API ----------------------------------------------------------------------
 -spec start_link([{string(), integer()}], [term()]) ->
@@ -70,9 +72,14 @@ stop(Pid) ->
   gen_server:call(Pid, stop).
 
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 ok | {error, any()}.
+                 {ok, reference()}.
 produce(Pid, Topic, Partition, Key, Value) ->
-  gen_server:call(Pid, {produce, Topic, Partition, Key, Value}).
+  Ref = erlang:make_ref(),
+  From = {self(), Ref},
+  %% do not use gen_server:cast as it silently "eats" an exception
+  %% when a message is sent to a non-existing process
+  erlang:send(Pid, {produce, From, Topic, Partition, Key, Value}),
+  {ok, Ref}.
 
 -spec debug(pid(), sys:dbg_opt()) -> ok.
 %% @doc Enable/disabling debugging on brod_producer and on all connections
@@ -101,22 +108,8 @@ init([Hosts, Options, Debug]) ->
   {ok, State} = connect(Hosts, Debug, #state{}),
   Acks = proplists:get_value(required_acks, Options, ?DEFAULT_ACKS),
   Timeout = proplists:get_value(ack_timeout, Options, ?DEFAULT_ACK_TIMEOUT),
-  BatchSize = proplists:get_value(batch_size, Options, ?DEFAULT_BATCH_SIZE),
-  BatchTimeout = proplists:get_value(batch_timeout, Options,
-                                     ?DEFAULT_BATCH_TIMEOUT),
-  {ok, State#state{ acks = Acks
-                  , timeout = Timeout
-                  , batch_size = BatchSize
-                  , batch_timeout = BatchTimeout}}.
+  {ok, State#state{acks = Acks, timeout = Timeout}}.
 
-handle_call({produce, Topic, Partition, Key, Value}, _From, State0) ->
-  Buffer0 = State0#state.buffer,
-  Buffer = dict:append({Topic, Partition}, {Key, Value}, Buffer0),
-  BufferSize = State0#state.buffer_size + 1,
-  %% may be flush buffer
-  {ok, State} = maybe_send(State0#state{buffer = Buffer,
-                                        buffer_size = BufferSize}),
-  {reply, ok, State, State#state.batch_timeout};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(get_sockets, _From, State) ->
@@ -127,18 +120,24 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
-handle_info({msg, Pid, CorrId, #produce_response{}}, State) ->
-  %% TODO: keep offsets?
-  Unacked = lists:keydelete({Pid, CorrId}, 1, State#state.unacked),
-  {noreply, State#state{unacked = Unacked}};
-handle_info(timeout, #state{buffer_size = Size} = State0) ->
-  {ok, State} = case Size > 0 of
-                  true  -> do_send(State0);
-                  false -> {ok, State0}
-                end,
+handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
+  State1 = handle_produce(From, Topic, Partition, Key, Value, State0),
+  Leader = get_leader(Topic, Partition, State0#state.leaders),
+  State = maybe_send(Leader, State1),
+  {noreply, State};
+handle_info({msg, Leader, CorrId, #produce_response{}}, State0) ->
+  {value, {_, FromList}, Pending} =
+    lists:keytake({Leader, CorrId}, 1, State0#state.pending),
+  lists:foreach(fun({Pid, Ref}) ->
+                    Pid ! {{Ref, self()}, ack}
+                end, FromList),
+  State = maybe_send(Leader, State0#state{pending = Pending}),
   {noreply, State};
 handle_info({'EXIT', Pid, Reason}, State) ->
   Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
+  %% Shutdown because cluster has elected other leaders for
+  %% every topic/partition most likely.
+  %% Users will have to resend outstanding messages
   {stop, {socket_down, Reason}, State#state{sockets = Sockets}};
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -182,30 +181,123 @@ connect(Hosts, Debug, State) ->
       end, [], Topics),
   {ok, State#state{sockets = Sockets, leaders = Leaders}}.
 
-maybe_send(State) when State#state.buffer_size >= State#state.batch_size ->
-  do_send(State);
-maybe_send(State) ->
-  {ok, State}.
+handle_produce(From, Topic, Partition, Key, Value, State) ->
+  Leader = get_leader(Topic, Partition, State#state.leaders),
+  DataBuffer0 = State#state.data_buffer,
+  LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
+  TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
+  TopicBuffer = dict:append(Partition, {Key, Value}, TopicBuffer0),
+  LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
+  DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
+  FromBuffer = dict:append(Leader, From, State#state.from_buffer),
+  State#state{data_buffer = DataBuffer, from_buffer = FromBuffer}.
 
-do_send(#state{buffer = Buffer, unacked = Unacked0} = State) ->
-  %% distribute buffered data on corresponding leaders
-  F1 = fun({_Topic, _Partition} = Key, Msgs, Dict) ->
-          {_, Pid} = lists:keyfind(Key, 1, State#state.leaders),
-          dict:append(Pid, {Key, Msgs}, Dict)
-      end,
-  LeadersData = dict:fold(F1, dict:new(), Buffer),
-  %% send out buffered data
-  F2 = fun(Pid, Data, Acc) ->
-           Produce = #produce_request{ acks = State#state.acks
-                                     , timeout = State#state.timeout
-                                     , data = Data},
-           {ok, CorrId} = brod_sock:send(Pid, Produce),
-           [{{Pid, CorrId}, Data} | Acc]
-       end,
-  Unacked = dict:fold(F2, Unacked0, LeadersData),
-  {ok, State#state{ buffer = dict:new()
-                  , buffer_size = 0
-                  , unacked = Unacked}}.
+maybe_send(Leader, State) ->
+  case get_leader_buffer(Leader, State#state.data_buffer) of
+    [] -> {ok, State};
+    LeaderBuffer ->
+      Produce = #produce_request{ acks    = State#state.acks
+                                , timeout = State#state.timeout
+                                , data    = LeaderBuffer},
+      {ok, CorrId} = brod_sock:send(Leader, Produce),
+      DataBuffer = lists:keydelete(Leader, 1, State#state.data_buffer),
+      FromList = dict:fetch(Leader, State#state.from_buffer),
+      FromBuffer = dict:erase(Leader, State#state.from_buffer),
+      Pending = [{{Leader, CorrId}, FromList} | State#state.pending],
+      {ok, State#state{ data_buffer = DataBuffer
+                      , from_buffer = FromBuffer
+                      , pending     = Pending}}
+  end.
+
+get_leader(Topic, Partition, Leaders) ->
+  {_, Leader} = lists:keyfind({Topic, Partition}, 1, Leaders),
+  Leader.
+
+get_leader_buffer(Leader, DataBuffer) ->
+  case lists:keyfind(Leader, 1, DataBuffer) of
+    {_, LeaderBuffer} -> LeaderBuffer;
+    false             -> []
+  end.
+
+store_leader_buffer(Leader, DataBuffer, LeaderBuffer) ->
+  lists:keystore(Leader, 1, DataBuffer, {Leader, LeaderBuffer}).
+
+get_topic_buffer(Topic, LeaderBuffer) ->
+  case lists:keyfind(Topic, 1, LeaderBuffer) of
+    {_, TopicBuffer} -> TopicBuffer;
+    false            -> dict:new()
+  end.
+
+store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
+  lists:keystore(Topic, 1, LeaderBuffer, {Topic, TopicBuffer}).
+
+%% Tests -----------------------------------------------------------------------
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+handle_produce_test() ->
+  F1 = f1,
+  L1 = 1,
+  T1 = t1,
+  P1 = p1,
+  K1 = k1,
+  V1 = v1,
+  Leaders0 = [{{T1, P1}, L1}],
+  FromBuffer1 = dict:store(L1, [F1], dict:new()),
+  TopicBuffer1 = dict:store(P1, [{K1, V1}], dict:new()),
+  DataBuffer1 = [{L1, [{T1, TopicBuffer1}]}],
+  State0 = #state{leaders = Leaders0},
+  State1 = handle_produce(F1, T1, P1, K1, V1, State0),
+  ?assertEqual(Leaders0, State1#state.leaders),
+  ?assertEqual(FromBuffer1, State1#state.from_buffer),
+  ?assertEqual(DataBuffer1, State1#state.data_buffer),
+
+  K2 = k2,
+  V2 = v2,
+  TopicBuffer2 = dict:append(P1, {K2, V2}, TopicBuffer1),
+  DataBuffer2 = [{L1, [{T1, TopicBuffer2}]}],
+  FromBuffer2 = dict:append(L1, F1, State1#state.from_buffer),
+  State2 = handle_produce(F1, T1, P1, K2, V2, State1),
+  ?assertEqual(Leaders0, State1#state.leaders),
+  ?assertEqual(FromBuffer2, State2#state.from_buffer),
+  ?assertEqual(DataBuffer2, State2#state.data_buffer),
+
+  F2 = f2,
+  L2 = 2,
+  P2 = p2,
+  K3 = k3,
+  V3 = v3,
+  FromBuffer3 = dict:append(L2, F2, State2#state.from_buffer),
+  Leaders1 = [{{T1, P2}, L2} | Leaders0],
+  State3 = State2#state{leaders = Leaders1},
+  TopicBuffer3 = dict:append(P2, {K3, V3}, dict:new()),
+  %% ++ due to lists:keystore/4 behaviour
+  DataBuffer3 = State3#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
+  State4 = handle_produce(F2, T1, P2, K3, V3, State3),
+  ?assertEqual(Leaders1, State4#state.leaders),
+  ?assertEqual(FromBuffer3, State4#state.from_buffer),
+  ?assertEqual(DataBuffer3, State4#state.data_buffer),
+
+  T2 = t2,
+  F3 = f3,
+  K4 = k4,
+  V4 = v4,
+  FromBuffer5 = dict:append(L1, F3, State4#state.from_buffer),
+  Leaders2 = [{{T2, P1}, L1} | Leaders1],
+  State5 = State4#state{leaders = Leaders2},
+  Topic2Buffer = dict:append(P1, {K4, V4}, dict:new()),
+  {value, {L1, [{T1, Topic1Buffer}]}, DataBuffer4} =
+    lists:keytake(L1, 1, DataBuffer3),
+  DataBuffer5 = [{L1, [{T1, Topic1Buffer}, {T2, Topic2Buffer}]} |
+                DataBuffer4],
+  State6 = handle_produce(F3, T2, P1, K4, V4, State5),
+  ?assertEqual(Leaders2, State6#state.leaders),
+  ?assertEqual(FromBuffer5, State6#state.from_buffer),
+  ?assertEqual(DataBuffer5, State6#state.data_buffer),
+  ok.
+
+-endif. % TEST
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
