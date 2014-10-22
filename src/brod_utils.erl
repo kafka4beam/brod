@@ -24,7 +24,7 @@ get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
   Request = #metadata_request{topics = Topics},
   Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
+  ok = brod_sock:stop(Pid),
   Response.
 
 try_connect(Hosts) ->

@@ -1,4 +1,4 @@
-%%%=============================================================================
+%%=============================================================================
 %%% @doc
 %%% @copyright 2014 Klarna AB
 %%% @end
@@ -73,7 +73,7 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   gen_server:call(Pid, {consume, Subscriber, Offset,
                         MaxWaitTime, MinBytes, MaxBytes}).
 
--spec debug(pid(), sys:dbg_opt()) -> ok.
+-spec debug(pid(), list()) -> ok.
 %% @doc Enable/disabling debugging on brod_consumer and its connection
 %%      to broker.
 %%      Enable:

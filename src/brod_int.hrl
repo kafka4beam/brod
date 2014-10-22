@@ -27,7 +27,7 @@
                         , partitions :: [#partition_metadata{}]}).
 
 -record(broker_metadata, { node_id :: integer()
-                         , host    :: binary()
+                         , host    :: string()
                          , port    :: integer()
                          }).
 
@@ -38,9 +38,8 @@
 %%%_* produce request ----------------------------------------------------------
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()
-                         %% {Topic, Partition} -> [{Key, Value}]
-                         , data    :: [{{binary(), integer()},
-                                        [{binary(), binary()}]}]
+                         %% [{Topic, [dict(Partition -> [{K, V}])]}]
+                         , data    :: [{binary(), dict()}]
                          }).
 
 %%%_* produce response ---------------------------------------------------------
