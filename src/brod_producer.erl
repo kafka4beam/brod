@@ -9,8 +9,8 @@
 -behaviour(gen_server).
 
 %% Server API
--export([ start_link/2
-        , start_link/3
+-export([ start_link/3
+        , start_link/4
         , stop/1
         ]).
 
@@ -44,7 +44,7 @@
 -type from()      :: {pid(), reference()}.
 
 -record(state, { acks                   :: integer()
-               , timeout                :: integer()
+               , ack_timeout            :: integer()
                , sockets = []           :: [#socket{}]
                , leaders = []           :: [{{topic(), partition()}, leader()}]
                , data_buffer = []       :: [{leader(), [{topic(), dict()}]}]
@@ -52,20 +52,17 @@
                , pending = []           :: [{{leader(), corr_id()}, [from()]}]
                }).
 
-%%%_* Macros -------------------------------------------------------------------
--define(DEFAULT_ACKS,            1). % default required acks
--define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
-
 %%%_* API ----------------------------------------------------------------------
--spec start_link([{string(), integer()}], [term()]) ->
+-spec start_link([{string(), integer()}], integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, Options) ->
-  start_link(Hosts, Options, []).
+start_link(Hosts, RequiredAcks, AckTimeout) ->
+  start_link(Hosts, RequiredAcks, AckTimeout, []).
 
--spec start_link([{string(), integer()}], [term()], [term()]) ->
+-spec start_link([{string(), integer()}], integer(), integer(), [term()]) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, Options, Debug) ->
-  gen_server:start_link(?MODULE, [Hosts, Options, Debug], [{debug, Debug}]).
+start_link(Hosts, RequiredAcks, AckTimeout, Debug) ->
+  gen_server:start_link(?MODULE, [Hosts, RequiredAcks, AckTimeout, Debug],
+                        [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
@@ -81,7 +78,7 @@ produce(Pid, Topic, Partition, Key, Value) ->
   erlang:send(Pid, {produce, From, Topic, Partition, Key, Value}),
   {ok, Ref}.
 
--spec debug(pid(), sys:dbg_opt()) -> ok.
+-spec debug(pid(), list()) -> ok.
 %% @doc Enable/disabling debugging on brod_producer and on all connections
 %%      to brokers managed by the given brod_producer instance.
 %%      Enable:
@@ -103,12 +100,10 @@ get_sockets(Pid) ->
   gen_server:call(Pid, get_sockets).
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, Options, Debug]) ->
+init([Hosts, RequiredAcks, AckTimeout, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, State} = connect(Hosts, Debug, #state{}),
-  Acks = proplists:get_value(required_acks, Options, ?DEFAULT_ACKS),
-  Timeout = proplists:get_value(ack_timeout, Options, ?DEFAULT_ACK_TIMEOUT),
-  {ok, State#state{acks = Acks, timeout = Timeout}}.
+  {ok, State#state{acks = RequiredAcks, ack_timeout = AckTimeout}}.
 
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
@@ -197,7 +192,7 @@ maybe_send(Leader, State) ->
     [] -> {ok, State};
     LeaderBuffer ->
       Produce = #produce_request{ acks    = State#state.acks
-                                , timeout = State#state.timeout
+                                , timeout = State#state.ack_timeout
                                 , data    = LeaderBuffer},
       {ok, CorrId} = brod_sock:send(Leader, Produce),
       DataBuffer = lists:keydelete(Leader, 1, State#state.data_buffer),

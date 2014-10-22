@@ -8,7 +8,7 @@
 
 %% Producer API
 -export([ start_producer/1
-        , start_producer/2
+        , start_producer/3
         , stop_producer/1
         , produce/3
         , produce/4
@@ -31,58 +31,48 @@
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
+%%%_* Macros -------------------------------------------------------------------
+-define(DEFAULT_ACKS,            1). % default required acks
+-define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
+
 %%%_* API ----------------------------------------------------------------------
-%% @equiv start_producer(Hosts, [])
+%% @equiv start_producer(Hosts, 1, 1000)
 -spec start_producer([{string(), integer()}]) ->
                         {ok, pid()} | {error, any()}.
 start_producer(Hosts) ->
-  start_producer(Hosts, []).
+  start_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
 
 %% @doc Start a process to publish messages to kafka.
-%%      <br/>
-%%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
-%%      <br/>
-%%      Options:
-%%      <dl>
-%%        <dt>``{required_acks, integer()}''</dt>
-%%          <dd>How many acknowledgements the servers should receive
-%%              before responding to the request. If it is 0 the
-%%              server will not send any response (this is the only
-%%              case where the server will not reply to a request). If
-%%              it is 1, the server will wait the data is written to
-%%              the local log before sending a response. If it is -1
-%%              the server will block until the message is committed
-%%              by all in sync replicas before sending a response. For
-%%              any number > 1 the server will block waiting for this
-%%              number of acknowledgements to occur (but the server
-%%              will never wait for more acknowledgements than there
-%%              are in-sync replicas).<br/>Default: 1</dd>
-%%        <dt>``{ack_timeout, integer()}''</dt>
-%%          <dd>Maximum time in milliseconds the server can await the
-%%              receipt of the number of acknowledgements in
-%%              required_acks. The timeout is not an exact limit on
-%%              the request time for a few reasons: (1) it does not
-%%              include network latency, (2) the timer begins at the
-%%              beginning of the processing of this request so if many
-%%              requests are queued due to server overload that wait
-%%              time will not be included, (3) we will not terminate a
-%%              local write so if the local write time exceeds this
-%%              timeout it will not be respected.<br/>
-%%              Default: 1000.</dd>
-%%        <dt>``{batch_size, integer()}''</dt>
-%%          <dd>Number of messages to collect before sending in a
-%%              batch produce request. Set to 1 to disable batches.<br/>
-%%              Default: 20.</dd>
-%%        <dt>``{batch_timeout, integer()}''</dt>
-%%          <dd>If no message comes in during this time (in ms),
-%%              producer will try to send already bufferred messages,
-%%              regardless of batch_size setting.<br/>
-%%              Default: 200.</dd>
-%%      </dl>
--spec start_producer([{string(), integer()}], [{atom(), integer()}]) ->
+%%      Hosts:
+%%        list of "bootstrap" kafka nodes, {"hostname", 1234}
+%%      RequiredAcks:
+%%        How many acknowledgements the servers should receive
+%%        before responding to the request. If it is 0 the
+%%        server will not send any response (this is the only
+%%        case where the server will not reply to a request). If
+%%        it is 1, the server will wait the data is written to
+%%        the local log before sending a response. If it is -1
+%%        the server will block until the message is committed
+%%        by all in sync replicas before sending a response. For
+%%        any number > 1 the server will block waiting for this
+%%        number of acknowledgements to occur (but the server
+%%        will never wait for more acknowledgements than there
+%%        are in-sync replicas).
+%%      AckTimeout:
+%%        Maximum time in milliseconds the server can await the
+%%        receipt of the number of acknowledgements in
+%%        RequiredAcks. The timeout is not an exact limit on
+%%        the request time for a few reasons: (1) it does not
+%%        include network latency, (2) the timer begins at the
+%%        beginning of the processing of this request so if many
+%%        requests are queued due to server overload that wait
+%%        time will not be included, (3) we will not terminate a
+%%        local write so if the local write time exceeds this
+%%        timeout it will not be respected.
+-spec start_producer([{string(), integer()}], integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
-start_producer(Hosts, Options) ->
-  brod_producer:start_link(Hosts, Options).
+start_producer(Hosts, RequiredAcks, AckTimeout) ->
+  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -90,12 +80,12 @@ stop_producer(Pid) ->
   brod_producer:stop(Pid).
 
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
--spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
+-spec produce(pid(), binary(), binary()) -> {ok, reference()}.
 produce(Pid, Topic, Value) ->
   produce(Pid, Topic, 0, Value).
 
 %% @equiv produce(Pid, Topic, Partition, <<>>, Value)
--spec produce(pid(), binary(), integer(), binary()) -> ok | {error, any()}.
+-spec produce(pid(), binary(), integer(), binary()) -> {ok, reference()}.
 produce(Pid, Topic, Partition, Value) ->
   produce(Pid, Topic, Partition, <<>>, Value).
 
@@ -103,7 +93,7 @@ produce(Pid, Topic, Partition, Value) ->
 %%      Internally it's a gen_server:call to brod_producer process. Returns
 %%      when the message is handled by brod_producer.
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 ok | {error, any()}.
+                 {ok, reference()}.
 produce(Pid, Topic, Partition, Key, Value) ->
   brod_producer:produce(Pid, Topic, Partition, Key, Value).
 
@@ -162,7 +152,7 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
                            , time = Time
                            , max_n_offsets = MaxNOffsets},
   Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
+  ok = brod_sock:stop(Pid),
   Response.
 
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
@@ -174,7 +164,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
   Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
+  ok = brod_sock:stop(Pid),
   Response.
 
 %%%_* Internal functions -------------------------------------------------------
