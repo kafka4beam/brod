@@ -1,7 +1,7 @@
 -ifndef(__BROD_INT_HRL).
 -define(__BROD_INT_HRL, true).
 
--include("brod.hrl").
+-include("../include/brod.hrl").
 
 -record(socket, { pid     :: pid()
                 , host    :: string()

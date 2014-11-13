@@ -28,8 +28,13 @@
         , fetch/7
         ]).
 
+-export_type([host/0]).
+
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
+
+%%%_* Types --------------------------------------------------------------------
+-type host() :: {string(), integer()}.
 
 %%%_* Macros -------------------------------------------------------------------
 -define(DEFAULT_ACKS,            1). % default required acks
@@ -37,8 +42,7 @@
 
 %%%_* API ----------------------------------------------------------------------
 %% @equiv start_producer(Hosts, 1, 1000)
--spec start_producer([{string(), integer()}]) ->
-                        {ok, pid()} | {error, any()}.
+-spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_producer(Hosts) ->
   start_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
 
@@ -69,7 +73,7 @@ start_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
--spec start_producer([{string(), integer()}], integer(), integer()) ->
+-spec start_producer([host()], integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_producer(Hosts, RequiredAcks, AckTimeout) ->
   brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).

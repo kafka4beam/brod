@@ -43,7 +43,9 @@
 -type corr_id()   :: non_neg_integer().
 -type from()      :: {pid(), reference()}.
 
--record(state, { acks                   :: integer()
+-record(state, { hosts                  :: [brod:host()]
+               , debug                  :: [term()]
+               , acks                   :: integer()
                , ack_timeout            :: integer()
                , sockets = []           :: [#socket{}]
                , leaders = []           :: [{{topic(), partition()}, leader()}]
@@ -53,12 +55,12 @@
                }).
 
 %%%_* API ----------------------------------------------------------------------
--spec start_link([{string(), integer()}], integer(), integer()) ->
+-spec start_link([brod:host()], integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Hosts, RequiredAcks, AckTimeout) ->
   start_link(Hosts, RequiredAcks, AckTimeout, []).
 
--spec start_link([{string(), integer()}], integer(), integer(), [term()]) ->
+-spec start_link([brod:host()], integer(), integer(), [term()]) ->
                     {ok, pid()} | {error, any()}.
 start_link(Hosts, RequiredAcks, AckTimeout, Debug) ->
   gen_server:start_link(?MODULE, [Hosts, RequiredAcks, AckTimeout, Debug],
@@ -102,8 +104,11 @@ get_sockets(Pid) ->
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, RequiredAcks, AckTimeout, Debug]) ->
   erlang:process_flag(trap_exit, true),
-  {ok, State} = connect(Hosts, Debug, #state{}),
-  {ok, State#state{acks = RequiredAcks, ack_timeout = AckTimeout}}.
+  {ok, #state{ hosts       = Hosts
+             , debug       = Debug
+             , acks        = RequiredAcks
+             , ack_timeout = AckTimeout
+             }}.
 
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
@@ -116,9 +121,15 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
-  {Leader, State1} = handle_produce(From, Topic, Partition, Key, Value, State0),
-  State = maybe_send(Leader, State1),
-  {noreply, State};
+  case handle_produce(From, Topic, Partition, Key, Value, State0) of
+    {ok, Leader, State1} ->
+      State = maybe_send(Leader, State1),
+      {noreply, State};
+    {error, Error} ->
+      {Pid, Ref} = From,
+      Pid ! {{Ref, self()}, {error, Error}},
+      {noreply, State0}
+  end;
 handle_info({msg, Leader, CorrId, #produce_response{}}, State0) ->
   {value, {_, FromList}, Pending} =
     lists:keytake({Leader, CorrId}, 1, State0#state.pending),
@@ -144,47 +155,50 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%%_* Internal functions -------------------------------------------------------
-connect(Hosts, Debug, State) ->
-  {ok, Metadata} = brod_utils:get_metadata(Hosts),
-  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
-  %% connect to all known nodes which are alive and map node id to connection
-  Sockets = lists:foldl(
-              fun(#broker_metadata{node_id = Id, host = H, port = P}, Acc) ->
-                  %% keep alive nodes only
-                  case brod_sock:start_link(self(), H, P, Debug) of
-                    {ok, Pid} ->
-                      [#socket{ pid = Pid
-                              , host = H
-                              , port = P
-                              , node_id = Id} | Acc];
-                    _ ->
-                      Acc
-                  end
-              end, [], Brokers),
-  %% map {Topic, Partition} to connection, crash if a node which must be
-  %% a leader is not alive
-  Leaders =
-    lists:foldl(
-      fun(#topic_metadata{name = Topic, partitions = Ps}, AccExt) ->
-          lists:foldl(
-            fun(#partition_metadata{id = Id, leader_id = LeaderId}, AccInt) ->
-                #socket{pid = Pid} =
-                  lists:keyfind(LeaderId, #socket.node_id, Sockets),
-                [{{Topic, Id}, Pid} | AccInt]
-            end, AccExt, Ps)
-      end, [], Topics),
-  {ok, State#state{sockets = Sockets, leaders = Leaders}}.
+handle_produce(From, Topic, Partition, Key, Value, State0) ->
+  case get_leader(Topic, Partition, State0) of
+    {ok, Leader, State1} ->
+      DataBuffer0 = State1#state.data_buffer,
+      LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
+      TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
+      TopicBuffer = dict:append(Partition, {Key, Value}, TopicBuffer0),
+      LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
+      DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
+      FromBuffer = dict:append(Leader, From, State1#state.from_buffer),
+      State = State1#state{data_buffer = DataBuffer, from_buffer = FromBuffer},
+      {ok, Leader, State};
+    {error, Error} ->
+      {error, Error}
+  end.
 
-handle_produce(From, Topic, Partition, Key, Value, State) ->
-  Leader = get_leader(Topic, Partition, State#state.leaders),
-  DataBuffer0 = State#state.data_buffer,
-  LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
-  TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
-  TopicBuffer = dict:append(Partition, {Key, Value}, TopicBuffer0),
-  LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
-  DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
-  FromBuffer = dict:append(Leader, From, State#state.from_buffer),
-  {Leader, State#state{data_buffer = DataBuffer, from_buffer = FromBuffer}}.
+get_leader(Topic, Partition, State) ->
+  case lists:keyfind({Topic, Partition}, 1, State#state.leaders) of
+    {_, Leader} ->
+      {ok, Leader, State};
+    false ->
+      connect(Topic, Partition, State)
+  end.
+
+connect(Topic, Partition, State) ->
+  {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
+  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
+  case lists:keyfind(Topic, #topic_metadata.name, Topics) of
+    false ->
+      {error, {unknown_topic, Topic}};
+    #topic_metadata{partitions = Partitions} ->
+      case lists:keyfind(Partition, #partition_metadata.id, Partitions) of
+        false ->
+          {error, {unknown_partition, Topic, Partition}};
+        #partition_metadata{leader_id = LeaderId} ->
+          Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+          #broker_metadata{host = H, port = P} = Broker,
+          {ok, Pid} = brod_sock:start_link(self(), H, P, State#state.debug),
+          Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
+          Sockets = [Socket | State#state.sockets],
+          Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
+          {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}}
+      end
+  end.
 
 maybe_send(Leader, State) ->
   case { get_leader_buffer(Leader, State#state.data_buffer)
@@ -206,10 +220,6 @@ maybe_send(Leader, State) ->
     {_, _} -> % waiting for ack
       {ok, State}
   end.
-
-get_leader(Topic, Partition, Leaders) ->
-  {_, Leader} = lists:keyfind({Topic, Partition}, 1, Leaders),
-  Leader.
 
 get_leader_buffer(Leader, DataBuffer) ->
   case lists:keyfind(Leader, 1, DataBuffer) of
@@ -234,10 +244,36 @@ store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
 
 -include_lib("eunit/include/eunit.hrl").
 
-maybe_send_test() ->
-  {ok, brod_sock} = compile:file("test/mock/brod_sock",
-                                 [{outdir, "test/mock"}]),
+mock_brod_sock() ->
+  code:delete(brod_sock),
+  code:purge(brod_sock),
+  {ok, brod_sock} =
+    compile:file("test/mock/brod_sock",
+                 [{outdir, "test/mock"}, verbose, report_errors]),
   {module, brod_sock} = code:load_abs("test/mock/brod_sock"),
+  ok.
+
+connect_test() ->
+  ok = mock_brod_sock(),
+  Topic = <<"t">>,
+  Partition = 0,
+  H1 = {"h1", 2181}, H2 = {"h2", 2181}, H3 = {"h3", 2181},
+  State0 = #state{hosts = [H1]},
+  Error0 = {error, {unknown_topic, Topic}},
+  ?assertEqual(Error0, connect(Topic, Partition, State0)),
+  State1 = #state{hosts = [H2]},
+  Error1 = {error, {unknown_partition, Topic, Partition}},
+  ?assertEqual(Error1, connect(Topic, Partition, State1)),
+  State2 = #state{hosts = [H3]},
+  Socket = #socket{pid = p3, host = "h3", port = 2181, node_id = 1},
+  Leader = {{Topic, Partition}, p3},
+  State3 = State2#state{ sockets = [Socket]
+                       , leaders = [Leader]},
+  ?assertEqual({ok, p3, State3}, connect(Topic, Partition, State2)),
+  ok.
+
+maybe_send_test() ->
+  ok = mock_brod_sock(),
   State0 = #state{data_buffer = [], pending = []},
   L1 = erlang:list_to_pid("<0.0.1>"),
   ?assertEqual({ok, State0}, maybe_send(L1, State0)),
@@ -254,6 +290,13 @@ maybe_send_test() ->
   ok.
 
 handle_produce_test() ->
+  ok = mock_brod_sock(),
+  T0 = <<"t">>,
+  H1 = {"h1", 2181},
+  State0 = #state{hosts = [H1]},
+  Error0 = {error, {unknown_topic, T0}},
+  ?assertEqual(Error0, handle_produce(f0, T0, p0, k0, v0, State0)),
+
   F1 = f1,
   L1 = 1,
   T1 = t1,
@@ -264,54 +307,54 @@ handle_produce_test() ->
   FromBuffer1 = dict:store(L1, [F1], dict:new()),
   TopicBuffer1 = dict:store(P1, [{K1, V1}], dict:new()),
   DataBuffer1 = [{L1, [{T1, TopicBuffer1}]}],
-  State0 = #state{leaders = Leaders0},
-  {L1, State1} = handle_produce(F1, T1, P1, K1, V1, State0),
-  ?assertEqual(Leaders0, State1#state.leaders),
-  ?assertEqual(FromBuffer1, State1#state.from_buffer),
-  ?assertEqual(DataBuffer1, State1#state.data_buffer),
+  State1 = #state{leaders = Leaders0},
+  {ok, L1, State2} = handle_produce(F1, T1, P1, K1, V1, State1),
+  ?assertEqual(Leaders0, State2#state.leaders),
+  ?assertEqual(FromBuffer1, State2#state.from_buffer),
+  ?assertEqual(DataBuffer1, State2#state.data_buffer),
 
   K2 = k2,
   V2 = v2,
   TopicBuffer2 = dict:append(P1, {K2, V2}, TopicBuffer1),
   DataBuffer2 = [{L1, [{T1, TopicBuffer2}]}],
-  FromBuffer2 = dict:append(L1, F1, State1#state.from_buffer),
-  {L1, State2} = handle_produce(F1, T1, P1, K2, V2, State1),
-  ?assertEqual(Leaders0, State1#state.leaders),
-  ?assertEqual(FromBuffer2, State2#state.from_buffer),
-  ?assertEqual(DataBuffer2, State2#state.data_buffer),
+  FromBuffer2 = dict:append(L1, F1, State2#state.from_buffer),
+  {ok, L1, State3} = handle_produce(F1, T1, P1, K2, V2, State2),
+  ?assertEqual(Leaders0, State2#state.leaders),
+  ?assertEqual(FromBuffer2, State3#state.from_buffer),
+  ?assertEqual(DataBuffer2, State3#state.data_buffer),
 
   F2 = f2,
   L2 = 2,
   P2 = p2,
   K3 = k3,
   V3 = v3,
-  FromBuffer3 = dict:append(L2, F2, State2#state.from_buffer),
+  FromBuffer3 = dict:append(L2, F2, State3#state.from_buffer),
   Leaders1 = [{{T1, P2}, L2} | Leaders0],
-  State3 = State2#state{leaders = Leaders1},
+  State4 = State3#state{leaders = Leaders1},
   TopicBuffer3 = dict:append(P2, {K3, V3}, dict:new()),
   %% ++ due to lists:keystore/4 behaviour
-  DataBuffer3 = State3#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
-  {L2, State4} = handle_produce(F2, T1, P2, K3, V3, State3),
-  ?assertEqual(Leaders1, State4#state.leaders),
-  ?assertEqual(FromBuffer3, State4#state.from_buffer),
-  ?assertEqual(DataBuffer3, State4#state.data_buffer),
+  DataBuffer3 = State4#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
+  {ok, L2, State5} = handle_produce(F2, T1, P2, K3, V3, State4),
+  ?assertEqual(Leaders1, State5#state.leaders),
+  ?assertEqual(FromBuffer3, State5#state.from_buffer),
+  ?assertEqual(DataBuffer3, State5#state.data_buffer),
 
   T2 = t2,
   F3 = f3,
   K4 = k4,
   V4 = v4,
-  FromBuffer5 = dict:append(L1, F3, State4#state.from_buffer),
+  FromBuffer5 = dict:append(L1, F3, State5#state.from_buffer),
   Leaders2 = [{{T2, P1}, L1} | Leaders1],
-  State5 = State4#state{leaders = Leaders2},
+  State6 = State5#state{leaders = Leaders2},
   Topic2Buffer = dict:append(P1, {K4, V4}, dict:new()),
   {value, {L1, [{T1, Topic1Buffer}]}, DataBuffer4} =
     lists:keytake(L1, 1, DataBuffer3),
   DataBuffer5 = [{L1, [{T1, Topic1Buffer}, {T2, Topic2Buffer}]} |
                 DataBuffer4],
-  {L1, State6} = handle_produce(F3, T2, P1, K4, V4, State5),
-  ?assertEqual(Leaders2, State6#state.leaders),
-  ?assertEqual(FromBuffer5, State6#state.from_buffer),
-  ?assertEqual(DataBuffer5, State6#state.data_buffer),
+  {ok, L1, State7} = handle_produce(F3, T2, P1, K4, V4, State6),
+  ?assertEqual(Leaders2, State7#state.leaders),
+  ?assertEqual(FromBuffer5, State7#state.from_buffer),
+  ?assertEqual(DataBuffer5, State7#state.data_buffer),
   ok.
 
 -endif. % TEST
