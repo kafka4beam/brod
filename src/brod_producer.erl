@@ -49,7 +49,7 @@
                , leaders = []           :: [{{topic(), partition()}, leader()}]
                , data_buffer = []       :: [{leader(), [{topic(), dict()}]}]
                , from_buffer = dict:new() :: dict() % (leader(), [from()])
-               , pending = []           :: [{{leader(), corr_id()}, [from()]}]
+               , pending = []           :: [{leader(), {corr_id(), [from()]}}]
                }).
 
 %%%_* API ----------------------------------------------------------------------
@@ -116,8 +116,7 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
-  State1 = handle_produce(From, Topic, Partition, Key, Value, State0),
-  Leader = get_leader(Topic, Partition, State0#state.leaders),
+  {Leader, State1} = handle_produce(From, Topic, Partition, Key, Value, State0),
   State = maybe_send(Leader, State1),
   {noreply, State};
 handle_info({msg, Leader, CorrId, #produce_response{}}, State0) ->
@@ -185,12 +184,14 @@ handle_produce(From, Topic, Partition, Key, Value, State) ->
   LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
   DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
   FromBuffer = dict:append(Leader, From, State#state.from_buffer),
-  State#state{data_buffer = DataBuffer, from_buffer = FromBuffer}.
+  {Leader, State#state{data_buffer = DataBuffer, from_buffer = FromBuffer}}.
 
 maybe_send(Leader, State) ->
-  case get_leader_buffer(Leader, State#state.data_buffer) of
-    [] -> {ok, State};
-    LeaderBuffer ->
+  case { get_leader_buffer(Leader, State#state.data_buffer)
+       , lists:keyfind(Leader, 1, State#state.pending)} of
+    {[], _} -> % nothing to send right now
+      {ok, State};
+    {LeaderBuffer, false} -> % no outstanding messages
       Produce = #produce_request{ acks    = State#state.acks
                                 , timeout = State#state.ack_timeout
                                 , data    = LeaderBuffer},
@@ -198,10 +199,12 @@ maybe_send(Leader, State) ->
       DataBuffer = lists:keydelete(Leader, 1, State#state.data_buffer),
       FromList = dict:fetch(Leader, State#state.from_buffer),
       FromBuffer = dict:erase(Leader, State#state.from_buffer),
-      Pending = [{{Leader, CorrId}, FromList} | State#state.pending],
+      Pending = [{Leader, {CorrId, FromList}} | State#state.pending],
       {ok, State#state{ data_buffer = DataBuffer
                       , from_buffer = FromBuffer
-                      , pending     = Pending}}
+                      , pending     = Pending}};
+    {_, _} -> % waiting for ack
+      {ok, State}
   end.
 
 get_leader(Topic, Partition, Leaders) ->
@@ -231,6 +234,25 @@ store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
 
 -include_lib("eunit/include/eunit.hrl").
 
+maybe_send_test() ->
+  {ok, brod_sock} = compile:file("test/mock/brod_sock",
+                                 [{outdir, "test/mock"}]),
+  {module, brod_sock} = code:load_abs("test/mock/brod_sock"),
+  State0 = #state{data_buffer = [], pending = []},
+  L1 = erlang:list_to_pid("<0.0.1>"),
+  ?assertEqual({ok, State0}, maybe_send(L1, State0)),
+  State1 = State0#state{pending = [{L1, 2}]},
+  ?assertEqual({ok, State1}, maybe_send(L1, State1)),
+  L2 = erlang:list_to_pid("<0.0.2>"),
+  FromBuffer = dict:store(L2, [d], dict:store(L1, [a, b, c], dict:new())),
+  State2 = State0#state{ data_buffer = [{L1, foo}, {L2, bar}]
+                       , from_buffer = FromBuffer},
+  ExpectedState = #state{ data_buffer = [{L2, bar}]
+                        , from_buffer = dict:erase(L1, FromBuffer)
+                        , pending = [{L1, {1, [a, b, c]}}]},
+  ?assertEqual({ok, ExpectedState}, maybe_send(L1, State2)),
+  ok.
+
 handle_produce_test() ->
   F1 = f1,
   L1 = 1,
@@ -243,7 +265,7 @@ handle_produce_test() ->
   TopicBuffer1 = dict:store(P1, [{K1, V1}], dict:new()),
   DataBuffer1 = [{L1, [{T1, TopicBuffer1}]}],
   State0 = #state{leaders = Leaders0},
-  State1 = handle_produce(F1, T1, P1, K1, V1, State0),
+  {L1, State1} = handle_produce(F1, T1, P1, K1, V1, State0),
   ?assertEqual(Leaders0, State1#state.leaders),
   ?assertEqual(FromBuffer1, State1#state.from_buffer),
   ?assertEqual(DataBuffer1, State1#state.data_buffer),
@@ -253,7 +275,7 @@ handle_produce_test() ->
   TopicBuffer2 = dict:append(P1, {K2, V2}, TopicBuffer1),
   DataBuffer2 = [{L1, [{T1, TopicBuffer2}]}],
   FromBuffer2 = dict:append(L1, F1, State1#state.from_buffer),
-  State2 = handle_produce(F1, T1, P1, K2, V2, State1),
+  {L1, State2} = handle_produce(F1, T1, P1, K2, V2, State1),
   ?assertEqual(Leaders0, State1#state.leaders),
   ?assertEqual(FromBuffer2, State2#state.from_buffer),
   ?assertEqual(DataBuffer2, State2#state.data_buffer),
@@ -269,7 +291,7 @@ handle_produce_test() ->
   TopicBuffer3 = dict:append(P2, {K3, V3}, dict:new()),
   %% ++ due to lists:keystore/4 behaviour
   DataBuffer3 = State3#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
-  State4 = handle_produce(F2, T1, P2, K3, V3, State3),
+  {L2, State4} = handle_produce(F2, T1, P2, K3, V3, State3),
   ?assertEqual(Leaders1, State4#state.leaders),
   ?assertEqual(FromBuffer3, State4#state.from_buffer),
   ?assertEqual(DataBuffer3, State4#state.data_buffer),
@@ -286,7 +308,7 @@ handle_produce_test() ->
     lists:keytake(L1, 1, DataBuffer3),
   DataBuffer5 = [{L1, [{T1, Topic1Buffer}, {T2, Topic2Buffer}]} |
                 DataBuffer4],
-  State6 = handle_produce(F3, T2, P1, K4, V4, State5),
+  {L1, State6} = handle_produce(F3, T2, P1, K4, V4, State5),
   ?assertEqual(Leaders2, State6#state.leaders),
   ?assertEqual(FromBuffer5, State6#state.from_buffer),
   ?assertEqual(DataBuffer5, State6#state.data_buffer),
