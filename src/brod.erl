@@ -18,12 +18,14 @@
 %% Consumer API
 -export([ start_consumer/3
         , stop_consumer/1
+        , consume/2
         , consume/6
         ]).
 
 %% Management and testing API
 -export([ get_metadata/1
         , get_metadata/2
+        , get_offsets/3
         , get_offsets/5
         , fetch/7
         ]).
@@ -112,6 +114,13 @@ start_consumer(Hosts, Topic, Partition) ->
 stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
+-spec consume(pid(), integer()) -> ok | {error, any()}.
+%% @equiv consume(Pid, self(), Offset, 1000, 0, 100000)
+%% @doc A simple alternative for consume/7 with predefined defaults.
+%%      Calling process will receive messages from consumer process.
+consume(Pid, Offset) ->
+  consume(Pid, self(), Offset, 1000, 0, 100000).
+
 %% @doc Start consuming message from a partition.
 %% Subscriber: a process which will receive messages
 %% Offset: Where to start to fetch data from.
@@ -148,6 +157,10 @@ get_metadata(Hosts) ->
 
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
+
+%% @equiv get_offsets(Hosts, Topic, Partition, -2, 1)
+get_offsets(Hosts, Topic, Partition) ->
+  get_offsets(Hosts, Topic, Partition, -2, 1).
 
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
