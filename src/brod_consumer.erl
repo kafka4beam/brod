@@ -51,6 +51,11 @@
                }).
 
 %%%_* Macros -------------------------------------------------------------------
+%% how much time to wait before sending next fetch request when we got
+%% no messages in the last one
+-define(SLEEP_TIMEOUT, 1000).
+
+-define(SEND_FETCH_REQUEST, send_fetch_request).
 
 %%%_* API ----------------------------------------------------------------------
 -spec start_link([{string(), integer()}], binary(), integer()) ->
@@ -157,26 +162,18 @@ handle_cast(Msg, State) ->
   {stop, {unsupported_cast, Msg}, State}.
 
 handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
-  #fetch_response{topics = [TopicFetchData]} = R,
-  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
-  case has_error(PM) of
-    {true, Error} ->
+  case handle_fetch_response(R, State0) of
+    {error, Error} ->
       {stop, {broker_error, Error}, State0};
-    false ->
-      ok = maybe_send_subscriber(State0#state.subscriber, Topic, PM),
-      LastOffset = PM#partition_messages.last_offset,
-      case PM#partition_messages.messages of
-        [] ->
-          %% do not bump offset when we get nothing, repeat request later
-          {noreply, State0, State0#state.max_wait_time};
-        X when is_list(X) ->
-          Offset = erlang:max(State0#state.offset, LastOffset + 1),
-          State = State0#state{offset = Offset},
-          ok = send_fetch_request(State),
-          {noreply, State}
-      end
+    {ok, State} ->
+      ok = send_subscriber(State#state.subscriber, R),
+      ok = send_fetch_request(State),
+      {noreply, State};
+    {empty, State} ->
+      erlang:send_after(?SLEEP_TIMEOUT, self(), ?SEND_FETCH_REQUEST),
+      {noreply, State}
   end;
-handle_info(timeout, State) ->
+handle_info(?SEND_FETCH_REQUEST, State) ->
   ok = send_fetch_request(State),
   {noreply, State};
 handle_info({'EXIT', _Pid, Reason}, State) ->
@@ -220,9 +217,24 @@ send_fetch_request(#state{socket = Socket} = State) ->
   {ok, _} = brod_sock:send(Socket#socket.pid, Request),
   ok.
 
-maybe_send_subscriber(_, _, #partition_messages{messages = []}) ->
-  ok;
-maybe_send_subscriber(Subscriber, Topic, PM) ->
+handle_fetch_response(#fetch_response{topics = [TopicFetchData]}, State) ->
+  #topic_fetch_data{partitions = [PM]} = TopicFetchData,
+  case has_error(PM) of
+    {true, Error} ->
+      {error, Error};
+    false ->
+      case PM#partition_messages.messages of
+        [] ->
+          {empty, State};
+        X when is_list(X) ->
+          LastOffset = PM#partition_messages.last_offset,
+          Offset = erlang:max(State#state.offset, LastOffset + 1),
+          {ok, State#state{offset = Offset}}
+      end
+  end.
+
+send_subscriber(Subscriber, #fetch_response{topics = [TopicFetchData]}) ->
+  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
   #partition_messages{ partition = Partition
                      , high_wm_offset = HighWmOffset
                      , messages = Messages} = PM,
@@ -249,6 +261,22 @@ do_debug(Pid, Debug) ->
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
+
+handle_fetch_response_test() ->
+  State0 = #state{},
+  PM0 = #partition_messages{error_code = 1},
+  R0 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM0]}]},
+  ?assertEqual({error, kafka:error_code_to_atom(1)},
+               handle_fetch_response(R0, State0)),
+  PM1 = #partition_messages{error_code = 0, messages = []},
+  R1 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM1]}]},
+  ?assertEqual({empty, State0}, handle_fetch_response(R1, State0)),
+  State1 = State0#state{offset = 0},
+  PM2 = #partition_messages{error_code = 0, messages = [foo], last_offset = 1},
+  R2 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM2]}]},
+  State2 = State1#state{offset = 2},
+  ?assertEqual({ok, State2}, handle_fetch_response(R2, State1)),
+  ok.
 
 -endif. % TEST
 
