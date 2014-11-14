@@ -20,6 +20,7 @@
 
 %% Debug API
 -export([ debug/2
+        , no_debug/1
         , get_sockets/1
         ]).
 
@@ -31,6 +32,7 @@
         , handle_info/2
         , terminate/2
         , code_change/3
+        , format_status/2
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -80,22 +82,21 @@ produce(Pid, Topic, Partition, Key, Value) ->
   erlang:send(Pid, {produce, From, Topic, Partition, Key, Value}),
   {ok, Ref}.
 
--spec debug(pid(), list()) -> ok.
-%% @doc Enable/disabling debugging on brod_producer and on all connections
-%%      to brokers managed by the given brod_producer instance.
-%%      Enable:
-%%        brod_producer:debug(Conn, {log, print}).
-%%        brod_producer:debug(Conn, {trace, true}).
-%%      Disable:
-%%        brod_producer:debug(Conn, no_debug).
-debug(Pid, Debug) ->
-  {ok, Sockets} = get_sockets(Pid),
-  lists:foreach(
-    fun(#socket{pid = SocketPid}) ->
-        {ok, _} = gen:call(SocketPid, system, {debug, Debug})
-    end, Sockets),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}),
-  ok.
+-spec debug(pid(), print | string() | none) -> ok.
+%% @doc Enable debugging on producer and its connection to a broker
+%%      debug(Pid, pring) prints debug info on stdout
+%%      debug(Pid, File) prints debug info into a File
+debug(Pid, print) ->
+  do_debug(Pid, {trace, true}),
+  do_debug(Pid, {log, print});
+debug(Pid, File) when is_list(File) ->
+  do_debug(Pid, {trace, true}),
+  do_debug(Pid, {log_to_file, File}).
+
+-spec no_debug(pid()) -> ok.
+%% @doc Disable debugging
+no_debug(Pid) ->
+  do_debug(Pid, no_debug).
 
 -spec get_sockets(pid()) -> {ok, [#socket{}]}.
 get_sockets(Pid) ->
@@ -123,7 +124,7 @@ handle_cast(_Msg, State) ->
 handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
   case handle_produce(From, Topic, Partition, Key, Value, State0) of
     {ok, Leader, State1} ->
-      State = maybe_send(Leader, State1),
+      {ok, State} = maybe_send(Leader, State1),
       {noreply, State};
     {error, Error} ->
       {Pid, Ref} = From,
@@ -131,12 +132,12 @@ handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
       {noreply, State0}
   end;
 handle_info({msg, Leader, CorrId, #produce_response{}}, State0) ->
-  {value, {_, FromList}, Pending} =
-    lists:keytake({Leader, CorrId}, 1, State0#state.pending),
+  {value, {_, {CorrId, FromList}}, Pending} =
+    lists:keytake(Leader, 1, State0#state.pending),
   lists:foreach(fun({Pid, Ref}) ->
                     Pid ! {{Ref, self()}, ack}
                 end, FromList),
-  State = maybe_send(Leader, State0#state{pending = Pending}),
+  {ok, State} = maybe_send(Leader, State0#state{pending = Pending}),
   {noreply, State};
 handle_info({'EXIT', Pid, Reason}, State) ->
   Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
@@ -153,6 +154,10 @@ terminate(_Reason, State) ->
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
+
+format_status(_Opt, [_PDict, State0]) ->
+  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State0))),
+  [{data, [{"State", State}]}].
 
 %%%_* Internal functions -------------------------------------------------------
 handle_produce(From, Topic, Partition, Key, Value, State0) ->
@@ -238,6 +243,15 @@ get_topic_buffer(Topic, LeaderBuffer) ->
 
 store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
   lists:keystore(Topic, 1, LeaderBuffer, {Topic, TopicBuffer}).
+
+do_debug(Pid, Debug) ->
+  {ok, Sockets} = get_sockets(Pid),
+  lists:foreach(
+    fun(#socket{pid = SocketPid}) ->
+        {ok, _} = gen:call(SocketPid, system, {debug, Debug})
+    end, Sockets),
+  {ok, _} = gen:call(Pid, system, {debug, Debug}),
+  ok.
 
 %% Tests -----------------------------------------------------------------------
 -ifdef(TEST).
