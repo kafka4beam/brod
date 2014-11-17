@@ -261,10 +261,12 @@ do_debug(Pid, Debug) ->
 mock_brod_sock() ->
   code:delete(brod_sock),
   code:purge(brod_sock),
+  BrodDir = filename:dirname(filename:dirname(code:which(brod))),
+  OutDir = filename:join(BrodDir, "test/mock"),
   {ok, brod_sock} =
-    compile:file("test/mock/brod_sock",
-                 [{outdir, "test/mock"}, verbose, report_errors]),
-  {module, brod_sock} = code:load_abs("test/mock/brod_sock"),
+    compile:file(filename:join(BrodDir, "test/mock/brod_sock"),
+                 [{outdir, OutDir}, verbose, report_errors]),
+  {module, brod_sock} = code:load_abs(filename:join(OutDir, "brod_sock")),
   ok.
 
 connect_test() ->
