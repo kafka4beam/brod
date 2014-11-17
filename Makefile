@@ -19,9 +19,9 @@ TEST_OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(TEST_SOURCES:%.erl=%.beam))
 
 all: build
 
+build: export ERLC_FLAGS := -DNOTEST $(ERLC_FLAGS)
 build: $(OBJECTS)
 
-test: export ERLC_FLAGS := -DTEST $(ERLC_FLAGS)
 test: $(OBJECTS) $(TEST_OBJECTS)
 	erl -noshell -pa $(EBIN_DIR) \
 		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \

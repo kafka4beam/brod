@@ -254,9 +254,9 @@ do_debug(Pid, Debug) ->
   ok.
 
 %% Tests -----------------------------------------------------------------------
--ifdef(TEST).
-
 -include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
 
 mock_brod_sock() ->
   code:delete(brod_sock),

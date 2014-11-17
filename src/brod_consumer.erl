@@ -258,9 +258,9 @@ do_debug(Pid, Debug) ->
   ok.
 
 %% Tests -----------------------------------------------------------------------
--ifdef(TEST).
-
 -include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
 
 handle_fetch_response_test() ->
   State0 = #state{},

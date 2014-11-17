@@ -357,9 +357,9 @@ parse_bytes(Size, Bin0) ->
   {binary:copy(Bytes), Bin}.
 
 %% Tests -----------------------------------------------------------------------
--ifdef(TEST).
-
 -include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
 
 parse_array_test() ->
   F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) ->
