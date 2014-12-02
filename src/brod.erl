@@ -27,6 +27,7 @@
         , get_metadata/2
         , get_offsets/3
         , get_offsets/5
+        , fetch/4
         , fetch/7
         ]).
 
@@ -95,9 +96,11 @@ produce(Pid, Topic, Value) ->
 produce(Pid, Topic, Partition, Value) ->
   produce(Pid, Topic, Partition, <<>>, Value).
 
-%% @doc Send message to a broker.
-%%      Internally it's a gen_server:call to brod_producer process. Returns
-%%      when the message is handled by brod_producer.
+%% @doc Send a message to a broker.
+%%      Returns a reference which can later be used to match on an
+%%      'ack' message from producer acknowledging that the payload
+%%      has been handled by kafka cluster.
+%%      'ack' message has format {{Reference, ProducerPid}, ack}.
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
                  {ok, reference()}.
 produce(Pid, Topic, Partition, Key, Value) ->
@@ -121,7 +124,8 @@ stop_consumer(Pid) ->
 consume(Pid, Offset) ->
   consume(Pid, self(), Offset, 1000, 0, 100000).
 
-%% @doc Start consuming message from a partition.
+%% @doc Start consuming data from a partition.
+%%      Messages are delivered as #message_set{}.
 %% Subscriber: a process which will receive messages
 %% Offset: Where to start to fetch data from.
 %%                  -1: start from the latest available offset
@@ -152,16 +156,28 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   brod_consumer:consume(Pid, Subscriber, Offset,
                         MaxWaitTime, MinBytes, MaxBytes).
 
+%% @doc Fetch broker metadata
+-spec get_metadata([{string(), integer()}]) ->
+                      {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
+%% @doc Fetch broker metadata
+-spec get_metadata([{string(), integer()}], [binary()]) ->
+                      {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -2, 1)
+-spec get_offsets([{string(), integer()}], binary(), non_neg_integer()) ->
+                     {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -2, 1).
 
+%% @doc Get valid offsets for a specified topic/partition
+-spec get_offsets([{string(), integer()}], binary(), non_neg_integer(),
+                  integer(), non_neg_integer()) ->
+                     {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #offset_request{ topic = Topic
@@ -172,6 +188,17 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   ok = brod_sock:stop(Pid),
   Response.
 
+%% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
+-spec fetch([{string(), integer()}], binary(), non_neg_integer(), integer()) ->
+               {ok, #message_set{}} | {error, any()}.
+fetch(Hosts, Topic, Partition, Offset) ->
+  fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
+
+%% @doc Fetch a single message set from a specified topic/partition
+-spec fetch([{string(), integer()}], binary(), non_neg_integer(),
+            integer(), non_neg_integer(), non_neg_integer(),
+            pos_integer()) ->
+               {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
@@ -182,7 +209,12 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , max_bytes = MaxBytes},
   Response = brod_sock:send_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
-  Response.
+  case Response of
+    {ok, FetchResponse} ->
+      {ok, brod_utils:fetch_response_to_message_set(FetchResponse)};
+    _ ->
+      Response
+  end.
 
 %%%_* Internal functions -------------------------------------------------------
 connect_leader(Hosts, Topic, Partition) ->

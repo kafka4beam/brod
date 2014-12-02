@@ -7,7 +7,8 @@
 -module(brod_utils).
 
 %% Exports
--export([ get_metadata/1
+-export([ fetch_response_to_message_set/1
+        , get_metadata/1
         , get_metadata/2
         , try_connect/1
         ]).
@@ -40,6 +41,16 @@ try_connect([{Host, Port} | Hosts], _) ->
     {ok, Pid} -> {ok, Pid};
     Error     -> try_connect(Hosts, Error)
   end.
+
+fetch_response_to_message_set(#fetch_response{topics = [TopicFetchData]}) ->
+  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
+  #partition_messages{ partition = Partition
+                     , high_wm_offset = HighWmOffset
+                     , messages = Messages} = PM,
+  #message_set{ topic = Topic
+              , partition = Partition
+              , high_wm_offset = HighWmOffset
+              , messages = Messages}.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

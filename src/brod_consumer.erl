@@ -233,15 +233,8 @@ handle_fetch_response(#fetch_response{topics = [TopicFetchData]}, State) ->
       end
   end.
 
-send_subscriber(Subscriber, #fetch_response{topics = [TopicFetchData]}) ->
-  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
-  #partition_messages{ partition = Partition
-                     , high_wm_offset = HighWmOffset
-                     , messages = Messages} = PM,
-  MsgSet = #message_set{ topic = Topic
-                       , partition = Partition
-                       , high_wm_offset = HighWmOffset
-                       , messages = Messages},
+send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
+  MsgSet = brod_utils:fetch_response_to_message_set(FetchResponse),
   Subscriber ! MsgSet,
   ok.
 
