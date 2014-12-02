@@ -25,7 +25,8 @@ await response and then close the connection.
 
     Hosts = [{"kafka-host1", 9092}, {"kafka-host2", 9092}].
     Topic = <<"topic">>.
+    Partition = 0.
     brod:get_metadata(Hosts).
     brod:get_metadata(Hosts, [Topic]).
-    brod:get_offsets(Hosts, Topic, 0).
-    brod:fetch(Hosts, Topic, 0, 1).
+    brod:get_offsets(Hosts, Topic, Partition).
+    brod:fetch(Hosts, Topic, Partition, 1).

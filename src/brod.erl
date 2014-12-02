@@ -168,11 +168,11 @@ get_metadata(Hosts) ->
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
-%% @equiv get_offsets(Hosts, Topic, Partition, -2, 1)
+%% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
 -spec get_offsets([{string(), integer()}], binary(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
-  get_offsets(Hosts, Topic, Partition, -2, 1).
+  get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
 -spec get_offsets([{string(), integer()}], binary(), non_neg_integer(),
