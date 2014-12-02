@@ -1,4 +1,4 @@
-.PHONY:	all build test shell plt dialyze
+.PHONY:	all build test docs shell plt dialyze
 
 INCLUDE_DIR ?= include
 SRC_DIR ?= src
@@ -10,6 +10,9 @@ ERLC_FLAGS += -I $(INCLUDE_DIR)
 DIALYZER_PLT = $(HOME)/.brod_plt
 DIALYZER_OPTS = -Werror_handling -Wrace_conditions -Wunderspecs
 export DIALYZER_PLT
+
+# needed for edoc
+export ERL_LIBS=$(abspath ..)
 
 SOURCES := $(wildcard $(SRC_DIR)/*.erl)
 TEST_SOURCES := $(wildcard $(TEST_DIR)/*.erl)
@@ -26,6 +29,9 @@ test: $(OBJECTS) $(TEST_OBJECTS)
 	erl -noshell -pa $(EBIN_DIR) \
 		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \
 		-s init stop
+
+docs: build
+	@erl -noshell -eval 'edoc:application(brod), init:stop()'
 
 $(EBIN_DIR)/%.beam: $(SRC_DIR)/%.erl
 	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
