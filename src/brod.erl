@@ -89,24 +89,25 @@ stop_producer(Pid) ->
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
 -spec produce(pid(), binary(), binary()) -> {ok, reference()}.
 produce(Pid, Topic, Value) ->
-  produce(Pid, Topic, 0, Value).
+  produce(Pid, Topic, 0, <<>>, Value).
 
-%% @equiv produce(Pid, Topic, Partition, <<>>, Value)
--spec produce(pid(), binary(), integer(), binary()) -> {ok, reference()}.
-produce(Pid, Topic, Partition, Value) ->
-  produce(Pid, Topic, Partition, <<>>, Value).
+%% @equiv produce(Pid, Topic, Partition, [{Key, Value}])
+-spec produce(pid(), binary(), integer(), binary(), binary()) ->
+                 {ok, reference()}.
+produce(Pid, Topic, Partition, Key, Value) ->
+  produce(Pid, Topic, Partition, [{Key, Value}]).
 
-%% @doc Send a message to a broker.
+%% @doc Send one or more {key, value} messages to a broker.
 %%      Returns a reference which can later be used to match on an
 %%      'ack' message from producer acknowledging that the payload
 %%      has been handled by kafka cluster.
 %%      'ack' message has format {{Reference, ProducerPid}, ack}.
--spec produce(pid(), binary(), integer(), binary(), binary()) ->
+-spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
                  {ok, reference()}.
-produce(Pid, Topic, Partition, Key, Value) ->
-  brod_producer:produce(Pid, Topic, Partition, Key, Value).
+produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
+  brod_producer:produce(Pid, Topic, Partition, KVList).
 
-%% @doc
+%% @doc Start consumer process
 -spec start_consumer([{string(), integer()}], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->

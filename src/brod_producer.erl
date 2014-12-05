@@ -15,7 +15,7 @@
         ]).
 
 %% Kafka API
--export([ produce/5
+-export([ produce/4
         ]).
 
 %% Debug API
@@ -72,14 +72,14 @@ start_link(Hosts, RequiredAcks, AckTimeout, Debug) ->
 stop(Pid) ->
   gen_server:call(Pid, stop).
 
--spec produce(pid(), binary(), integer(), binary(), binary()) ->
+-spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
                  {ok, reference()}.
-produce(Pid, Topic, Partition, Key, Value) ->
+produce(Pid, Topic, Partition, KVList) ->
   Ref = erlang:make_ref(),
   From = {self(), Ref},
   %% do not use gen_server:cast as it silently "eats" an exception
   %% when a message is sent to a non-existing process
-  erlang:send(Pid, {produce, From, Topic, Partition, Key, Value}),
+  erlang:send(Pid, {produce, From, Topic, Partition, KVList}),
   {ok, Ref}.
 
 -spec debug(pid(), print | string() | none) -> ok.
@@ -121,8 +121,8 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
-handle_info({produce, From, Topic, Partition, Key, Value}, State0) ->
-  case handle_produce(From, Topic, Partition, Key, Value, State0) of
+handle_info({produce, From, Topic, Partition, KVList}, State0) ->
+  case handle_produce(From, Topic, Partition, KVList, State0) of
     {ok, Leader, State1} ->
       {ok, State} = maybe_send(Leader, State1),
       {noreply, State};
@@ -160,13 +160,13 @@ format_status(_Opt, [_PDict, State0]) ->
   [{data, [{"State", State}]}].
 
 %%%_* Internal functions -------------------------------------------------------
-handle_produce(From, Topic, Partition, Key, Value, State0) ->
+handle_produce(From, Topic, Partition, KVList, State0) ->
   case get_leader(Topic, Partition, State0) of
     {ok, Leader, State1} ->
       DataBuffer0 = State1#state.data_buffer,
       LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
       TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
-      TopicBuffer = dict:append(Partition, {Key, Value}, TopicBuffer0),
+      TopicBuffer = dict:append_list(Partition, KVList, TopicBuffer0),
       LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
       DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
       FromBuffer = dict:append(Leader, From, State1#state.from_buffer),
@@ -311,7 +311,7 @@ handle_produce_test() ->
   H1 = {"h1", 2181},
   State0 = #state{hosts = [H1]},
   Error0 = {error, {unknown_topic, T0}},
-  ?assertEqual(Error0, handle_produce(f0, T0, p0, k0, v0, State0)),
+  ?assertEqual(Error0, handle_produce(f0, T0, p0, [{k0, v0}], State0)),
 
   F1 = f1,
   L1 = 1,
@@ -324,7 +324,7 @@ handle_produce_test() ->
   TopicBuffer1 = dict:store(P1, [{K1, V1}], dict:new()),
   DataBuffer1 = [{L1, [{T1, TopicBuffer1}]}],
   State1 = #state{leaders = Leaders0},
-  {ok, L1, State2} = handle_produce(F1, T1, P1, K1, V1, State1),
+  {ok, L1, State2} = handle_produce(F1, T1, P1, [{K1, V1}], State1),
   ?assertEqual(Leaders0, State2#state.leaders),
   ?assertEqual(FromBuffer1, State2#state.from_buffer),
   ?assertEqual(DataBuffer1, State2#state.data_buffer),
@@ -334,7 +334,7 @@ handle_produce_test() ->
   TopicBuffer2 = dict:append(P1, {K2, V2}, TopicBuffer1),
   DataBuffer2 = [{L1, [{T1, TopicBuffer2}]}],
   FromBuffer2 = dict:append(L1, F1, State2#state.from_buffer),
-  {ok, L1, State3} = handle_produce(F1, T1, P1, K2, V2, State2),
+  {ok, L1, State3} = handle_produce(F1, T1, P1, [{K2, V2}], State2),
   ?assertEqual(Leaders0, State2#state.leaders),
   ?assertEqual(FromBuffer2, State3#state.from_buffer),
   ?assertEqual(DataBuffer2, State3#state.data_buffer),
@@ -350,7 +350,7 @@ handle_produce_test() ->
   TopicBuffer3 = dict:append(P2, {K3, V3}, dict:new()),
   %% ++ due to lists:keystore/4 behaviour
   DataBuffer3 = State4#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
-  {ok, L2, State5} = handle_produce(F2, T1, P2, K3, V3, State4),
+  {ok, L2, State5} = handle_produce(F2, T1, P2, [{K3, V3}], State4),
   ?assertEqual(Leaders1, State5#state.leaders),
   ?assertEqual(FromBuffer3, State5#state.from_buffer),
   ?assertEqual(DataBuffer3, State5#state.data_buffer),
@@ -367,7 +367,7 @@ handle_produce_test() ->
     lists:keytake(L1, 1, DataBuffer3),
   DataBuffer5 = [{L1, [{T1, Topic1Buffer}, {T2, Topic2Buffer}]} |
                 DataBuffer4],
-  {ok, L1, State7} = handle_produce(F3, T2, P1, K4, V4, State6),
+  {ok, L1, State7} = handle_produce(F3, T2, P1, [{K4, V4}], State6),
   ?assertEqual(Leaders2, State7#state.leaders),
   ?assertEqual(FromBuffer5, State7#state.from_buffer),
   ?assertEqual(DataBuffer5, State7#state.data_buffer),
