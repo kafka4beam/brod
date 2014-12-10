@@ -108,7 +108,7 @@ produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
   brod_producer:produce(Pid, Topic, Partition, KVList).
 
 %% @doc Start consumer process
--spec start_consumer([{string(), integer()}], binary(), integer()) ->
+-spec start_consumer([host()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
   brod_consumer:start_link(Hosts, Topic, Partition).
@@ -158,25 +158,24 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                         MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
--spec get_metadata([{string(), integer()}]) ->
-                      {ok, #metadata_response{}} | {error, any()}.
+-spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
--spec get_metadata([{string(), integer()}], [binary()]) ->
+-spec get_metadata([host()], [binary()]) ->
                       {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
--spec get_offsets([{string(), integer()}], binary(), non_neg_integer()) ->
+-spec get_offsets([host()], binary(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([{string(), integer()}], binary(), non_neg_integer(),
+-spec get_offsets([host()], binary(), non_neg_integer(),
                   integer(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
@@ -190,13 +189,13 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   Response.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
--spec fetch([{string(), integer()}], binary(), non_neg_integer(), integer()) ->
+-spec fetch([host()], binary(), non_neg_integer(), integer()) ->
                {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([{string(), integer()}], binary(), non_neg_integer(),
+-spec fetch([host()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
                {ok, #message_set{}} | {error, any()}.
