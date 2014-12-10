@@ -5,16 +5,18 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 Usage
 -----
-    Hosts = [{"kafka-host1", 9092}, {"kafka-host2", 9092}].
+    rr(brod).
+    Hosts = [{"localhost", 9092}].
     Topic = <<"topic">>.
-    Msg = <<"test">>.
+    Key = <<"key">>.
+    Value = <<"value">>.
     Partition = 0.
     {ok, Producer} = brod:start_producer(Hosts).
     {ok, Consumer} = brod:start_consumer(Hosts, Topic, Partition).
     ok = brod:consume(Consumer, -1).
-    {ok, Ref} = brod:produce(Producer, Topic, Partition, Msg).
+    {ok, Ref} = brod:produce(Producer, Topic, Partition, Key, Value).
     receive {{Ref, Producer}, ack} -> ok end.
-    receive #message_set{messages = [#message{value = Msg}]} -> ok end.
+    receive #message_set{messages = [#message{key = Key, value = Value}]} -> ok end.
 
 More advanced versions of the functions above are also available, see brod.erl.
 
@@ -23,7 +25,7 @@ Other API to play with/inspect kafka
 These functions open a connetion to kafka cluster, send a request,
 await response and then close the connection.
 
-    Hosts = [{"kafka-host1", 9092}, {"kafka-host2", 9092}].
+    Hosts = [{"localhost", 9092}].
     Topic = <<"topic">>.
     Partition = 0.
     brod:get_metadata(Hosts).
