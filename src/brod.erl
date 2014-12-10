@@ -29,6 +29,9 @@
         , get_offsets/5
         , fetch/4
         , fetch/7
+        , console_consumer/4
+        , file_consumer/5
+        , simple_consumer/5
         ]).
 
 -export_type([host/0]).
@@ -216,6 +219,29 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
       Response
   end.
 
+console_consumer(Hosts, Topic, Partition, Offset) ->
+  simple_consumer(Hosts, Topic, Partition, Offset, user).
+
+file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
+  {ok, File} = file:open(Filename, [write, append]),
+  C = simple_consumer(Hosts, Topic, Partition, Offset, File),
+  MonitorFun = fun() ->
+                   Mref = erlang:monitor(process, C),
+                   receive
+                     {'DOWN', Mref, process, C, _} ->
+                       io:format("~nClosing ~s~n", [Filename]),
+                       file:close(File)
+                   end
+               end,
+  proc_lib:spawn(fun() -> MonitorFun() end),
+  C.
+
+simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
+  {ok, C} = brod:start_consumer(Hosts, Topic, Partition),
+  Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
+  ok = brod:consume(C, Pid, Offset, 1000, 0, 100000),
+  Pid.
+
 %%%_* Internal functions -------------------------------------------------------
 connect_leader(Hosts, Topic, Partition) ->
   {ok, Metadata} = get_metadata(Hosts),
@@ -228,6 +254,23 @@ connect_leader(Hosts, Topic, Partition) ->
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
   brod_sock:start_link(self(), Host, Port, []).
+
+simple_consumer_loop(C, Io) ->
+  receive
+    #message_set{messages = Msgs} ->
+      lists:foreach(
+        fun(#message{key = K, value = V}) ->
+            io:format(Io, "\n~s\n~s\n", [K, V])
+        end, Msgs),
+      simple_consumer_loop(C, Io);
+    stop ->
+      brod:stop_consumer(C),
+      io:format(Io, "\Simple consumer ~p terminating\n", [self()]),
+      ok;
+    Other ->
+      io:format(Io, "\nStrange msg: ~p\n", [Other]),
+      simple_consumer_loop(C, Io)
+  end.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

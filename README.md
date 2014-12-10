@@ -20,6 +20,15 @@ Usage
 
 More advanced versions of the functions above are also available, see brod.erl.
 
+Simple consumers
+----------------
+    f(C), C = brod:console_consumer(Hosts, Topic, Partition, -1).
+    % this will print messages from the Topic on your stdout
+    C ! stop.
+    f(C), C = brod:file_consumer(Hosts, Topic, Partition, -1, "/tmp/kafka.log").
+    % this will write messages to /tmp/kafka.log
+    C ! stop.
+
 Other API to play with/inspect kafka
 -------------------------------
 These functions open a connetion to kafka cluster, send a request,
