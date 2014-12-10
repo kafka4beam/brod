@@ -8,7 +8,7 @@
 
 %% Producer API
 -export([ start_producer/1
-        , start_producer/2
+        , start_producer/3
         , stop_producer/1
         , produce/3
         , produce/4
@@ -18,71 +18,68 @@
 %% Consumer API
 -export([ start_consumer/3
         , stop_consumer/1
+        , consume/2
         , consume/6
         ]).
 
 %% Management and testing API
 -export([ get_metadata/1
         , get_metadata/2
+        , get_offsets/3
         , get_offsets/5
+        , fetch/4
         , fetch/7
         ]).
+
+-export_type([host/0]).
 
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
+%%%_* Types --------------------------------------------------------------------
+-type host() :: {string(), integer()}.
+
+%%%_* Macros -------------------------------------------------------------------
+-define(DEFAULT_ACKS,            1). % default required acks
+-define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
+
 %%%_* API ----------------------------------------------------------------------
-%% @equiv start_producer(Hosts, [])
--spec start_producer([{string(), integer()}]) ->
-                        {ok, pid()} | {error, any()}.
+%% @equiv start_producer(Hosts, 1, 1000)
+-spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_producer(Hosts) ->
-  start_producer(Hosts, []).
+  start_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
 
 %% @doc Start a process to publish messages to kafka.
-%%      <br/>
-%%      Hosts: list of "bootstrap" kafka nodes, {"hostname", 1234}
-%%      <br/>
-%%      Options:
-%%      <dl>
-%%        <dt>``{required_acks, integer()}''</dt>
-%%          <dd>How many acknowledgements the servers should receive
-%%              before responding to the request. If it is 0 the
-%%              server will not send any response (this is the only
-%%              case where the server will not reply to a request). If
-%%              it is 1, the server will wait the data is written to
-%%              the local log before sending a response. If it is -1
-%%              the server will block until the message is committed
-%%              by all in sync replicas before sending a response. For
-%%              any number > 1 the server will block waiting for this
-%%              number of acknowledgements to occur (but the server
-%%              will never wait for more acknowledgements than there
-%%              are in-sync replicas).<br/>Default: 1</dd>
-%%        <dt>``{ack_timeout, integer()}''</dt>
-%%          <dd>Maximum time in milliseconds the server can await the
-%%              receipt of the number of acknowledgements in
-%%              required_acks. The timeout is not an exact limit on
-%%              the request time for a few reasons: (1) it does not
-%%              include network latency, (2) the timer begins at the
-%%              beginning of the processing of this request so if many
-%%              requests are queued due to server overload that wait
-%%              time will not be included, (3) we will not terminate a
-%%              local write so if the local write time exceeds this
-%%              timeout it will not be respected.<br/>
-%%              Default: 1000.</dd>
-%%        <dt>``{batch_size, integer()}''</dt>
-%%          <dd>Number of messages to collect before sending in a
-%%              batch produce request. Set to 1 to disable batches.<br/>
-%%              Default: 20.</dd>
-%%        <dt>``{batch_timeout, integer()}''</dt>
-%%          <dd>If no message comes in during this time (in ms),
-%%              producer will try to send already bufferred messages,
-%%              regardless of batch_size setting.<br/>
-%%              Default: 200.</dd>
-%%      </dl>
--spec start_producer([{string(), integer()}], [{atom(), integer()}]) ->
+%%      Hosts:
+%%        list of "bootstrap" kafka nodes, {"hostname", 1234}
+%%      RequiredAcks:
+%%        How many acknowledgements the servers should receive
+%%        before responding to the request. If it is 0 the
+%%        server will not send any response (this is the only
+%%        case where the server will not reply to a request). If
+%%        it is 1, the server will wait the data is written to
+%%        the local log before sending a response. If it is -1
+%%        the server will block until the message is committed
+%%        by all in sync replicas before sending a response. For
+%%        any number > 1 the server will block waiting for this
+%%        number of acknowledgements to occur (but the server
+%%        will never wait for more acknowledgements than there
+%%        are in-sync replicas).
+%%      AckTimeout:
+%%        Maximum time in milliseconds the server can await the
+%%        receipt of the number of acknowledgements in
+%%        RequiredAcks. The timeout is not an exact limit on
+%%        the request time for a few reasons: (1) it does not
+%%        include network latency, (2) the timer begins at the
+%%        beginning of the processing of this request so if many
+%%        requests are queued due to server overload that wait
+%%        time will not be included, (3) we will not terminate a
+%%        local write so if the local write time exceeds this
+%%        timeout it will not be respected.
+-spec start_producer([host()], integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
-start_producer(Hosts, Options) ->
-  brod_producer:start_link(Hosts, Options).
+start_producer(Hosts, RequiredAcks, AckTimeout) ->
+  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -90,24 +87,27 @@ stop_producer(Pid) ->
   brod_producer:stop(Pid).
 
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
--spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
+-spec produce(pid(), binary(), binary()) -> {ok, reference()}.
 produce(Pid, Topic, Value) ->
-  produce(Pid, Topic, 0, Value).
+  produce(Pid, Topic, 0, <<>>, Value).
 
-%% @equiv produce(Pid, Topic, Partition, <<>>, Value)
--spec produce(pid(), binary(), integer(), binary()) -> ok | {error, any()}.
-produce(Pid, Topic, Partition, Value) ->
-  produce(Pid, Topic, Partition, <<>>, Value).
-
-%% @doc Send message to a broker.
-%%      Internally it's a gen_server:call to brod_producer process. Returns
-%%      when the message is handled by brod_producer.
+%% @equiv produce(Pid, Topic, Partition, [{Key, Value}])
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 ok | {error, any()}.
+                 {ok, reference()}.
 produce(Pid, Topic, Partition, Key, Value) ->
-  brod_producer:produce(Pid, Topic, Partition, Key, Value).
+  produce(Pid, Topic, Partition, [{Key, Value}]).
 
-%% @doc
+%% @doc Send one or more {key, value} messages to a broker.
+%%      Returns a reference which can later be used to match on an
+%%      'ack' message from producer acknowledging that the payload
+%%      has been handled by kafka cluster.
+%%      'ack' message has format {{Reference, ProducerPid}, ack}.
+-spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
+                 {ok, reference()}.
+produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
+  brod_producer:produce(Pid, Topic, Partition, KVList).
+
+%% @doc Start consumer process
 -spec start_consumer([{string(), integer()}], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
@@ -118,7 +118,15 @@ start_consumer(Hosts, Topic, Partition) ->
 stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
-%% @doc Start consuming message from a partition.
+-spec consume(pid(), integer()) -> ok | {error, any()}.
+%% @equiv consume(Pid, self(), Offset, 1000, 0, 100000)
+%% @doc A simple alternative for consume/7 with predefined defaults.
+%%      Calling process will receive messages from consumer process.
+consume(Pid, Offset) ->
+  consume(Pid, self(), Offset, 1000, 0, 100000).
+
+%% @doc Start consuming data from a partition.
+%%      Messages are delivered as #message_set{}.
 %% Subscriber: a process which will receive messages
 %% Offset: Where to start to fetch data from.
 %%                  -1: start from the latest available offset
@@ -149,12 +157,28 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   brod_consumer:consume(Pid, Subscriber, Offset,
                         MaxWaitTime, MinBytes, MaxBytes).
 
+%% @doc Fetch broker metadata
+-spec get_metadata([{string(), integer()}]) ->
+                      {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
+%% @doc Fetch broker metadata
+-spec get_metadata([{string(), integer()}], [binary()]) ->
+                      {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
+%% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
+-spec get_offsets([{string(), integer()}], binary(), non_neg_integer()) ->
+                     {ok, #offset_response{}} | {error, any()}.
+get_offsets(Hosts, Topic, Partition) ->
+  get_offsets(Hosts, Topic, Partition, -1, 1).
+
+%% @doc Get valid offsets for a specified topic/partition
+-spec get_offsets([{string(), integer()}], binary(), non_neg_integer(),
+                  integer(), non_neg_integer()) ->
+                     {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #offset_request{ topic = Topic
@@ -162,9 +186,20 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
                            , time = Time
                            , max_n_offsets = MaxNOffsets},
   Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
+  ok = brod_sock:stop(Pid),
   Response.
 
+%% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
+-spec fetch([{string(), integer()}], binary(), non_neg_integer(), integer()) ->
+               {ok, #message_set{}} | {error, any()}.
+fetch(Hosts, Topic, Partition, Offset) ->
+  fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
+
+%% @doc Fetch a single message set from a specified topic/partition
+-spec fetch([{string(), integer()}], binary(), non_neg_integer(),
+            integer(), non_neg_integer(), non_neg_integer(),
+            pos_integer()) ->
+               {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
@@ -174,8 +209,13 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
   Response = brod_sock:send_sync(Pid, Request, 10000),
-  brod_sock:stop(Pid),
-  Response.
+  ok = brod_sock:stop(Pid),
+  case Response of
+    {ok, FetchResponse} ->
+      {ok, brod_utils:fetch_response_to_message_set(FetchResponse)};
+    _ ->
+      Response
+  end.
 
 %%%_* Internal functions -------------------------------------------------------
 connect_leader(Hosts, Topic, Partition) ->

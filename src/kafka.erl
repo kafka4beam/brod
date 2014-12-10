@@ -11,37 +11,16 @@
 %% API
 -export([ api_key/1
         , parse_stream/2
+        , encode/1
         , encode/2
         , decode/2
+        , is_error/1
+        , error_code_to_atom/1
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
-
-%%%_* Macros -------------------------------------------------------------------
-
--define(CLIENT_ID,      <<"brod">>).
--define(CLIENT_ID_SIZE, 4).
-
--define(API_VERSION, 0).
--define(MAGIC_BYTE, 0).
-
--define(REPLICA_ID, -1).
-
-%% Api keys
--define(API_KEY_PRODUCE,        0).
--define(API_KEY_FETCH,          1).
--define(API_KEY_OFFSET,         2).
--define(API_KEY_METADATA,       3).
--define(API_KEY_LEADER_AND_ISR, 4).
--define(API_KEY_STOP_REPLICA,   5).
--define(API_KEY_OFFSET_COMMIT,  6).
--define(API_KEY_OFFSET_FETCH,   7).
-
-%% Compression
--define(COMPRESS_NONE, 0).
--define(COMPRESS_GZIP, 1).
--define(COMPRESS_SNAPPY, 2).
+-include("kafka.hrl").
 
 %%%_* API ----------------------------------------------------------------------
 %% @doc Parse binary stream of kafka responses.
@@ -63,7 +42,7 @@ parse_stream(Bin, Acc, CorrIdDict) ->
 
 encode(CorrId, Request) ->
   Header = header(api_key(Request), CorrId),
-  Body = do_encode_request(Request),
+  Body = encode(Request),
   Bin = <<Header/binary, Body/binary>>,
   Size = byte_size(Bin),
   <<Size:32/integer, Bin/binary>>.
@@ -78,6 +57,26 @@ decode(?API_KEY_PRODUCE, Bin)  -> produce_response(Bin);
 decode(?API_KEY_OFFSET, Bin)   -> offset_response(Bin);
 decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
 
+is_error(0)                    -> false;
+is_error(X) when is_integer(X) -> true.
+
+error_code_to_atom(-1) -> unexpected_server_error;
+error_code_to_atom(1)  -> offset_out_of_range;
+error_code_to_atom(2)  -> invalid_message;
+error_code_to_atom(3)  -> unknown_topic_or_partition;
+error_code_to_atom(4)  -> invalid_message_size;
+error_code_to_atom(5)  -> leader_not_available;
+error_code_to_atom(6)  -> not_leader_for_partition;
+error_code_to_atom(7)  -> request_timed_out;
+error_code_to_atom(8)  -> broker_not_available;
+error_code_to_atom(9)  -> replica_not_available;
+error_code_to_atom(10) -> message_size_too_large;
+error_code_to_atom(11) -> stale_controller_epoch_code;
+error_code_to_atom(12) -> offset_metadata_too_large;
+error_code_to_atom(14) -> offsets_load_in_progress;
+error_code_to_atom(15) -> consumer_coordinator_not_available;
+error_code_to_atom(16) -> not_coordinator_for_consumer.
+
 %%%_* Internal functions -------------------------------------------------------
 header(ApiKey, CorrId) ->
   <<ApiKey:16/integer,
@@ -86,30 +85,14 @@ header(ApiKey, CorrId) ->
     ?CLIENT_ID_SIZE:16/integer,
     ?CLIENT_ID/binary>>.
 
-do_encode_request(#metadata_request{} = Request) ->
+encode(#metadata_request{} = Request) ->
   metadata_request_body(Request);
-do_encode_request(#produce_request{} = Request)  ->
+encode(#produce_request{} = Request)  ->
   produce_request_body(Request);
-do_encode_request(#offset_request{} = Request)  ->
+encode(#offset_request{} = Request)  ->
   offset_request_body(Request);
-do_encode_request(#fetch_request{} = Request)  ->
+encode(#fetch_request{} = Request)  ->
   fetch_request_body(Request).
-
-parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
-  parse_array(Length, Bin, [], Fun).
-
-parse_array(0, Bin, Acc, _Fun) ->
-  {Acc, Bin};
-parse_array(Length, Bin0, Acc, Fun) ->
-  {Item, Bin} = Fun(Bin0),
-  parse_array(Length - 1, Bin, [Item | Acc], Fun).
-
-parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
-
-parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
-
-kafka_size(<<"">>) -> -1;
-kafka_size(Bin)    -> size(Bin).
 
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
@@ -138,7 +121,7 @@ parse_broker_metadata(<<NodeID:32/integer,
                            , port = Port},
   {Broker, Bin}.
 
-parse_topic_metadata(<<ErrorCode:16/integer,
+parse_topic_metadata(<<ErrorCode:16/signed-integer,
                        Size:16/integer,
                        Name:Size/binary,
                        Bin0/binary>>) ->
@@ -148,6 +131,7 @@ parse_topic_metadata(<<ErrorCode:16/integer,
                          , partitions = Partitions},
   {Topic, Bin}.
 
+%% isrs = "in sync replicas"
 parse_partition_metadata(<<ErrorCode:16/signed-integer,
                            Id:32/integer,
                            LeaderId:32/signed-integer,
@@ -165,27 +149,18 @@ parse_partition_metadata(<<ErrorCode:16/signed-integer,
 produce_request_body(#produce_request{} = Produce) ->
   Acks = Produce#produce_request.acks,
   Timeout = Produce#produce_request.timeout,
-  Topics = group_by_topic(Produce#produce_request.data, []),
+  Topics = Produce#produce_request.data,
   TopicsCount = erlang:length(Topics),
   Head = <<Acks:16/signed-integer,
            Timeout:32/integer,
            TopicsCount:32/integer>>,
   encode_topics(Topics, Head).
 
-group_by_topic([], Acc) ->
-  Acc;
-group_by_topic([{{Topic, Partition}, Msgs} | Rest], Acc) ->
-  Data0 = case lists:keyfind(Topic, 1, Acc) of
-            {_, X} -> X;
-            false  -> []
-          end,
-  Data = [{Partition, Msgs} | Data0],
-  group_by_topic(Rest, lists:keystore(Topic, 1, Acc, {Topic, Data})).
-
 encode_topics([], Acc) ->
   Acc;
-encode_topics([{Topic, Partitions} | T], Acc0) ->
+encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
   Size = erlang:size(Topic),
+  Partitions = dict:to_list(PartitionsDict),
   PartitionsCount = erlang:length(Partitions),
   Acc1 = <<Acc0/binary, Size:16/integer, Topic/binary,
            PartitionsCount:32/integer>>,
@@ -311,7 +286,7 @@ parse_topic_fetch_data(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
   {#topic_fetch_data{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
 parse_partition_messages(<<Partition:32/integer,
-                           ErrorCode:16/integer,
+                           ErrorCode:16/signed-integer,
                            HighWmOffset:64/integer,
                            MessageSetSize:32/integer,
                            MessageSetBin:MessageSetSize/binary,
@@ -359,11 +334,68 @@ parse_message_set(_Bin, []) ->
   %% For some reason kafka does not report error.
   throw("max_bytes option is too small").
 
+parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
+  parse_array(Length, Bin, [], Fun).
+
+parse_array(0, Bin, Acc, _Fun) ->
+  {Acc, Bin};
+parse_array(Length, Bin0, Acc, Fun) ->
+  {Item, Bin} = Fun(Bin0),
+  parse_array(Length - 1, Bin, [Item | Acc], Fun).
+
+parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
+
+parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
+
+kafka_size(<<"">>) -> -1;
+kafka_size(Bin)    -> size(Bin).
+
 parse_bytes(-1, Bin) ->
   {<<>>, Bin};
 parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
   {binary:copy(Bytes), Bin}.
+
+%% Tests -----------------------------------------------------------------------
+-include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+
+parse_array_test() ->
+  F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) ->
+          {binary_to_list(X), Bin}
+      end,
+  ?assertMatch({["BARR", "FOO"], <<>>},
+               parse_array(<<2:32/integer, 3:32/integer, "FOO",
+                                           4:32/integer, "BARR">>, F)),
+  ?assertMatch({["FOO"], <<4:32/integer, "BARR">>},
+               parse_array(<<1:32/integer, 3:32/integer, "FOO",
+                                           4:32/integer, "BARR">>, F)),
+  ?assertMatch({[], <<>>}, parse_array(<<0:32/integer>>, F)),
+  ?assertError(function_clause, parse_array(<<-1:32/integer>>, F)),
+  ?assertError(function_clause, parse_array(<<1:32/integer>>, F)),
+  ok.
+
+parse_int32_test() ->
+  ?assertMatch({0, <<"123">>}, parse_int32(<<0:32/integer, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int32(<<0:32/integer>>)),
+  ?assertError(function_clause, parse_int32(<<0:16/integer>>)),
+  ok.
+
+parse_int64_test() ->
+  ?assertMatch({0, <<"123">>}, parse_int64(<<0:64/integer, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int64(<<0:64/integer>>)),
+  ?assertError(function_clause, parse_int64(<<0:32/integer>>)),
+  ok.
+
+parse_bytes_test() ->
+  ?assertMatch({<<"1234">>, <<"5678">>}, parse_bytes(4, <<"12345678">>)),
+  ?assertMatch({<<"1234">>, <<"">>}, parse_bytes(4, <<"1234">>)),
+  ?assertMatch({<<"">>, <<"1234">>}, parse_bytes(-1, <<"1234">>)),
+  ?assertError({badmatch, <<"123">>}, parse_bytes(4, <<"123">>)),
+  ok.
+
+-endif. % TEST
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

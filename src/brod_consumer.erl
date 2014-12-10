@@ -20,6 +20,7 @@
 
 %% Debug API
 -export([ debug/2
+        , no_debug/1
         , get_socket/1
         ]).
 
@@ -31,6 +32,7 @@
         , handle_info/2
         , terminate/2
         , code_change/3
+        , format_status/2
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -49,6 +51,11 @@
                }).
 
 %%%_* Macros -------------------------------------------------------------------
+%% how much time to wait before sending next fetch request when we got
+%% no messages in the last one
+-define(SLEEP_TIMEOUT, 1000).
+
+-define(SEND_FETCH_REQUEST, send_fetch_request).
 
 %%%_* API ----------------------------------------------------------------------
 -spec start_link([{string(), integer()}], binary(), integer()) ->
@@ -73,19 +80,21 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   gen_server:call(Pid, {consume, Subscriber, Offset,
                         MaxWaitTime, MinBytes, MaxBytes}).
 
--spec debug(pid(), sys:dbg_opt()) -> ok.
-%% @doc Enable/disabling debugging on brod_consumer and its connection
-%%      to broker.
-%%      Enable:
-%%        brod_consumer:debug(Pid, {log, print}).
-%%        brod_consumer:debug(Pid, {trace, true}).
-%%      Disable:
-%%        brod_consumer:debug(Pid, no_debug).
-debug(Pid, Debug) ->
-  {ok, #socket{pid = Sock}} = get_socket(Pid),
-  {ok, _} = gen:call(Sock, system, {debug, Debug}),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}),
-  ok.
+-spec debug(pid(), print | string() | none) -> ok.
+%% @doc Enable debugging on consumer and its connection to a broker
+%%      debug(Pid, pring) prints debug info on stdout
+%%      debug(Pid, File) prints debug info into a File
+debug(Pid, print) ->
+  do_debug(Pid, {trace, true}),
+  do_debug(Pid, {log, print});
+debug(Pid, File) when is_list(File) ->
+  do_debug(Pid, {trace, true}),
+  do_debug(Pid, {log_to_file, File}).
+
+-spec no_debug(pid()) -> ok.
+%% @doc Disable debugging
+no_debug(Pid) ->
+  do_debug(Pid, no_debug).
 
 -spec get_socket(pid()) -> {ok, #socket{}}.
 get_socket(Pid) ->
@@ -100,17 +109,20 @@ init([Hosts, Topic, Partition, Debug]) ->
     %% detect a leader for the given partition and connect it
     Partitions =
       case lists:keyfind(Topic, #topic_metadata.name, Topics) of
-        #topic_metadata{partitions = Ps} -> Ps;
-        false                            -> throw(topic_not_found)
+        #topic_metadata{} = TM ->
+          TM#topic_metadata.partitions;
+        false ->
+          throw({unknown_topic, Topic})
       end,
     NodeId =
       case lists:keyfind(Partition, #partition_metadata.id, Partitions) of
-        #partition_metadata{leader_id = Id} -> Id;
-        false                               -> throw(partition_not_found)
+        #partition_metadata{leader_id = Id} ->
+          Id;
+        false ->
+          throw({unknown_partition, Topic, Partition})
       end,
-    Broker = lists:keyfind(NodeId, #broker_metadata.node_id, Brokers),
-    Host = Broker#broker_metadata.host,
-    Port = Broker#broker_metadata.port,
+    #broker_metadata{host = Host, port = Port} =
+      lists:keyfind(NodeId, #broker_metadata.node_id, Brokers),
     {ok, Pid} = brod_sock:start_link(self(), Host, Port, Debug),
     Socket = #socket{ pid = Pid
                     , host = Host
@@ -150,21 +162,18 @@ handle_cast(Msg, State) ->
   {stop, {unsupported_cast, Msg}, State}.
 
 handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
-  #fetch_response{topics = [TopicFetchData]} = R,
-  #topic_fetch_data{topic = Topic, partitions = [Msgs]} = TopicFetchData,
-  ok = maybe_send_subscriber(State0#state.subscriber, Topic, Msgs),
-  LastOffset = Msgs#partition_messages.last_offset,
-  case Msgs#partition_messages.messages of
-    [] ->
-      %% do not bump offset when we get nothing, repeat request later
-      {noreply, State0, State0#state.max_wait_time};
-    _ ->
-      Offset = erlang:max(State0#state.offset, LastOffset + 1),
-      State = State0#state{offset = Offset},
+  case handle_fetch_response(R, State0) of
+    {error, Error} ->
+      {stop, {broker_error, Error}, State0};
+    {ok, State} ->
+      ok = send_subscriber(State#state.subscriber, R),
       ok = send_fetch_request(State),
+      {noreply, State};
+    {empty, State} ->
+      erlang:send_after(?SLEEP_TIMEOUT, self(), ?SEND_FETCH_REQUEST),
       {noreply, State}
   end;
-handle_info(timeout, State) ->
+handle_info(?SEND_FETCH_REQUEST, State) ->
   ok = send_fetch_request(State),
   {noreply, State};
 handle_info({'EXIT', _Pid, Reason}, State) ->
@@ -177,6 +186,10 @@ terminate(_Reason, #state{socket = Socket}) ->
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
+
+format_status(_Opt, [_PDict, State0]) ->
+  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State0))),
+  [{data, [{"State", State}]}].
 
 %%%_* Internal functions -------------------------------------------------------
 get_valid_offset(Offset, _State) when Offset > 0 ->
@@ -204,18 +217,61 @@ send_fetch_request(#state{socket = Socket} = State) ->
   {ok, _} = brod_sock:send(Socket#socket.pid, Request),
   ok.
 
-maybe_send_subscriber(_, _, #partition_messages{messages = []}) ->
-  ok;
-maybe_send_subscriber(Subscriber, Topic, Msgs) ->
-  #partition_messages{ partition = Partition
-                     , high_wm_offset = HighWmOffset
-                     , messages = Messages} = Msgs,
-  MsgSet = #message_set{ topic = Topic
-                       , partition = Partition
-                       , high_wm_offset = HighWmOffset
-                       , messages = Messages},
+handle_fetch_response(#fetch_response{topics = [TopicFetchData]}, State) ->
+  #topic_fetch_data{partitions = [PM]} = TopicFetchData,
+  case has_error(PM) of
+    {true, Error} ->
+      {error, Error};
+    false ->
+      case PM#partition_messages.messages of
+        [] ->
+          {empty, State};
+        X when is_list(X) ->
+          LastOffset = PM#partition_messages.last_offset,
+          Offset = erlang:max(State#state.offset, LastOffset + 1),
+          {ok, State#state{offset = Offset}}
+      end
+  end.
+
+send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
+  MsgSet = brod_utils:fetch_response_to_message_set(FetchResponse),
   Subscriber ! MsgSet,
   ok.
+
+has_error(#partition_messages{error_code = ErrorCode}) ->
+  case kafka:is_error(ErrorCode) of
+    true  -> {true, kafka:error_code_to_atom(ErrorCode)};
+    false -> false
+  end.
+
+do_debug(Pid, Debug) ->
+  {ok, #socket{pid = Sock}} = get_socket(Pid),
+  {ok, _} = gen:call(Sock, system, {debug, Debug}),
+  {ok, _} = gen:call(Pid, system, {debug, Debug}),
+  ok.
+
+%% Tests -----------------------------------------------------------------------
+-include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+
+handle_fetch_response_test() ->
+  State0 = #state{},
+  PM0 = #partition_messages{error_code = 1},
+  R0 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM0]}]},
+  ?assertEqual({error, kafka:error_code_to_atom(1)},
+               handle_fetch_response(R0, State0)),
+  PM1 = #partition_messages{error_code = 0, messages = []},
+  R1 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM1]}]},
+  ?assertEqual({empty, State0}, handle_fetch_response(R1, State0)),
+  State1 = State0#state{offset = 0},
+  PM2 = #partition_messages{error_code = 0, messages = [foo], last_offset = 1},
+  R2 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM2]}]},
+  State2 = State1#state{offset = 2},
+  ?assertEqual({ok, State2}, handle_fetch_response(R2, State1)),
+  ok.
+
+-endif. % TEST
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
