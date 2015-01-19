@@ -29,7 +29,7 @@
   ((fun (__X) ->
       case (Expr) of
     __X -> ok;
-    __V -> .erlang:error({assertEqual_failed,
+    __V -> erlang:error({assertEqual_failed,
               [{module, ?MODULE},
                {line, ?LINE},
                {expression, (??Expr)},
