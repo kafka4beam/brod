@@ -17,10 +17,10 @@
 
 -define(l2b(L), erlang:list_to_binary(L)).
 
--define(max8,  1 bsl 8 - 1).
--define(max16, 1 bsl 16 - 1).
--define(max32, 1 bsl 32 - 1).
--define(max64, 1 bsl 64 - 1).
+-define(max8,  (1 bsl 8 - 1)).
+-define(max16, (1 bsl 16 - 1)).
+-define(max32, (1 bsl 32 - 1)).
+-define(max64, (1 bsl 64 - 1)).
 
 %% make it print full binaries on tty when a test fails
 %% to simplify debugging
