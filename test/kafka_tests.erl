@@ -30,9 +30,7 @@
       case (Expr) of
     __X -> ok;
     __V -> erlang:error({assertEqual_failed,
-              [{module, ?MODULE},
-               {line, ?LINE},
-               {expression, (??Expr)},
+              [{expression, (??Expr)},
                {expected, lists:flatten(io_lib:format("~1000p", [__X]))},
                {value, lists:flatten(io_lib:format("~1000p", [__V]))}]})
       end
