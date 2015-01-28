@@ -1,8 +1,13 @@
 .PHONY:	all build test docs shell plt dialyze
 
+APP = brod
 INCLUDE_DIR ?= include
 SRC_DIR ?= src
 TEST_DIR ?= test
+
+APP_FILE = $(EBIN_DIR)/$(APP).app
+APP_SRC_FILE = $(SRC_DIR)/$(APP).app.src
+
 ERLC ?= erlc
 ERLC_FLAGS ?= +debug_info +warn_obsolete_guard +warn_export_all -Werror
 ERLC_FLAGS += -I $(INCLUDE_DIR)
@@ -19,19 +24,31 @@ TEST_SOURCES := $(wildcard $(TEST_DIR)/*.erl)
 EBIN_DIR ?= ebin
 OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(SOURCES:%.erl=%.beam)))
 TEST_OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(TEST_SOURCES:%.erl=%.beam)))
+MODULES := $(sort $(OBJECTS:$(EBIN_DIR)/%.beam=%))
+
+# comma-separated list of single-quoted module names
+# (the comma/space variables are needed to work around Make's argument parsing)
+comma := ,
+space :=
+space +=
+MODULES_LIST := $(subst $(space),$(comma)$(space),$(patsubst %,'%',$(MODULES)))
 
 all: build
 
 build: export ERLC_FLAGS := -DNOTEST $(ERLC_FLAGS)
-build: $(OBJECTS)
+build: $(OBJECTS) $(APP_FILE)
 
-test: $(OBJECTS) $(TEST_OBJECTS)
+test: $(OBJECTS) $(TEST_OBJECTS) $(APP_FILE)
 	erl -noshell -pa $(EBIN_DIR) \
 		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \
 		-s init stop
 
+$(APP_FILE): $(APP_SRC_FILE)
+	@echo "Writing $(APP_FILE)"
+	@sed "s/modules,\[\]/modules, [$(MODULES_LIST)]/" $(APP_SRC_FILE) > $(APP_FILE)
+
 docs: build
-	@erl -noshell -eval 'edoc:application(brod), init:stop()'
+	@erl -noshell -eval 'edoc:application($(APP)), init:stop()'
 
 $(EBIN_DIR)/%.beam: $(SRC_DIR)/%.erl
 	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
