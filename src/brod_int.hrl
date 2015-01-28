@@ -38,7 +38,7 @@
 %%%_* produce request ----------------------------------------------------------
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()
-                         %% [{Topic :: binar(), [dict(Partition -> [{K, V}])]}]
+                         %% [{Topic :: binary(), [dict(Partition -> [{K, V}])]}]
                          %% skipping spec to make it working with R15..R17
                          , data
                          }).
