@@ -36,9 +36,9 @@ MODULES_LIST := $(subst $(space),$(comma)$(space),$(patsubst %,'%',$(MODULES)))
 all: build
 
 build: export ERLC_FLAGS := -DNOTEST $(ERLC_FLAGS)
-build: $(OBJECTS) $(APP_FILE)
+build: $(APP_FILE) $(OBJECTS)
 
-test: $(OBJECTS) $(TEST_OBJECTS) $(APP_FILE)
+test: $(APP_FILE) $(OBJECTS) $(TEST_OBJECTS)
 	erl -noshell -pa $(EBIN_DIR) \
 		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \
 		-s init stop

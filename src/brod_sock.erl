@@ -39,7 +39,8 @@
                , sock                  :: port()
                , corr_id = 0           :: integer()
                , tail    = <<>>        :: binary()
-               , api_keys = dict:new() :: dict()    % corr_id -> api_key
+               %% dict(corr_id -> api_key)
+               , api_keys = dict:new()
                }).
 
 %%%_* API ======================================================================

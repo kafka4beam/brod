@@ -51,8 +51,10 @@
                , ack_timeout      :: integer()
                , sockets = []     :: [#socket{}]
                , leaders = []     :: [{{topic(), partition()}, leader()}]
-               , data_buffer = [] :: [{leader(), [{topic(), dict()}]}]
-               , senders_buffer = dict:new() :: dict() % (leader(), [sender()])
+               %% [{leader(), [{topic(), dict()}]}]
+               , data_buffer = []
+               %% dict(leader(), [sender()])
+               , senders_buffer = dict:new()
                , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
                }).
 
