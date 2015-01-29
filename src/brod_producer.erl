@@ -258,15 +258,42 @@ do_debug(Pid, Debug) ->
 -ifdef(TEST).
 
 mock_brod_sock() ->
-  code:delete(brod_sock),
-  code:purge(brod_sock),
-  BrodDir = filename:dirname(filename:dirname(code:which(brod))),
-  OutDir = filename:join(BrodDir, "test/mock"),
-  {ok, brod_sock} =
-    compile:file(filename:join(BrodDir, "test/mock/brod_sock"),
-                 [{outdir, OutDir}, verbose, report_errors]),
-  {module, brod_sock} = code:load_abs(filename:join(OutDir, "brod_sock")),
+  meck:new(brod_sock, [passthrough]),
+  meck:expect(brod_sock, start_link,
+              fun(_Parent, "h1", _Port, _Debug) -> {ok, p1};
+                 (_Parent, "h2", _Port, _Debug) -> {ok, p2};
+                 (_Parent, "h3", _Port, _Debug) -> {ok, p3}
+              end),
+
+  meck:expect(brod_sock, start,
+              fun(_Parent, "h1", _Port, _Debug) -> {ok, p1};
+                 (_Parent, "h2", _Port, _Debug) -> {ok, p2};
+                 (_Parent, "h3", _Port, _Debug) -> {ok, p3}
+              end),
+
+  meck:expect(brod_sock, stop, 1, ok),
+  meck:expect(brod_sock, send, 2, {ok, 1}),
+
+  meck:expect(brod_sock, send_sync,
+              fun(p1, #metadata_request{}, _Timeout) ->
+                  {ok, #metadata_response{brokers = [], topics = []}};
+                 (p2, #metadata_request{}, _Timeout) ->
+                  Topics = [#topic_metadata{name = <<"t">>, partitions = []}],
+                  {ok, #metadata_response{brokers = [], topics = Topics}};
+                 (p3, #metadata_request{}, _Timeout) ->
+                  Brokers = [#broker_metadata{ node_id = 1,
+                                               host = "h3",
+                                               port = 2181}],
+                  Partitions = [#partition_metadata{id = 0, leader_id = 1}],
+                  Topics = [#topic_metadata{ name = <<"t">>,
+                                             partitions = Partitions}],
+                  {ok, #metadata_response{brokers = Brokers, topics = Topics}}
+              end),
   ok.
+
+validate_mock() ->
+  true = meck:validate(brod_sock),
+  ok   = meck:unload(brod_sock).
 
 connect_test() ->
   ok = mock_brod_sock(),
@@ -285,7 +312,7 @@ connect_test() ->
   State3 = State2#state{ sockets = [Socket]
                        , leaders = [Leader]},
   ?assertEqual({ok, p3, State3}, connect(Topic, Partition, State2)),
-  ok.
+  ok = validate_mock().
 
 maybe_send_test() ->
   ok = mock_brod_sock(),
@@ -302,7 +329,7 @@ maybe_send_test() ->
                         , senders_buffer = dict:erase(L1, SendersBuffer)
                         , pending = [{L1, {1, [a, b, c]}}]},
   ?assertEqual({ok, ExpectedState}, maybe_send(L1, State2)),
-  ok.
+  ok = validate_mock().
 
 handle_produce_test() ->
   ok = mock_brod_sock(),
@@ -373,7 +400,7 @@ handle_produce_test() ->
   ?assertEqual(Leaders2, State7#state.leaders),
   ?assertEqual(SendersBuffer5, State7#state.senders_buffer),
   ?assertEqual(DataBuffer5, State7#state.data_buffer),
-  ok.
+  ok = validate_mock().
 
 -endif. % TEST
 

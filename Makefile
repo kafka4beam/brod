@@ -1,82 +1,39 @@
-.PHONY:	all build test docs shell plt dialyze
+.PHONY:	all compile docs check test clean plt dialyze
 
-APP = brod
-INCLUDE_DIR ?= include
-SRC_DIR ?= src
-TEST_DIR ?= test
+REBAR ?= $(shell which rebar 2> /dev/null || which ./rebar)
+DIALYZER_PLT = ./brod.plt
+DIALYZER_OPTS = --fullpath --no_native -Werror_handling -Wrace_conditions -Wunderspecs -Wno_opaque -Wno_return -Wno_match -Wno_unused --plt $(DIALYZER_PLT)
+PLT_APPS = erts kernel stdlib
 
-APP_FILE = $(EBIN_DIR)/$(APP).app
-APP_SRC_FILE = $(SRC_DIR)/$(APP).app.src
+all: compile
 
-ERLC ?= erlc
-ERLC_FLAGS ?= +debug_info +warn_obsolete_guard +warn_export_all -Werror
-ERLC_FLAGS += -I $(INCLUDE_DIR)
+compile:
+	@$(REBAR) compile
 
-DIALYZER_PLT = $(HOME)/.brod_plt
-DIALYZER_OPTS = -Werror_handling -Wrace_conditions -Wunderspecs
-export DIALYZER_PLT
+docs:
+	@$(REBAR) skip_deps=true doc
 
-# needed for edoc
-export ERL_LIBS=$(abspath ..)
+check: compile plt dialyze
 
-SOURCES := $(wildcard $(SRC_DIR)/*.erl)
-TEST_SOURCES := $(wildcard $(TEST_DIR)/*.erl)
-EBIN_DIR ?= ebin
-OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(SOURCES:%.erl=%.beam)))
-TEST_OBJECTS := $(addprefix $(EBIN_DIR)/, $(notdir $(TEST_SOURCES:%.erl=%.beam)))
-MODULES := $(sort $(OBJECTS:$(EBIN_DIR)/%.beam=%))
+get-deps:
+	$(REBAR) get-deps
 
-# comma-separated list of single-quoted module names
-# (the comma/space variables are needed to work around Make's argument parsing)
-comma := ,
-space :=
-space +=
-MODULES_LIST := $(subst $(space),$(comma)$(space),$(patsubst %,'%',$(MODULES)))
-
-all: build
-
-build: export ERLC_FLAGS := -DNOTEST $(ERLC_FLAGS)
-build: $(APP_FILE) $(OBJECTS)
-
-test: $(APP_FILE) $(OBJECTS) $(TEST_OBJECTS)
-	erl -noshell -pa $(EBIN_DIR) \
-		-eval 'eunit:test("$(EBIN_DIR)", [verbose])' \
-		-s init stop
-
-$(APP_FILE): $(APP_SRC_FILE)
-	@echo "Writing $(APP_FILE)"
-	@sed "s/modules,\[\]/modules, [$(MODULES_LIST)]/" $(APP_SRC_FILE) > $(APP_FILE)
-
-docs: build
-	@erl -noshell -eval 'edoc:application($(APP)), init:stop()'
-
-$(EBIN_DIR)/%.beam: $(SRC_DIR)/%.erl
-	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
-
-$(EBIN_DIR)/%.beam: $(TEST_DIR)/%.erl
-	$(ERLC) $(ERLC_FLAGS) -o $(EBIN_DIR) $<
+test: REBAR := BROD_TEST=1 $(REBAR)
+test: clean get-deps compile
+	$(REBAR) eunit -v apps=brod
 
 clean:
-	@rm -f $(OBJECTS)
-	@rm -f $(TEST_OBJECTS)
-	@rm -f $(DIALYZER_PLT)
-
-shell:
-	erl -pa ebin
-
-PLT_APPS = compiler	\
-           crypto	\
-           dialyzer	\
-           erts	\
-           eunit	\
-           kernel	\
-           stdlib	\
-           syntax_tools
-
-$(DIALYZER_PLT):
-	dialyzer --build_plt --apps $(PLT_APPS) ebin
+	@$(RM) -rf deps
+	@$(REBAR) clean
+	@$(RM) doc/*
+	@$(RM) -f $(DIALYZER_PLT)
 
 plt: $(DIALYZER_PLT)
 
+$(DIALYZER_PLT):
+	dialyzer --build_plt --apps $(PLT_APPS) ebin --output_plt $(DIALYZER_PLT)
+
 dialyze: $(DIALYZER_PLT)
-	dialyzer --no_native --src -r src $(DIALYZER_OPTS)
+	dialyzer -r ebin $(DIALYZER_OPTS)
+
+# eof
