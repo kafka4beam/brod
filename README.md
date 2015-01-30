@@ -11,6 +11,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 In gen_server's init/1:
 
+    % Producer will be linked to the calling process
     {ok, Producer} = brod:start_producer(Hosts, RequiredAcks, AckTimeout),
     {ok, #state{ producer = Producer }}.
 
@@ -20,7 +21,7 @@ Sending a message:
                             , Topic
                             , Partition
                             , [{Key, Value}]),
-    % remember a Ref somewhere, e.g. in #state{}
+    % remember the Ref somewhere, e.g. in #state{}
 
 Handling acks from kafka broker:
 
@@ -35,6 +36,7 @@ Include brod.hrl:
 
 In gen_server's init/1:
 
+    % Consumer will be linked to the calling process
     {ok, Consumer} = brod:start_consumer(Hosts, Topic, Partition),
     ok = brod:consume(Consumer, self(), Offset, 1000, 0, 100000),
     {ok, #state{ consumer = Consumer }}.
