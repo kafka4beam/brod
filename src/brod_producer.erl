@@ -45,16 +45,22 @@
 -type corr_id()   :: non_neg_integer().
 -type sender()    :: {pid(), reference()}.
 
+-ifdef(otp_before_17).
+-type data_buffer() :: [{leader(), [{topic(), dict()}]}].
+-type senders_buffer() :: dict().
+-else.
+-type data_buffer() :: [{leader(), [{topic(), dict:dict()}]}].
+-type senders_buffer() :: dict:dict(leader(), [sender()]).
+-endif.
+
 -record(state, { hosts            :: [brod:host()]
                , debug            :: [term()]
                , acks             :: integer()
                , ack_timeout      :: integer()
                , sockets = []     :: [#socket{}]
                , leaders = []     :: [{{topic(), partition()}, leader()}]
-               %% [{leader(), [{topic(), dict()}]}]
-               , data_buffer = []
-               %% dict(leader(), [sender()])
-               , senders_buffer = dict:new()
+               , data_buffer = [] :: data_buffer()
+               , senders_buffer = dict:new() :: senders_buffer()
                , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
                }).
 
