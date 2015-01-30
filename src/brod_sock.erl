@@ -34,13 +34,20 @@
 %%%_* Macros -------------------------------------------------------------------
 -define(MAX_CORR_ID, 4294967295). % 2^32 - 1
 
+%%%_* Types --------------------------------------------------------------------
+-type corr_id() :: integer().
+-ifdef(otp_before_17).
+-type api_keys() :: dict().
+-else.
+-type api_keys() :: dict:dict(corr_id(), term()).
+-endif.
+
 %%%_* Records ==================================================================
 -record(state, { parent                :: pid()
                , sock                  :: port()
-               , corr_id = 0           :: integer()
+               , corr_id = 0           :: corr_id()
                , tail    = <<>>        :: binary()
-               %% dict(corr_id -> api_key)
-               , api_keys = dict:new()
+               , api_keys = dict:new() :: api_keys()
                }).
 
 %%%_* API ======================================================================
