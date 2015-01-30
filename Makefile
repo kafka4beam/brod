@@ -19,7 +19,7 @@ get-deps:
 	$(REBAR) get-deps
 
 test: REBAR := BROD_TEST=1 $(REBAR)
-test: clean get-deps compile
+test: get-deps compile
 	$(REBAR) eunit -v apps=brod
 
 clean:
