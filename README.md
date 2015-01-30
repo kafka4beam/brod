@@ -3,6 +3,14 @@ Kafka client library in Erlang
 Supports v0.8+.  
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 
+Build
+-----
+    make
+
+Test
+----
+    make clean && make test
+
 Usage
 -----
     rr(brod).
