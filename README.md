@@ -28,6 +28,13 @@ Handling acks from kafka broker:
     handle_info({{Ref, P}, ack}, #state{producer = P} = State) ->
       % do something with Ref, e.g. notify a client and remove from #state{}
 
+Sending a message with a blocking call:
+
+    ok = brod:produce_sync( State#state.producer
+                          , Topic
+                          , Partition
+                          , [{Key, Value}]).
+
 ## Consumer as a part of an application
 
 Include brod.hrl:
