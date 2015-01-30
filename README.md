@@ -10,10 +10,12 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 ## Producer as a part of an application
 
 In gen_server's init/1:
+
     {ok, Producer} = brod:start_producer(Hosts, RequiredAcks, AckTimeout),
     {ok, #state{ producer = Producer }}.
 
 Sending a message:
+
     {ok, Ref} = brod:produce( State#state.producer
                             , Topic
                             , Partition
@@ -21,20 +23,24 @@ Sending a message:
     % remember a Ref somewhere, e.g. in #state{}
 
 Handling acks from kafka broker:
+
     handle_info({{Ref, P}, ack}, #state{producer = P} = State) ->
       % do something with Ref, e.g. notify a client and remove from #state{}
 
 ## Consumer as a part of an application
 
 Include brod.hrl:
+
     -include_lib("brod/include/brod.hrl").
 
 In gen_server's init/1:
+
     {ok, Consumer} = brod:start_consumer(Hosts, Topic, Partition),
     ok = brod:consume(Consumer, self(), Offset, 1000, 0, 100000),
     {ok, #state{ consumer = Consumer }}.
 
 Handling payloads from kafka broker:
+
     handle_info(#message_set{messages = Msgs}, State) ->
       lists:foreach(
         fun(#message{key = K, value = V}) ->
