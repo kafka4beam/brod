@@ -13,6 +13,9 @@
         , produce/3
         , produce/4
         , produce/5
+        , produce_sync/3
+        , produce_sync/4
+        , produce_sync/5
         ]).
 
 %% Consumer API
@@ -109,6 +112,26 @@ produce(Pid, Topic, Partition, Key, Value) ->
                  {ok, reference()}.
 produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
   brod_producer:produce(Pid, Topic, Partition, KVList).
+
+%% @equiv produce_sync(Pid, Topic, 0, <<>>, Value)
+-spec produce_sync(pid(), binary(), binary()) -> ok.
+produce_sync(Pid, Topic, Value) ->
+  produce_sync(Pid, Topic, 0, <<>>, Value).
+
+%% @equiv produce_sync(Pid, Topic, Partition, [{Key, Value}])
+-spec produce_sync(pid(), binary(), integer(), binary(), binary()) -> ok.
+produce_sync(Pid, Topic, Partition, Key, Value) ->
+  produce_sync(Pid, Topic, Partition, [{Key, Value}]).
+
+%% @doc Send one or more {key, value} messages to a broker and block
+%%      until producer acknowledges the payload.
+-spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) -> ok.
+produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
+  {ok, Ref} = produce(Pid, Topic, Partition, KVList),
+  receive
+    {{Ref, Pid}, ack} ->
+      ok
+  end.
 
 %% @doc Start consumer process
 -spec start_consumer([host()], binary(), integer()) ->

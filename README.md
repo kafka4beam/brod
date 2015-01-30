@@ -4,7 +4,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Building and testing
     make
-    make clean && make test
+    make clean test
 
 # Usage
 ## Producer as a part of an application
