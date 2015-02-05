@@ -36,10 +36,17 @@
                            }).
 
 %%%_* produce request ----------------------------------------------------------
+-ifdef(otp_before_17).
+-type produce_request_data() :: [{binary(), dict()}].
+-else.
+-type produce_request_data() :: [{binary(), dict:dict(integer(),
+                                                      [{binary(), binary()}])}].
+-endif.
+
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()
                          %% [{Topic, [dict(Partition -> [{K, V}])]}]
-                         , data    :: [{binary(), dict()}]
+                         , data    :: produce_request_data()
                          }).
 
 %%%_* produce response ---------------------------------------------------------

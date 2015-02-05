@@ -1,2 +1,6 @@
 doc/
 erl_crash.dump
+/.eunit/
+/.rebar/
+/deps/
+ebin

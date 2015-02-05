@@ -13,6 +13,9 @@
         , produce/3
         , produce/4
         , produce/5
+        , produce_sync/3
+        , produce_sync/4
+        , produce_sync/5
         ]).
 
 %% Consumer API
@@ -29,6 +32,9 @@
         , get_offsets/5
         , fetch/4
         , fetch/7
+        , console_consumer/4
+        , file_consumer/5
+        , simple_consumer/5
         ]).
 
 -export_type([host/0]).
@@ -53,26 +59,26 @@ start_producer(Hosts) ->
 %%      Hosts:
 %%        list of "bootstrap" kafka nodes, {"hostname", 1234}
 %%      RequiredAcks:
-%%        How many acknowledgements the servers should receive
-%%        before responding to the request. If it is 0 the
-%%        server will not send any response (this is the only
-%%        case where the server will not reply to a request). If
-%%        it is 1, the server will wait the data is written to
-%%        the local log before sending a response. If it is -1
-%%        the server will block until the message is committed
-%%        by all in sync replicas before sending a response. For
-%%        any number > 1 the server will block waiting for this
-%%        number of acknowledgements to occur (but the server
-%%        will never wait for more acknowledgements than there
-%%        are in-sync replicas).
+%%        How many acknowledgements the kafka broker should receive
+%%        from the clustered replicas before responding to the
+%%        producer.
+%%        If it is 0 the broker will not send any response (this is
+%%        the only case where the broker will not reply to a
+%%        request). If it is 1, the broker will wait the data is
+%%        written to the local log before sending a response. If it is
+%%        -1 the broker will block until the message is committed by
+%%        all in sync replicas before sending a response. For any
+%%        number > 1 the broker will block waiting for this number of
+%%        acknowledgements to occur (but the broker will never wait
+%%        for more acknowledgements than there are in-sync replicas).
 %%      AckTimeout:
-%%        Maximum time in milliseconds the server can await the
+%%        Maximum time in milliseconds the broker can await the
 %%        receipt of the number of acknowledgements in
 %%        RequiredAcks. The timeout is not an exact limit on
 %%        the request time for a few reasons: (1) it does not
 %%        include network latency, (2) the timer begins at the
 %%        beginning of the processing of this request so if many
-%%        requests are queued due to server overload that wait
+%%        requests are queued due to broker overload that wait
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
@@ -107,8 +113,28 @@ produce(Pid, Topic, Partition, Key, Value) ->
 produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
   brod_producer:produce(Pid, Topic, Partition, KVList).
 
+%% @equiv produce_sync(Pid, Topic, 0, <<>>, Value)
+-spec produce_sync(pid(), binary(), binary()) -> ok.
+produce_sync(Pid, Topic, Value) ->
+  produce_sync(Pid, Topic, 0, <<>>, Value).
+
+%% @equiv produce_sync(Pid, Topic, Partition, [{Key, Value}])
+-spec produce_sync(pid(), binary(), integer(), binary(), binary()) -> ok.
+produce_sync(Pid, Topic, Partition, Key, Value) ->
+  produce_sync(Pid, Topic, Partition, [{Key, Value}]).
+
+%% @doc Send one or more {key, value} messages to a broker and block
+%%      until producer acknowledges the payload.
+-spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) -> ok.
+produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
+  {ok, Ref} = produce(Pid, Topic, Partition, KVList),
+  receive
+    {{Ref, Pid}, ack} ->
+      ok
+  end.
+
 %% @doc Start consumer process
--spec start_consumer([{string(), integer()}], binary(), integer()) ->
+-spec start_consumer([host()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
   brod_consumer:start_link(Hosts, Topic, Partition).
@@ -158,25 +184,24 @@ consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                         MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
--spec get_metadata([{string(), integer()}]) ->
-                      {ok, #metadata_response{}} | {error, any()}.
+-spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
--spec get_metadata([{string(), integer()}], [binary()]) ->
+-spec get_metadata([host()], [binary()]) ->
                       {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
--spec get_offsets([{string(), integer()}], binary(), non_neg_integer()) ->
+-spec get_offsets([host()], binary(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([{string(), integer()}], binary(), non_neg_integer(),
+-spec get_offsets([host()], binary(), non_neg_integer(),
                   integer(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
@@ -190,13 +215,13 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   Response.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
--spec fetch([{string(), integer()}], binary(), non_neg_integer(), integer()) ->
+-spec fetch([host()], binary(), non_neg_integer(), integer()) ->
                {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([{string(), integer()}], binary(), non_neg_integer(),
+-spec fetch([host()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
                {ok, #message_set{}} | {error, any()}.
@@ -217,6 +242,29 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
       Response
   end.
 
+console_consumer(Hosts, Topic, Partition, Offset) ->
+  simple_consumer(Hosts, Topic, Partition, Offset, user).
+
+file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
+  {ok, File} = file:open(Filename, [write, append]),
+  C = simple_consumer(Hosts, Topic, Partition, Offset, File),
+  MonitorFun = fun() ->
+                   Mref = erlang:monitor(process, C),
+                   receive
+                     {'DOWN', Mref, process, C, _} ->
+                       io:format("~nClosing ~s~n", [Filename]),
+                       file:close(File)
+                   end
+               end,
+  proc_lib:spawn(fun() -> MonitorFun() end),
+  C.
+
+simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
+  {ok, C} = brod:start_consumer(Hosts, Topic, Partition),
+  Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
+  ok = brod:consume(C, Pid, Offset, 1000, 0, 100000),
+  Pid.
+
 %%%_* Internal functions -------------------------------------------------------
 connect_leader(Hosts, Topic, Partition) ->
   {ok, Metadata} = get_metadata(Hosts),
@@ -229,6 +277,23 @@ connect_leader(Hosts, Topic, Partition) ->
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
   brod_sock:start_link(self(), Host, Port, []).
+
+simple_consumer_loop(C, Io) ->
+  receive
+    #message_set{messages = Msgs} ->
+      lists:foreach(
+        fun(#message{key = K, value = V}) ->
+            io:format(Io, "\n~s\n~s\n", [K, V])
+        end, Msgs),
+      simple_consumer_loop(C, Io);
+    stop ->
+      brod:stop_consumer(C),
+      io:format(Io, "\Simple consumer ~p terminating\n", [self()]),
+      ok;
+    Other ->
+      io:format(Io, "\nStrange msg: ~p\n", [Other]),
+      simple_consumer_loop(C, Io)
+  end.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
