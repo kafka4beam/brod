@@ -239,8 +239,8 @@ send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
   ok.
 
 has_error(#partition_messages{error_code = ErrorCode}) ->
-  case kafka:is_error(ErrorCode) of
-    true  -> {true, kafka:error_code_to_atom(ErrorCode)};
+  case brod_kafka:is_error(ErrorCode) of
+    true  -> {true, brod_kafka:error_code_to_atom(ErrorCode)};
     false -> false
   end.
 
@@ -259,7 +259,7 @@ handle_fetch_response_test() ->
   State0 = #state{},
   PM0 = #partition_messages{error_code = 1},
   R0 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM0]}]},
-  ?assertEqual({error, kafka:error_code_to_atom(1)},
+  ?assertEqual({error, brod_kafka:error_code_to_atom(1)},
                handle_fetch_response(R0, State0)),
   PM1 = #partition_messages{error_code = 0, messages = []},
   R1 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM1]}]},
