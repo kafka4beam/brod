@@ -125,7 +125,8 @@ decode_msg(Msg, State, Debug0) ->
 
 handle_msg({tcp, _Sock, Bin}, #state{tail = Tail0} = State, Debug) ->
   Stream = <<Tail0/binary, Bin/binary>>,
-  {Tail, Responses, ApiKeys} = kafka:parse_stream(Stream, State#state.api_keys),
+  {Tail, Responses, ApiKeys} =
+    brod_kafka:parse_stream(Stream, State#state.api_keys),
   lists:foreach(fun({CorrId, Response}) ->
                     State#state.parent ! {msg, self(), CorrId, Response}
                 end, Responses),
@@ -138,9 +139,9 @@ handle_msg({From, {send, Request}}, #state{sock = Sock} = State, Debug) ->
   CorrId = next_corr_id(State#state.corr_id),
   %% reply faster
   reply(From, {ok, CorrId}),
-  RequestBin = kafka:encode(CorrId, Request),
+  RequestBin = brod_kafka:encode(CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
-  ApiKey = kafka:api_key(Request),
+  ApiKey = brod_kafka:api_key(Request),
   ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
   ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->

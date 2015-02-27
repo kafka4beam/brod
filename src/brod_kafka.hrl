@@ -1,5 +1,5 @@
--ifndef(__KAFKA_HRL).
--define(__KAFKA_HRL, true).
+-ifndef(__BROD_KAFKA_HRL).
+-define(__BROD_KAFKA_HRL, true).
 
 -define(CLIENT_ID,      <<"brod">>).
 -define(CLIENT_ID_SIZE, 4).
@@ -24,7 +24,7 @@
 -define(COMPRESS_GZIP, 1).
 -define(COMPRESS_SNAPPY, 2).
 
--endif. % include kafka.hrl
+-endif. % include brod_kafka.hrl
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

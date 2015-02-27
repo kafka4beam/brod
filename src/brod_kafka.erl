@@ -6,7 +6,7 @@
 %%% @end
 %%%=============================================================================
 
--module(kafka).
+-module(brod_kafka).
 
 %% API
 -export([ api_key/1
@@ -20,7 +20,7 @@
 
 %%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
--include("kafka.hrl").
+-include("brod_kafka.hrl").
 
 %%%_* API ----------------------------------------------------------------------
 %% @doc Parse binary stream of kafka responses.

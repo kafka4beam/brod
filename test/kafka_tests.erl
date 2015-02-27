@@ -3,7 +3,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include("src/brod_int.hrl").
--include("src/kafka.hrl").
+-include("src/brod_kafka.hrl").
 
 -define(PORT, 1234).
 
@@ -37,25 +37,26 @@
     end)(Expect))).
 
 api_key_test() ->
-  ?assertMatch(?API_KEY_METADATA, kafka:api_key(#metadata_request{})),
-  ?assertMatch(?API_KEY_PRODUCE, kafka:api_key(#produce_request{})),
-  ?assertMatch(?API_KEY_OFFSET, kafka:api_key(#offset_request{})),
-  ?assertMatch(?API_KEY_FETCH, kafka:api_key(#fetch_request{})),
-  ?assertError(function_clause, kafka:api_key(foo)),
+  ?assertMatch(?API_KEY_METADATA, brod_kafka:api_key(#metadata_request{})),
+  ?assertMatch(?API_KEY_PRODUCE, brod_kafka:api_key(#produce_request{})),
+  ?assertMatch(?API_KEY_OFFSET, brod_kafka:api_key(#offset_request{})),
+  ?assertMatch(?API_KEY_FETCH, brod_kafka:api_key(#fetch_request{})),
+  ?assertError(function_clause, brod_kafka:api_key(foo)),
   ok.
 
 parse_stream_test() ->
   D0 = dict:new(),
-  ?assertMatch({<<>>, [], D0}, kafka:parse_stream(<<>>, D0)),
-  ?assertMatch({<<"foo">>, [], D0}, kafka:parse_stream(<<"foo">>, D0)),
+  ?assertMatch({<<>>, [], D0}, brod_kafka:parse_stream(<<>>, D0)),
+  ?assertMatch({<<"foo">>, [], D0}, brod_kafka:parse_stream(<<"foo">>, D0)),
   D1 = dict:store(1, ?API_KEY_METADATA, D0),
-  ?assertMatch({<<"foo">>, [], D1}, kafka:parse_stream(<<"foo">>, D1)),
+  ?assertMatch({<<"foo">>, [], D1}, brod_kafka:parse_stream(<<"foo">>, D1)),
   ok.
 
 encode_metadata_test() ->
-  ?assertMatch(<<?i32(0), ?i16s(-1)>>, kafka:encode(#metadata_request{})),
+  ?assertMatch(<<?i32(0), ?i16s(-1)>>, brod_kafka:encode(#metadata_request{})),
   R = #metadata_request{topics = [<<"FOO">>, <<"BARR">>]},
-  ?assertMatch(<<?i32(2), ?i16(4), "BARR", ?i16(3), "FOO">>, kafka:encode(R)),
+  ?assertMatch(<<?i32(2), ?i16(4), "BARR", ?i16(3), "FOO">>,
+               brod_kafka:encode(R)),
   ok.
 
 decode_metadata_test() ->
@@ -69,7 +70,7 @@ decode_metadata_test() ->
   %% isr: 32b node id
   Bin1 = <<?i32(0), ?i32(0)>>,
   ?assertMatch(#metadata_response{brokers = [], topics = []},
-               kafka:decode(?API_KEY_METADATA, Bin1)),
+               brod_kafka:decode(?API_KEY_METADATA, Bin1)),
   Host = "localhost",
   Node1 = 0,
   Node2 = ?max32,
@@ -111,14 +112,15 @@ decode_metadata_test() ->
               >>,
   Bin2 = <<BrokersBin/binary, TopicsBin/binary>>,
   ?assertEqual(#metadata_response{brokers = Brokers, topics = Topics},
-               kafka:decode(?API_KEY_METADATA, Bin2)),
+               brod_kafka:decode(?API_KEY_METADATA, Bin2)),
   ok.
 
 encode_produce_test() ->
   Acks1 = -(?max8),
   Timeout1 = 0,
   R1 = #produce_request{acks = Acks1, timeout = Timeout1, data = []},
-  ?assertMatch(<<?i16s(Acks1), ?i32(Timeout1), ?i32(0)>>, kafka:encode(R1)),
+  ?assertMatch(<<?i16s(Acks1), ?i32(Timeout1), ?i32(0)>>,
+               brod_kafka:encode(R1)),
   T1 = <<"t1">>,
   T2 = <<"t2">>,
   T3 = <<"topic3">>,
@@ -156,7 +158,7 @@ encode_produce_test() ->
   ?assertEqual(<<?i16s(Acks2), ?i32(Timeout2), ?i32(3), % metadata
                  ?i16(2), T1/binary, ?i32(3),    % t1 start
                  ?i32(0), ?i32(0),               % p0 start/end
-                 %% in kafka:group_by_topics/2 dict puts p2 before p0
+                 %% in brod_kafka:group_by_topics/2 dict puts p2 before p0
                  ?i32(2), ?i32(32),              % p2 start
                                                  % message set start
                  ?i64(0), ?i32(20), ?i32(Crc2),  % msg1
@@ -194,7 +196,7 @@ encode_produce_test() ->
                  ?i32(0), ?i32(0),               % p0 start/end
                                                  % t3 end
                  <<>>/binary
-               >>, kafka:encode(R2)),
+               >>, brod_kafka:encode(R2)),
   ok.
 
 decode_produce_test() ->
@@ -203,7 +205,7 @@ decode_produce_test() ->
   %% topic: 16b name size, name, array of offsets
   %% offset: 32b partition, 16b error code, 64b offset
   ?assertEqual(#produce_response{topics = []},
-               kafka:decode(?API_KEY_PRODUCE, <<?i32(0)>>)),
+               brod_kafka:decode(?API_KEY_PRODUCE, <<?i32(0)>>)),
   Topic1 = <<"t1">>,
   Offset1 = ?max64,
   ProduceOffset1 = #produce_offset{ partition = 0
@@ -214,7 +216,7 @@ decode_produce_test() ->
   Bin1 = <<?i32(1), ?i16(2), Topic1/binary, ?i32(1),
            ?i32(0), ?i16s(-1), ?i64(Offset1)>>,
   ?assertEqual(#produce_response{topics = [ProduceTopic1]},
-              kafka:decode(?API_KEY_PRODUCE, Bin1)),
+              brod_kafka:decode(?API_KEY_PRODUCE, Bin1)),
 
   Topic2 = <<"t2">>,
   Topic3 = <<"t3">>,
@@ -238,7 +240,7 @@ decode_produce_test() ->
            ?i16(2), Topic3/binary, ?i32(0)
          >>,
   ?assertEqual(#produce_response{topics = [ProduceTopic3, ProduceTopic2]},
-              kafka:decode(?API_KEY_PRODUCE, Bin2)),
+              brod_kafka:decode(?API_KEY_PRODUCE, Bin2)),
   ok.
 
 encode_offset_test() ->
@@ -252,12 +254,12 @@ encode_offset_test() ->
                       , max_n_offsets = MaxNOffsets},
   Bin1 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
          ?i32(1), ?i32(Partition), ?i64s(Time1), ?i32(MaxNOffsets)>>,
-  ?assertEqual(Bin1, kafka:encode(R1)),
+  ?assertEqual(Bin1, brod_kafka:encode(R1)),
   Time2 = ?max64,
   R2 = R1#offset_request{time = Time2},
   Bin2 = <<?i32s(?REPLICA_ID), ?i32(1), ?i16((size(Topic))), Topic/binary,
          ?i32(1), ?i32(Partition), ?i64s(Time2), ?i32(MaxNOffsets)>>,
-  ?assertEqual(Bin2, kafka:encode(R2)),
+  ?assertEqual(Bin2, brod_kafka:encode(R2)),
   ok.
 
 decode_offset_test() ->
@@ -267,12 +269,12 @@ decode_offset_test() ->
   %% partition: 32b partition, 16b error code, array of offsets
   %% offset: 64b int
   ?assertEqual(#offset_response{topics = []},
-               kafka:decode(?API_KEY_OFFSET, <<?i32(0)>>)),
+               brod_kafka:decode(?API_KEY_OFFSET, <<?i32(0)>>)),
   Topic = <<"t1">>,
   R1 = #offset_response{topics = [#offset_topic{ topic = Topic
                                                , partitions = []}]},
   Bin1 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(0)>>,
-  ?assertEqual(R1, kafka:decode(?API_KEY_OFFSET, Bin1)),
+  ?assertEqual(R1, brod_kafka:decode(?API_KEY_OFFSET, Bin1)),
   Partition = 0,
   ErrorCode = -1,
   Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
@@ -283,7 +285,7 @@ decode_offset_test() ->
   R2 = #offset_response{
                   topics = [#offset_topic{ topic = Topic
                                          , partitions = Partitions2}]},
-  ?assertEqual(R2, kafka:decode(?API_KEY_OFFSET, Bin2)),
+  ?assertEqual(R2, brod_kafka:decode(?API_KEY_OFFSET, Bin2)),
   Offsets = [0, 1, ?max64, 3],
   OffsetsBin = << << ?i64(X) >> || X <- lists:reverse(Offsets) >>,
   Partitions3 = [#partition_offsets{ partition = Partition
@@ -294,7 +296,7 @@ decode_offset_test() ->
   Bin3 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(Partition), ?i16s(ErrorCode), ?i32((length(Offsets))),
            OffsetsBin/binary>>,
-  ?assertEqual(R3, kafka:decode(?API_KEY_OFFSET, Bin3)),
+  ?assertEqual(R3, brod_kafka:decode(?API_KEY_OFFSET, Bin3)),
   ok.
 
 encode_fetch_test() ->
@@ -313,7 +315,7 @@ encode_fetch_test() ->
   Bin = <<?i32s(?REPLICA_ID), ?i32(MaxWaitTime), ?i32(MinBytes),
           ?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
           ?i32(Partition), ?i64(Offset), ?i32(MaxBytes)>>,
-  ?assertEqual(Bin, kafka:encode(R)),
+  ?assertEqual(Bin, brod_kafka:encode(R)),
   ok.
 
 decode_fetch_test() ->
@@ -326,12 +328,12 @@ decode_fetch_test() ->
   %% message: 64b offset, 32b message size, 32b crc, 8b magic byte,
   %%          8b attributes, 32b key size, key, 32b value size, value
   ?assertEqual(#fetch_response{topics = []},
-               kafka:decode(?API_KEY_FETCH, <<?i32(0)>>)),
+               brod_kafka:decode(?API_KEY_FETCH, <<?i32(0)>>)),
   Topic = <<"t1">>,
   R1 = #fetch_response{topics = [#topic_fetch_data{ topic = Topic
                                                   , partitions = []}]},
   Bin1 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(0)>>,
-  ?assertEqual(R1, kafka:decode(?API_KEY_FETCH, Bin1)),
+  ?assertEqual(R1, brod_kafka:decode(?API_KEY_FETCH, Bin1)),
 
   R2 = #fetch_response{
     topics = [#topic_fetch_data{ topic = Topic
@@ -343,12 +345,12 @@ decode_fetch_test() ->
                                                      , messages = []}]}]},
   Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(0), ?i16s(0), ?i64(0), ?i32(0)>>,
-  ?assertEqual(R2, kafka:decode(?API_KEY_FETCH, Bin2)),
+  ?assertEqual(R2, brod_kafka:decode(?API_KEY_FETCH, Bin2)),
 
   Bin3 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(0), ?i16s(0), ?i64(0), ?i32(13), ?i64(0), ?i32(16), "x">>,
   ?assertThrow("max_bytes option is too small",
-               kafka:decode(?API_KEY_FETCH, Bin3)),
+               brod_kafka:decode(?API_KEY_FETCH, Bin3)),
 
   Topic1 = <<"t1">>,
   Topic2 = crypto:rand_bytes(?max16),
@@ -454,7 +456,7 @@ decode_fetch_test() ->
                                                 % partition 1 end
                                                 % topic 3 end
            >>,
-  ?assertEqual(R3, kafka:decode(?API_KEY_FETCH, Bin4)),
+  ?assertEqual(R3, brod_kafka:decode(?API_KEY_FETCH, Bin4)),
   ok.
 
 msgcrc(<<>>, <<>>) ->
