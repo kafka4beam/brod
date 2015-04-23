@@ -205,7 +205,7 @@ do_print_msg(Device, Fmt, Args, State) ->
             [ts(), self(), CorrId] ++ Args).
 
 ts() ->
-  Now = erlang:now(),
+  Now = os:timestamp(),
   {_, _, MicroSec} = Now,
   {{Y,M,D}, {HH,MM,SS}} = calendar:now_to_local_time(Now),
   lists:flatten(io_lib:format("~.4.0w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w.~w",
