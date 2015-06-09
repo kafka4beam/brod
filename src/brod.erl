@@ -141,11 +141,16 @@ produce_sync(Pid, Topic, Partition, Key, Value) ->
 
 %% @doc Send one or more {key, value} messages to a broker and block
 %%      until producer acknowledges the payload.
--spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) -> ok.
+-spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) ->
+        ok | {error, any()}.
 produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
+  MonitorRef = erlang:monitor(process, Pid),
   {ok, Ref} = produce(Pid, Topic, Partition, KVList),
   receive
+    {'DOWN', MonitorRef, _, _, Info} ->
+      {error, Info};
     {{Ref, Pid}, ack} ->
+      erlang:demonitor(MonitorRef, [flush]),
       ok
   end.
 
