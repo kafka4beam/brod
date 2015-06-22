@@ -72,31 +72,27 @@ decode(?API_KEY_PRODUCE, Bin)  -> produce_response(Bin);
 decode(?API_KEY_OFFSET, Bin)   -> offset_response(Bin);
 decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
 
-is_error(no_error)             -> false;
-is_error(X) when is_integer(X) -> is_error(error_code_to_atom(X));
-is_error(X) when is_atom(X)    -> true.
+is_error(X) when is_integer(X) -> X =/= 0;
+is_error(X) when is_atom(X)    -> X =/= no_error.
 
-error_code_to_atom(0)  -> no_error;
-error_code_to_atom(-1) -> unexpected_server_error;
-error_code_to_atom(1)  -> offset_out_of_range;
-error_code_to_atom(2)  -> invalid_message;
-error_code_to_atom(3)  -> unknown_topic_or_partition;
-error_code_to_atom(4)  -> invalid_message_size;
-error_code_to_atom(5)  -> leader_not_available;
-error_code_to_atom(6)  -> not_leader_for_partition;
-error_code_to_atom(7)  -> request_timed_out;
-error_code_to_atom(8)  -> broker_not_available;
-error_code_to_atom(9)  -> replica_not_available;
-error_code_to_atom(10) -> message_size_too_large;
-error_code_to_atom(11) -> stale_controller_epoch_code;
-error_code_to_atom(12) -> offset_metadata_too_large;
-error_code_to_atom(14) -> offsets_load_in_progress;
-error_code_to_atom(15) -> consumer_coordinator_not_available;
-error_code_to_atom(16) -> not_coordinator_for_consumer;
-error_code_to_atom(X) when X > 0 andalso X < 256 ->
-  list_to_atom("error_code_" ++ integer_to_list(X));
-error_code_to_atom(_X) ->
-  unknown_error_code.
+parse_error_code(0)  -> no_error;
+parse_error_code(-1) -> unexpected_server_error;
+parse_error_code(1)  -> offset_out_of_range;
+parse_error_code(2)  -> invalid_message;
+parse_error_code(3)  -> unknown_topic_or_partition;
+parse_error_code(4)  -> invalid_message_size;
+parse_error_code(5)  -> leader_not_available;
+parse_error_code(6)  -> not_leader_for_partition;
+parse_error_code(7)  -> request_timed_out;
+parse_error_code(8)  -> broker_not_available;
+parse_error_code(9)  -> replica_not_available;
+parse_error_code(10) -> message_size_too_large;
+parse_error_code(11) -> stale_controller_epoch_code;
+parse_error_code(12) -> offset_metadata_too_large;
+parse_error_code(14) -> offsets_load_in_progress;
+parse_error_code(15) -> consumer_coordinator_not_available;
+parse_error_code(16) -> not_coordinator_for_consumer;
+parse_error_code(X)  -> (true = is_integer(X)) andalso X.
 
 %%%_* Internal functions -------------------------------------------------------
 header(ApiKey, CorrId) ->
@@ -147,7 +143,7 @@ parse_topic_metadata(<<ErrorCode:16/signed-integer,
                        Name:Size/binary,
                        Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_metadata/1),
-  Topic = #topic_metadata{ error_code = error_code_to_atom(ErrorCode)
+  Topic = #topic_metadata{ error_code = parse_error_code(ErrorCode)
                          , name = binary:copy(Name)
                          , partitions = Partitions},
   {Topic, Bin}.
@@ -159,7 +155,7 @@ parse_partition_metadata(<<ErrorCode:16/signed-integer,
                            Bin0/binary>>) ->
   {Replicas, Bin1} = parse_array(Bin0, fun parse_int32/1),
   {Isrs, Bin} = parse_array(Bin1, fun parse_int32/1),
-  Partition = #partition_metadata{ error_code = error_code_to_atom(ErrorCode)
+  Partition = #partition_metadata{ error_code = parse_error_code(ErrorCode)
                                  , id = Id
                                  , leader_id = LeaderId
                                  , replicas = Replicas
@@ -237,7 +233,7 @@ parse_produce_offset(<<Partition:32/integer,
                        Offset:64/integer,
                        Bin/binary>>) ->
   Res = #produce_offset{ partition = Partition
-                       , error_code = error_code_to_atom(ErrorCode)
+                       , error_code = parse_error_code(ErrorCode)
                        , offset = Offset},
   {Res, Bin}.
 
@@ -272,7 +268,7 @@ parse_partition_offsets(<<Partition:32/integer,
                           Bin0/binary>>) ->
   {Offsets, Bin} = parse_array(Bin0, fun parse_int64/1),
   Res = #partition_offsets{ partition = Partition
-                          , error_code = error_code_to_atom(ErrorCode)
+                          , error_code = parse_error_code(ErrorCode)
                           , offsets = Offsets},
   {Res, Bin}.
 
@@ -314,7 +310,7 @@ parse_partition_messages(<<Partition:32/integer,
                            Bin/binary>>) ->
   {LastOffset, Messages} = parse_message_set(MessageSetBin),
   Res = #partition_messages{ partition = Partition
-                           , error_code = error_code_to_atom(ErrorCode)
+                           , error_code = parse_error_code(ErrorCode)
                            , high_wm_offset = HighWmOffset
                            , last_offset = LastOffset
                            , messages = Messages},

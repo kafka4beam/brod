@@ -19,6 +19,8 @@
 
 -include("../include/brod.hrl").
 
+-type error_code() :: atom() | integer().
+
 -record(socket, { pid     :: pid()
                 , host    :: string()
                 , port    :: integer()
@@ -31,14 +33,14 @@
 %%%_* metadata response --------------------------------------------------------
 %% 'isrs' - 'in sync replicas', the subset of the replicas
 %% that are "caught up" to the leader
--record(partition_metadata, { error_code :: atom()
+-record(partition_metadata, { error_code :: error_code()
                             , id         :: integer()
                             , leader_id  :: integer()
                             , replicas   :: [integer()]
                             , isrs       :: [integer()]
                             }).
 
--record(topic_metadata, { error_code :: atom()
+-record(topic_metadata, { error_code :: error_code()
                         , name       :: binary()
                         , partitions :: [#partition_metadata{}]}).
 
@@ -67,7 +69,7 @@
 
 %%%_* produce response ---------------------------------------------------------
 -record(produce_offset, { partition  :: integer()
-                        , error_code :: atom()
+                        , error_code :: error_code()
                         , offset     :: integer()
                         }).
 
@@ -89,7 +91,7 @@
 
 %%%_* offset response ----------------------------------------------------------
 -record(partition_offsets, { partition  :: integer()
-                           , error_code :: atom()
+                           , error_code :: error_code()
                            , offsets    :: [integer()]
                            }).
 
@@ -114,7 +116,7 @@
 %%%_* fetch response -----------------------------------------------------------
 %% definition of #message{} is in include/brod.hrl
 -record(partition_messages, { partition      :: integer()
-                            , error_code     :: atom()
+                            , error_code     :: error_code()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
                             , messages       :: [#message{}]

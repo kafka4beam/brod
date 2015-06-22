@@ -209,7 +209,7 @@ decode_produce_test() ->
   Topic1 = <<"t1">>,
   Offset1 = ?max64,
   ProduceOffset1 = #produce_offset{ partition = 0
-                                  , error_code = -1
+                                  , error_code = unexpected_server_error
                                   , offset = Offset1},
   ProduceTopic1 = #produce_topic{ topic = Topic1
                                 , offsets = [ProduceOffset1]},
@@ -223,10 +223,10 @@ decode_produce_test() ->
   Offset2 = 0,
   Offset3 = 1,
   ProduceOffset2 = #produce_offset{ partition = 0
-                                  , error_code = 1
+                                  , error_code = offset_out_of_range
                                   , offset = Offset2},
   ProduceOffset3 = #produce_offset{ partition = 2
-                                  , error_code = 2
+                                  , error_code = invalid_message
                                   , offset = Offset3},
   ProduceTopic2 = #produce_topic{ topic = Topic2
                                 , offsets = [ ProduceOffset3
@@ -277,10 +277,11 @@ decode_offset_test() ->
   ?assertEqual(R1, brod_kafka:decode(?API_KEY_OFFSET, Bin1)),
   Partition = 0,
   ErrorCode = -1,
+  ErrorCodeParsed = unexpected_server_error,
   Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(Partition), ?i16s(ErrorCode), ?i32(0)>>,
   Partitions2 = [#partition_offsets{ partition = Partition
-                                   , error_code = ErrorCode
+                                   , error_code = ErrorCodeParsed
                                    , offsets = []}],
   R2 = #offset_response{
                   topics = [#offset_topic{ topic = Topic
@@ -289,7 +290,7 @@ decode_offset_test() ->
   Offsets = [0, 1, ?max64, 3],
   OffsetsBin = << << ?i64(X) >> || X <- lists:reverse(Offsets) >>,
   Partitions3 = [#partition_offsets{ partition = Partition
-                                   , error_code = ErrorCode
+                                   , error_code = ErrorCodeParsed
                                    , offsets = Offsets}],
   R3 = #offset_response{topics = [#offset_topic{ topic = Topic
                                                , partitions = Partitions3}]},
@@ -339,7 +340,7 @@ decode_fetch_test() ->
     topics = [#topic_fetch_data{ topic = Topic
                                , partitions =
                                  [#partition_messages{ partition = 0
-                                                     , error_code = 0
+                                                     , error_code = no_error
                                                      , high_wm_offset = 0
                                                      , last_offset = 0
                                                      , messages = []}]}]},
@@ -356,8 +357,12 @@ decode_fetch_test() ->
   Topic2 = crypto:rand_bytes(?max16),
   %% Topic2 = <<"t2">>,
   Topic3 = <<"t3">>,
-  Partition1 = 1, Partition2 = ?max32,
-  ErrorCode1 = 0, ErrorCode2 = ?max8,
+  Partition1 = 1,
+  ErrorCode1 = 0,
+  ErrorCodeParsed1 = no_error,
+  Partition2 = ?max32,
+  ErrorCode2 = ?max8,
+  ErrorCodeParsed2 = ErrorCode2,
   HighWmOffset1 = 1, HighWmOffset2 = ?max64,
   K2 = crypto:rand_bytes(?max16),
   V2 = crypto:rand_bytes(?max16),
@@ -388,17 +393,17 @@ decode_fetch_test() ->
                      , key = <<>>
                      , value = <<>>},
   Partitions1 = [ #partition_messages{ partition = Partition2
-                                     , error_code = ErrorCode2
+                                     , error_code = ErrorCodeParsed2
                                      , high_wm_offset = HighWmOffset2
                                      , last_offset = 0
                                      , messages = []}
                 , #partition_messages{ partition = Partition1
-                                     , error_code = ErrorCode1
+                                     , error_code = ErrorCodeParsed1
                                      , high_wm_offset = HighWmOffset1
                                      , last_offset = ?max64
                                      , messages = [Message1, Message2]}],
   Partitions3 = [ #partition_messages{ partition = Partition1
-                                     , error_code = ErrorCode1
+                                     , error_code = ErrorCodeParsed1
                                      , high_wm_offset = HighWmOffset1
                                      , last_offset = 0
                                      , messages = [Message1, Message2,
