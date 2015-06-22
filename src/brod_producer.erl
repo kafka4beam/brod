@@ -150,11 +150,12 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
-handle_info({msg, Leader, CorrId, #produce_response{}}, State0) ->
+handle_info({msg, Leader, CorrId, #produce_response{topics = Topics}}, State0) ->
   {value, {_, {CorrId, SendersList}}, Pending} =
     lists:keytake(Leader, 1, State0#state.pending),
+  Reply = get_produce_reply_result(Topics),
   lists:foreach(fun({Sender, Ref}) ->
-                    Sender ! {{Ref, self()}, ack}
+                    Sender ! {{Ref, self()}, Reply}
                 end, SendersList),
   {ok, State} = maybe_send(Leader, State0#state{pending = Pending}),
   {noreply, State};
@@ -179,6 +180,34 @@ format_status(_Opt, [_PDict, State0]) ->
   [{data, [{"State", State}]}].
 
 %%%_* Internal functions -------------------------------------------------------
+
+%% @private Check error codes in produce response,
+%% return 'nack' together with the errors found
+%% @end
+-spec get_produce_reply_result([#produce_offset{}]) ->
+        ack | {nack, [{Topic::binary(),
+                       Partition::integer(),
+                       Offset::integer(),
+                       Reason::atom()}]}.
+get_produce_reply_result(Topics) ->
+  Errors =
+    lists:foldl(
+      fun(#produce_topic{topic = Topic, offsets = Offsets}, TopicAcc) ->
+        lists:foldl(
+          fun(#produce_offset{partition  = Partition,
+                              error_code = ErrorCode,
+                              offset     = Offset }, OffsetAcc) ->
+            case brod_kafka:is_error(ErrorCode) of
+              true  -> [{Topic, Partition, Offset, ErrorCode} | OffsetAcc];
+              false -> OffsetAcc
+            end
+          end, TopicAcc, Offsets)
+      end, [], Topics),
+  case Errors =:= [] of
+    true  -> ack;
+    false -> {nack, Errors}
+  end.
+
 handle_produce(Sender, Ref, Topic, Partition, KVList, State0) ->
   case get_leader(Topic, Partition, State0) of
     {ok, Leader, State1} ->

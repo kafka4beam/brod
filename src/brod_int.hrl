@@ -31,14 +31,14 @@
 %%%_* metadata response --------------------------------------------------------
 %% 'isrs' - 'in sync replicas', the subset of the replicas
 %% that are "caught up" to the leader
--record(partition_metadata, { error_code :: integer()
+-record(partition_metadata, { error_code :: atom()
                             , id         :: integer()
                             , leader_id  :: integer()
                             , replicas   :: [integer()]
                             , isrs       :: [integer()]
                             }).
 
--record(topic_metadata, { error_code :: integer()
+-record(topic_metadata, { error_code :: atom()
                         , name       :: binary()
                         , partitions :: [#partition_metadata{}]}).
 
@@ -67,7 +67,7 @@
 
 %%%_* produce response ---------------------------------------------------------
 -record(produce_offset, { partition  :: integer()
-                        , error_code :: integer()
+                        , error_code :: atom()
                         , offset     :: integer()
                         }).
 
@@ -89,7 +89,7 @@
 
 %%%_* offset response ----------------------------------------------------------
 -record(partition_offsets, { partition  :: integer()
-                           , error_code :: integer()
+                           , error_code :: atom()
                            , offsets    :: [integer()]
                            }).
 
@@ -114,7 +114,7 @@
 %%%_* fetch response -----------------------------------------------------------
 %% definition of #message{} is in include/brod.hrl
 -record(partition_messages, { partition      :: integer()
-                            , error_code     :: integer()
+                            , error_code     :: atom()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
                             , messages       :: [#message{}]
