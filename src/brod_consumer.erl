@@ -256,7 +256,7 @@ send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
 
 has_error(#partition_messages{error_code = ErrorCode}) ->
   case brod_kafka:is_error(ErrorCode) of
-    true  -> {true, brod_kafka:error_code_to_atom(ErrorCode)};
+    true  -> {true, ErrorCode};
     false -> false
   end.
 
@@ -273,15 +273,17 @@ do_debug(Pid, Debug) ->
 
 handle_fetch_response_test() ->
   State0 = #state{},
-  PM0 = #partition_messages{error_code = 1},
+  PM0 = #partition_messages{error_code = ?EC_OFFSET_OUT_OF_RANGE},
   R0 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM0]}]},
-  ?assertEqual({error, brod_kafka:error_code_to_atom(1)},
+  ?assertEqual({error, ?EC_OFFSET_OUT_OF_RANGE},
                handle_fetch_response(R0, State0)),
-  PM1 = #partition_messages{error_code = 0, messages = []},
+  PM1 = #partition_messages{error_code = ?EC_NONE, messages = []},
   R1 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM1]}]},
   ?assertEqual({empty, State0}, handle_fetch_response(R1, State0)),
   State1 = State0#state{offset = 0},
-  PM2 = #partition_messages{error_code = 0, messages = [foo], last_offset = 1},
+  PM2 = #partition_messages{error_code = ?EC_NONE,
+                            messages = [foo],
+                            last_offset = 1},
   R2 = #fetch_response{topics = [#topic_fetch_data{partitions = [PM2]}]},
   State2 = State1#state{offset = 2},
   ?assertEqual({ok, State2}, handle_fetch_response(R2, State1)),

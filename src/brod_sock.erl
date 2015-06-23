@@ -107,7 +107,12 @@ init(Parent, Host, Port, Debug0) ->
   case gen_tcp:connect(Host, Port, SockOpts) of
     {ok, Sock} ->
       proc_lib:init_ack(Parent, {ok, self()}),
-      loop(#state{parent = Parent, sock = Sock}, Debug);
+      try
+        loop(#state{parent = Parent, sock = Sock}, Debug)
+      catch error : E ->
+        Stack = erlang:get_stacktrace(),
+        exit({E, Stack})
+      end;
     Error ->
       proc_lib:init_ack(Parent, {error, Error})
   end.
