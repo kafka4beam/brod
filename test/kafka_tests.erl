@@ -350,7 +350,7 @@ decode_fetch_test() ->
                brod_kafka:decode(?API_KEY_FETCH, Bin3)),
 
   Topic1 = <<"t1">>,
-  Topic2 = crypto:rand_bytes(10),
+  Topic2 = random_bytes(),
   %% Topic2 = <<"t2">>,
   Topic3 = <<"t3">>,
   Partition1 = 1,
@@ -361,8 +361,8 @@ decode_fetch_test() ->
   ErrorCodeDecoded2 = ?EC_UNKNOWN,
   HighWmOffset1 = 1,
   HighWmOffset2 = -1,
-  K2 = crypto:rand_bytes(10),
-  V2 = crypto:rand_bytes(10),
+  K2 = random_bytes(),
+  V2 = random_bytes(),
   %% K2 = <<"a">>,
   %% V2 = <<"b">>,
   Message1 = #message{ offset = 0
@@ -473,6 +473,8 @@ msgcrc(K, <<>>) ->
 msgcrc(K, V) ->
   erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32((size(K))),
                  K/binary, ?i32((size(V))), V/binary>>).
+
+random_bytes() -> crypto:rand_bytes(random:uniform(1 bsl 16 - 1)).
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
