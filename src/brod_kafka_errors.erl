@@ -25,9 +25,9 @@
 -module(brod_kafka_errors).
 
 -export([ desc/1
+        , decode/1
         , encode/1
         , is_error/1
-        , parse/1
         ]).
 
 -include("brod_int.hrl").
@@ -41,26 +41,26 @@ is_error(0)        -> false;
 is_error(?EC_NONE) -> false;
 is_error(_)        -> true.
 
-%% @doc Parse kafka protocol error code integer into atoms
+%% @doc Decode kafka protocol error code integer into atoms
 %% for undefined error codes, return the original integer
 %% @end
--spec parse(integer()) -> error_code().
-parse(-1) -> ?EC_UNKNOWN;
-parse(0)  -> ?EC_NONE;
-parse(1)  -> ?EC_OFFSET_OUT_OF_RANGE;
-parse(2)  -> ?EC_CORRUPT_MESSAGE;
-parse(3)  -> ?EC_UNKNOWN_TOPIC_OR_PARTITION;
-parse(5)  -> ?EC_LEADER_NOT_AVAILABLE;
-parse(6)  -> ?EC_NOT_LEADER_FOR_PARTITION;
-parse(7)  -> ?EC_REQUEST_TIMED_OUT;
-parse(10) -> ?EC_MESSAGE_TOO_LARGE;
-parse(12) -> ?EC_OFFSET_METADATA_TOO_LARGE;
-parse(13) -> ?EC_NETWORK_EXCEPTION;
-parse(17) -> ?EC_INVALID_TOPIC_EXCEPTION;
-parse(18) -> ?EC_RECORD_LIST_TOO_LARGE;
-parse(19) -> ?EC_NOT_ENOUGH_REPLICAS;
-parse(20) -> ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND;
-parse(X)  -> (true = is_integer(X)) andalso X.
+-spec decode(integer()) -> error_code().
+decode(-1) -> ?EC_UNKNOWN;
+decode(0)  -> ?EC_NONE;
+decode(1)  -> ?EC_OFFSET_OUT_OF_RANGE;
+decode(2)  -> ?EC_CORRUPT_MESSAGE;
+decode(3)  -> ?EC_UNKNOWN_TOPIC_OR_PARTITION;
+decode(5)  -> ?EC_LEADER_NOT_AVAILABLE;
+decode(6)  -> ?EC_NOT_LEADER_FOR_PARTITION;
+decode(7)  -> ?EC_REQUEST_TIMED_OUT;
+decode(10) -> ?EC_MESSAGE_TOO_LARGE;
+decode(12) -> ?EC_OFFSET_METADATA_TOO_LARGE;
+decode(13) -> ?EC_NETWORK_EXCEPTION;
+decode(17) -> ?EC_INVALID_TOPIC_EXCEPTION;
+decode(18) -> ?EC_RECORD_LIST_TOO_LARGE;
+decode(19) -> ?EC_NOT_ENOUGH_REPLICAS;
+decode(20) -> ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND;
+decode(X)  -> (true = is_integer(X)) andalso X.
 
 %% @doc Encode error code atom to kafka protocol intetger.
 -spec encode(error_code()) -> integer().
@@ -79,14 +79,14 @@ encode(?EC_INVALID_TOPIC_EXCEPTION)          -> 17;
 encode(?EC_RECORD_LIST_TOO_LARGE)            -> 18;
 encode(?EC_NOT_ENOUGH_REPLICAS)              -> 19;
 encode(?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND) -> 20;
-encode(X) when is_integer(X)                 -> (true = ?IS_INT16(X) andalso X).
+encode(X) when is_integer(X)                 -> ((true = ?IS_INT16(X)) andalso X).
 
 %% @doc Get description string of a error code.
 -spec desc(error_code()) -> binary().
-desc(ErrorCode) when is_integer(ErrorCode) -> do_desc(parse(ErrorCode));
+desc(ErrorCode) when is_integer(ErrorCode) -> do_desc(decode(ErrorCode));
 desc(ErrorCode) when is_atom(ErrorCode)    -> do_desc(ErrorCode).
 
-%% @private Get description string for erro codes, take parsed error code only.
+%% @private Get description string for erro codes, take decoded error code only.
 -spec do_desc(error_code()) -> binary().
 do_desc(?EC_UNKNOWN) ->
   <<"The server experienced an unexpected error when processing the request">>;
@@ -126,7 +126,7 @@ do_desc(?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND) ->
   <<"Messages are written to the log, but to "
     "fewer in-sync replicas than required.">>;
 do_desc(X) when is_integer(X) ->
-  <<"undefeind error code for kafka", ?KAFKA_VERSION/binary>>.
+  <<"Undefeind error code for kafka", ?KAFKA_VERSION/binary>>.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

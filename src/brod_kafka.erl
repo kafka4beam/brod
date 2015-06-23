@@ -123,7 +123,7 @@ parse_topic_metadata(<<ErrorCode:16/signed-integer,
                        Name:Size/binary,
                        Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_metadata/1),
-  Topic = #topic_metadata{ error_code = brod_kafka_errors:parse(ErrorCode)
+  Topic = #topic_metadata{ error_code = brod_kafka_errors:decode(ErrorCode)
                          , name = binary:copy(Name)
                          , partitions = Partitions},
   {Topic, Bin}.
@@ -136,7 +136,7 @@ parse_partition_metadata(<<ErrorCode:16/signed-integer,
   {Replicas, Bin1} = parse_array(Bin0, fun parse_int32/1),
   {Isrs, Bin} = parse_array(Bin1, fun parse_int32/1),
   Partition =
-    #partition_metadata{ error_code = brod_kafka_errors:parse(ErrorCode)
+    #partition_metadata{ error_code = brod_kafka_errors:decode(ErrorCode)
                        , id         = Id
                        , leader_id  = LeaderId
                        , replicas   = Replicas
@@ -214,7 +214,7 @@ parse_produce_offset(<<Partition:32/integer,
                        Offset:64/integer,
                        Bin/binary>>) ->
   Res = #produce_offset{ partition = Partition
-                       , error_code = brod_kafka_errors:parse(ErrorCode)
+                       , error_code = brod_kafka_errors:decode(ErrorCode)
                        , offset = Offset},
   {Res, Bin}.
 
@@ -249,7 +249,7 @@ parse_partition_offsets(<<Partition:32/integer,
                           Bin0/binary>>) ->
   {Offsets, Bin} = parse_array(Bin0, fun parse_int64/1),
   Res = #partition_offsets{ partition = Partition
-                          , error_code = brod_kafka_errors:parse(ErrorCode)
+                          , error_code = brod_kafka_errors:decode(ErrorCode)
                           , offsets = Offsets},
   {Res, Bin}.
 
@@ -291,7 +291,7 @@ parse_partition_messages(<<Partition:32/integer,
                            Bin/binary>>) ->
   {LastOffset, Messages} = parse_message_set(MessageSetBin),
   Res = #partition_messages{ partition = Partition
-                           , error_code = brod_kafka_errors:parse(ErrorCode)
+                           , error_code = brod_kafka_errors:decode(ErrorCode)
                            , high_wm_offset = HighWmOffset
                            , last_offset = LastOffset
                            , messages = Messages},
