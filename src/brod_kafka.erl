@@ -37,6 +37,8 @@
 -include("brod_int.hrl").
 -include("brod_kafka.hrl").
 
+-define(INT, signed-integer).
+
 %%%_* API ----------------------------------------------------------------------
 %% @doc Parse binary stream of kafka responses.
 %%      Returns list of {CorrId, Response} tuples and remaining binary.
@@ -44,10 +46,10 @@
 parse_stream(Bin, CorrIdDict) ->
   parse_stream(Bin, [], CorrIdDict).
 
-parse_stream(<<Size:32/integer,
+parse_stream(<<Size:32/?INT,
                Bin0:Size/binary,
                Tail/binary>>, Acc, CorrIdDict0) ->
-  <<CorrId:32/integer, Bin/binary>> = Bin0,
+  <<CorrId:32/?INT, Bin/binary>> = Bin0,
   ApiKey = dict:fetch(CorrId, CorrIdDict0),
   Response = decode(ApiKey, Bin),
   CorrIdDict = dict:erase(CorrId, CorrIdDict0),
@@ -60,7 +62,7 @@ encode(CorrId, Request) ->
   Body = encode(Request),
   Bin = <<Header/binary, Body/binary>>,
   Size = byte_size(Bin),
-  <<Size:32/integer, Bin/binary>>.
+  <<Size:32/?INT, Bin/binary>>.
 
 api_key(#metadata_request{}) -> ?API_KEY_METADATA;
 api_key(#produce_request{})  -> ?API_KEY_PRODUCE;
@@ -76,10 +78,10 @@ is_error(X) -> brod_kafka_errors:is_error(X).
 
 %%%_* Internal functions -------------------------------------------------------
 header(ApiKey, CorrId) ->
-  <<ApiKey:16/integer,
-    ?API_VERSION:16/integer,
-    CorrId:32/integer,
-    ?CLIENT_ID_SIZE:16/integer,
+  <<ApiKey:16/?INT,
+    ?API_VERSION:16/?INT,
+    CorrId:32/?INT,
+    ?CLIENT_ID_SIZE:16/?INT,
     ?CLIENT_ID/binary>>.
 
 encode(#metadata_request{} = Request) ->
@@ -93,33 +95,33 @@ encode(#fetch_request{} = Request)  ->
 
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
-  <<0:32/integer, -1:16/signed-integer>>;
+  <<0:32/?INT, -1:16/?INT>>;
 metadata_request_body(#metadata_request{topics = Topics}) ->
   Length = erlang:length(Topics),
   F = fun(Topic, Acc) ->
           Size = kafka_size(Topic),
-          <<Size:16/signed-integer, Topic/binary, Acc/binary>>
+          <<Size:16/?INT, Topic/binary, Acc/binary>>
       end,
   Bin = lists:foldl(F, <<>>, Topics),
-  <<Length:32/integer, Bin/binary>>.
+  <<Length:32/?INT, Bin/binary>>.
 
 metadata_response(Bin0) ->
   {Brokers, Bin} = parse_array(Bin0, fun parse_broker_metadata/1),
   {Topics, _} = parse_array(Bin, fun parse_topic_metadata/1),
   #metadata_response{brokers = Brokers, topics = Topics}.
 
-parse_broker_metadata(<<NodeID:32/integer,
-                        HostSize:16/integer,
+parse_broker_metadata(<<NodeID:32/?INT,
+                        HostSize:16/?INT,
                         Host:HostSize/binary,
-                        Port:32/integer,
+                        Port:32/?INT,
                         Bin/binary>>) ->
   Broker = #broker_metadata{ node_id = NodeID
                            , host = binary_to_list(Host)
                            , port = Port},
   {Broker, Bin}.
 
-parse_topic_metadata(<<ErrorCode:16/signed-integer,
-                       Size:16/integer,
+parse_topic_metadata(<<ErrorCode:16/?INT,
+                       Size:16/?INT,
                        Name:Size/binary,
                        Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_metadata/1),
@@ -129,9 +131,9 @@ parse_topic_metadata(<<ErrorCode:16/signed-integer,
   {Topic, Bin}.
 
 %% isrs = "in sync replicas"
-parse_partition_metadata(<<ErrorCode:16/signed-integer,
-                           Id:32/integer,
-                           LeaderId:32/signed-integer,
+parse_partition_metadata(<<ErrorCode:16/?INT,
+                           Id:32/?INT,
+                           LeaderId:32/?INT,
                            Bin0/binary>>) ->
   {Replicas, Bin1} = parse_array(Bin0, fun parse_int32/1),
   {Isrs, Bin} = parse_array(Bin1, fun parse_int32/1),
@@ -149,9 +151,9 @@ produce_request_body(#produce_request{} = Produce) ->
   Timeout = Produce#produce_request.timeout,
   Topics = Produce#produce_request.data,
   TopicsCount = erlang:length(Topics),
-  Head = <<Acks:16/signed-integer,
-           Timeout:32/integer,
-           TopicsCount:32/integer>>,
+  Head = <<Acks:16/?INT,
+           Timeout:32/?INT,
+           TopicsCount:32/?INT>>,
   encode_topics(Topics, Head).
 
 encode_topics([], Acc) ->
@@ -160,8 +162,8 @@ encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
   Size = erlang:size(Topic),
   Partitions = dict:to_list(PartitionsDict),
   PartitionsCount = erlang:length(Partitions),
-  Acc1 = <<Acc0/binary, Size:16/integer, Topic/binary,
-           PartitionsCount:32/integer>>,
+  Acc1 = <<Acc0/binary, Size:16/?INT, Topic/binary,
+           PartitionsCount:32/?INT>>,
   Acc = encode_partitions(Partitions, Acc1),
   encode_topics(T, Acc).
 
@@ -171,8 +173,8 @@ encode_partitions([{Id, Messages} | T], Acc0) ->
   MessageSet = encode_message_set(Messages),
   MessageSetSize = erlang:size(MessageSet),
   Acc = <<Acc0/binary,
-          Id:32/integer,
-          MessageSetSize:32/integer,
+          Id:32/?INT,
+          MessageSetSize:32/?INT,
           MessageSet/binary>>,
   encode_partitions(T, Acc).
 
@@ -186,17 +188,17 @@ encode_message_set([Msg | Messages], Acc0) ->
   Size = size(MsgBin),
   %% 0 is for offset which is unknown until message is handled by
   %% server, we can put any number here actually
-  Acc = <<Acc0/binary, 0:64/integer, Size:32/integer, MsgBin/binary>>,
+  Acc = <<Acc0/binary, 0:64/?INT, Size:32/?INT, MsgBin/binary>>,
   encode_message_set(Messages, Acc).
 
 encode_message({Key, Value}) ->
   KeySize = kafka_size(Key),
   ValSize = kafka_size(Value),
-  Message = <<?MAGIC_BYTE:8/integer,
-              ?COMPRESS_NONE:8/integer,
-              KeySize:32/signed-integer,
+  Message = <<?MAGIC_BYTE:8/?INT,
+              ?COMPRESS_NONE:8/?INT,
+              KeySize:32/?INT,
               Key/binary,
-              ValSize:32/signed-integer,
+              ValSize:32/?INT,
               Value/binary>>,
   Crc32 = erlang:crc32(Message),
   <<Crc32:32/integer, Message/binary>>.
@@ -205,13 +207,13 @@ produce_response(Bin) ->
   {Topics, _} = parse_array(Bin, fun parse_produce_topic/1),
   #produce_response{topics = Topics}.
 
-parse_produce_topic(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
+parse_produce_topic(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
   {Offsets, Bin} = parse_array(Bin0, fun parse_produce_offset/1),
   {#produce_topic{topic = binary:copy(Name), offsets = Offsets}, Bin}.
 
-parse_produce_offset(<<Partition:32/integer,
-                       ErrorCode:16/signed-integer,
-                       Offset:64/integer,
+parse_produce_offset(<<Partition:32/?INT,
+                       ErrorCode:16/?INT,
+                       Offset:64/?INT,
                        Bin/binary>>) ->
   Res = #produce_offset{ partition = Partition
                        , error_code = brod_kafka_errors:decode(ErrorCode)
@@ -227,25 +229,25 @@ offset_request_body(#offset_request{} = Offset) ->
   TopicSize = erlang:size(Topic),
   PartitionsCount = 1,
   TopicsCount = 1,
-  <<?REPLICA_ID:32/signed-integer,
-    TopicsCount:32/integer,
-    TopicSize:16/integer,
+  <<?REPLICA_ID:32/?INT,
+    TopicsCount:32/?INT,
+    TopicSize:16/?INT,
     Topic/binary,
-    PartitionsCount:32/integer,
-    Partition:32/integer,
-    Time:64/signed-integer,
-    MaxNumberOfOffsets:32/integer>>.
+    PartitionsCount:32/?INT,
+    Partition:32/?INT,
+    Time:64/?INT,
+    MaxNumberOfOffsets:32/?INT>>.
 
 offset_response(Bin) ->
   {Topics, _} = parse_array(Bin, fun parse_offset_topic/1),
   #offset_response{topics = Topics}.
 
-parse_offset_topic(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
+parse_offset_topic(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_offsets/1),
   {#offset_topic{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
-parse_partition_offsets(<<Partition:32/integer,
-                          ErrorCode:16/signed-integer,
+parse_partition_offsets(<<Partition:32/?INT,
+                          ErrorCode:16/?INT,
                           Bin0/binary>>) ->
   {Offsets, Bin} = parse_array(Bin0, fun parse_int64/1),
   Res = #partition_offsets{ partition = Partition
@@ -264,29 +266,29 @@ fetch_request_body(#fetch_request{} = Fetch) ->
   PartitionsCount = 1,
   TopicsCount = 1,
   TopicSize = erlang:size(Topic),
-  <<?REPLICA_ID:32/signed-integer,
-    MaxWaitTime:32/integer,
-    MinBytes:32/integer,
-    TopicsCount:32/integer,
-    TopicSize:16/integer,
+  <<?REPLICA_ID:32/?INT,
+    MaxWaitTime:32/?INT,
+    MinBytes:32/?INT,
+    TopicsCount:32/?INT,
+    TopicSize:16/?INT,
     Topic/binary,
-    PartitionsCount:32/integer,
-    Partition:32/integer,
-    Offset:64/integer,
-    MaxBytes:32/integer>>.
+    PartitionsCount:32/?INT,
+    Partition:32/?INT,
+    Offset:64/?INT,
+    MaxBytes:32/?INT>>.
 
 fetch_response(Bin) ->
   {Topics, _} = parse_array(Bin, fun parse_topic_fetch_data/1),
   #fetch_response{topics = Topics}.
 
-parse_topic_fetch_data(<<Size:16/integer, Name:Size/binary, Bin0/binary>>) ->
+parse_topic_fetch_data(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_messages/1),
   {#topic_fetch_data{topic = binary:copy(Name), partitions = Partitions}, Bin}.
 
-parse_partition_messages(<<Partition:32/integer,
-                           ErrorCode:16/signed-integer,
-                           HighWmOffset:64/integer,
-                           MessageSetSize:32/integer,
+parse_partition_messages(<<Partition:32/?INT,
+                           ErrorCode:16/?INT,
+                           HighWmOffset:64/?INT,
+                           MessageSetSize:32/?INT,
                            MessageSetBin:MessageSetSize/binary,
                            Bin/binary>>) ->
   {LastOffset, Messages} = parse_message_set(MessageSetBin),
@@ -304,17 +306,17 @@ parse_message_set(<<>>, []) ->
   {0, []};
 parse_message_set(<<>>, [Msg | _] = Acc) ->
   {Msg#message.offset, lists:reverse(Acc)};
-parse_message_set(<<Offset:64/integer,
-                    MessageSize:32/integer,
+parse_message_set(<<Offset:64/?INT,
+                    MessageSize:32/?INT,
                     MessageBin:MessageSize/binary,
                     Bin/binary>>, Acc) ->
   <<Crc:32/integer,
-    MagicByte:8/integer,
-    Attributes:8/integer,
-    KeySize:32/signed-integer,
+    MagicByte:8/?INT,
+    Attributes:8/?INT,
+    KeySize:32/?INT,
     KV/binary>> = MessageBin,
   {Key, ValueBin} = parse_bytes(KeySize, KV),
-  <<ValueSize:32/signed-integer, Value0/binary>> = ValueBin,
+  <<ValueSize:32/?INT, Value0/binary>> = ValueBin,
   {Value, <<>>} = parse_bytes(ValueSize, Value0),
   Msg = #message{ offset     = Offset
                 , crc        = Crc
@@ -332,7 +334,7 @@ parse_message_set(_Bin, []) ->
   %% For some reason kafka does not report error.
   throw("max_bytes option is too small").
 
-parse_array(<<Length:32/integer, Bin/binary>>, Fun) ->
+parse_array(<<Length:32/?INT, Bin/binary>>, Fun) ->
   parse_array(Length, Bin, [], Fun).
 
 parse_array(0, Bin, Acc, _Fun) ->
@@ -341,9 +343,9 @@ parse_array(Length, Bin0, Acc, Fun) ->
   {Item, Bin} = Fun(Bin0),
   parse_array(Length - 1, Bin, [Item | Acc], Fun).
 
-parse_int32(<<X:32/integer, Bin/binary>>) -> {X, Bin}.
+parse_int32(<<X:32/?INT, Bin/binary>>) -> {X, Bin}.
 
-parse_int64(<<X:64/integer, Bin/binary>>) -> {X, Bin}.
+parse_int64(<<X:64/?INT, Bin/binary>>) -> {X, Bin}.
 
 kafka_size(<<"">>) -> -1;
 kafka_size(Bin)    -> size(Bin).
@@ -360,30 +362,30 @@ parse_bytes(Size, Bin0) ->
 -ifdef(TEST).
 
 parse_array_test() ->
-  F = fun(<<Size:32/integer, X:Size/binary, Bin/binary>>) ->
+  F = fun(<<Size:32/?INT, X:Size/binary, Bin/binary>>) ->
           {binary_to_list(X), Bin}
       end,
   ?assertMatch({["BARR", "FOO"], <<>>},
-               parse_array(<<2:32/integer, 3:32/integer, "FOO",
-                                           4:32/integer, "BARR">>, F)),
-  ?assertMatch({["FOO"], <<4:32/integer, "BARR">>},
-               parse_array(<<1:32/integer, 3:32/integer, "FOO",
-                                           4:32/integer, "BARR">>, F)),
-  ?assertMatch({[], <<>>}, parse_array(<<0:32/integer>>, F)),
-  ?assertError(function_clause, parse_array(<<-1:32/integer>>, F)),
-  ?assertError(function_clause, parse_array(<<1:32/integer>>, F)),
+               parse_array(<<2:32/?INT, 3:32/?INT, "FOO",
+                           4:32/?INT, "BARR">>, F)),
+  ?assertMatch({["FOO"], <<4:32/?INT, "BARR">>},
+               parse_array(<<1:32/?INT, 3:32/?INT, "FOO",
+                                           4:32/?INT, "BARR">>, F)),
+  ?assertMatch({[], <<>>}, parse_array(<<0:32/?INT>>, F)),
+  ?assertError(function_clause, parse_array(<<-1:32/?INT>>, F)),
+  ?assertError(function_clause, parse_array(<<1:32/?INT>>, F)),
   ok.
 
 parse_int32_test() ->
-  ?assertMatch({0, <<"123">>}, parse_int32(<<0:32/integer, "123">>)),
-  ?assertMatch({0, <<"">>}, parse_int32(<<0:32/integer>>)),
-  ?assertError(function_clause, parse_int32(<<0:16/integer>>)),
+  ?assertMatch({0, <<"123">>}, parse_int32(<<0:32/?INT, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int32(<<0:32/?INT>>)),
+  ?assertError(function_clause, parse_int32(<<0:16/?INT>>)),
   ok.
 
 parse_int64_test() ->
-  ?assertMatch({0, <<"123">>}, parse_int64(<<0:64/integer, "123">>)),
-  ?assertMatch({0, <<"">>}, parse_int64(<<0:64/integer>>)),
-  ?assertError(function_clause, parse_int64(<<0:32/integer>>)),
+  ?assertMatch({0, <<"123">>}, parse_int64(<<0:64/?INT, "123">>)),
+  ?assertMatch({0, <<"">>}, parse_int64(<<0:64/?INT>>)),
+  ?assertError(function_clause, parse_int64(<<0:32/?INT>>)),
   ok.
 
 parse_bytes_test() ->
