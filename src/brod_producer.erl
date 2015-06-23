@@ -58,8 +58,9 @@
 -type topic()     :: binary().
 -type partition() :: non_neg_integer().
 -type leader()    :: pid(). % brod_sock pid
--type corr_id()   :: non_neg_integer().
+-type corr_id()   :: 0..2147483647.
 -type sender()    :: {pid(), reference()}.
+-type offset()    :: integer().
 
 -ifdef(otp_before_17).
 -type data_buffer() :: [{leader(), [{topic(), dict()}]}].
@@ -151,14 +152,22 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info({msg, Leader, CorrId, #produce_response{topics = Topics}}, State0) ->
-  {value, {_, {CorrId, SendersList}}, Pending} =
-    lists:keytake(Leader, 1, State0#state.pending),
-  Reply = get_produce_reply_result(Topics),
-  lists:foreach(fun({Sender, Ref}) ->
-                    Sender ! {{Ref, self()}, Reply}
-                end, SendersList),
-  {ok, State} = maybe_send(Leader, State0#state{pending = Pending}),
-  {noreply, State};
+  Errors = get_error_codes(Topics),
+  case handle_produce_response(Leader, CorrId, Errors, State0) of
+    {ok, State} ->
+      {noreply, State};
+    {error, Reason} ->
+      %% Errors found in produce response, terminate myself.
+      %% In a nicer way, it should recognize at least error code
+      %% ?EC_NOT_LEADER_FOR_PARTITION, then try to connect to the
+      %% new leader (if not yet connected) and migrate data buffer
+      %% and pending list from the old leader to the new leader.
+      %% We can not do this now because the payload is not kept in
+      %% the pending list for resend, there is no better solution
+      %% than crash myself and hope the brod clients would (and they
+      %% should) retry after restart.
+      {stop, Reason, State0}
+  end;
 handle_info({'EXIT', Pid, Reason}, State) ->
   Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
   %% Shutdown because cluster has elected other leaders for
@@ -181,32 +190,42 @@ format_status(_Opt, [_PDict, State0]) ->
 
 %%%_* Internal functions -------------------------------------------------------
 
-%% @private Check error codes in produce response,
-%% return 'nack' together with the errors found
-%% @end
--spec get_produce_reply_result([#produce_offset{}]) ->
-        ack | {nack, [{Topic::binary(),
-                       Partition::integer(),
-                       Offset::integer(),
-                       Reason::atom()}]}.
-get_produce_reply_result(Topics) ->
-  Errors =
-    lists:foldl(
-      fun(#produce_topic{topic = Topic, offsets = Offsets}, TopicAcc) ->
-        lists:foldl(
-          fun(#produce_offset{partition  = Partition,
-                              error_code = ErrorCode,
-                              offset     = Offset }, OffsetAcc) ->
-            case brod_kafka:is_error(ErrorCode) of
-              true  -> [{Topic, Partition, Offset, ErrorCode} | OffsetAcc];
-              false -> OffsetAcc
-            end
-          end, TopicAcc, Offsets)
-      end, [], Topics),
-  case Errors =:= [] of
-    true  -> ack;
-    false -> {nack, Errors}
-  end.
+-record(produce_error, { partition  :: partition()
+                       , offset     :: offset()
+                       , error_code :: error_code()
+                       }).
+-type produce_error() :: #produce_error{}.
+
+-spec handle_produce_response(pid(), corr_id(), [produce_error()], #state{}) ->
+        {ok, #state{}} | {error, any()}.
+handle_produce_response(Leader, CorrId, [], State0) ->
+  {value, {_, {CorrId, SendersList}}, Pending} =
+    lists:keytake(Leader, 1, State0#state.pending),
+  lists:foreach(fun({Sender, Ref}) ->
+                  Sender ! {{Ref, self()}, ack}
+                end, SendersList),
+  maybe_send(Leader, State0#state{pending = Pending});
+handle_produce_response(_Leader, _CorrId, Errors, _State0) ->
+  {error, Errors}.
+
+%% @private Flatten the per-topic-partition error codes in produce result.
+-spec get_error_codes([#produce_topic{}]) -> [produce_error()].
+get_error_codes(Topics) ->
+  lists:foldl(
+    fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
+      lists:foldl(
+        fun(#produce_offset{partition  = Partition,
+                            error_code = ErrorCode,
+                            offset     = Offset }, OffsetAcc) ->
+          case brod_kafka:is_error(ErrorCode) of
+            true  -> [#produce_error{ partition  = Partition
+                                    , offset     = Offset
+                                    , error_code = ErrorCode
+                                    } | OffsetAcc];
+            false -> OffsetAcc
+          end
+        end, TopicAcc, Offsets)
+    end, [], Topics).
 
 handle_produce(Sender, Ref, Topic, Partition, KVList, State0) ->
   case get_leader(Topic, Partition, State0) of
@@ -235,6 +254,20 @@ get_leader(Topic, Partition, State) ->
   end.
 
 connect(Topic, Partition, State) ->
+  case fetch_leader_broker_metadata(Topic, Partition, State) of
+    {ok, #broker_metadata{host = H, port = P, node_id = LeaderId}} ->
+      {ok, Pid} = brod_sock:start_link(self(), H, P, State#state.debug),
+      Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
+      Sockets = [Socket | State#state.sockets],
+      Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
+      {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}};
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec fetch_leader_broker_metadata(topic(), partition(), #state{}) ->
+        {ok, #broker_metadata{}} | {error, any()}.
+fetch_leader_broker_metadata(Topic, Partition, State) ->
   {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   case lists:keyfind(Topic, #topic_metadata.name, Topics) of
@@ -246,12 +279,7 @@ connect(Topic, Partition, State) ->
           {error, {unknown_partition, Topic, Partition}};
         #partition_metadata{leader_id = LeaderId} ->
           Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-          #broker_metadata{host = H, port = P} = Broker,
-          {ok, Pid} = brod_sock:start_link(self(), H, P, State#state.debug),
-          Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
-          Sockets = [Socket | State#state.sockets],
-          Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
-          {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}}
+          {ok, #broker_metadata{} = Broker}
       end
   end.
 
