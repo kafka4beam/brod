@@ -26,7 +26,6 @@
 
 -export([ desc/1
         , decode/1
-        , encode/1
         , is_error/1
         ]).
 
@@ -62,26 +61,7 @@ decode(19) -> ?EC_NOT_ENOUGH_REPLICAS;
 decode(20) -> ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND;
 decode(X)  -> (true = is_integer(X)) andalso X.
 
-%% @doc Encode error code atom to kafka protocol intetger.
--spec encode(error_code()) -> integer().
-encode(?EC_UNKNOWN)                          -> -1;
-encode(?EC_NONE)                             ->  0;
-encode(?EC_OFFSET_OUT_OF_RANGE)              ->  1;
-encode(?EC_CORRUPT_MESSAGE)                  ->  2;
-encode(?EC_UNKNOWN_TOPIC_OR_PARTITION)       ->  3;
-encode(?EC_LEADER_NOT_AVAILABLE)             ->  5;
-encode(?EC_NOT_LEADER_FOR_PARTITION)         ->  6;
-encode(?EC_REQUEST_TIMED_OUT)                ->  7;
-encode(?EC_MESSAGE_TOO_LARGE)                -> 10;
-encode(?EC_OFFSET_METADATA_TOO_LARGE)        -> 12;
-encode(?EC_NETWORK_EXCEPTION)                -> 13;
-encode(?EC_INVALID_TOPIC_EXCEPTION)          -> 17;
-encode(?EC_RECORD_LIST_TOO_LARGE)            -> 18;
-encode(?EC_NOT_ENOUGH_REPLICAS)              -> 19;
-encode(?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND) -> 20;
-encode(X) when is_integer(X)                 -> ((true = ?IS_INT16(X)) andalso X).
-
-%% @doc Get description string of a error code.
+%% @doc Get description string of error codes.
 -spec desc(error_code()) -> binary().
 desc(ErrorCode) when is_integer(ErrorCode) -> do_desc(decode(ErrorCode));
 desc(ErrorCode) when is_atom(ErrorCode)    -> do_desc(ErrorCode).
