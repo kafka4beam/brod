@@ -1,6 +1,6 @@
 %% -*- mode: erlang -*-
 ExtraDeps = [{meck, ".*",
-              {git, "ssh://git@stash.internal.machines:7999/external/meck.git",
+              {git, "git@github.com:eproxus/meck.git",
                {tag, "0.8.2"}}}],
 
 case os:getenv("BROD_TEST") of
