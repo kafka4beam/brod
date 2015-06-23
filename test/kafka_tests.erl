@@ -209,7 +209,7 @@ decode_produce_test() ->
   Topic1 = <<"t1">>,
   Offset1 = ?max64,
   ProduceOffset1 = #produce_offset{ partition = 0
-                                  , error_code = unexpected_server_error
+                                  , error_code = ?EC_UNKNOWN
                                   , offset = Offset1},
   ProduceTopic1 = #produce_topic{ topic = Topic1
                                 , offsets = [ProduceOffset1]},
@@ -223,10 +223,10 @@ decode_produce_test() ->
   Offset2 = 0,
   Offset3 = 1,
   ProduceOffset2 = #produce_offset{ partition = 0
-                                  , error_code = offset_out_of_range
+                                  , error_code = ?EC_OFFSET_OUT_OF_RANGE
                                   , offset = Offset2},
   ProduceOffset3 = #produce_offset{ partition = 2
-                                  , error_code = invalid_message
+                                  , error_code = ?EC_CORRUPT_MESSAGE
                                   , offset = Offset3},
   ProduceTopic2 = #produce_topic{ topic = Topic2
                                 , offsets = [ ProduceOffset3
@@ -277,7 +277,7 @@ decode_offset_test() ->
   ?assertEqual(R1, brod_kafka:decode(?API_KEY_OFFSET, Bin1)),
   Partition = 0,
   ErrorCode = -1,
-  ErrorCodeParsed = unexpected_server_error,
+  ErrorCodeParsed = ?EC_UNKNOWN,
   Bin2 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(Partition), ?i16s(ErrorCode), ?i32(0)>>,
   Partitions2 = [#partition_offsets{ partition = Partition
@@ -340,7 +340,7 @@ decode_fetch_test() ->
     topics = [#topic_fetch_data{ topic = Topic
                                , partitions =
                                  [#partition_messages{ partition = 0
-                                                     , error_code = no_error
+                                                     , error_code = ?EC_NONE
                                                      , high_wm_offset = 0
                                                      , last_offset = 0
                                                      , messages = []}]}]},
@@ -359,7 +359,7 @@ decode_fetch_test() ->
   Topic3 = <<"t3">>,
   Partition1 = 1,
   ErrorCode1 = 0,
-  ErrorCodeParsed1 = no_error,
+  ErrorCodeParsed1 = ?EC_NONE,
   Partition2 = ?max32,
   ErrorCode2 = ?max8,
   ErrorCodeParsed2 = ErrorCode2,
