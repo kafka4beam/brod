@@ -41,7 +41,6 @@
 -define(EC_NOT_ENOUGH_REPLICAS,        'NotEnoughReplicasException').       % 19
 -define(EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND,
         'NotEnoughReplicasAfterAppendException').                           % 20
--define(EC_UNDEFINED,                  'undefined').                        %  ?
 
 -type error_code() :: atom() | integer().
 
