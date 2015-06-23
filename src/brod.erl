@@ -151,10 +151,7 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
       {error, Info};
     {{Ref, Pid}, ack} ->
       erlang:demonitor(MonitorRef, [flush]),
-      ok;
-    {{Ref, Pid}, {nack, Reasons}} ->
-      erlang:demonitor(MonitorRef, [flush]),
-      {error, Reasons}
+      ok
   end.
 
 %% @doc Start consumer process
