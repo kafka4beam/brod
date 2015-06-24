@@ -207,7 +207,7 @@ handle_produce_response(_Leader, _CorrId, Errors, _State0) ->
 %% @private Flatten the per-topic-partition error codes in produce result.
 -spec get_error_codes([#produce_topic{}]) -> [produce_error()].
 get_error_codes(Topics) ->
-  lists:revert(
+  lists:reverse(
     lists:foldl(
       fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
         lists:foldl(
