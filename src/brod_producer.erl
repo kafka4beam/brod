@@ -81,6 +81,8 @@
                , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
                }).
 
+-type produce_error() :: {partition(), offset(), error_code()}.
+
 %%%_* API ----------------------------------------------------------------------
 -spec start_link([brod:host()], integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
@@ -190,12 +192,6 @@ format_status(_Opt, [_PDict, State0]) ->
 
 %%%_* Internal functions -------------------------------------------------------
 
--record(produce_error, { partition  :: partition()
-                       , offset     :: offset()
-                       , error_code :: error_code()
-                       }).
--type produce_error() :: #produce_error{}.
-
 -spec handle_produce_response(pid(), corr_id(), [produce_error()], #state{}) ->
         {ok, #state{}} | {error, any()}.
 handle_produce_response(Leader, CorrId, [], State0) ->
@@ -211,21 +207,19 @@ handle_produce_response(_Leader, _CorrId, Errors, _State0) ->
 %% @private Flatten the per-topic-partition error codes in produce result.
 -spec get_error_codes([#produce_topic{}]) -> [produce_error()].
 get_error_codes(Topics) ->
-  lists:foldl(
-    fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
-      lists:foldl(
-        fun(#produce_offset{partition  = Partition,
-                            error_code = ErrorCode,
-                            offset     = Offset }, OffsetAcc) ->
-          case brod_kafka:is_error(ErrorCode) of
-            true  -> [#produce_error{ partition  = Partition
-                                    , offset     = Offset
-                                    , error_code = ErrorCode
-                                    } | OffsetAcc];
-            false -> OffsetAcc
-          end
-        end, TopicAcc, Offsets)
-    end, [], Topics).
+  lists:revert(
+    lists:foldl(
+      fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
+        lists:foldl(
+          fun(#produce_offset{partition  = Partition,
+                              error_code = ErrorCode,
+                              offset     = Offset }, OffsetAcc) ->
+            case brod_kafka:is_error(ErrorCode) of
+              true  -> [{Partition, Offset, ErrorCode} | OffsetAcc];
+              false -> OffsetAcc
+            end
+          end, TopicAcc, Offsets)
+      end, [], Topics)).
 
 handle_produce(Sender, Ref, Topic, Partition, KVList, State0) ->
   case get_leader(Topic, Partition, State0) of
