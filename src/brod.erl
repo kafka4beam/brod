@@ -25,6 +25,8 @@
 %% Producer API
 -export([ start_link_producer/1
         , start_link_producer/3
+        , start_producer/1
+        , start_producer/3
         , stop_producer/1
         , produce/3
         , produce/4
@@ -36,6 +38,7 @@
 
 %% Consumer API
 -export([ start_link_consumer/3
+        , start_consumer/3
         , stop_consumer/1
         , consume/2
         , consume/6
@@ -66,6 +69,19 @@
 -define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
 
 %%%_* API ----------------------------------------------------------------------
+%% @deprecated
+%% @equiv start_link_producer(Hosts)
+-spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
+start_producer(Hosts) ->
+  start_link_producer(Hosts).
+
+%% @deprecated
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout)
+-spec start_producer([host()], integer(), integer()) ->
+                   {ok, pid()} | {error, any()}.
+start_producer(Hosts, RequiredAcks, AckTimeout) ->
+  start_link_producer(Hosts, RequiredAcks, AckTimeout).
+
 %% @equiv start_link_producer(Hosts, 1, 1000)
 -spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_link_producer(Hosts) ->
@@ -153,6 +169,13 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
       erlang:demonitor(MonitorRef, [flush]),
       ok
   end.
+
+%% @deprecated
+%% @equiv start_link_consumer(Hosts, Topic, Partition)
+-spec start_consumer([host()], binary(), integer()) ->
+                   {ok, pid()} | {error, any()}.
+start_consumer(Hosts, Topic, Partition) ->
+  start_link_consumer(Hosts, Topic, Partition).
 
 %% @doc Start consumer process
 -spec start_link_consumer([host()], binary(), integer()) ->
