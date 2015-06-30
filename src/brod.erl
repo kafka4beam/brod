@@ -23,7 +23,9 @@
 -module(brod).
 
 %% Producer API
--export([ start_producer/1
+-export([ start_link_producer/1
+        , start_link_producer/3
+        , start_producer/1
         , start_producer/3
         , stop_producer/1
         , produce/3
@@ -35,7 +37,8 @@
         ]).
 
 %% Consumer API
--export([ start_consumer/3
+-export([ start_link_consumer/3
+        , start_consumer/3
         , stop_consumer/1
         , consume/2
         , consume/6
@@ -66,10 +69,23 @@
 -define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
 
 %%%_* API ----------------------------------------------------------------------
-%% @equiv start_producer(Hosts, 1, 1000)
+%% @deprecated
+%% @equiv start_link_producer(Hosts)
 -spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_producer(Hosts) ->
-  start_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
+  start_link_producer(Hosts).
+
+%% @deprecated
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout)
+-spec start_producer([host()], integer(), integer()) ->
+                   {ok, pid()} | {error, any()}.
+start_producer(Hosts, RequiredAcks, AckTimeout) ->
+  start_link_producer(Hosts, RequiredAcks, AckTimeout).
+
+%% @equiv start_link_producer(Hosts, 1, 1000)
+-spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
+start_link_producer(Hosts) ->
+  start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
 
 %% @doc Start a process to publish messages to kafka.
 %%      Hosts:
@@ -98,9 +114,9 @@ start_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
--spec start_producer([host()], integer(), integer()) ->
+-spec start_link_producer([host()], integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
-start_producer(Hosts, RequiredAcks, AckTimeout) ->
+start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
   brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
 
 %% @doc Stop producer process
@@ -154,10 +170,17 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
       ok
   end.
 
-%% @doc Start consumer process
+%% @deprecated
+%% @equiv start_link_consumer(Hosts, Topic, Partition)
 -spec start_consumer([host()], binary(), integer()) ->
-                        {ok, pid()} | {error, any()}.
+                   {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
+  start_link_consumer(Hosts, Topic, Partition).
+
+%% @doc Start consumer process
+-spec start_link_consumer([host()], binary(), integer()) ->
+                        {ok, pid()} | {error, any()}.
+start_link_consumer(Hosts, Topic, Partition) ->
   brod_consumer:start_link(Hosts, Topic, Partition).
 
 %% @doc Stop consumer process
@@ -281,7 +304,7 @@ file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
   C.
 
 simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
-  {ok, C} = brod:start_consumer(Hosts, Topic, Partition),
+  {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
   Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
   ok = brod:consume(C, Pid, Offset, 1000, 0, 100000),
   Pid.

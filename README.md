@@ -12,7 +12,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 In gen_server's init/1:
 
     % Producer will be linked to the calling process
-    {ok, Producer} = brod:start_producer(Hosts, RequiredAcks, AckTimeout),
+    {ok, Producer} = brod:start_link_producer(Hosts, RequiredAcks, AckTimeout),
     {ok, #state{ producer = Producer }}.
 
 Sending a message:
@@ -44,7 +44,7 @@ Include brod.hrl:
 In gen_server's init/1:
 
     % Consumer will be linked to the calling process
-    {ok, Consumer} = brod:start_consumer(Hosts, Topic, Partition),
+    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
     ok = brod:consume(Consumer, self(), Offset, 1000, 0, 100000),
     {ok, #state{ consumer = Consumer }}.
 
@@ -63,8 +63,8 @@ Handling payloads from kafka broker:
     Key = <<"key">>.
     Value = <<"value">>.
     Partition = 0.
-    {ok, Producer} = brod:start_producer(Hosts).
-    {ok, Consumer} = brod:start_consumer(Hosts, Topic, Partition).
+    {ok, Producer} = brod:start_link_producer(Hosts).
+    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
     ok = brod:consume(Consumer, -1).
     {ok, Ref} = brod:produce(Producer, Topic, Partition, Key, Value).
     receive {{Ref, Producer}, ack} -> ok end.
