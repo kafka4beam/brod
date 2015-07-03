@@ -186,11 +186,30 @@ terminate(_Reason, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-format_status(_Opt, [_PDict, State0]) ->
-  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State0))),
+format_status(_Opt, [_PDict, #state{ data_buffer    = DataBuffer
+                                   , senders_buffer = SenderBuffer
+                                   } = State0]) ->
+  State1 = State0#state{ data_buffer    = fmt_data_buffer(DataBuffer)
+                       , senders_buffer = fmt_sender_buffer(SenderBuffer)
+                       },
+  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State1))),
   [{data, [{"State", State}]}].
 
 %%%_* Internal functions -------------------------------------------------------
+
+%% @private Report only the size of the pending data buffer for each leader.
+-spec fmt_data_buffer(data_buffer) ->
+        [{leader(), [{topic(), {size, integer()}}]}].
+fmt_data_buffer(Buffer) ->
+  [{Leader, [{Topic, {size, dict:size(Dict)}} || {Topic, Dict} <- Topics]}
+   || {Leader, Topics} <- Buffer].
+
+%% @private Report only the length of the pending requests in sender buffer.
+-spec fmt_sender_buffer(data_buffer) ->
+        [{leader(), [{topic(), {requests, integer()}}]}].
+fmt_sender_buffer(Dict) ->
+  [{Leader, {requests, length(Reqs)}}
+   || {Leader, Reqs} <- dict:to_list(Dict)].
 
 -spec handle_produce_response(pid(), corr_id(), [produce_error()], #state{}) ->
         {ok, #state{}} | {error, any()}.
