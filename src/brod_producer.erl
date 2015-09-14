@@ -153,8 +153,8 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
-handle_info({msg, Leader, CorrId, #produce_response{topics = Topics}}, State0) ->
-  Errors = get_error_codes(Topics),
+handle_info({msg, Leader, CorrId, #produce_response{} = R}, State0) ->
+  Errors = get_error_codes(R#produce_response.topics),
   case handle_produce_response(Leader, CorrId, Errors, State0) of
     {ok, State} ->
       {noreply, State};
