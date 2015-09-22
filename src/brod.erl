@@ -40,6 +40,7 @@
 -export([ start_link_consumer/3
         , start_consumer/3
         , stop_consumer/1
+        , consume/2
         , consume/3
         , consume/6
         ]).
@@ -189,16 +190,27 @@ start_link_consumer(Hosts, Topic, Partition) ->
 stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
--spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, self(), Offset, 1000, 0, 100000)
-%% @doc A simple alternative for consume/7 with predefined defaults.
+-spec consume(pid(), integer()) -> ok | {error, any()}.
+%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset, 1000, 0, 100000)
+%% @doc A simple alternative for consume/6 with predefined defaults.
 %%      Calling process will receive messages from consumer process.
+consume(Pid, Offset) ->
+  Self = self(),
+  Callback = fun(MsgSet) -> Self ! MsgSet end,
+  consume(Pid, Callback, Offset, 1000, 0, 100000).
+
+-spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
+%% @equiv consume(Pid, Callback, Offset, 1000, 0, 100000)
+%% @doc A simple alternative for consume/6 with predefined defaults.
+%%      Callback() will be called to handle incoming messages.
 consume(Pid, Callback, Offset) ->
   consume(Pid, Callback, Offset, 1000, 0, 100000).
 
 %% @doc Start consuming data from a partition.
 %%      Messages are delivered as #message_set{}.
-%% Subscriber: a process which will receive messages
+%% Pid: brod consumer pid, @see start_link_consumer/3
+%% Callback: a function which will be called by brod_consumer to
+%%           handle incoming messages
 %% Offset: Where to start to fetch data from.
 %%                  -1: start from the latest available offset
 %%                  -2: start from the earliest available offset
