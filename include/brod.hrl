@@ -32,6 +32,8 @@
                      , messages       :: [#message{}]
                      }).
 
+-type(callback_fun() :: fun((#message_set{}) -> ok)).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

@@ -45,16 +45,19 @@ In gen_server's init/1:
 
     % Consumer will be linked to the calling process
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
-    ok = brod:consume(Consumer, self(), Offset, 1000, 0, 100000),
+    Self = self(),
+    Callback = fun(#message_set{} = MsgSet) -> gen_server:call(Self, MsgSet) end,
+    ok = brod:consume(Consumer, Callback, Offset, 1000, 0, 100000),
     {ok, #state{ consumer = Consumer }}.
 
 Handling payloads from kafka broker:
 
-    handle_info(#message_set{messages = Msgs}, State) ->
+    handle_call(#message_set{messages = Msgs}, State) ->
       lists:foreach(
         fun(#message{key = K, value = V}) ->
             io:format(Io, "\n~s\n~s\n", [K, V])
-        end, Msgs).
+        end, Msgs),
+      {reply, ok, State};
 
 ## In erlang shell
     rr(brod).
@@ -65,7 +68,8 @@ Handling payloads from kafka broker:
     Partition = 0.
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
-    ok = brod:consume(Consumer, -1).
+    Self = self().
+    ok = brod:consume(Consumer, fun(MsgSet) -> Self ! MsgSet end, -1).
     {ok, Ref} = brod:produce(Producer, Topic, Partition, Key, Value).
     receive {{Ref, Producer}, ack} -> ok end.
     receive #message_set{messages = [#message{key = Key, value = Value}]} -> ok end.

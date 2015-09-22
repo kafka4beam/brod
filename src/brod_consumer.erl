@@ -52,6 +52,7 @@
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
+-include_lib("brod/include/brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
@@ -59,7 +60,7 @@
                , socket        :: #socket{}
                , topic         :: binary()
                , partition     :: integer()
-               , subscriber    :: pid()
+               , callback      :: function()
                , offset        :: integer()
                , max_wait_time :: integer()
                , min_bytes     :: integer()
@@ -90,10 +91,10 @@ start_link(Hosts, Topic, Partition, Debug) ->
 stop(Pid) ->
   gen_server:call(Pid, stop).
 
--spec consume(pid(), pid(), integer(), integer(), integer(), integer()) ->
-                 ok | {error, any()}.
-consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  gen_server:call(Pid, {consume, Subscriber, Offset,
+-spec consume(pid(), callback_fun(), integer(), integer(),
+             integer(), integer()) -> ok | {error, any()}.
+consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  gen_server:call(Pid, {consume, Callback, Offset,
                         MaxWaitTime, MinBytes, MaxBytes}).
 
 -spec debug(pid(), print | string() | none) -> ok.
@@ -153,13 +154,13 @@ init([Hosts, Topic, Partition, Debug]) ->
       {stop, What}
   end.
 
-handle_call({consume, Subscriber, Offset0,
+handle_call({consume, Callback, Offset0,
              MaxWaitTime, MinBytes, MaxBytes}, _From, State0) ->
   case get_valid_offset(Offset0, State0) of
     {error, Error} ->
       {reply, {error, Error}, State0};
     {ok, Offset} ->
-      State = State0#state{ subscriber = Subscriber
+      State = State0#state{ callback = Callback
                           , offset = Offset
                           , max_wait_time = MaxWaitTime
                           , min_bytes = MinBytes
@@ -182,7 +183,9 @@ handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
     {error, Error} ->
       {stop, {broker_error, Error}, State0};
     {ok, State} ->
-      ok = send_subscriber(State#state.subscriber, R),
+      MessageSet = brod_utils:fetch_response_to_message_set(R),
+      Callback = State#state.callback,
+      Callback(MessageSet),
       ok = send_fetch_request(State),
       {noreply, State};
     {empty, State} ->
@@ -248,11 +251,6 @@ handle_fetch_response(#fetch_response{topics = [TopicFetchData]}, State) ->
           {ok, State#state{offset = Offset}}
       end
   end.
-
-send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
-  MsgSet = brod_utils:fetch_response_to_message_set(FetchResponse),
-  Subscriber ! MsgSet,
-  ok.
 
 has_error(#partition_messages{error_code = ErrorCode}) ->
   case brod_kafka:is_error(ErrorCode) of

@@ -40,7 +40,7 @@
 -export([ start_link_consumer/3
         , start_consumer/3
         , stop_consumer/1
-        , consume/2
+        , consume/3
         , consume/6
         ]).
 
@@ -59,6 +59,7 @@
 -export_type([host/0]).
 
 %%%_* Includes -----------------------------------------------------------------
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Types --------------------------------------------------------------------
@@ -188,12 +189,12 @@ start_link_consumer(Hosts, Topic, Partition) ->
 stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
--spec consume(pid(), integer()) -> ok | {error, any()}.
+-spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
 %% @equiv consume(Pid, self(), Offset, 1000, 0, 100000)
 %% @doc A simple alternative for consume/7 with predefined defaults.
 %%      Calling process will receive messages from consumer process.
-consume(Pid, Offset) ->
-  consume(Pid, self(), Offset, 1000, 0, 100000).
+consume(Pid, Callback, Offset) ->
+  consume(Pid, Callback, Offset, 1000, 0, 100000).
 
 %% @doc Start consuming data from a partition.
 %%      Messages are delivered as #message_set{}.
@@ -221,11 +222,10 @@ consume(Pid, Offset) ->
 %%           responding).
 %% MaxBytes: The maximum bytes to include in the message set for this
 %%           partition. This helps bound the size of the response.
--spec consume(pid(), pid(), integer(), integer(), integer(), integer()) ->
-                 ok | {error, any()}.
-consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  brod_consumer:consume(Pid, Subscriber, Offset,
-                        MaxWaitTime, MinBytes, MaxBytes).
+-spec consume(pid(), callback_fun(), integer(),
+             integer(), integer(), integer()) -> ok | {error, any()}.
+consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
@@ -306,7 +306,7 @@ file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
 simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
   {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
   Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
-  ok = brod:consume(C, Pid, Offset, 1000, 0, 100000),
+  ok = brod:consume(C, fun(Msg) -> Pid ! Msg, ok end, Offset, 1000, 0, 100000),
   Pid.
 
 %%%_* Internal functions -------------------------------------------------------
