@@ -200,13 +200,13 @@ stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
 -spec consume(pid(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset, 1000, 0, 100000)
+%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset)
 %% @doc A simple alternative for consume/6 with predefined defaults.
 %%      Calling process will receive messages from consumer process.
 consume(Pid, Offset) ->
   Self = self(),
   Callback = fun(MsgSet) -> Self ! MsgSet end,
-  consume(Pid, Callback, Offset, 1000, 0, 100000).
+  consume(Pid, Callback, Offset).
 
 -spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
 %% @equiv consume(Pid, Callback, Offset, 1000, 0, 100000)

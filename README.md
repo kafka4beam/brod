@@ -82,7 +82,6 @@ Handler:
     Partition = 0.
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
-    Self = self().
     Callback = fun(Key, Value, Offset) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
     ok = brod:consume(Consumer, Callback, -1).
     brod:produce_sync(Producer, Topic, Partition, <<"k">>, <<"v">>).
