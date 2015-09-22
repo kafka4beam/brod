@@ -25,8 +25,8 @@
 -behaviour(gen_server).
 
 %% Server API
--export([ start_link/3
-        , start_link/4
+-export([ start_link/4
+        , start_link/5
         , stop/1
         ]).
 
@@ -66,25 +66,22 @@
                , max_wait_time :: integer()
                , min_bytes     :: integer()
                , max_bytes     :: integer()
+               , sleep_timeout :: integer()
                }).
 
 %%%_* Macros -------------------------------------------------------------------
-%% how much time to wait before sending next fetch request when we got
-%% no messages in the last one
--define(SLEEP_TIMEOUT, 1000).
-
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
 %%%_* API ----------------------------------------------------------------------
--spec start_link([{string(), integer()}], binary(), integer()) ->
+-spec start_link([{string(), integer()}], binary(), integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, Topic, Partition) ->
-  start_link(Hosts, Topic, Partition, []).
+start_link(Hosts, Topic, Partition, SleepTimeout) ->
+  start_link(Hosts, Topic, Partition, SleepTimeout, []).
 
--spec start_link([{string(), integer()}], binary(), integer(), [term()]) ->
-                    {ok, pid()} | {error, any()}.
-start_link(Hosts, Topic, Partition, Debug) ->
-  Args = [Hosts, Topic, Partition, Debug],
+-spec start_link([{string(), integer()}], binary(), integer(),
+                integer(), [term()]) -> {ok, pid()} | {error, any()}.
+start_link(Hosts, Topic, Partition, SleepTimeout, Debug) ->
+  Args = [Hosts, Topic, Partition, SleepTimeout, Debug],
   Options = [{debug, Debug}],
   gen_server:start_link(?MODULE, Args, Options).
 
@@ -119,7 +116,7 @@ get_socket(Pid) ->
   gen_server:call(Pid, get_socket).
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, Topic, Partition, Debug]) ->
+init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
@@ -146,10 +143,11 @@ init([Hosts, Topic, Partition, Debug]) ->
                     , host = Host
                     , port = Port
                     , node_id = NodeId},
-    {ok, #state{ hosts     = Hosts
-               , socket    = Socket
-               , topic     = Topic
-               , partition = Partition}}
+    {ok, #state{ hosts         = Hosts
+               , socket        = Socket
+               , topic         = Topic
+               , partition     = Partition
+               , sleep_timeout = SleepTimeout}}
   catch
     throw:What ->
       {stop, What}
@@ -194,7 +192,7 @@ handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
       ok = send_fetch_request(State),
       {noreply, State};
     {empty, State} ->
-      erlang:send_after(?SLEEP_TIMEOUT, self(), ?SEND_FETCH_REQUEST),
+      erlang:send_after(State#state.sleep_timeout, self(), ?SEND_FETCH_REQUEST),
       {noreply, State}
   end;
 handle_info(?SEND_FETCH_REQUEST, State) ->

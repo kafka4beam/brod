@@ -38,6 +38,7 @@
 
 %% Consumer API
 -export([ start_link_consumer/3
+        , start_link_consumer/4
         , start_consumer/3
         , stop_consumer/1
         , consume/2
@@ -179,11 +180,19 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
 start_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition).
 
-%% @doc Start consumer process
+%% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
 -spec start_link_consumer([host()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition) ->
-  brod_consumer:start_link(Hosts, Topic, Partition).
+  start_link_consumer(Hosts, Topic, Partition, 1000).
+
+%% @doc Start consumer process
+%%      SleepTimeout: how much time to wait before sending next fetch
+%%      request when we got no messages in the last one
+-spec start_link_consumer([host()], binary(), integer(), integer()) ->
+                        {ok, pid()} | {error, any()}.
+start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
+  brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
 
 %% @doc Stop consumer process
 -spec stop_consumer(pid()) -> ok.
