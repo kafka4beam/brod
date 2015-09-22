@@ -52,7 +52,7 @@ In gen_server's init/1:
 
 Handler:
 
-    handle_call(#message_set{messages = Msgs}, State) ->
+    handle_call(#message_set{messages = Msgs}, _From, State) ->
       lists:foreach(
         fun(#message{key = K, value = V, offset = Offset}) ->
             io:format(user, "[~p] ~s:~s\n", [Offset, K, V]),
@@ -71,7 +71,7 @@ In gen_server's init/1:
 
 Handler:
 
-    handle_call({msg, Key, Value, Offset}, State) ->
+    handle_call({msg, Key, Value, Offset}, _From, State) ->
       io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]),
       {reply, ok, State};
 
