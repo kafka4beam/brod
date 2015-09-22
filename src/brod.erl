@@ -306,7 +306,8 @@ file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
 simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
   {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
   Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
-  ok = brod:consume(C, fun(Msg) -> Pid ! Msg, ok end, Offset, 1000, 0, 100000),
+  Callback = fun(#message_set{messages = Msgs}) -> print_messages(Io, Msgs) end,
+  ok = brod:consume(C, Callback, Offset, 1000, 0, 100000),
   Pid.
 
 %%%_* Internal functions -------------------------------------------------------
@@ -322,14 +323,14 @@ connect_leader(Hosts, Topic, Partition) ->
   Port = Broker#broker_metadata.port,
   brod_sock:start_link(self(), Host, Port, []).
 
+print_messages(_Io, []) ->
+  ok;
+print_messages(Io, [#message{key = K, value = V} | Messages]) ->
+  io:format(Io, "~s:~s\n", [K, V]),
+  print_messages(Io, Messages).
+
 simple_consumer_loop(C, Io) ->
   receive
-    #message_set{messages = Msgs} ->
-      lists:foreach(
-        fun(#message{key = K, value = V}) ->
-            io:format(Io, "\n~s\n~s\n", [K, V])
-        end, Msgs),
-      simple_consumer_loop(C, Io);
     stop ->
       brod:stop_consumer(C),
       io:format(Io, "\Simple consumer ~p terminating\n", [self()]),

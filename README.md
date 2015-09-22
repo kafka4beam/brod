@@ -63,16 +63,14 @@ Handling payloads from kafka broker:
     rr(brod).
     Hosts = [{"localhost", 9092}].
     Topic = <<"t">>.
-    Key = <<"key">>.
-    Value = <<"value">>.
     Partition = 0.
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
     Self = self().
-    ok = brod:consume(Consumer, fun(MsgSet) -> Self ! MsgSet end, -1).
-    {ok, Ref} = brod:produce(Producer, Topic, Partition, Key, Value).
-    receive {{Ref, Producer}, ack} -> ok end.
-    receive #message_set{messages = [#message{key = Key, value = Value}]} -> ok end.
+    Callback = fun(#message_set{messages = Msgs}) ->
+      [io:format(user, "~s:~s\n", [K, V]) || #message{key = K, value = V} <- Msgs] end.
+    ok = brod:consume(Consumer, Callback, -1).
+    brod:produce_sync(Producer, Topic, Partition, <<"key">>, <<"value">>).
 
 More advanced versions of the functions above are also available, see brod.erl.
 
