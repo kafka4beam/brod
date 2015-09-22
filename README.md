@@ -47,16 +47,32 @@ In gen_server's init/1:
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
     Self = self(),
     Callback = fun(#message_set{} = MsgSet) -> gen_server:call(Self, MsgSet) end,
-    ok = brod:consume(Consumer, Callback, Offset, 1000, 0, 100000),
+    ok = brod:consume(Consumer, Callback, Offset),
     {ok, #state{ consumer = Consumer }}.
 
-Handling payloads from kafka broker:
+Handler:
 
     handle_call(#message_set{messages = Msgs}, State) ->
       lists:foreach(
-        fun(#message{key = K, value = V}) ->
-            io:format(Io, "\n~s\n~s\n", [K, V])
+        fun(#message{key = K, value = V, offset = Offset}) ->
+            io:format(user, "[~p] ~s:~s\n", [Offset, K, V]),
         end, Msgs),
+      {reply, ok, State};
+
+## More simple consumer callback (no need to include brod.hrl)
+
+In gen_server's init/1:
+
+    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
+    Self = self(),
+    Callback3 = fun(Key, Value, Offset) -> gen_server:call(Self, {msg, Key, Value, Offset}) end,
+    ok = brod:consume(Consumer, Callback3, Offset),
+    {ok, #state{ consumer = Consumer }}.
+
+Handler:
+
+    handle_call({msg, Key, Value, Offset}, State) ->
+      io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]),
       {reply, ok, State};
 
 ## In erlang shell
@@ -67,12 +83,9 @@ Handling payloads from kafka broker:
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
     Self = self().
-    Callback = fun(#message_set{messages = Msgs}) ->
-      [io:format(user, "~s:~s\n", [K, V]) || #message{key = K, value = V} <- Msgs] end.
+    Callback = fun(Key, Value, Offset) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
     ok = brod:consume(Consumer, Callback, -1).
-    brod:produce_sync(Producer, Topic, Partition, <<"key">>, <<"value">>).
-
-More advanced versions of the functions above are also available, see brod.erl.
+    brod:produce_sync(Producer, Topic, Partition, <<"k">>, <<"v">>).
 
 ## Simple consumers
     f(C), C = brod:console_consumer(Hosts, Topic, Partition, -1).

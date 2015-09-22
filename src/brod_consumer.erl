@@ -60,7 +60,8 @@
                , socket        :: #socket{}
                , topic         :: binary()
                , partition     :: integer()
-               , callback      :: function()
+               , callback      :: fun((#message_set{}) -> ok)
+               , callback3     :: fun((binary(), binary(), integer()) -> ok)
                , offset        :: integer()
                , max_wait_time :: integer()
                , min_bytes     :: integer()
@@ -160,8 +161,13 @@ handle_call({consume, Callback, Offset0,
     {error, Error} ->
       {reply, {error, Error}, State0};
     {ok, Offset} ->
-      State = State0#state{ callback = Callback
-                          , offset = Offset
+      State1 = case erlang:fun_info(Callback, arity) of
+                 {arity, 1} ->
+                   State0#state{callback = Callback, callback3 = undefined};
+                 {arity, 3} ->
+                   State0#state{callback = undefined, callback3 = Callback}
+               end,
+      State = State1#state{ offset = Offset
                           , max_wait_time = MaxWaitTime
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
@@ -184,8 +190,7 @@ handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
       {stop, {broker_error, Error}, State0};
     {ok, State} ->
       MessageSet = brod_utils:fetch_response_to_message_set(R),
-      Callback = State#state.callback,
-      Callback(MessageSet),
+      exec_callback(State#state.callback, State#state.callback3, MessageSet),
       ok = send_fetch_request(State),
       {noreply, State};
     {empty, State} ->
@@ -257,6 +262,14 @@ has_error(#partition_messages{error_code = ErrorCode}) ->
     true  -> {true, ErrorCode};
     false -> false
   end.
+
+exec_callback(Callback, undefined, MessageSet) ->
+  Callback(MessageSet);
+exec_callback(undefined, Callback3, #message_set{messages = Messages}) ->
+  F = fun(#message{key = K, value = V, offset = Offset}) ->
+          Callback3(K, V, Offset)
+      end,
+  lists:foreach(F, Messages).
 
 do_debug(Pid, Debug) ->
   {ok, #socket{pid = Sock}} = get_socket(Pid),
