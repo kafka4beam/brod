@@ -25,6 +25,7 @@
 %% Producer API
 -export([ start_link_producer/1
         , start_link_producer/3
+        , start_link_producer/4
         , start_producer/1
         , start_producer/3
         , stop_producer/1
@@ -90,6 +91,7 @@ start_producer(Hosts, RequiredAcks, AckTimeout) ->
 start_link_producer(Hosts) ->
   start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
 
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
 -spec start_link_producer([host()], integer(), integer()) ->
         {ok, pid()} | {error, any()}.
 start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
@@ -350,7 +352,8 @@ connect_leader(Hosts, Topic, Partition) ->
   Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
-  brod_sock:start_link(self(), Host, Port, []).
+  %% client id matters only for producer clients
+  brod_sock:start_link(self(), Host, Port, ?DEFAULT_CLIENT_ID, []).
 
 print_message(Io, Offset, K, V) ->
   io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
