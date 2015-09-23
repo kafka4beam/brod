@@ -78,7 +78,7 @@ start_link(Hosts, Topic, Partition, SleepTimeout) ->
   start_link(Hosts, Topic, Partition, SleepTimeout, []).
 
 -spec start_link([{string(), integer()}], binary(), integer(),
-                integer(), [term()]) -> {ok, pid()} | {error, any()}.
+                 integer(), [term()]) -> {ok, pid()} | {error, any()}.
 start_link(Hosts, Topic, Partition, SleepTimeout, Debug) ->
   Args = [Hosts, Topic, Partition, SleepTimeout, Debug],
   Options = [{debug, Debug}],
