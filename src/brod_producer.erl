@@ -135,7 +135,7 @@ init([Hosts, RequiredAcks, AckTimeout, ClientId, Debug]) ->
              , debug       = Debug
              , acks        = RequiredAcks
              , ack_timeout = AckTimeout
-             , client_id   = ClientId
+             , client_id   = ensure_binary(ClientId)
              }}.
 
 handle_call(stop, _From, State) ->
@@ -345,6 +345,10 @@ do_debug(Pid, Debug) ->
     end, Sockets),
   {ok, _} = gen:call(Pid, system, {debug, Debug}),
   ok.
+
+ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
+ensure_binary(L) when is_list(L)   -> ensure_binary(iolist_to_binary(L));
+ensure_binary(B) when is_binary(B) -> B.
 
 %% Tests -----------------------------------------------------------------------
 -include_lib("eunit/include/eunit.hrl").
