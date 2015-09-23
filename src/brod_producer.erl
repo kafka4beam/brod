@@ -347,7 +347,7 @@ do_debug(Pid, Debug) ->
   ok.
 
 ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
-ensure_binary(L) when is_list(L)   -> ensure_binary(iolist_to_binary(L));
+ensure_binary(L) when is_list(L)   -> iolist_to_binary(L);
 ensure_binary(B) when is_binary(B) -> B.
 
 %% Tests -----------------------------------------------------------------------
