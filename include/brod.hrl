@@ -32,8 +32,8 @@
                      , messages       :: [#message{}]
                      }).
 
--type(callback_fun() :: fun((#message_set{}) -> ok) |
-                        fun((Key :: binary(), Value :: binary(), Offset :: integer()) -> ok)).
+-type(callback_fun() :: fun((#message_set{}) -> any()) |
+                        fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any())).
 
 -endif. % include brod.hrl
 

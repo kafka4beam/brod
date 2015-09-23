@@ -54,7 +54,7 @@ Handler:
 
     handle_call(#message_set{messages = Msgs}, _From, State) ->
       lists:foreach(
-        fun(#message{key = K, value = V, offset = Offset}) ->
+        fun(#message{offset = Offset, key = K, value = V}) ->
             io:format(user, "[~p] ~s:~s\n", [Offset, K, V]),
         end, Msgs),
       {reply, ok, State};
@@ -65,13 +65,13 @@ In gen_server's init/1:
 
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
     Self = self(),
-    Callback3 = fun(Key, Value, Offset) -> gen_server:call(Self, {msg, Key, Value, Offset}) end,
-    ok = brod:consume(Consumer, Callback3, Offset),
+    Callback = fun(Offset, Key, Value) -> gen_server:call(Self, {msg, Offset, Key, Value}) end,
+    ok = brod:consume(Consumer, Callback, Offset),
     {ok, #state{ consumer = Consumer }}.
 
 Handler:
 
-    handle_call({msg, Key, Value, Offset}, _From, State) ->
+    handle_call({msg, Offset, Key, Value}, _From, State) ->
       io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]),
       {reply, ok, State};
 
@@ -82,7 +82,7 @@ Handler:
     Partition = 0.
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
-    Callback = fun(Key, Value, Offset) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
+    Callback = fun(Offset, Key, Value) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
     ok = brod:consume(Consumer, Callback, -1).
     brod:produce_sync(Producer, Topic, Partition, <<"k">>, <<"v">>).
 

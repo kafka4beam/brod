@@ -89,7 +89,7 @@ stop(Pid) ->
   gen_server:call(Pid, stop).
 
 -spec consume(pid(), callback_fun(), integer(), integer(),
-             integer(), integer()) -> ok | {error, any()}.
+              integer(), integer()) -> ok | {error, any()}.
 consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   gen_server:call(Pid, {consume, Callback, Offset,
                         MaxWaitTime, MinBytes, MaxBytes}).
@@ -260,8 +260,8 @@ exec_callback(Callback, MessageSet) ->
     {arity, 1} ->
       Callback(MessageSet);
     {arity, 3} ->
-      F = fun(#message{key = K, value = V, offset = Offset}) ->
-              Callback(K, V, Offset)
+      F = fun(#message{offset = Offset, key = K, value = V}) ->
+              Callback(Offset, K, V)
           end,
       lists:foreach(F, MessageSet#message_set.messages)
   end.
