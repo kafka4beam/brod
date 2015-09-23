@@ -38,4 +38,7 @@ $(DIALYZER_PLT):
 dialyze: $(DIALYZER_PLT)
 	dialyzer -r ebin $(DIALYZER_OPTS)
 
+xref: compile
+	$(REBAR) xref
+
 # eof

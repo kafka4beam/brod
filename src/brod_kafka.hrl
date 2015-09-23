@@ -17,9 +17,6 @@
 -ifndef(__BROD_KAFKA_HRL).
 -define(__BROD_KAFKA_HRL, true).
 
--define(CLIENT_ID,      <<"brod">>).
--define(CLIENT_ID_SIZE, 4).
-
 -define(API_VERSION, 0).
 -define(MAGIC_BYTE, 0).
 

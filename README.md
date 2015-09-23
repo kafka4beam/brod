@@ -12,7 +12,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 In gen_server's init/1:
 
     % Producer will be linked to the calling process
-    {ok, Producer} = brod:start_link_producer(Hosts, RequiredAcks, AckTimeout),
+    {ok, Producer} = brod:start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId),
     {ok, #state{ producer = Producer }}.
 
 Sending a message:

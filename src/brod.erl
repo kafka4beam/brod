@@ -25,6 +25,7 @@
 %% Producer API
 -export([ start_link_producer/1
         , start_link_producer/3
+        , start_link_producer/4
         , start_producer/1
         , start_producer/3
         , stop_producer/1
@@ -79,16 +80,22 @@ start_producer(Hosts) ->
   start_link_producer(Hosts).
 
 %% @deprecated
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout)
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
 -spec start_producer([host()], integer(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout).
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @equiv start_link_producer(Hosts, 1, 1000)
 -spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_link_producer(Hosts) ->
   start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
+
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
+-spec start_link_producer([host()], integer(), integer()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @doc Start a process to publish messages to kafka.
 %%      Hosts:
@@ -117,10 +124,12 @@ start_link_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
--spec start_link_producer([host()], integer(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
-  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
+%%     ClientId:
+%%        Atom or binary string (preferably unique) identifier of the client.
+-spec start_link_producer([host()], integer(), integer(), client_id()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
+  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout, ClientId).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -342,7 +351,8 @@ connect_leader(Hosts, Topic, Partition) ->
   Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
-  brod_sock:start_link(self(), Host, Port, []).
+  %% client id matters only for producer clients
+  brod_sock:start_link(self(), Host, Port, ?DEFAULT_CLIENT_ID, []).
 
 print_message(Io, Offset, K, V) ->
   io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
