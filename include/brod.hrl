@@ -32,8 +32,12 @@
                      , messages       :: [#message{}]
                      }).
 
--type(callback_fun() :: fun((#message_set{}) -> any()) |
-                        fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any())).
+-type callback_fun() :: fun((#message_set{}) -> any()) |
+                        fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any()).
+
+-type client_id() :: atom() | binary().
+
+-define(DEFAULT_CLIENT_ID, <<"brod">>).
 
 -endif. % include brod.hrl
 

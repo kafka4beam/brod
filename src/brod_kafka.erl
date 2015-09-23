@@ -28,7 +28,7 @@
 -export([ api_key/1
         , parse_stream/2
         , encode/1
-        , encode/2
+        , encode/3
         , decode/2
         , is_error/1
         ]).
@@ -57,8 +57,8 @@ parse_stream(<<Size:32/?INT,
 parse_stream(Bin, Acc, CorrIdDict) ->
   {Bin, Acc, CorrIdDict}.
 
-encode(CorrId, Request) ->
-  Header = header(api_key(Request), CorrId),
+encode(ClientId, CorrId, Request) ->
+  Header = header(api_key(Request), ClientId, CorrId),
   Body = encode(Request),
   Bin = <<Header/binary, Body/binary>>,
   Size = byte_size(Bin),
@@ -77,12 +77,15 @@ decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
 is_error(X) -> brod_kafka_errors:is_error(X).
 
 %%%_* Internal functions -------------------------------------------------------
-header(ApiKey, CorrId) ->
+header(ApiKey, ClientId, CorrId) when is_atom(ClientId) ->
+  header(ApiKey, list_to_binary(atom_to_list(ClientId)), CorrId);
+header(ApiKey, ClientId, CorrId) ->
+  ClientIdLength = size(ClientId),
   <<ApiKey:16/?INT,
     ?API_VERSION:16/?INT,
     CorrId:32/?INT,
-    ?CLIENT_ID_SIZE:16/?INT,
-    ?CLIENT_ID/binary>>.
+    ClientIdLength:16/?INT,
+    ClientId/binary>>.
 
 encode(#metadata_request{} = Request) ->
   metadata_request_body(Request);

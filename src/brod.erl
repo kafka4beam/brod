@@ -83,12 +83,17 @@ start_producer(Hosts) ->
 -spec start_producer([host()], integer(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout).
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @equiv start_link_producer(Hosts, 1, 1000)
 -spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_link_producer(Hosts) ->
   start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
+
+-spec start_link_producer([host()], integer(), integer()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @doc Start a process to publish messages to kafka.
 %%      Hosts:
@@ -117,10 +122,13 @@ start_link_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
--spec start_link_producer([host()], integer(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
-  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
+%%     ClientId:
+%%        Atom or binary string (preferablly unique) identifier
+%%        of the client.
+-spec start_link_producer([host()], integer(), integer(), client_id()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
+  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout, ClientId).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.

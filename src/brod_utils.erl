@@ -53,7 +53,7 @@ try_connect([{Host, Port} | Hosts], _) ->
   %% Do not 'start_link' to avoid unexpected 'EXIT' message.
   %% Should be ok since we're using a single blocking request which
   %% monitors the process anyway.
-  case brod_sock:start(self(), Host, Port, []) of
+  case brod_sock:start(self(), Host, Port, ?DEFAULT_CLIENT_ID, []) of
     {ok, Pid} -> {ok, Pid};
     Error     -> try_connect(Hosts, Error)
   end.
