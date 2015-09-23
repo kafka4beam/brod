@@ -25,6 +25,7 @@
 %% Producer API
 -export([ start_link_producer/1
         , start_link_producer/3
+        , start_link_producer/4
         , start_producer/1
         , start_producer/3
         , stop_producer/1
@@ -38,9 +39,11 @@
 
 %% Consumer API
 -export([ start_link_consumer/3
+        , start_link_consumer/4
         , start_consumer/3
         , stop_consumer/1
         , consume/2
+        , consume/3
         , consume/6
         ]).
 
@@ -59,6 +62,7 @@
 -export_type([host/0]).
 
 %%%_* Includes -----------------------------------------------------------------
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Types --------------------------------------------------------------------
@@ -76,16 +80,22 @@ start_producer(Hosts) ->
   start_link_producer(Hosts).
 
 %% @deprecated
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout)
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
 -spec start_producer([host()], integer(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout).
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @equiv start_link_producer(Hosts, 1, 1000)
 -spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_link_producer(Hosts) ->
   start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
+
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
+-spec start_link_producer([host()], integer(), integer()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
+  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
 
 %% @doc Start a process to publish messages to kafka.
 %%      Hosts:
@@ -114,10 +124,12 @@ start_link_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
--spec start_link_producer([host()], integer(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
-  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout).
+%%     ClientId:
+%%        Atom or binary string (preferably unique) identifier of the client.
+-spec start_link_producer([host()], integer(), integer(), client_id()) ->
+        {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
+  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout, ClientId).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -177,11 +189,19 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
 start_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition).
 
-%% @doc Start consumer process
+%% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
 -spec start_link_consumer([host()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition) ->
-  brod_consumer:start_link(Hosts, Topic, Partition).
+  start_link_consumer(Hosts, Topic, Partition, 1000).
+
+%% @doc Start consumer process
+%%      SleepTimeout: how much time to wait before sending next fetch
+%%      request when we got no messages in the last one
+-spec start_link_consumer([host()], binary(), integer(), integer()) ->
+                        {ok, pid()} | {error, any()}.
+start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
+  brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
 
 %% @doc Stop consumer process
 -spec stop_consumer(pid()) -> ok.
@@ -189,15 +209,26 @@ stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
 -spec consume(pid(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, self(), Offset, 1000, 0, 100000)
-%% @doc A simple alternative for consume/7 with predefined defaults.
+%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset)
+%% @doc A simple alternative for consume/6 with predefined defaults.
 %%      Calling process will receive messages from consumer process.
 consume(Pid, Offset) ->
-  consume(Pid, self(), Offset, 1000, 0, 100000).
+  Self = self(),
+  Callback = fun(MsgSet) -> Self ! MsgSet end,
+  consume(Pid, Callback, Offset).
+
+-spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
+%% @equiv consume(Pid, Callback, Offset, 1000, 0, 100000)
+%% @doc A simple alternative for consume/6 with predefined defaults.
+%%      Callback() will be called to handle incoming messages.
+consume(Pid, Callback, Offset) ->
+  consume(Pid, Callback, Offset, 1000, 0, 100000).
 
 %% @doc Start consuming data from a partition.
 %%      Messages are delivered as #message_set{}.
-%% Subscriber: a process which will receive messages
+%% Pid: brod consumer pid, @see start_link_consumer/3
+%% Callback: a function which will be called by brod_consumer to
+%%           handle incoming messages
 %% Offset: Where to start to fetch data from.
 %%                  -1: start from the latest available offset
 %%                  -2: start from the earliest available offset
@@ -221,11 +252,10 @@ consume(Pid, Offset) ->
 %%           responding).
 %% MaxBytes: The maximum bytes to include in the message set for this
 %%           partition. This helps bound the size of the response.
--spec consume(pid(), pid(), integer(), integer(), integer(), integer()) ->
-                 ok | {error, any()}.
-consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  brod_consumer:consume(Pid, Subscriber, Offset,
-                        MaxWaitTime, MinBytes, MaxBytes).
+-spec consume(pid(), callback_fun(), integer(),
+             integer(), integer(), integer()) -> ok | {error, any()}.
+consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
@@ -306,7 +336,8 @@ file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
 simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
   {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
   Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
-  ok = brod:consume(C, Pid, Offset, 1000, 0, 100000),
+  Callback = fun(MsgOffset, K, V) -> print_message(Io, MsgOffset, K, V) end,
+  ok = brod:consume(C, Callback, Offset),
   Pid.
 
 %%%_* Internal functions -------------------------------------------------------
@@ -320,16 +351,14 @@ connect_leader(Hosts, Topic, Partition) ->
   Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
-  brod_sock:start_link(self(), Host, Port, []).
+  %% client id matters only for producer clients
+  brod_sock:start_link(self(), Host, Port, ?DEFAULT_CLIENT_ID, []).
+
+print_message(Io, Offset, K, V) ->
+  io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
 
 simple_consumer_loop(C, Io) ->
   receive
-    #message_set{messages = Msgs} ->
-      lists:foreach(
-        fun(#message{key = K, value = V}) ->
-            io:format(Io, "\n~s\n~s\n", [K, V])
-        end, Msgs),
-      simple_consumer_loop(C, Io);
     stop ->
       brod:stop_consumer(C),
       io:format(Io, "\Simple consumer ~p terminating\n", [self()]),

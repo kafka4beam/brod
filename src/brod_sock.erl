@@ -28,12 +28,12 @@
 
 %% API
 -export([ get_tcp_sock/1
-        , init/4
+        , init/5
         , loop/2
         , send/2
         , send_sync/3
-        , start/4
-        , start_link/4
+        , start/5
+        , start_link/5
         , stop/1
         ]).
 
@@ -45,6 +45,7 @@
         ]).
 
 %%%_* Includes =================================================================
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Macros -------------------------------------------------------------------
@@ -64,18 +65,19 @@
                , corr_id = 0           :: corr_id()
                , tail    = <<>>        :: binary()
                , api_keys = dict:new() :: api_keys()
+               , client_id             :: client_id()
                }).
 
 %%%_* API ======================================================================
--spec start_link(pid(), string(), integer(), term()) ->
+-spec start_link(pid(), string(), integer(), client_id(), term()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Parent, Host, Port, Debug) ->
-  proc_lib:start_link(?MODULE, init, [Parent, Host, Port, Debug]).
+start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
+  proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
--spec start(pid(), string(), integer(), term()) ->
+-spec start(pid(), string(), integer(), client_id(), term()) ->
                {ok, pid()} | {error, any()}.
-start(Parent, Host, Port, Debug) ->
-  proc_lib:start(?MODULE, init, [Parent, Host, Port, Debug]).
+start(Parent, Host, Port, ClientId, Debug) ->
+  proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
 -spec send(pid(), term()) -> {ok, integer()} | {error, any()}.
 send(Pid, Request) ->
@@ -101,14 +103,14 @@ get_tcp_sock(Pid) ->
   call(Pid, get_tcp_sock).
 
 %%%_* Internal functions =======================================================
-init(Parent, Host, Port, Debug0) ->
+init(Parent, Host, Port, ClientId, Debug0) ->
   Debug = sys:debug_options(Debug0),
   SockOpts = [{active, true}, {packet, raw}, binary, {nodelay, true}],
   case gen_tcp:connect(Host, Port, SockOpts) of
     {ok, Sock} ->
       proc_lib:init_ack(Parent, {ok, self()}),
       try
-        loop(#state{parent = Parent, sock = Sock}, Debug)
+        loop(#state{parent = Parent, sock = Sock, client_id = ClientId}, Debug)
       catch error : E ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
@@ -156,11 +158,12 @@ handle_msg({tcp_closed, _Sock}, _State, _) ->
   exit(tcp_closed);
 handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
   exit({tcp_error, Reason});
-handle_msg({From, {send, Request}}, #state{sock = Sock} = State, Debug) ->
+handle_msg({From, {send, Request}},
+           #state{sock = Sock, client_id = ClientId} = State, Debug) ->
   CorrId = next_corr_id(State#state.corr_id),
   %% reply faster
   reply(From, {ok, CorrId}),
-  RequestBin = brod_kafka:encode(CorrId, Request),
+  RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   ApiKey = brod_kafka:api_key(Request),
   ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),

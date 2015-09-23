@@ -25,8 +25,8 @@
 -behaviour(gen_server).
 
 %% Server API
--export([ start_link/3
-        , start_link/4
+-export([ start_link/4
+        , start_link/5
         , stop/1
         ]).
 
@@ -52,6 +52,7 @@
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
@@ -59,30 +60,27 @@
                , socket        :: #socket{}
                , topic         :: binary()
                , partition     :: integer()
-               , subscriber    :: pid()
+               , callback      :: callback_fun()
                , offset        :: integer()
                , max_wait_time :: integer()
                , min_bytes     :: integer()
                , max_bytes     :: integer()
+               , sleep_timeout :: integer()
                }).
 
 %%%_* Macros -------------------------------------------------------------------
-%% how much time to wait before sending next fetch request when we got
-%% no messages in the last one
--define(SLEEP_TIMEOUT, 1000).
-
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
 %%%_* API ----------------------------------------------------------------------
--spec start_link([{string(), integer()}], binary(), integer()) ->
+-spec start_link([{string(), integer()}], binary(), integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, Topic, Partition) ->
-  start_link(Hosts, Topic, Partition, []).
+start_link(Hosts, Topic, Partition, SleepTimeout) ->
+  start_link(Hosts, Topic, Partition, SleepTimeout, []).
 
--spec start_link([{string(), integer()}], binary(), integer(), [term()]) ->
-                    {ok, pid()} | {error, any()}.
-start_link(Hosts, Topic, Partition, Debug) ->
-  Args = [Hosts, Topic, Partition, Debug],
+-spec start_link([{string(), integer()}], binary(), integer(),
+                 integer(), [term()]) -> {ok, pid()} | {error, any()}.
+start_link(Hosts, Topic, Partition, SleepTimeout, Debug) ->
+  Args = [Hosts, Topic, Partition, SleepTimeout, Debug],
   Options = [{debug, Debug}],
   gen_server:start_link(?MODULE, Args, Options).
 
@@ -90,10 +88,10 @@ start_link(Hosts, Topic, Partition, Debug) ->
 stop(Pid) ->
   gen_server:call(Pid, stop).
 
--spec consume(pid(), pid(), integer(), integer(), integer(), integer()) ->
-                 ok | {error, any()}.
-consume(Pid, Subscriber, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  gen_server:call(Pid, {consume, Subscriber, Offset,
+-spec consume(pid(), callback_fun(), integer(), integer(),
+              integer(), integer()) -> ok | {error, any()}.
+consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  gen_server:call(Pid, {consume, Callback, Offset,
                         MaxWaitTime, MinBytes, MaxBytes}).
 
 -spec debug(pid(), print | string() | none) -> ok.
@@ -117,7 +115,7 @@ get_socket(Pid) ->
   gen_server:call(Pid, get_socket).
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, Topic, Partition, Debug]) ->
+init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
@@ -139,31 +137,34 @@ init([Hosts, Topic, Partition, Debug]) ->
       end,
     #broker_metadata{host = Host, port = Port} =
       lists:keyfind(NodeId, #broker_metadata.node_id, Brokers),
-    {ok, Pid} = brod_sock:start_link(self(), Host, Port, Debug),
+    %% client id matters only for producer clients
+    {ok, Pid} = brod_sock:start_link(self(), Host, Port,
+                                     ?DEFAULT_CLIENT_ID, Debug),
     Socket = #socket{ pid = Pid
                     , host = Host
                     , port = Port
                     , node_id = NodeId},
-    {ok, #state{ hosts     = Hosts
-               , socket    = Socket
-               , topic     = Topic
-               , partition = Partition}}
+    {ok, #state{ hosts         = Hosts
+               , socket        = Socket
+               , topic         = Topic
+               , partition     = Partition
+               , sleep_timeout = SleepTimeout}}
   catch
     throw:What ->
       {stop, What}
   end.
 
-handle_call({consume, Subscriber, Offset0,
+handle_call({consume, Callback, Offset0,
              MaxWaitTime, MinBytes, MaxBytes}, _From, State0) ->
   case get_valid_offset(Offset0, State0) of
     {error, Error} ->
       {reply, {error, Error}, State0};
     {ok, Offset} ->
-      State = State0#state{ subscriber = Subscriber
-                          , offset = Offset
+      State = State0#state{ callback      = Callback
+                          , offset        = Offset
                           , max_wait_time = MaxWaitTime
-                          , min_bytes = MinBytes
-                          , max_bytes = MaxBytes},
+                          , min_bytes     = MinBytes
+                          , max_bytes     = MaxBytes},
       ok = send_fetch_request(State),
       {reply, ok, State}
   end;
@@ -182,11 +183,12 @@ handle_info({msg, _Pid, _CorrId, #fetch_response{} = R}, State0) ->
     {error, Error} ->
       {stop, {broker_error, Error}, State0};
     {ok, State} ->
-      ok = send_subscriber(State#state.subscriber, R),
+      MessageSet = brod_utils:fetch_response_to_message_set(R),
+      exec_callback(State#state.callback, MessageSet),
       ok = send_fetch_request(State),
       {noreply, State};
     {empty, State} ->
-      erlang:send_after(?SLEEP_TIMEOUT, self(), ?SEND_FETCH_REQUEST),
+      erlang:send_after(State#state.sleep_timeout, self(), ?SEND_FETCH_REQUEST),
       {noreply, State}
   end;
 handle_info(?SEND_FETCH_REQUEST, State) ->
@@ -249,15 +251,29 @@ handle_fetch_response(#fetch_response{topics = [TopicFetchData]}, State) ->
       end
   end.
 
-send_subscriber(Subscriber, #fetch_response{} = FetchResponse) ->
-  MsgSet = brod_utils:fetch_response_to_message_set(FetchResponse),
-  Subscriber ! MsgSet,
-  ok.
-
 has_error(#partition_messages{error_code = ErrorCode}) ->
   case brod_kafka:is_error(ErrorCode) of
     true  -> {true, ErrorCode};
     false -> false
+  end.
+
+exec_callback(Callback, MessageSet) ->
+  case erlang:fun_info(Callback, arity) of
+    {arity, 1} ->
+      try
+        Callback(MessageSet)
+      catch C:E ->
+          erlang:C({E, erlang:get_stacktrace()})
+      end;
+    {arity, 3} ->
+      F = fun(#message{offset = Offset, key = K, value = V}) ->
+              try
+                Callback(Offset, K, V)
+              catch C:E ->
+                  erlang:C({E, erlang:get_stacktrace()})
+              end
+          end,
+      lists:foreach(F, MessageSet#message_set.messages)
   end.
 
 do_debug(Pid, Debug) ->

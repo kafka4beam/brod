@@ -12,7 +12,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 In gen_server's init/1:
 
     % Producer will be linked to the calling process
-    {ok, Producer} = brod:start_link_producer(Hosts, RequiredAcks, AckTimeout),
+    {ok, Producer} = brod:start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId),
     {ok, #state{ producer = Producer }}.
 
 Sending a message:
@@ -45,32 +45,46 @@ In gen_server's init/1:
 
     % Consumer will be linked to the calling process
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
-    ok = brod:consume(Consumer, self(), Offset, 1000, 0, 100000),
+    Self = self(),
+    Callback = fun(#message_set{} = MsgSet) -> gen_server:call(Self, MsgSet) end,
+    ok = brod:consume(Consumer, Callback, Offset),
     {ok, #state{ consumer = Consumer }}.
 
-Handling payloads from kafka broker:
+Handler:
 
-    handle_info(#message_set{messages = Msgs}, State) ->
+    handle_call(#message_set{messages = Msgs}, _From, State) ->
       lists:foreach(
-        fun(#message{key = K, value = V}) ->
-            io:format(Io, "\n~s\n~s\n", [K, V])
-        end, Msgs).
+        fun(#message{offset = Offset, key = K, value = V}) ->
+            io:format(user, "[~p] ~s:~s\n", [Offset, K, V]),
+        end, Msgs),
+      {reply, ok, State};
+
+## More simple consumer callback (no need to include brod.hrl)
+
+In gen_server's init/1:
+
+    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
+    Self = self(),
+    Callback = fun(Offset, Key, Value) -> gen_server:call(Self, {msg, Offset, Key, Value}) end,
+    ok = brod:consume(Consumer, Callback, Offset),
+    {ok, #state{ consumer = Consumer }}.
+
+Handler:
+
+    handle_call({msg, Offset, Key, Value}, _From, State) ->
+      io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]),
+      {reply, ok, State};
 
 ## In erlang shell
     rr(brod).
     Hosts = [{"localhost", 9092}].
     Topic = <<"t">>.
-    Key = <<"key">>.
-    Value = <<"value">>.
     Partition = 0.
     {ok, Producer} = brod:start_link_producer(Hosts).
     {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
-    ok = brod:consume(Consumer, -1).
-    {ok, Ref} = brod:produce(Producer, Topic, Partition, Key, Value).
-    receive {{Ref, Producer}, ack} -> ok end.
-    receive #message_set{messages = [#message{key = Key, value = Value}]} -> ok end.
-
-More advanced versions of the functions above are also available, see brod.erl.
+    Callback = fun(Offset, Key, Value) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
+    ok = brod:consume(Consumer, Callback, -1).
+    brod:produce_sync(Producer, Topic, Partition, <<"k">>, <<"v">>).
 
 ## Simple consumers
     f(C), C = brod:console_consumer(Hosts, Topic, Partition, -1).

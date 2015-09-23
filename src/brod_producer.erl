@@ -25,8 +25,8 @@
 -behaviour(gen_server).
 
 %% Server API
--export([ start_link/3
-        , start_link/4
+-export([ start_link/4
+        , start_link/5
         , stop/1
         ]).
 
@@ -52,6 +52,7 @@
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
@@ -79,21 +80,22 @@
                , data_buffer = [] :: data_buffer()
                , senders_buffer = dict:new() :: senders_buffer()
                , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
+               , client_id        :: client_id()
                }).
 
 -type produce_error() :: {partition(), offset(), error_code()}.
 
 %%%_* API ----------------------------------------------------------------------
--spec start_link([brod:host()], integer(), integer()) ->
+-spec start_link([brod:host()], integer(), integer(), client_id()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout) ->
-  start_link(Hosts, RequiredAcks, AckTimeout, []).
+start_link(Hosts, RequiredAcks, AckTimeout, ClientId) ->
+  start_link(Hosts, RequiredAcks, AckTimeout, ClientId, []).
 
--spec start_link([brod:host()], integer(), integer(), [term()]) ->
+-spec start_link([brod:host()], integer(), integer(), client_id(), [term()]) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout, Debug) ->
-  gen_server:start_link(?MODULE, [Hosts, RequiredAcks, AckTimeout, Debug],
-                        [{debug, Debug}]).
+start_link(Hosts, RequiredAcks, AckTimeout, ClientId, Debug) ->
+  Args = [Hosts, RequiredAcks, AckTimeout, ClientId, Debug],
+  gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
@@ -127,12 +129,13 @@ get_sockets(Pid) ->
   gen_server:call(Pid, get_sockets).
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, RequiredAcks, AckTimeout, Debug]) ->
+init([Hosts, RequiredAcks, AckTimeout, ClientId, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, #state{ hosts       = Hosts
              , debug       = Debug
              , acks        = RequiredAcks
              , ack_timeout = AckTimeout
+             , client_id   = ensure_binary(ClientId)
              }}.
 
 handle_call(stop, _From, State) ->
@@ -265,10 +268,10 @@ get_leader(Topic, Partition, State) ->
       connect(Topic, Partition, State)
   end.
 
-connect(Topic, Partition, State) ->
+connect(Topic, Partition, #state{client_id = ClientId, debug = Dbg} = State) ->
   case fetch_leader_broker_metadata(Topic, Partition, State) of
     {ok, #broker_metadata{host = H, port = P, node_id = LeaderId}} ->
-      {ok, Pid} = brod_sock:start_link(self(), H, P, State#state.debug),
+      {ok, Pid} = brod_sock:start_link(self(), H, P, ClientId, Dbg),
       Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
       Sockets = [Socket | State#state.sockets],
       Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
@@ -343,6 +346,10 @@ do_debug(Pid, Debug) ->
   {ok, _} = gen:call(Pid, system, {debug, Debug}),
   ok.
 
+ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
+ensure_binary(L) when is_list(L)   -> iolist_to_binary(L);
+ensure_binary(B) when is_binary(B) -> B.
+
 %% Tests -----------------------------------------------------------------------
 -include_lib("eunit/include/eunit.hrl").
 
@@ -351,15 +358,15 @@ do_debug(Pid, Debug) ->
 mock_brod_sock() ->
   meck:new(brod_sock, [passthrough]),
   meck:expect(brod_sock, start_link,
-              fun(_Parent, "h1", _Port, _Debug) -> {ok, p1};
-                 (_Parent, "h2", _Port, _Debug) -> {ok, p2};
-                 (_Parent, "h3", _Port, _Debug) -> {ok, p3}
+              fun(_Parent, "h1", _Port, _ClientId, _Debug) -> {ok, p1};
+                 (_Parent, "h2", _Port, _ClientId, _Debug) -> {ok, p2};
+                 (_Parent, "h3", _Port, _ClientId, _Debug) -> {ok, p3}
               end),
 
   meck:expect(brod_sock, start,
-              fun(_Parent, "h1", _Port, _Debug) -> {ok, p1};
-                 (_Parent, "h2", _Port, _Debug) -> {ok, p2};
-                 (_Parent, "h3", _Port, _Debug) -> {ok, p3}
+              fun(_Parent, "h1", _Port, _ClientId, _Debug) -> {ok, p1};
+                 (_Parent, "h2", _Port, _ClientId, _Debug) -> {ok, p2};
+                 (_Parent, "h3", _Port, _ClientId, _Debug) -> {ok, p3}
               end),
 
   meck:expect(brod_sock, stop, 1, ok),
