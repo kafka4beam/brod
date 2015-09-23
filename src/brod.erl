@@ -80,7 +80,7 @@ start_producer(Hosts) ->
   start_link_producer(Hosts).
 
 %% @deprecated
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout)
+%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
 -spec start_producer([host()], integer(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_producer(Hosts, RequiredAcks, AckTimeout) ->
@@ -125,8 +125,7 @@ start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
 %%     ClientId:
-%%        Atom or binary string (preferablly unique) identifier
-%%        of the client.
+%%        Atom or binary string (preferably unique) identifier of the client.
 -spec start_link_producer([host()], integer(), integer(), client_id()) ->
         {ok, pid()} | {error, any()}.
 start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
