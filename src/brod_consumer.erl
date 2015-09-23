@@ -258,10 +258,10 @@ has_error(#partition_messages{error_code = ErrorCode}) ->
 exec_callback(Callback, MessageSet) ->
   case erlang:fun_info(Callback, arity) of
     {arity, 1} ->
-      Callback(MessageSet);
+      try Callback(MessageSet) catch C:E -> erlang:C({E, erlang:get_stacktrace()}) end;
     {arity, 3} ->
       F = fun(#message{offset = Offset, key = K, value = V}) ->
-              Callback(Offset, K, V)
+              try Callback(Offset, K, V) catch C:E -> erlang:C({E, erlang:get_stacktrace()}) end
           end,
       lists:foreach(F, MessageSet#message_set.messages)
   end.
