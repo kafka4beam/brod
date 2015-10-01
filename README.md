@@ -105,3 +105,9 @@ await response and then close the connection.
     brod:get_metadata(Hosts, [Topic]).
     brod:get_offsets(Hosts, Topic, Partition).
     brod:fetch(Hosts, Topic, Partition, 1).
+
+## Standalone binary
+This will build a standalone binary with brod application
+
+    make escriptize
+    ./brod help

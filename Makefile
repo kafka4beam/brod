@@ -41,4 +41,7 @@ dialyze: $(DIALYZER_PLT)
 xref: compile
 	$(REBAR) xref
 
+escriptize: compile
+	@$(REBAR) escriptize
+
 # eof
