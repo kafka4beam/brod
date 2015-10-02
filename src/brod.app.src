@@ -1,7 +1,7 @@
 %% -*- mode:erlang -*-
 {application,brod,
  [{description,"Kafka client"},
-  {vsn,"1.4"},
+  {vsn,"1.4.1"},
   {registered,[]},
   {applications,[kernel,stdlib]},
   {env,[]},
