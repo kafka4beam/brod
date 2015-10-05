@@ -367,12 +367,12 @@ show_help() ->
   io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,kafka-3:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092  topic1,topic2\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1 topic\n", []),
-  io:format(user, "  ./brod get_offsets kafka-1 topic -1\n", []),
-  io:format(user, "  ./brod fetch kafka-1 topic 0 -1\n", []),
-  io:format(user, "  ./brod fetch kafka-1 topic 0 -1 1000 0 100000\n", []),
-  io:format(user, "  ./brod console_consumer kafka-1 topic 0 -1\n", []),
-  io:format(user, "  ./brod file_consumer kafka-1 topic 0 -1 /tmp/kafka-data\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1 topic1\n", []),
+  io:format(user, "  ./brod get_offsets kafka-1 topic1 0 -1 1\n", []),
+  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
+  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
+  io:format(user, "  ./brod console_consumer kafka-1 topic1 0 -1\n", []),
+  io:format(user, "  ./brod file_consumer kafka-1 topic1 0 -1 /tmp/kafka-data\n", []),
   ok.
 
 call_api(get_metadata, [HostsStr]) ->
