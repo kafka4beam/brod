@@ -59,6 +59,9 @@
         , simple_consumer/5
         ]).
 
+%% escript
+-export([main/1]).
+
 -export_type([host/0]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -340,7 +343,104 @@ simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
   ok = brod:consume(C, Callback, Offset),
   Pid.
 
+%% escript entry point
+main([]) ->
+  show_help();
+main(["help"]) ->
+  show_help();
+main(Args) ->
+  case length(Args) < 2 of
+    true  -> erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
+    false -> ok
+  end,
+  [F | Tail] = Args,
+  io:format("~p~n", [call_api(list_to_atom(F), Tail)]).
+
+show_help() ->
+  io:format(user, "Command line interface for brod.\n", []),
+  io:format(user, "General patterns:\n", []),
+  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> <function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host:port pair> <function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host name (9092 is used by default)> <function name> <function arguments>\n", []),
+  io:format(user, "\n", []),
+  io:format(user, "Examples:\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,kafka-3:9092\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1:9092\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1:9092  topic1,topic2\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1 topic1\n", []),
+  io:format(user, "  ./brod get_offsets kafka-1 topic1 0 -1 1\n", []),
+  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
+  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
+  io:format(user, "  ./brod console_consumer kafka-1 topic1 0 -1\n", []),
+  io:format(user, "  ./brod file_consumer kafka-1 topic1 0 -1 /tmp/kafka-data\n", []),
+  ok.
+
+call_api(get_metadata, [HostsStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  brod:get_metadata(Hosts);
+call_api(get_metadata, [HostsStr, TopicsStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  Topics = [list_to_binary(T) || T <- string:tokens(TopicsStr, ",")],
+  brod:get_metadata(Hosts, Topics);
+call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  brod:get_offsets(Hosts, list_to_binary(TopicStr), list_to_integer(PartitionStr));
+call_api(get_offsets, [HostsStr, TopicStr, PartitionStr, TimeStr, MaxOffsetStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  brod:get_offsets(Hosts,
+                   list_to_binary(TopicStr),
+                   list_to_integer(PartitionStr),
+                   list_to_integer(TimeStr),
+                   list_to_integer(MaxOffsetStr));
+call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  brod:fetch(Hosts,
+             list_to_binary(TopicStr),
+             list_to_integer(PartitionStr),
+             list_to_integer(OffsetStr));
+call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr,
+                 MaxWaitTimeStr, MinBytesStr, MaxBytesStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  brod:fetch(Hosts,
+             list_to_binary(TopicStr),
+             list_to_integer(PartitionStr),
+             list_to_integer(OffsetStr),
+             list_to_integer(MaxWaitTimeStr),
+             list_to_integer(MinBytesStr),
+             list_to_integer(MaxBytesStr));
+call_api(console_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  Pid = brod:console_consumer(Hosts,
+                              list_to_binary(TopicStr),
+                              list_to_integer(PartitionStr),
+                              list_to_integer(OffsetStr)),
+  MRef = erlang:monitor(process, Pid),
+  receive
+    {'DOWN', MRef, process, Pid, _} -> ok
+  end;
+call_api(file_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr, Filename]) ->
+  Hosts = parse_hosts_str(HostsStr),
+  Pid = brod:file_consumer(Hosts,
+                           list_to_binary(TopicStr),
+                           list_to_integer(PartitionStr),
+                           list_to_integer(OffsetStr),
+                           Filename),
+  MRef = erlang:monitor(process, Pid),
+  receive
+    {'DOWN', MRef, process, Pid, _} -> ok
+  end.
+
 %%%_* Internal functions -------------------------------------------------------
+parse_hosts_str(HostsStr) ->
+  F = fun(HostPortStr) ->
+          Pair = string:tokens(HostPortStr, ":"),
+          case Pair of
+            [Host, PortStr] -> {Host, list_to_integer(PortStr)};
+            [Host]          -> {Host, 9092}
+          end
+      end,
+  lists:map(F, string:tokens(HostsStr, ",")).
+
 connect_leader(Hosts, Topic, Partition) ->
   {ok, Metadata} = get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
