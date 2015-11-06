@@ -27,6 +27,8 @@
         , get_metadata/1
         , get_metadata/2
         , try_connect/1
+        , now_microsec/0
+        , is_pid_alive/1
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -67,6 +69,26 @@ fetch_response_to_message_set(#fetch_response{topics = [TopicFetchData]}) ->
               , partition = Partition
               , high_wm_offset = HighWmOffset
               , messages = Messages}.
+
+-spec now_microsec() -> integer().
+now_microsec() ->
+  {MegaSec, Sec, MicroSec} = now_tuple(),
+  (MegaSec * 1000000 * 1000000) + (Sec * 1000000) + MicroSec.
+
+-spec now_tuple() -> erlang:timestamp().
+-ifdef(otp_before_18).
+now_tuple() ->
+  erlang:now().
+-else.
+now_tuple() ->
+  erlang:timestamp().
+-endif.
+
+-spec is_pid_alive(pid() | any()) -> boolean().
+is_pid_alive(Pid) when is_pid(Pid) ->
+  is_process_alive(Pid);
+is_pid_alive(_) ->
+  false.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
