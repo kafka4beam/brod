@@ -42,13 +42,34 @@
 -define(EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND,
         'NotEnoughReplicasAfterAppendException').                           % 20
 
+-define(MAX_CORR_ID, 2147483647). % 2^31 - 1
+
 -type error_code() :: atom() | integer().
+
+-type leader_id() :: non_neg_integer().
+-type topic()     :: binary().
+-type partition() :: non_neg_integer().
+-type corr_id()   :: 0..?MAX_CORR_ID.
+-type offset()    :: integer().
+-type kafka_kv()  :: {binary(), binary()}.
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
                 , port    :: integer()
                 , node_id :: integer()
                 }).
+
+
+%% 'from' is handle cases when worker's buffer is full
+%% and we need to block user's process via {noreply, State}
+%% and then release via gen_server:reply
+-record(request, { ref        :: reference()
+                 , sender_pid :: pid()
+                 , from       :: term() % pretending it's opaque
+                 , topic      :: topic()
+                 , partition  :: partition()
+                 , data       :: [kafka_kv()]
+                 }).
 
 %%%_* metadata request ---------------------------------------------------------
 -record(metadata_request, {topics = [] :: [binary()]}).
@@ -57,14 +78,14 @@
 %% 'isrs' - 'in sync replicas', the subset of the replicas
 %% that are "caught up" to the leader
 -record(partition_metadata, { error_code :: error_code()
-                            , id         :: integer()
+                            , id         :: partition()
                             , leader_id  :: integer()
                             , replicas   :: [integer()]
                             , isrs       :: [integer()]
                             }).
 
 -record(topic_metadata, { error_code :: error_code()
-                        , name       :: binary()
+                        , name       :: topic()
                         , partitions :: [#partition_metadata{}]}).
 
 -record(broker_metadata, { node_id :: integer()
@@ -78,25 +99,24 @@
 
 %%%_* produce request ----------------------------------------------------------
 -ifdef(otp_before_17).
--type produce_request_data() :: [{binary(), dict()}].
+-type produce_request_data() :: [{topic(), dict()}].
 -else.
--type produce_request_data() :: [{binary(), dict:dict(integer(),
-                                                      [{binary(), binary()}])}].
+-type produce_request_data() :: [{topic(),
+                                  dict:dict(partition(), [kafka_kv()])}].
 -endif.
 
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()
-                         %% [{Topic, [dict(Partition -> [{K, V}])]}]
                          , data    :: produce_request_data()
                          }).
 
 %%%_* produce response ---------------------------------------------------------
--record(produce_offset, { partition  :: integer()
+-record(produce_offset, { partition  :: partition()
                         , error_code :: error_code()
-                        , offset     :: integer()
+                        , offset     :: offset()
                         }).
 
--record(produce_topic, { topic   :: binary()
+-record(produce_topic, { topic   :: topic()
                        , offsets :: [#produce_offset{}]
                        }).
 
@@ -106,19 +126,19 @@
 %% Protocol allows to request offsets for any number of topics and partitions
 %% at once, but we use only single pair assuming the most cases users spawn
 %% separate connections for each topic-partition.
--record(offset_request, { topic             :: binary()
-                        , partition         :: integer()
+-record(offset_request, { topic             :: topic()
+                        , partition         :: partition()
                         , time              :: integer()
                         , max_n_offsets = 1 :: integer()
                         }).
 
 %%%_* offset response ----------------------------------------------------------
--record(partition_offsets, { partition  :: integer()
+-record(partition_offsets, { partition  :: partition()
                            , error_code :: error_code()
-                           , offsets    :: [integer()]
+                           , offsets    :: [offset()]
                            }).
 
--record(offset_topic, { topic      :: binary()
+-record(offset_topic, { topic      :: topic()
                       , partitions :: [#partition_offsets{}]
                       }).
 
@@ -130,22 +150,22 @@
 %% separate connections for each topic-partition.
 -record(fetch_request, { max_wait_time :: integer()
                        , min_bytes     :: integer()
-                       , topic         :: binary()
-                       , partition     :: integer()
-                       , offset        :: integer()
+                       , topic         :: topic()
+                       , partition     :: partition()
+                       , offset        :: offset()
                        , max_bytes     :: integer()
                        }).
 
 %%%_* fetch response -----------------------------------------------------------
 %% definition of #message{} is in include/brod.hrl
--record(partition_messages, { partition      :: integer()
+-record(partition_messages, { partition      :: partition()
                             , error_code     :: error_code()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
                             , messages       :: [#message{}]
                             }).
 
--record(topic_fetch_data, { topic      :: binary()
+-record(topic_fetch_data, { topic      :: topic()
                           , partitions :: [#partition_messages{}]
                           }).
 
