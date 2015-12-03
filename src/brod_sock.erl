@@ -160,16 +160,6 @@ handle_msg({tcp_closed, _Sock}, _State, _) ->
   exit(tcp_closed);
 handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
   exit({tcp_error, Reason});
-%% when required_acks = 0 in produce request
-%% kafka will not send any response
-handle_msg({From, {send, #produce_request{acks = 0} = Request}},
-           #state{sock = Sock, client_id = ClientId} = State, Debug) ->
-  %% increment CorrId anyway
-  CorrId = next_corr_id(State#state.corr_id),
-  RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
-  ok = gen_tcp:send(Sock, RequestBin),
-  reply(From, ok),
-  ?MODULE:loop(State#state{corr_id = CorrId}, Debug);
 handle_msg({From, {send, Request}},
            #state{sock = Sock, client_id = ClientId} = State, Debug) ->
   CorrId = next_corr_id(State#state.corr_id),
