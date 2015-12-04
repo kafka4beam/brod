@@ -40,7 +40,7 @@ init(PermanentProducers) ->
   {ok, {{one_for_one, 0, 1}, Children}}.
 
 permanent_producer({ProducerId0, Args0}) ->
-  KafkaHosts = proplists:get_values(hosts, Args0),
+  KafkaHosts = proplists:get_value(hosts, Args0),
   case is_list(KafkaHosts) of
     true  -> ok;
     false -> erlang:throw({mandatory_prop_missing, Args0})
