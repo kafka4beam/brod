@@ -189,17 +189,18 @@ handle_cast(Msg, State) ->
                            [?MODULE, self(), Msg]),
   {noreply, State}.
 
-handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State0) ->
   %% protection agains restarts in a tight loop when cluster is unavailable
-  SupRestartsCnt = State#state.sup_restarts_cnt + 1,
+  SupRestartsCnt = State0#state.sup_restarts_cnt + 1,
   SleepMs = erlang:min(?SUP_RESTART_COOLDOWN_BASE_MS bsl SupRestartsCnt,
                        ?MAX_SUP_RESTART_COOLDOWN_MS),
   timer:sleep(SleepMs),
   error_logger:info_msg("Workers supervisor ~p crashed, recovering~n", [Pid]),
-  TabLeaders = State#state.t_leaders,
+  TabLeaders = State0#state.t_leaders,
   ets:delete_all_objects(TabLeaders),
   {ok, SupPid} = brod_producer_sup:start_link(),
-  {ok, Brokers} = refresh_metadata(State#state.hosts, TabLeaders),
+  {ok, Brokers} = refresh_metadata(State0#state.hosts, TabLeaders),
+  State = State0#state{sup_pid = SupPid, brokers = Brokers},
   BlockedList = queue:to_list(State#state.blocked_requests),
   %% loop over ?T_REQUESTS and create new leader queues
   %% skip requests which are in blocked_reqeusts queue
@@ -228,9 +229,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State) ->
         Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
         ok = spawn_worker(Broker, State)
     end, LeaderQueues),
-  {noreply, State#state{ sup_pid = SupPid
-                       , brokers = Brokers
-                       , leader_queues = LeaderQueues
+  {noreply, State#state{ leader_queues = LeaderQueues
                        , sup_restarts_cnt = SupRestartsCnt}};
 handle_info({{Ref, WorkerPid}, ack}, State) ->
   [Request] = ets:lookup(?T_REQUESTS, Ref),
@@ -315,7 +314,7 @@ spawn_worker(#broker_metadata{} = Broker, State) ->
   Options = State#state.options,
   Debug = State#state.debug,
   Args = [self(), Id, Host, Port, Options, Debug],
-  case brod_producer_sup:start_worker(Args) of
+  case brod_producer_sup:start_worker(State#state.sup_pid, Args) of
     {ok, _Pid} ->
       ok;
     Error ->
