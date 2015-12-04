@@ -25,20 +25,18 @@
 
 %% API
 -export([ start_link/0
-        , start_worker/1
+        , start_worker/2
         ]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
--define(SERVER, ?MODULE).
-
 %%%_* API functions ============================================================
 start_link() ->
-  supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+  supervisor:start_link(?MODULE, []).
 
-start_worker(Args) ->
-  supervisor:start_child(?SERVER, Args).
+start_worker(SupPid, Args) ->
+  supervisor:start_child(SupPid, Args).
 
 %%%_* Supervisor callbacks =====================================================
 init([]) ->

@@ -184,7 +184,7 @@ handle_cast({produce, RequestRef}, #state{acks = 0} = State) ->
   Data0 = Request#request.data,
   Data = [{Topic, dict:append_list(Partition, Data0, dict:new())}],
   %% crash on error
-  ok = send_request(SocketPid, Acks, AckTimeout, Data),
+  {ok, _} = send_request(SocketPid, Acks, AckTimeout, Data),
   ack_request(State#state.parent_pid, RequestRef),
   {noreply, State};
 handle_cast({produce, RequestRef}, State0) ->
