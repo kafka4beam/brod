@@ -82,17 +82,15 @@ send(Pid, Request) ->
   call(Pid, {send, Request}).
 
 -spec send_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
+send_sync(Pid, #produce_request{acks = 0} = Request, _Timeout) ->
+  {ok, _CorrId} = send(Pid, Request),
+  ok;
 send_sync(Pid, Request, Timeout) ->
   {ok, CorrId} = send(Pid, Request),
-  case Request#produce_request.acks =:= 0 of
-    true ->
-      ok;
-    false ->
-      receive
-        {msg, Pid, CorrId, Response} -> {ok, Response}
-      after
-        Timeout -> {error, timeout}
-      end
+  receive
+    {msg, Pid, CorrId, Response} -> {ok, Response}
+  after
+    Timeout -> {error, timeout}
   end.
 
 -spec stop(pid()) -> ok | {error, any()}.
