@@ -27,10 +27,7 @@
         , stop/1
         ]).
 
-%% application callback
-start(_StartType, _StartArgs) -> start().
-
-%% @doc Start brod application.
+%% @doc Application callback
 %%
 %% Permanent producers can be configured in app env (sys.config).
 %% A minimal example of app env with permanent producer args:
@@ -43,11 +40,14 @@ start(_StartType, _StartArgs) -> start().
 %% @see brod:start_link_producer/2 for more info about all producer args
 %%
 %% @end
-start() ->
-  _ = application:load(brod), %% ensure loaded
+start(_StartType, _StartArgs) ->
   %% if no producer is configured in app env, start the supervisor empty
   PermanentProducers = application:get_env(brod, producers, _Default = []),
   brod_sup:start_link(PermanentProducers).
+
+%% @doc Start brod application.
+start() ->
+  application:start(brod).
 
 stop(_State) -> ok.
 
