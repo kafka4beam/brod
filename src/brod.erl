@@ -79,7 +79,15 @@ start_link_producer(Hosts) ->
 %%        list of "bootstrap" kafka nodes, {"hostname", 9092}
 %%      Options:
 %%        list of tuples {atom(), any()} where atom can be:
-%%      required_acks:
+%%      producer_id (optional)
+%%        The producer PID is regisgred using this name if given.
+%%        This is mandatory for permanent producers configured in app env.
+%%        See brod_sup.erl for more info.
+%%      client_id (optional, default = ?DEFAULT_CLIENT_ID):
+%%        Atom or binary string (preferably unique) identifier of the client,
+%%        This ID is used by kafka broker for per-client statistic data
+%%        collection.
+%%      required_acks (optional, default = -1):
 %%        How many acknowledgements the kafka broker should receive
 %%        from the clustered replicas before responding to the
 %%        producer.
@@ -92,8 +100,7 @@ start_link_producer(Hosts) ->
 %%        number > 1 the broker will block waiting for this number of
 %%        acknowledgements to occur (but the broker will never wait
 %%        for more acknowledgements than there are in-sync replicas).
-%%        Default is -1.
-%%      ack_timeout:
+%%      ack_timeout (optional, default = 1000 ms):
 %%        Maximum time in milliseconds the broker can await the
 %%        receipt of the number of acknowledgements in
 %%        RequiredAcks. The timeout is not an exact limit on
@@ -104,18 +111,13 @@ start_link_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
-%%        Default is 1000 ms.
-%%     max_leader_queue_len:
+%%     max_leader_queue_len (optional, default = 32):
 %%        How many requests sent to a kafka broker can stay
 %%        unacknowledged by a broker before blocking producing thread.
-%%        Default: 32
-%%     max_requests_in_flight:
+%%     max_requests_in_flight (optional, default = 5):
 %%        Worker process will be sending produce reqeusts to kafka
 %%        without waiting for acknowledgements of a previous one.
 %%        This is to control how many such requests can be sent.
-%%        Default: 5
-%%     client_id:
-%%        Atom or binary string (preferably unique) identifier of the client.
 -spec start_link_producer([host()], proplists:proplist()) ->
                              {ok, pid()} | {error, any()}.
 start_link_producer(Hosts, Options) ->

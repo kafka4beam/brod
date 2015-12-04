@@ -86,7 +86,12 @@ start_link(Hosts, Options) ->
 -spec start_link([brod:host()], proplists:proplist(), [term()]) ->
                     {ok, pid()} | {error, any()}.
 start_link(Hosts, Options, Debug) ->
-  gen_server:start_link(?MODULE, [Hosts, Options, Debug], [{debug, Debug}]).
+  case proplists:get_value(producer_id, Options) of
+    undefined ->
+      gen_server:start_link(?MODULE, [Hosts, Options, Debug], [{debug, Debug}]);
+    ProducerId when is_atom(ProducerId) ->
+      gen_server:start_link({local, ProducerId}, ?MODULE, [Hosts, Options, Debug], [{debug, Debug}])
+  end.
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
