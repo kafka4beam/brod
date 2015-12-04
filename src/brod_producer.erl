@@ -55,6 +55,7 @@
                , debug            :: [term()]
                , sup_pid          :: pid()
                , options          :: proplists:proplist()
+               , t_leaders        :: ets:tab()
                , blocked_requests :: queue:queue()
                , brokers          :: [#broker_metadata{}]
                , workers          :: [{leader_id(), pid()}]
@@ -70,8 +71,6 @@
 
 -define(DEFAULT_MAX_LEADER_QUEUE_LEN, 32).
 
-%% ets table {topic, partition} -> #broker_metadata{}
--define(T_LEADERS, t_leaders).
 %% ets table to keep incoming requests so that we
 %% can resend data to kafka in case of leader rebalancing
 %% and other errors we can handle here
@@ -112,15 +111,16 @@ init([Hosts, Options, Debug]) ->
   erlang:process_flag(trap_exit, true),
   MaxLeaderQueueLen = proplists:get_value(max_leader_queue_len, Options,
                                           ?DEFAULT_MAX_LEADER_QUEUE_LEN),
-  ets:new(?T_LEADERS, [protected, named_table]),
+  TabLeaders = ets:new(t_leaders, [protected]),
   ets:new(?T_REQUESTS, [protected, named_table, ordered_set,
                         {keypos, #request.ref}]),
   {ok, SupPid} = brod_producer_sup:start_link(),
-  {ok, Brokers} = refresh_metadata(Hosts),
+  {ok, Brokers} = refresh_metadata(Hosts, TabLeaders),
   {ok, #state{ hosts            = Hosts
              , debug            = Debug
              , sup_pid          = SupPid
              , options          = Options
+             , t_leaders        = TabLeaders
              , blocked_requests = queue:new()
              , brokers          = Brokers
              , workers          = []
@@ -137,7 +137,7 @@ handle_call({produce, Ref, SenderPid, Topic, Partition, KVList},
               , partition  = Partition
               , data       = KVList},
   ets:insert(?T_REQUESTS, R),
-  {ok, LeaderId} = get_leader_id(Topic, Partition),
+  {ok, LeaderId} = get_leader_id(State#state.t_leaders, Topic, Partition),
   case lists:keyfind(LeaderId, 1, State#state.workers) of
     {_, WorkerPid} ->
       {_, LeaderQueue} = lists:keyfind(LeaderId, 1, State#state.leader_queues),
@@ -161,13 +161,14 @@ handle_call({subscribe, WorkerPid, LeaderId}, _From, State0) ->
   Workers =
     lists:keystore(LeaderId, 1, State0#state.workers, {LeaderId, WorkerPid}),
   State = State0#state{workers = Workers},
+  TabLeaders = State#state.t_leaders,
   EmptyQueue = queue:new(),
   case lists:keyfind(LeaderId, 1, State#state.leader_queues) of
     Res when Res =:= false orelse Res =:= EmptyQueue ->
       %% try to unblock producers when there are no pending requests
       Blocked0 = State#state.blocked_requests,
       {Queue, Blocked} =
-        maybe_unblock(LeaderId, WorkerPid, EmptyQueue, Blocked0),
+        maybe_unblock(TabLeaders, LeaderId, WorkerPid, EmptyQueue, Blocked0),
       LeaderQueues = [{LeaderId, Queue} | State#state.leader_queues],
       {reply, ok, State#state{ leader_queues = LeaderQueues
                              , blocked_requests = Blocked
@@ -195,9 +196,10 @@ handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State) ->
                        ?MAX_SUP_RESTART_COOLDOWN_MS),
   timer:sleep(SleepMs),
   error_logger:info_msg("Workers supervisor ~p crashed, recovering~n", [Pid]),
-  ets:delete_all_objects(?T_LEADERS),
+  TabLeaders = State#state.t_leaders,
+  ets:delete_all_objects(TabLeaders),
   {ok, SupPid} = brod_producer_sup:start_link(),
-  {ok, Brokers} = refresh_metadata(State#state.hosts),
+  {ok, Brokers} = refresh_metadata(State#state.hosts, TabLeaders),
   BlockedList = queue:to_list(State#state.blocked_requests),
   %% loop over ?T_REQUESTS and create new leader queues
   %% skip requests which are in blocked_reqeusts queue
@@ -207,7 +209,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State) ->
             false ->
               Topic = R#request.topic,
               Partition = R#request.partition,
-              {ok, LeaderId} = get_leader_id(Topic, Partition),
+              {ok, LeaderId} = get_leader_id(TabLeaders, Topic, Partition),
               case lists:keyfind(LeaderId, 1, LeaderQueues) of
                 {_, Q} ->
                   lists:keystore(LeaderId, 1, LeaderQueues,
@@ -238,8 +240,9 @@ handle_info({{Ref, WorkerPid}, ack}, State) ->
   {_, LeaderQueue0} = lists:keyfind(LeaderId, 1, State#state.leader_queues),
   {{value, Ref}, LeaderQueue1} = queue:out(LeaderQueue0),
   Blocked0 = State#state.blocked_requests,
+  TabLeaders = State#state.t_leaders,
   {LeaderQueue, Blocked} =
-    maybe_unblock(LeaderId, WorkerPid, LeaderQueue1, Blocked0),
+    maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue1, Blocked0),
   LeaderQueues = lists:keystore(LeaderId, 1, State#state.leader_queues,
                                 {LeaderId, LeaderQueue}),
   {noreply, State#state{ blocked_requests = Blocked
@@ -264,28 +267,30 @@ resend_outstanding(WorkerPid, [Ref | Tail]) ->
   ok = brod_producer_worker:produce(WorkerPid, Ref),
   resend_outstanding(WorkerPid, Tail).
 
-maybe_unblock(LeaderId, WorkerPid, LeaderQueue, BlockedQueue) ->
+maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue, BlockedQueue) ->
   L = queue:to_list(BlockedQueue),
-  maybe_unblock(LeaderId, WorkerPid, LeaderQueue, L, []).
+  maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue, L, []).
 
-maybe_unblock(_LeaderId, _WorkerPid, LeaderQueue, [], Acc) ->
+maybe_unblock(_TabLeaders, _LeaderId, _WorkerPid, LeaderQueue, [], Acc) ->
   {LeaderQueue, queue:from_list(lists:reverse(Acc))};
-maybe_unblock(LeaderId, WorkerPid, LeaderQueue, [{Ref, From} | Tail], Acc) ->
+maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue,
+              [{Ref, From} | Tail], Acc) ->
   [[Topic, Partition]] = ets:match(?T_REQUESTS, #request{ ref = Ref
                                                         , topic = '$1'
                                                         , partition = '$2'
                                                         , _ = '_'}),
-  case get_leader_id(Topic, Partition) of
+  case get_leader_id(TabLeaders, Topic, Partition) of
     {ok, LeaderId} ->
       ok = brod_producer_worker:produce(WorkerPid, Ref),
       gen_server:reply(From, {ok, Ref}),
-      maybe_unblock(LeaderId, WorkerPid, queue:in(Ref, LeaderQueue), Tail, Acc);
+      maybe_unblock(TabLeaders, LeaderId, WorkerPid,
+                    queue:in(Ref, LeaderQueue), Tail, Acc);
     _ ->
-      maybe_unblock(LeaderId, WorkerPid, Tail, [Ref | Acc])
+      maybe_unblock(TabLeaders, LeaderId, WorkerPid, Tail, [Ref | Acc])
   end.
 
-get_leader_id(Topic, Partition) ->
-  case ets:lookup(?T_LEADERS, {Topic, Partition}) of
+get_leader_id(Tab, Topic, Partition) ->
+  case ets:lookup(Tab, {Topic, Partition}) of
     [{_, #broker_metadata{node_id = Id}}] ->
       {ok, Id};
     [] ->
@@ -293,7 +298,7 @@ get_leader_id(Topic, Partition) ->
   end.
 
 spawn_worker(Topic, Partition, State) ->
-  case ets:lookup(?T_LEADERS, {Topic, Partition}) of
+  case ets:lookup(State#state.t_leaders, {Topic, Partition}) of
     [{_, #broker_metadata{} = Broker}] ->
       spawn_worker(Broker, State);
     [] ->
@@ -317,15 +322,15 @@ spawn_worker(#broker_metadata{} = Broker, State) ->
       {error, Error}
   end.
 
--spec refresh_metadata([brod:host()]) -> ok.
-refresh_metadata(Hosts) ->
+-spec refresh_metadata([brod:host()], ets:tab()) -> ok.
+refresh_metadata(Hosts, TabLeaders) ->
   {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
-  ets:match_delete(?T_LEADERS, '_'),
+  ets:match_delete(TabLeaders, '_'),
   %% fill in {Topic, Partition} -> Leader mapping table
   [ begin
       Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
-      ets:insert(?T_LEADERS, {{T, P}, Broker})
+      ets:insert(TabLeaders, {{T, P}, Broker})
     end || #topic_metadata{name = T, partitions = PS} <- Topics,
            #partition_metadata{leader_id = Id, id = P} <- PS
   ],
