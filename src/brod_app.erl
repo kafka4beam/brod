@@ -28,22 +28,8 @@
         ]).
 
 %% @doc Application callback
-%%
-%% Permanent producers can be configured in app env (sys.config).
-%% A minimal example of app env with permanent producer args:
-%%    [ { producers
-%%      , [ {producer_id_1, [{hosts, [{"localhost", 9092}]}]}
-%%        , {producer_id_2, ...}
-%%        ]
-%%      }
-%%    ].
-%% @see brod:start_link_producer/2 for more info about all producer args
-%%
-%% @end
 start(_StartType, _StartArgs) ->
-  %% if no producer is configured in app env, start the supervisor empty
-  PermanentProducers = application:get_env(brod, producers, _Default = []),
-  brod_sup:start_link(PermanentProducers).
+  brod_sup:start_link().
 
 %% @doc Start brod application.
 start() ->

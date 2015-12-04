@@ -79,10 +79,6 @@ start_link_producer(Hosts) ->
 %%        list of "bootstrap" kafka nodes, {"hostname", 9092}
 %%      Options:
 %%        list of tuples {atom(), any()} where atom can be:
-%%      producer_id (optional)
-%%        The producer PID is regisgred using this name if given.
-%%        This is mandatory for permanent producers configured in app env.
-%%        See brod_sup.erl for more info.
 %%      client_id (optional, default = ?DEFAULT_CLIENT_ID):
 %%        Atom or binary string (preferably unique) identifier of the client,
 %%        This ID is used by kafka broker for per-client statistic data
