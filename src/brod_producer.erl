@@ -99,14 +99,15 @@ start_link(Hosts, RequiredAcks, AckTimeout, ClientId, Debug) ->
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
-  gen_server:call(Pid, stop).
+  gen_server:call(Pid, stop, infinity).
 
 -spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
                  {ok, reference()}.
 produce(Pid, Topic, Partition, KVList) ->
   Sender = self(),
   Ref = erlang:make_ref(),
-  gen_server:call(Pid, {produce, Sender, Ref, Topic, Partition, KVList}).
+  gen_server:call(Pid, {produce, Sender, Ref, Topic, Partition, KVList},
+                  infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable debugging on producer and its connection to a broker
@@ -126,7 +127,7 @@ no_debug(Pid) ->
 
 -spec get_sockets(pid()) -> {ok, [#socket{}]}.
 get_sockets(Pid) ->
-  gen_server:call(Pid, get_sockets).
+  gen_server:call(Pid, get_sockets, infinity).
 
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, RequiredAcks, AckTimeout, ClientId, Debug]) ->
@@ -341,9 +342,9 @@ do_debug(Pid, Debug) ->
   {ok, Sockets} = get_sockets(Pid),
   lists:foreach(
     fun(#socket{pid = SocketPid}) ->
-        {ok, _} = gen:call(SocketPid, system, {debug, Debug})
+        {ok, _} = gen:call(SocketPid, system, {debug, Debug}, infinity)
     end, Sockets),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}),
+  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
 
 ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
