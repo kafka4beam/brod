@@ -64,15 +64,19 @@ encode(ClientId, CorrId, Request) ->
   Size = byte_size(Bin),
   <<Size:32/?INT, Bin/binary>>.
 
-api_key(#metadata_request{}) -> ?API_KEY_METADATA;
-api_key(#produce_request{})  -> ?API_KEY_PRODUCE;
-api_key(#offset_request{})   -> ?API_KEY_OFFSET;
-api_key(#fetch_request{})    -> ?API_KEY_FETCH.
+api_key(#metadata_request{})          -> ?API_KEY_METADATA;
+api_key(#produce_request{})           -> ?API_KEY_PRODUCE;
+api_key(#offset_request{})            -> ?API_KEY_OFFSET;
+api_key(#fetch_request{})             -> ?API_KEY_FETCH;
+api_key(#offset_commit_request{})     -> ?API_KEY_OFFSET_COMMIT;
+api_key(#offset_fetch_request{})      -> ?API_KEY_OFFSET_FETCH.
 
-decode(?API_KEY_METADATA, Bin) -> metadata_response(Bin);
-decode(?API_KEY_PRODUCE, Bin)  -> produce_response(Bin);
-decode(?API_KEY_OFFSET, Bin)   -> offset_response(Bin);
-decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
+decode(?API_KEY_METADATA, Bin)          -> metadata_response(Bin);
+decode(?API_KEY_PRODUCE, Bin)           -> produce_response(Bin);
+decode(?API_KEY_OFFSET, Bin)            -> offset_response(Bin);
+decode(?API_KEY_FETCH, Bin)             -> fetch_response(Bin);
+decode(?API_KEY_OFFSET_COMMIT, Bin)     -> offset_commit_response(Bin);
+decode(?API_KEY_OFFSET_FETCH, Bin)      -> offset_fetch_response(Bin).
 
 is_error(X) -> brod_kafka_errors:is_error(X).
 
@@ -93,7 +97,11 @@ encode(#produce_request{} = Request)  ->
 encode(#offset_request{} = Request)  ->
   offset_request_body(Request);
 encode(#fetch_request{} = Request)  ->
-  fetch_request_body(Request).
+  fetch_request_body(Request);
+encode(#offset_commit_request{} = Request)  ->
+  ocr_body(Request);
+encode(#offset_fetch_request{} = Request)  ->
+  offset_fetch_request_body(Request).
 
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
@@ -356,6 +364,94 @@ parse_bytes(-1, Bin) ->
 parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
   {binary:copy(Bytes), Bin}.
+
+%%%_* offset commit request ----------------------------------------------------
+ocr_body(#offset_commit_request{} = R) ->
+  Version = R#offset_commit_request.version,
+  Head = ocr_head(R),
+  Topics = R#offset_commit_request.topics,
+  TopicsCount = erlang:length(Topics),
+  Acc = <<Head/binary,
+          TopicsCount:32/?INT>>,
+  encode_ocr_topics(Version, Topics, Acc).
+
+ocr_head(#offset_commit_request{version = 0} = R) ->
+  ConsumerGroupId = R#offset_commit_request.consumer_group_id,
+  ConsumerGroupIdSize = erlang:size(ConsumerGroupId),
+  <<ConsumerGroupIdSize:16/?INT,
+    ConsumerGroupId/binary>>;
+ocr_head(#offset_commit_request{version = 1} = R) ->
+  ConsumerGroupId = R#offset_commit_request.consumer_group_id,
+  ConsumerGroupIdSize = erlang:size(ConsumerGroupId),
+  ConsumerGroupGenId = R#offset_commit_request.consumer_group_generation_id,
+  ConsumerGroupGenIdSize = erlang:size(ConsumerGroupGenId),
+  ConsumerId = R#offset_commit_request.consumer_id,
+  ConsumerIdSize = erlang:size(ConsumerId),
+  <<ConsumerGroupIdSize:16/?INT,
+    ConsumerGroupId/binary,
+    ConsumerGroupGenIdSize:16/?INT,
+    ConsumerGroupGenId/binary,
+    ConsumerIdSize:16/?INT,
+    ConsumerId/binary>>;
+ocr_head(#offset_commit_request{version = 2} = R) ->
+  ConsumerGroupId = R#offset_commit_request.consumer_group_id,
+  ConsumerGroupIdSize = erlang:size(ConsumerGroupId),
+  ConsumerGroupGenId = R#offset_commit_request.consumer_group_generation_id,
+  ConsumerGroupGenIdSize = erlang:size(ConsumerGroupGenId),
+  ConsumerId = R#offset_commit_request.consumer_id,
+  ConsumerIdSize = erlang:size(ConsumerId),
+  RetentionTime = R#offset_commit_request.retention_time,
+  <<ConsumerGroupIdSize:16/?INT,
+    ConsumerGroupId/binary,
+    ConsumerGroupGenIdSize:16/?INT,
+    ConsumerGroupGenId/binary,
+    ConsumerIdSize:16/?INT,
+    ConsumerId/binary,
+    RetentionTime:64/?INT>>.
+
+encode_ocr_topics(_Version, [], Acc) ->
+  Acc;
+encode_ocr_topics(Version, [T | Topics], Acc0) ->
+  Topic = T#offset_commit_request_topic.topic,
+  Size = erlang:size(Topic),
+  Partitions = T#offset_commit_request_topic.partitions,
+  PartitionsCount = erlang:length(Partitions),
+  Acc1 = <<Acc0/binary, Size:16/?INT, Topic/binary,
+           PartitionsCount:32/?INT>>,
+  Acc = encode_ocr_partitions(Version, Partitions, Acc1),
+  encode_ocr_topics(Version, Topics, Acc).
+
+encode_ocr_partitions(_Version, [], Acc) ->
+  Acc;
+encode_ocr_partitions(Version = 1, [P | Partitions], Acc0) ->
+  Partition = P#offset_commit_request_partition.partition,
+  Offset = P#offset_commit_request_partition.offset,
+  Timestamp = P#offset_commit_request_partition.timestamp,
+  Metadata = P#offset_commit_request_partition.metadata,
+  MetadataSize = erlang:size(Metadata),
+  Acc = <<Acc0/binary,
+          Partition:32/?INT,
+          Offset:64/?INT,
+          Timestamp:64/?INT,
+          MetadataSize:16/?INT,
+          Metadata/binary>>,
+  encode_ocr_partitions(Version, Partitions, Acc);
+encode_ocr_partitions(Version, [P | Partitions], Acc0) ->
+  Partition = P#offset_commit_request_partition.partition,
+  Offset = P#offset_commit_request_partition.offset,
+  Metadata = P#offset_commit_request_partition.metadata,
+  MetadataSize = erlang:size(Metadata),
+  Acc = <<Acc0/binary,
+          Partition:32/?INT,
+          Offset:64/?INT,
+          MetadataSize:16/?INT,
+          Metadata/binary>>,
+  encode_ocr_partitions(Version, Partitions, Acc).
+
+offset_commit_response(_) -> ok.
+
+offset_fetch_response(_) -> ok.
+offset_fetch_request_body(_) -> ok.
 
 %%%_* Tests ====================================================================
 

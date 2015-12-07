@@ -505,6 +505,16 @@ t_decode_fetch(Config) when is_list(Config) ->
   ?assertEqual(R3, brod_kafka:decode(?API_KEY_FETCH, Bin4)),
   ok.
 
+encode_ocr_v0_test() ->
+  GroupId = <<"testme">>,
+  GroupIdSize = size(GroupId),
+  R0 = #offset_commit_request{ version = 0
+                             , consumer_group_id = GroupId
+                             , topics = []},
+  ?assertMatch(<<?i16(GroupIdSize), GroupId:GroupIdSize/binary, ?i32(0)>>,
+               brod_kafka:encode(R0)),
+  ok.
+
 %%%_* Help functions ===========================================================
 
 msgcrc(<<>>, <<>>) ->
