@@ -22,9 +22,14 @@
 
 -module(brod).
 
+%% Client API
+-export([ start_client/2
+        ]).
+
 %% Producer API
--export([ start_link_producer/1
-        , start_link_producer/2
+-export([ start_link_partition_producer/4
+        , start_link_producer/3
+        , start_link_producer/4
         , stop_producer/1
         , produce/3
         , produce/4
@@ -59,30 +64,28 @@
 %% escript
 -export([main/1]).
 
--export_type([host/0]).
-
 %%%_* Includes -----------------------------------------------------------------
--include("brod.hrl").
 -include("brod_int.hrl").
 
-%%%_* Types --------------------------------------------------------------------
--type host() :: {string(), integer()}.
-
 %%%_* API ----------------------------------------------------------------------
-%% @equiv start_link_producer(Hosts, [])
--spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
-start_link_producer(Hosts) ->
-  start_link_producer(Hosts, []).
+
+%5 @doc Start a client under supervisor brod_sup.
+%% @see brod_sup for permanent clients.
+%% @end
+-spec start_client(client_id(), client_config()) -> ok | {error, any()}.
+start_client(ClientId, Config) ->
+  brod_sup:start_client(ClientId, Config).
 
 %% @doc Start a process to publish messages to kafka.
+%%      ClientId:
+%%        Client ID used to register the client process pid.
+%%        Also for statistic data collection in kafka.
 %%      Hosts:
 %%        list of "bootstrap" kafka nodes, {"hostname", 9092}
-%%      Options:
+%%      Topic:
+%%        Topic name to produce data to.
+%%      Config:
 %%        list of tuples {atom(), any()} where atom can be:
-%%      client_id (optional, default = ?DEFAULT_CLIENT_ID):
-%%        Atom or binary string (preferably unique) identifier of the client,
-%%        This ID is used by kafka broker for per-client statistic data
-%%        collection.
 %%      required_acks (optional, default = -1):
 %%        How many acknowledgements the kafka broker should receive
 %%        from the clustered replicas before responding to the
@@ -107,17 +110,40 @@ start_link_producer(Hosts) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
-%%     max_leader_queue_len (optional, default = 32):
-%%        How many requests sent to a kafka broker can stay
-%%        unacknowledged by a broker before blocking producing thread.
-%%     max_requests_in_flight (optional, default = 5):
-%%        Worker process will be sending produce reqeusts to kafka
-%%        without waiting for acknowledgements of a previous one.
-%%        This is to control how many such requests can be sent.
--spec start_link_producer([host()], proplists:proplist()) ->
-                             {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, Options) ->
-  brod_producer:start_link(Hosts, Options).
+%%     partition_buffer_limit(optional, default = 32):
+%%        How many requests (per-partition) can be buffered without
+%%        blocking the caller.
+%%     partition_onwire_limit(optional, default = 8):
+%%        How many requests (per-partition) can be sent to kafka broker
+%%        asynchronously before receiving ACKs from broker.
+%%     message_set_bytes_limit(optional, default = 1M):
+%%        In case callers are producing faster than brokers can handle
+%%        (or congestion on wire), try to accumulate small requests as
+%%        much as possible but not exceeding message_set_bytes_limit.
+%% @end
+-spec start_link_producer(client_id(), [endpoint()],
+                          topic(), producer_config()) -> {ok, pid()}.
+start_link_producer(ClientId, Hosts, Topic, Config) ->
+  ok = ensure_client(ClientId, Hosts),
+  start_link_producer(ClientId, Topic, Config).
+
+%% @doc Start a producer for a specific topic.
+%% Assuming client has been started already, @see start_client/2, or
+%% @see brod_sup:init/1 for app-env (sys.config) staticly configured clients.
+%% @end
+-spec start_link_producer(client_id(), topic(), producer_config()) ->
+        {ok, pid()}.
+start_link_producer(ClientId, Topic, Config) ->
+  brod_producer:start_link(ClientId, Topic, Config).
+
+%% @doc Start a producer for a specific partition.
+%% Assuming client has been started already, @see start_client/2, or
+%% @see brod_sup:init/1 for app-env (sys.config) staticly configured clients.
+%% @end
+-spec start_link_partition_producer(
+        client_id(), topic(), partition(), producer_config()) -> {ok, pid()}.
+start_link_partition_producer(ClientId, Topic, Partition, Config) ->
+  brod_partition_producer:start_link(ClientId, Topic, Partition, Config).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -178,13 +204,13 @@ produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)
--spec start_consumer([host()], binary(), integer()) ->
+-spec start_consumer([endpoint()], binary(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition).
 
 %% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
--spec start_link_consumer([host()], binary(), integer()) ->
+-spec start_link_consumer([endpoint()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition, 1000).
@@ -192,7 +218,7 @@ start_link_consumer(Hosts, Topic, Partition) ->
 %% @doc Start consumer process
 %%      SleepTimeout: how much time to wait before sending next fetch
 %%      request when we got no messages in the last one
--spec start_link_consumer([host()], binary(), integer(), integer()) ->
+-spec start_link_consumer([endpoint()], binary(), integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
   brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
@@ -252,24 +278,24 @@ consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
--spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
+-spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
--spec get_metadata([host()], [binary()]) ->
+-spec get_metadata([endpoint()], [binary()]) ->
                       {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
--spec get_offsets([host()], binary(), non_neg_integer()) ->
+-spec get_offsets([endpoint()], binary(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([host()], binary(), non_neg_integer(),
+-spec get_offsets([endpoint()], binary(), non_neg_integer(),
                   integer(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
@@ -283,13 +309,13 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   Response.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
--spec fetch([host()], binary(), non_neg_integer(), integer()) ->
+-spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
                {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([host()], binary(), non_neg_integer(),
+-spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
                {ok, #message_set{}} | {error, any()}.
@@ -485,6 +511,14 @@ simple_consumer_loop(C, Io) ->
     Other ->
       io:format(Io, "\nStrange msg: ~p\n", [Other]),
       simple_consumer_loop(C, Io)
+  end.
+
+-spec ensure_client(client_id(), [endpoint()]) -> ok | no_return().
+ensure_client(ClientId, Endpoints) ->
+  _ = brod:start(), %% ensure started
+  case brod_sup:start_client(ClientId, [{endpoints, Endpoints}]) of
+    ok                       -> ok;
+    {error, already_started} -> ok
   end.
 
 %%% Local Variables:

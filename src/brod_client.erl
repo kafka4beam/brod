@@ -40,8 +40,6 @@
 -include_lib("stdlib/include/ms_transform.hrl").
 -include("brod_int.hrl").
 
--type endpoint() :: {hostname(), portnum()}.
-
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 
 -define(dead_since(TS, REASON), {dead_since, TS, REASON}).
@@ -61,8 +59,9 @@
 
 %%%_* APIs ---------------------------------------------------------------------
 
-start_link(ClientId, Args) when is_atom(ClientId) ->
-  gen_server:start_link({local, ClientId}, ?MODULE, {ClientId, Args}, []).
+-spec start_link(client_id(), client_config()) -> {ok, pid()}.
+start_link(ClientId, Config) when is_atom(ClientId) ->
+  gen_server:start_link({local, ClientId}, ?MODULE, {ClientId, Config}, []).
 
 -spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(ClientId, Topic) ->
@@ -78,9 +77,9 @@ connect_broker(ClientId, Host, Port) ->
 
 %%%_* gen_server callbacks -----------------------------------------------------
 
-init({ClientId, Args}) ->
+init({ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
-  Endpoints = proplists:get_value(endpoints, Args),
+  Endpoints = proplists:get_value(endpoints, Config),
   true = is_list(Endpoints) andalso length(Endpoints) > 0, %% assert
   {ok, #state{ client_id = ClientId
              , endpoints = Endpoints

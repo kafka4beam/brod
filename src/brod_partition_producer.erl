@@ -23,8 +23,8 @@
 -module(brod_partition_producer).
 -behaviour(gen_server).
 
--export([ start_link/1
-        , produce/4
+-export([ start_link/4
+        , produce/3
         ]).
 
 -export([ code_change/3
@@ -41,10 +41,10 @@
 
 %% by default, keep 32 message in buffer
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 32).
-%% by default, allow 16 message-sets on wire
--define(DEFAULT_PARITION_ONWIRE_LIMIT, 16).
+%% by default, allow 8 message-sets on wire
+-define(DEFAULT_PARITION_ONWIRE_LIMIT, 8).
 %% by default, send 1 MB message-set
--define(DEFAULT_MESSAGE_SET_BYTES, 1048576).
+-define(DEFAULT_MESSAGE_SET_BYTES_LIMIT, 1048576).
 %% by default, require acks from all ISR
 -define(DEFAULT_REQUIRED_ACKS, -1).
 %% by default, leader should wait 1 second for replicas to ack
@@ -76,18 +76,26 @@
 
 %%%_* APIs ---------------------------------------------------------------------
 
--spec start_link({client_id(), cluster_id(), kafka_hosts(),
-                 topic(), partition(), producer_config()}) -> {ok, pid()}.
-start_link(Args) ->
-  gen_server:start_link(?MODULE, Args, []).
+-spec start_link(client_id(), topic(), partition(), producer_config()) ->
+        {ok, pid()}.
+start_link(ClientId, Topic, Partition, Config) ->
+  gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
 
--spec produce(pid(), produce_caller(), binary(), binary()) -> ok.
-produce(Pid, Caller, Key, Value) ->
+-spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
+produce(Pid, Key, Value) ->
+  Mref = erlang:monitor(process, Pid),
+  Caller = {Mref, self()},
   Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
             , key    = Key
             , value  = Value
             },
-  gen_server:cast(Pid, {produce, Req}).
+  ok = gen_server:cast(Pid, {produce, Req}),
+  receive
+    {'DOWN', Mref, process, Pid, Reason} ->
+      {error, {"partition producer down", Reason}};
+    ?BROD_PRODUCE_REQ_BUFFERED(Mref) ->
+      ok
+  end.
 
 %%%_* gen_server callbacks------------------------------------------------------
 
@@ -185,34 +193,53 @@ maybe_send_reqs(#state{onwire = OnWire} = State, OnWireMsgSetCountLimit)
 maybe_send_reqs(#state{ buffer    = Buffer
                       , onwire    = OnWire
                       , sock_pid  = SockPid
+                      , topic     = Topic
+                      , partition = Partition
                       } = State, _OnWireCntLimit) ->
   MessageSetBytesLimit = get_message_set_bytes(State),
   {Callers, MessageSet, NewBuffer} = get_message_set(Buffer, MessageSetBytesLimit),
+  %% TODO: change to plain kv-list ?
+  PartitionDict = dict:from_list([{Partition, MessageSet}]),
+  Data = [{Topic, PartitionDict}],
   KafkaReq = #produce_request{ acks    = get_required_acks(State)
                              , timeout = get_ack_timeout(State)
-                             , data    = MessageSet
+                             , data    = Data
                              },
   {ok, CorrId} = brod_sock:send(SockPid, KafkaReq),
   {ok, State#state{ buffer = NewBuffer
                   , onwire = OnWire ++ [{CorrId, Callers}]
                   }}.
 
+%% @private Get the next message-set to send from buffer.
+-spec get_message_set([#req{}], pos_integer()) ->
+        {[caller_state()], [kafka_kv()], [#req{}]}.
 get_message_set(Buffer, MessageSetBytesLimit) ->
   get_message_set(Buffer, MessageSetBytesLimit, [], [], 0).
 
 get_message_set([], _BytesLimit, Callers, KVList, _Bytes) ->
+  %% no request left
   {lists:reverse(Callers), lists:reverse(KVList), []};
-get_message_set(Buffer, BytesLimit, Callers, KVList, Bytes) when Bytes >= BytesLimit ->
-  {lists:reverse(Callers), lists:reverse(KVList), Buffer};
 get_message_set([#req{ caller = CallerState
                      , key    = Key
                      , value  = Value
                      } | Buffer], BytesLimit, Callers, KVList, Bytes) ->
-  NewCallerState = maybe_reply_buffered(CallerState),
   NewBytes = Bytes + size(Key) + size(Value),
-  get_message_set(Buffer, BytesLimit,
-                  [NewCallerState | Callers],
-                  [{Key, Value} | KVList], NewBytes).
+  case NewBytes > BytesLimit of
+    true when Bytes > 0 ->
+      %% keep accumulating would exceed limit
+      {lists:reverse(Callers), lists:reverse(KVList), Buffer};
+    true when Bytes =:= 0 ->
+      %% the first request itself exceeded limit
+      [] = KVList, %% assert
+      NewCallerState = maybe_reply_buffered(CallerState),
+      {[NewCallerState], [{Key, Value}], Buffer};
+    false ->
+      %% keep pulling in messages to message-set
+      NewCallerState = maybe_reply_buffered(CallerState),
+      get_message_set(Buffer, BytesLimit,
+                     [NewCallerState | Callers],
+                     [{Key, Value} | KVList], NewBytes)
+  end.
 
 %% @private Reply PRODUCE_REQ_BUFFERED to caller for the first N requests,
 %% Keep the callers of the ones at tail blocked.
@@ -239,33 +266,6 @@ maybe_reply_buffered(?CALLER_PENDING_ON_ACK(Caller)) ->
   %% already replied
   ?CALLER_PENDING_ON_ACK(Caller).
 
--spec get_buffer_count_limit(#state{}) -> non_neg_integer().
-get_buffer_count_limit(#state{config = Config}) ->
-  case proplists:get_value(partition_buffer_limit, Config) of
-    ?undef ->
-      ?DEFAULT_PARITION_BUFFER_LIMIT;
-    N when is_integer(N) andalso N >= 0 ->
-      N
-  end.
-
--spec get_onwire_count_limit(#state{}) -> pos_integer().
-get_onwire_count_limit(#state{config = Config}) ->
-  case proplists:get_value(partition_onwire_limit, Config) of
-    ?undef ->
-      ?DEFAULT_PARITION_ONWIRE_LIMIT;
-    N when is_integer(N) andalso N > 0 ->
-      N
-  end.
-
--spec get_message_set_bytes(#state{}) -> pos_integer().
-get_message_set_bytes(#state{config = Config}) ->
-  case proplists:get_value(message_set_size_limit, Config) of
-    ?undef ->
-      ?DEFAULT_MESSAGE_SET_BYTES;
-    N when is_integer(N) andalso N > 0 ->
-      N
-  end.
-
 -spec handle_produce_response(#state{}, corr_id()) -> {ok, #state{}}.
 handle_produce_response(#state{onwire = [{CorrId, Callers} | OnWire]} = State, CorrId) ->
   lists:foreach(fun(?CALLER_PENDING_ON_ACK(Caller)) ->
@@ -289,6 +289,33 @@ safe_send(Pid, Msg) ->
     ok
   catch _ : _ ->
     ok
+  end.
+
+-spec get_buffer_count_limit(#state{}) -> non_neg_integer().
+get_buffer_count_limit(#state{config = Config}) ->
+  case proplists:get_value(partition_buffer_limit, Config) of
+    ?undef ->
+      ?DEFAULT_PARITION_BUFFER_LIMIT;
+    N when is_integer(N) andalso N >= 0 ->
+      N
+  end.
+
+-spec get_onwire_count_limit(#state{}) -> pos_integer().
+get_onwire_count_limit(#state{config = Config}) ->
+  case proplists:get_value(partition_onwire_limit, Config) of
+    ?undef ->
+      ?DEFAULT_PARITION_ONWIRE_LIMIT;
+    N when is_integer(N) andalso N > 0 ->
+      N
+  end.
+
+-spec get_message_set_bytes(#state{}) -> pos_integer().
+get_message_set_bytes(#state{config = Config}) ->
+  case proplists:get_value(message_set_bytes_limit, Config) of
+    ?undef ->
+      ?DEFAULT_MESSAGE_SET_BYTES_LIMIT;
+    N when is_integer(N) andalso N > 0 ->
+      N
   end.
 
 get_required_acks(#state{config = Config}) ->

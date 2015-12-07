@@ -51,8 +51,8 @@
 
 -type hostname()        :: string().
 -type portnum()         :: pos_integer().
+-type endpoint()        :: {hostname(), portnum()}.
 -type cluster_id()      :: atom().
--type kafka_hosts()     :: [{hostname(), portnum()}].
 -type leader_id()       :: non_neg_integer().
 -type topic()           :: binary().
 -type partition()       :: non_neg_integer().
@@ -60,6 +60,7 @@
 -type offset()          :: integer().
 -type kafka_kv()        :: {binary(), binary()}.
 -type produce_caller()  :: {reference(), pid()}.
+-type client_config()   :: proplists:proplist().
 -type producer_config() :: proplists:proplist().
 
 -record(socket, { pid     :: pid()

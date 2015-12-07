@@ -20,10 +20,10 @@
 %%% @end
 %%%=============================================================================
 -module(brod_sup).
--behaviour(supervisor).
+-behaviour(brod_supervisor).
 
-%% TODO add API to start / stop / delete clients
 -export([ start_link/0
+        , start_client/2
         , init/1
         ]).
 
@@ -31,9 +31,9 @@
 
 %%%_* APIs ---------------------------------------------------------------------
 
-%% @doc Start supervisor of per-topic permanent producer supervisors.
+%% @doc Start root supervisor.
 %%
-%% To start permanent clients, a minimal example of app evn (sys.config):
+%% To start permanent clients, a minimal example of app env (sys.config):
 %%    [ { clients
 %%      , [ {client_1
 %%          , [ {endpoints, [{"localhost", 9092}]}
@@ -48,22 +48,39 @@
 start_link() ->
   brod_supervisor:start_link({local, ?MODULE}, ?MODULE, clients_sup).
 
+%% @doc Start client under brod_sup.
+-spec start_client(client_id(), client_config()) -> ok | {error, any()}.
+start_client(ClientId, Config) ->
+  case brod_supervisor:find_child(brod_sup, ClientId) of
+    [ ] ->
+      Spec = client_spec(ClientId, Config),
+      case brod_supervisor:start_child(brod_sup, Spec) of
+        {ok, Pid} when is_pid(Pid)        -> ok;
+        {ok, Pid, _Info} when is_pid(Pid) -> ok;
+        {error, Reason}                   -> {error, Reason};
+        Other                             -> {error, {failed, Other}}
+      end;
+    [_] ->
+      {error, already_started}
+  end.
+
 %% @doc brod_supervisor callback.
 init(clients_sup) ->
   init({clients_sup, application:get_env(brod, clients, _Default = [])});
 init({clients_sup, Clients}) ->
-  SpecFun =
-    fun({ClientId, Args}) ->
-      { _Id       = ClientId
-      , _Start    = {brod_client, start_link, [ClientId, Args]}
-      , _Restart  = permanent
-      , _Shutdown = 5000
-      , _Type     = worker
-      , _Module   = [brod_client]
-      }
-    end,
-  Children = [SpecFun(Client) || Client <- Clients],
+  Children = lists:map(fun({ClientId, Config}) ->
+                          client_spec(ClientId, Config)
+                       end, Clients),
   {ok, {{one_for_one, 5, 10}, Children}}.
+
+client_spec(ClientId, Config) ->
+  { _Id       = ClientId
+  , _Start    = {brod_client, start_link, [ClientId, Config]}
+  , _Restart  = {permanent, 30} %% TODO make it configurable
+  , _Shutdown = 5000
+  , _Type     = worker
+  , _Module   = [brod_client]
+  }.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
