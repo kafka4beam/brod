@@ -100,9 +100,11 @@
 %%%_* produce request ----------------------------------------------------------
 -ifdef(otp_before_17).
 -type produce_request_data() :: [{topic(), dict()}].
+-type request_queue() :: queue().
 -else.
 -type produce_request_data() :: [{topic(),
                                   dict:dict(partition(), [kafka_kv()])}].
+-type request_queue() :: queue:queue().
 -endif.
 
 -record(produce_request, { acks    :: integer()
@@ -176,4 +178,3 @@
 %%% Local Variables:
 %%% erlang-indent-level: 2
 %%% End:
-

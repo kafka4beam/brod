@@ -56,11 +56,11 @@
                , sup_pid          :: pid()
                , options          :: proplists:proplist()
                , t_leaders        :: ets:tab()
-               , blocked_requests :: queue:queue()
+               , blocked_requests :: request_queue()
                , brokers          :: [#broker_metadata{}]
                , workers          :: [{leader_id(), pid()}]
                %% pending requests
-               , leader_queues    :: [{leader_id(), queue:queue()}]
+               , leader_queues    :: [{leader_id(), request_queue()}]
                , max_leader_queue_len :: integer()
                , sup_restarts_cnt :: integer()
                }).

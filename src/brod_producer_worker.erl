@@ -80,7 +80,7 @@
                  %% list of requests references in the current buffer
                , request_refs = []      :: [reference()]
                  %% list of requests already sent to broker
-               , pending = queue:new()  :: queue:queue()
+               , pending = queue:new()  :: request_queue()
                }).
 
 -type produce_error() :: {partition(), offset(), error_code()}.
