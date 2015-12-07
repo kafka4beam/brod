@@ -2,8 +2,8 @@
 {application,brod,
  [{description,"Kafka client"},
   {vsn,"2.0.0"},
-  {registered,[]},
+  {registered,[brod_sup]},
   {applications,[kernel,stdlib]},
-  {env,[]},
+  {env,[{producers, []}]},
   {mod, {brod_app, []}},
   {modules,[]}]}.

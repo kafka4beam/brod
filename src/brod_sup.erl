@@ -31,7 +31,7 @@
 %% @doc Start supervisor of permanent producers.
 %% @see brod:start_link_producer/2 for more info about all producer args
 %% @end
--spec start_link(proplists:proplist()) -> {ok, pid()}.
+-spec start_link([proplists:proplist()]) -> {ok, pid()}.
 start_link(PermanentProducers) ->
   brod_supervisor:start_link({local, ?MODULE}, ?MODULE, PermanentProducers).
 
@@ -40,7 +40,7 @@ init(PermanentProducers) ->
   {ok, {{one_for_one, 0, 1}, Children}}.
 
 permanent_producer({ProducerId0, Args0}) ->
-  KafkaHosts = proplists:get_values(hosts, Args0),
+  KafkaHosts = proplists:get_value(hosts, Args0),
   case is_list(KafkaHosts) of
     true  -> ok;
     false -> erlang:throw({mandatory_prop_missing, Args0})
@@ -61,11 +61,11 @@ permanent_producer({ProducerId0, Args0}) ->
         {ID, Args}
     end,
   { _Id       = ProducerId
-  , _Start    = {brod, start_link_producer, [KafkaHosts, Opts]}
+  , _Start    = {brod_producer, start_link, [KafkaHosts, Opts]}
   , _Restart  = {permanent, RestartDelay}
   , _Shutdown = 5000
   , _Type     = worker
-  , _Module   = [brod, brod_producer]
+  , _Module   = [brod_producer]
   }.
 
 %%% Local Variables:
