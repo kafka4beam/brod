@@ -56,11 +56,11 @@
                , sup_pid          :: pid()
                , options          :: proplists:proplist()
                , t_leaders        :: ets:tab()
-               , blocked_requests :: queue:queue()
+               , blocked_requests :: request_queue()
                , brokers          :: [#broker_metadata{}]
                , workers          :: [{leader_id(), pid()}]
                %% pending requests
-               , leader_queues    :: [{leader_id(), queue:queue()}]
+               , leader_queues    :: [{leader_id(), request_queue()}]
                , max_leader_queue_len :: integer()
                , sup_restarts_cnt :: integer()
                }).
@@ -94,7 +94,7 @@ start_link(Hosts, Options, Debug) ->
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
-  gen_server:call(Pid, stop).
+  gen_server:call(Pid, stop, infinity).
 
 -spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
                  {ok, reference()} | ok.
@@ -105,7 +105,7 @@ produce(Pid, Topic, Partition, KVList) ->
   gen_server:call(Pid, Msg, infinity).
 
 subscribe(Pid, WorkerPid, LeaderId) ->
-  gen_server:call(Pid, {subscribe, WorkerPid, LeaderId}).
+  gen_server:call(Pid, {subscribe, WorkerPid, LeaderId}, infinity).
 
 get_request(RequestRef) ->
   [Request] = ets:lookup(?T_REQUESTS, RequestRef),
