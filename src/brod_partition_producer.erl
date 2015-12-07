@@ -24,7 +24,6 @@
 -behaviour(gen_server).
 
 -export([ start_link/4
-        , produce/3
         ]).
 
 -export([ code_change/3
@@ -81,22 +80,6 @@
 start_link(ClientId, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
 
--spec produce(pid(), binary(), binary()) -> ok | {error, any()}.
-produce(Pid, Key, Value) ->
-  Mref = erlang:monitor(process, Pid),
-  Caller = {Mref, self()},
-  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
-            , key    = Key
-            , value  = Value
-            },
-  ok = gen_server:cast(Pid, {produce, Req}),
-  receive
-    {'DOWN', Mref, process, Pid, Reason} ->
-      {error, {"partition producer down", Reason}};
-    ?BROD_PRODUCE_REQ_BUFFERED(Mref) ->
-      ok
-  end.
-
 %%%_* gen_server callbacks------------------------------------------------------
 
 init({ClientId, Topic, Partition, Config}) ->
@@ -127,7 +110,14 @@ init({ClientId, Topic, Partition, Config}) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unknown_call, _Call}}, State}.
 
-handle_cast({produce, Req}, State) ->
+handle_cast({produce, Caller, Partition, Key, Value},
+            #state{partition = MyPartition} = State) ->
+  Partition =:= MyPartition orelse
+    erlang:exit({"unexpected partition", Partition, MyPartition}),
+  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
+            , key    = Key
+            , value  = Value
+            },
   {ok, NewState} = handle_produce_request(State, Req),
   {noreply, NewState};
 handle_cast(_Cast, State) ->
@@ -198,17 +188,24 @@ maybe_send_reqs(#state{ buffer    = Buffer
                       } = State, _OnWireCntLimit) ->
   MessageSetBytesLimit = get_message_set_bytes(State),
   {Callers, MessageSet, NewBuffer} = get_message_set(Buffer, MessageSetBytesLimit),
+  RequiredAcks = get_required_acks(State),
   %% TODO: change to plain kv-list ?
   PartitionDict = dict:from_list([{Partition, MessageSet}]),
   Data = [{Topic, PartitionDict}],
-  KafkaReq = #produce_request{ acks    = get_required_acks(State)
+  KafkaReq = #produce_request{ acks    = RequiredAcks
                              , timeout = get_ack_timeout(State)
                              , data    = Data
                              },
   {ok, CorrId} = brod_sock:send(SockPid, KafkaReq),
-  {ok, State#state{ buffer = NewBuffer
-                  , onwire = OnWire ++ [{CorrId, Callers}]
-                  }}.
+  NewState =
+    State#state{ buffer = NewBuffer
+               , onwire = OnWire ++ [{CorrId, Callers}]
+               },
+  %% in case require no ack, fake one as if received from kakfa
+  case RequiredAcks =:= 0 of
+    true  -> handle_produce_response(NewState, CorrId);
+    false -> {ok, NewState}
+  end.
 
 %% @private Get the next message-set to send from buffer.
 -spec get_message_set([#req{}], pos_integer()) ->
@@ -275,12 +272,12 @@ handle_produce_response(#state{onwire = [{CorrId, Callers} | OnWire]} = State, C
 handle_produce_response(#state{onwire = OnWire}, CorrId) ->
   erlang:error({"unexpected response", CorrId, OnWire}).
 
--spec do_reply_buffered({reference(), pid()}) -> ok.
-do_reply_buffered({Ref, Pid}) ->
+-spec do_reply_buffered(produce_caller()) -> ok.
+do_reply_buffered(?produce_caller(Ref, Pid)) ->
   safe_send(Pid, ?BROD_PRODUCE_REQ_BUFFERED(Ref)).
 
--spec do_reply_acked({reference(), pid()}) -> ok.
-do_reply_acked({Ref, Pid}) ->
+-spec do_reply_acked(produce_caller()) -> ok.
+do_reply_acked(?produce_caller(Ref, Pid)) ->
   safe_send(Pid, ?BROD_PRODUCE_REQ_ACKED(Ref)).
 
 safe_send(Pid, Msg) ->

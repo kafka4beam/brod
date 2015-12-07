@@ -31,12 +31,10 @@
         , start_link_producer/3
         , start_link_producer/4
         , stop_producer/1
-        , produce/3
+        , produce/2
         , produce/4
-        , produce/5
-        , produce_sync/3
+        , produce_sync/2
         , produce_sync/4
-        , produce_sync/5
         ]).
 
 %% Consumer API
@@ -150,56 +148,52 @@ start_link_partition_producer(ClientId, Topic, Partition, Config) ->
 stop_producer(Pid) ->
   brod_producer:stop(Pid).
 
-%% @equiv produce(Pid, Topic, 0, <<>>, Value)
--spec produce(pid(), binary(), binary()) -> {ok, reference()} | ok.
-produce(Pid, Topic, Value) ->
-  produce(Pid, Topic, 0, <<>>, Value).
+%% @equiv produce(Pid, 0, <<>>, Value)
+-spec produce(pid(), binary()) -> {ok, reference()}.
+produce(Pid, Value) ->
+  produce(Pid, 0, <<>>, Value).
 
-%% @equiv produce(Pid, Topic, Partition, [{Key, Value}])
--spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 {ok, reference()} | ok.
-produce(Pid, Topic, Partition, Key, Value) ->
-  produce(Pid, Topic, Partition, [{Key, Value}]).
+%% @doc Produce one message. The pid can be either a topic producer
+%% or a partition producer.
+%% TODO: support kv-list batch produce, need to update buffering
+%%       logics in brod_patition_producer.erl
+%% @end
+-spec produce(pid(), partition(), binary(), binary()) ->
+        {ok, reference()} | {error, any()}.
+produce(Pid, Partition, Key, Value) ->
+  Ref = make_ref(),
+  Mref = erlang:monitor(process, Pid),
+  Caller = ?produce_caller(Ref, self()),
+  ok = gen_server:cast(Pid, {produce, Caller, Partition, Key, Value}),
+  receive
+    {'DOWN', Mref, process, Pid, Reason} ->
+      {error, {"producer down", Reason}};
+    ?BROD_PRODUCE_REQ_BUFFERED(Ref) ->
+      erlang:demonitor(Mref, [flush]),
+      {ok, Ref}
+  end.
 
-%% @doc Send one or more {key, value} messages to a broker.
-%%      If required_acks was set to 0, returns ok.
-%%      Otherwise returns a reference which can later be used to match
-%%      on an 'ack' message from producer acknowledging that the
-%%      payload has been handled by kafka cluster.
-%%      'ack' message has format {{Reference, ProducerPid}, ack}.
--spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
-                 {ok, reference()} | ok.
-produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
-  brod_producer:produce(Pid, Topic, Partition, KVList).
+%% @equiv produce_sync(Pid, 0, <<>>, Value)
+-spec produce_sync(pid(), binary()) -> ok.
+produce_sync(Pid, Value) ->
+  produce_sync(Pid, 0, <<>>, Value).
 
-%% @equiv produce_sync(Pid, Topic, 0, <<>>, Value)
--spec produce_sync(pid(), binary(), binary()) -> ok.
-produce_sync(Pid, Topic, Value) ->
-  produce_sync(Pid, Topic, 0, <<>>, Value).
-
-%% @equiv produce_sync(Pid, Topic, Partition, [{Key, Value}])
--spec produce_sync(pid(), binary(), integer(), binary(), binary()) -> ok.
-produce_sync(Pid, Topic, Partition, Key, Value) ->
-  produce_sync(Pid, Topic, Partition, [{Key, Value}]).
-
-%% @doc Send one or more {key, value} messages to a broker and block
-%%      until producer acknowledges the payload.
-%%      Does not block if required_acks was set to 0.
--spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) ->
+%% @doc Produce one message and wait for the ack from kafka.
+-spec produce_sync(pid(), partition(), binary(), binary()) ->
         ok | {error, any()}.
-produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
-  case produce(Pid, Topic, Partition, KVList) of
-    ok ->
-      ok;
+produce_sync(Pid, Partition, Key, Value) ->
+  case produce(Pid, Partition, Key, Value) of
     {ok, Ref} ->
-      MonitorRef = erlang:monitor(process, Pid),
+      Mref = erlang:monitor(process, Pid),
       receive
-        {'DOWN', MonitorRef, _, _, Info} ->
-          {error, Info};
-        {{Ref, Pid}, ack} ->
-          erlang:demonitor(MonitorRef, [flush]),
+        {'DOWN', Mref, process, Pid, Reason} ->
+          {error, {"producer down", Reason}};
+        ?BROD_PRODUCE_REQ_ACKED(Ref) ->
+          erlang:demonitor(Mref, [flush]),
           ok
-      end
+      end;
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 %% @deprecated
@@ -423,8 +417,9 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Pid} = brod:start_link_producer(Hosts),
-  Res = brod:produce_sync(Pid, Topic, Partition, Key, Value),
+  ok = ensure_client(brod_cli, Hosts),
+  {ok, Pid} = brod:start_link_partition_producer(brod_cli, Topic, Partition, []),
+  Res = brod:produce_sync(Pid, Partition, Key, Value),
   brod:stop_producer(Pid),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
