@@ -28,7 +28,10 @@
         ]).
 
 %% application callback
-start(_StartType, _StartArgs) -> start().
+start(_StartType, _StartArgs) ->
+  %% if no producer is configured in app env, start the supervisor empty
+  PermanentProducers = application:get_env(brod, producers, _Default = []),
+  brod_sup:start_link(PermanentProducers).
 
 %% @doc Start brod application.
 %%
@@ -44,10 +47,7 @@ start(_StartType, _StartArgs) -> start().
 %%
 %% @end
 start() ->
-  _ = application:load(brod), %% ensure loaded
-  %% if no producer is configured in app env, start the supervisor empty
-  PermanentProducers = application:get_env(brod, producers, _Default = []),
-  brod_sup:start_link(PermanentProducers).
+  application:ensure_started(brod).
 
 stop(_State) -> ok.
 
