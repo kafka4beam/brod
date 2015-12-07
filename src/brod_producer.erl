@@ -94,7 +94,7 @@ start_link(Hosts, Options, Debug) ->
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
-  gen_server:call(Pid, stop).
+  gen_server:call(Pid, stop, infinity).
 
 -spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
                  {ok, reference()} | ok.
@@ -105,7 +105,7 @@ produce(Pid, Topic, Partition, KVList) ->
   gen_server:call(Pid, Msg, infinity).
 
 subscribe(Pid, WorkerPid, LeaderId) ->
-  gen_server:call(Pid, {subscribe, WorkerPid, LeaderId}).
+  gen_server:call(Pid, {subscribe, WorkerPid, LeaderId}, infinity).
 
 get_request(RequestRef) ->
   [Request] = ets:lookup(?T_REQUESTS, RequestRef),

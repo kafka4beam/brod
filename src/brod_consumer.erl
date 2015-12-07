@@ -86,13 +86,14 @@ start_link(Hosts, Topic, Partition, SleepTimeout, Debug) ->
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
-  gen_server:call(Pid, stop).
+  gen_server:call(Pid, stop, infinity).
 
 -spec consume(pid(), callback_fun(), integer(), integer(),
               integer(), integer()) -> ok | {error, any()}.
 consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   gen_server:call(Pid, {consume, Callback, Offset,
-                        MaxWaitTime, MinBytes, MaxBytes}).
+                        MaxWaitTime, MinBytes, MaxBytes},
+                  infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable debugging on consumer and its connection to a broker
@@ -112,7 +113,7 @@ no_debug(Pid) ->
 
 -spec get_socket(pid()) -> {ok, #socket{}}.
 get_socket(Pid) ->
-  gen_server:call(Pid, get_socket).
+  gen_server:call(Pid, get_socket, infinity).
 
 %%%_* gen_server callbacks -----------------------------------------------------
 init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
@@ -278,8 +279,8 @@ exec_callback(Callback, MessageSet) ->
 
 do_debug(Pid, Debug) ->
   {ok, #socket{pid = Sock}} = get_socket(Pid),
-  {ok, _} = gen:call(Sock, system, {debug, Debug}),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}),
+  {ok, _} = gen:call(Sock, system, {debug, Debug}, infinity),
+  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
 
 %% Tests -----------------------------------------------------------------------

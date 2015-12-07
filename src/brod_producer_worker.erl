@@ -131,7 +131,7 @@ no_debug(Pid) ->
 
 -spec get_socket(pid()) -> {ok, #socket{}}.
 get_socket(Pid) ->
-  gen_server:call(Pid, get_socket).
+  gen_server:call(Pid, get_socket, infinity).
 
 %%%_* gen_server callbacks -----------------------------------------------------
 init([ParentPid, LeaderId, Host, Port, Options, Debug]) ->
@@ -307,8 +307,8 @@ get_error_codes(Topics) ->
 
 do_debug(Pid, Debug) ->
   {ok, SocketPid} = get_socket(Pid),
-  {ok, _} = gen:call(SocketPid, system, {debug, Debug}),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}),
+  {ok, _} = gen:call(SocketPid, system, {debug, Debug}, infinity),
+  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
 
 ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
