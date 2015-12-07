@@ -145,8 +145,7 @@ start_link_partition_producer(ClientId, Topic, Partition, Config) ->
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
-stop_producer(Pid) ->
-  brod_producer:stop(Pid).
+stop_producer(Pid) -> gen_server:call(Pid, stop).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
 -spec produce(pid(), binary()) -> {ok, reference()}.
@@ -179,6 +178,8 @@ produce_sync(Pid, Value) ->
   produce_sync(Pid, 0, <<>>, Value).
 
 %% @doc Produce one message and wait for the ack from kafka.
+%% The pid can be either a topic producer or a partition producer.
+%% @end
 -spec produce_sync(pid(), partition(), binary(), binary()) ->
         ok | {error, any()}.
 produce_sync(Pid, Partition, Key, Value) ->

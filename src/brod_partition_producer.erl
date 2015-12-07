@@ -107,8 +107,10 @@ init({ClientId, Topic, Partition, Config}) ->
              , sock_pid   = SockPid
              }}.
 
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
 handle_call(_Call, _From, State) ->
-  {reply, {error, {unknown_call, _Call}}, State}.
+  {reply, {error, {unsupported_call, _Call}}, State}.
 
 handle_cast({produce, Caller, Partition, Key, Value},
             #state{partition = MyPartition} = State) ->
