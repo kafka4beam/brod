@@ -25,21 +25,16 @@
 -behaviour(gen_server).
 
 %% Server API
--export([ start_link/4
-        , start_link/5
+-export([ start_link/2
+        , start_link/3
         , stop/1
+        , subscribe/3
+        , get_request/1
         ]).
 
 %% Kafka API
 -export([ produce/4
         ]).
-
-%% Debug API
--export([ debug/2
-        , no_debug/1
-        , get_sockets/1
-        ]).
-
 
 %% gen_server callbacks
 -export([ init/1
@@ -48,7 +43,6 @@
         , handle_info/2
         , terminate/2
         , code_change/3
-        , format_status/2
         ]).
 
 %%%_* Includes -----------------------------------------------------------------
@@ -56,300 +50,295 @@
 -include("brod_int.hrl").
 
 %%%_* Records ------------------------------------------------------------------
--type topic()     :: binary().
--type partition() :: non_neg_integer().
--type leader()    :: pid(). % brod_sock pid
--type corr_id()   :: 0..2147483647.
--type sender()    :: {pid(), reference()}.
--type offset()    :: integer().
-
--ifdef(otp_before_17).
--type data_buffer() :: [{leader(), [{topic(), dict()}]}].
--type senders_buffer() :: dict().
--else.
--type data_buffer() :: [{leader(), [{topic(), dict:dict()}]}].
--type senders_buffer() :: dict:dict(leader(), [sender()]).
--endif.
 
 -record(state, { hosts            :: [brod:host()]
                , debug            :: [term()]
-               , acks             :: integer()
-               , ack_timeout      :: integer()
-               , sockets = []     :: [#socket{}]
-               , leaders = []     :: [{{topic(), partition()}, leader()}]
-               , data_buffer = [] :: data_buffer()
-               , senders_buffer = dict:new() :: senders_buffer()
-               , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
-               , client_id        :: client_id()
+               , sup_pid          :: pid()
+               , options          :: proplists:proplist()
+               , t_leaders        :: ets:tab()
+               , blocked_requests :: request_queue()
+               , brokers          :: [#broker_metadata{}]
+               , workers          :: [{leader_id(), pid()}]
+               %% pending requests
+               , leader_queues    :: [{leader_id(), request_queue()}]
+               , max_leader_queue_len :: integer()
+               , sup_restarts_cnt :: integer()
                }).
 
--type produce_error() :: {partition(), offset(), error_code()}.
+%%%_* Macros -------------------------------------------------------------------
+-define(SUP_RESTART_COOLDOWN_BASE_MS, 1000).
+-define(MAX_SUP_RESTART_COOLDOWN_MS,  60000).
+
+-define(DEFAULT_MAX_LEADER_QUEUE_LEN, 32).
+
+%% ets table to keep incoming requests so that we
+%% can resend data to kafka in case of leader rebalancing
+%% and other errors we can handle here
+-define(T_REQUESTS, t_requests).
 
 %%%_* API ----------------------------------------------------------------------
--spec start_link([brod:host()], integer(), integer(), client_id()) ->
+-spec start_link([brod:host()], proplists:proplist()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout, ClientId) ->
-  start_link(Hosts, RequiredAcks, AckTimeout, ClientId, []).
+start_link(Hosts, Options) ->
+  start_link(Hosts, Options, []).
 
--spec start_link([brod:host()], integer(), integer(), client_id(), [term()]) ->
+-spec start_link([brod:host()], proplists:proplist(), [term()]) ->
                     {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout, ClientId, Debug) ->
-  Args = [Hosts, RequiredAcks, AckTimeout, ClientId, Debug],
-  gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
+start_link(Hosts, Options, Debug) ->
+  case proplists:get_value(producer_id, Options) of
+    undefined ->
+      gen_server:start_link(?MODULE, [Hosts, Options, Debug], [{debug, Debug}]);
+    ProducerId when is_atom(ProducerId) ->
+      gen_server:start_link({local, ProducerId}, ?MODULE, [Hosts, Options, Debug], [{debug, Debug}])
+  end.
 
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) ->
   gen_server:call(Pid, stop, infinity).
 
 -spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
-                 {ok, reference()}.
+                 {ok, reference()} | ok.
 produce(Pid, Topic, Partition, KVList) ->
-  Sender = self(),
   Ref = erlang:make_ref(),
-  gen_server:call(Pid, {produce, Sender, Ref, Topic, Partition, KVList},
-                  infinity).
+  SenderPid = self(),
+  Msg = {produce, Ref, SenderPid, Topic, Partition, KVList},
+  gen_server:call(Pid, Msg, infinity).
 
--spec debug(pid(), print | string() | none) -> ok.
-%% @doc Enable debugging on producer and its connection to a broker
-%%      debug(Pid, pring) prints debug info on stdout
-%%      debug(Pid, File) prints debug info into a File
-debug(Pid, print) ->
-  do_debug(Pid, {trace, true}),
-  do_debug(Pid, {log, print});
-debug(Pid, File) when is_list(File) ->
-  do_debug(Pid, {trace, true}),
-  do_debug(Pid, {log_to_file, File}).
+subscribe(Pid, WorkerPid, LeaderId) ->
+  gen_server:call(Pid, {subscribe, WorkerPid, LeaderId}, infinity).
 
--spec no_debug(pid()) -> ok.
-%% @doc Disable debugging
-no_debug(Pid) ->
-  do_debug(Pid, no_debug).
-
--spec get_sockets(pid()) -> {ok, [#socket{}]}.
-get_sockets(Pid) ->
-  gen_server:call(Pid, get_sockets, infinity).
+get_request(RequestRef) ->
+  [Request] = ets:lookup(?T_REQUESTS, RequestRef),
+  {ok, Request}.
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, RequiredAcks, AckTimeout, ClientId, Debug]) ->
+init([Hosts, Options, Debug]) ->
   erlang:process_flag(trap_exit, true),
-  {ok, #state{ hosts       = Hosts
-             , debug       = Debug
-             , acks        = RequiredAcks
-             , ack_timeout = AckTimeout
-             , client_id   = ensure_binary(ClientId)
+  MaxLeaderQueueLen = proplists:get_value(max_leader_queue_len, Options,
+                                          ?DEFAULT_MAX_LEADER_QUEUE_LEN),
+  TabLeaders = ets:new(t_leaders, [protected]),
+  ets:new(?T_REQUESTS, [protected, named_table, ordered_set,
+                        {keypos, #request.ref}]),
+  {ok, SupPid} = brod_producer_sup:start_link(),
+  {ok, Brokers} = refresh_metadata(Hosts, TabLeaders),
+  {ok, #state{ hosts            = Hosts
+             , debug            = Debug
+             , sup_pid          = SupPid
+             , options          = Options
+             , t_leaders        = TabLeaders
+             , blocked_requests = queue:new()
+             , brokers          = Brokers
+             , workers          = []
+             , leader_queues    = []
+             , max_leader_queue_len = MaxLeaderQueueLen
              }}.
 
+handle_call({produce, Ref, SenderPid, Topic, Partition, KVList},
+            From, State) ->
+  R = #request{ ref        = Ref
+              , sender_pid = SenderPid
+              , from       = From
+              , topic      = Topic
+              , partition  = Partition
+              , data       = KVList},
+  ets:insert(?T_REQUESTS, R),
+  {ok, LeaderId} = get_leader_id(State#state.t_leaders, Topic, Partition),
+  case lists:keyfind(LeaderId, 1, State#state.workers) of
+    {_, WorkerPid} ->
+      {_, LeaderQueue} = lists:keyfind(LeaderId, 1, State#state.leader_queues),
+      case queue:len(LeaderQueue) < State#state.max_leader_queue_len of
+        true ->
+          ok = brod_producer_worker:produce(WorkerPid, Ref),
+          LeaderQueues = lists:keystore(LeaderId, 1, State#state.leader_queues,
+                                        {LeaderId, queue:in(Ref, LeaderQueue)}),
+          {reply, {ok, Ref}, State#state{leader_queues = LeaderQueues}};
+        false ->
+          Blocked = queue:in({Ref, From}, State#state.blocked_requests),
+          {noreply, State#state{blocked_requests = Blocked}}
+      end;
+    false ->
+      ok = spawn_worker(Topic, Partition, State),
+      Blocked = queue:in({Ref, From}, State#state.blocked_requests),
+      {noreply, State#state{blocked_requests = Blocked}}
+  end;
+handle_call({subscribe, WorkerPid, LeaderId}, _From, State0) ->
+  %% register worker
+  Workers =
+    lists:keystore(LeaderId, 1, State0#state.workers, {LeaderId, WorkerPid}),
+  State = State0#state{workers = Workers},
+  TabLeaders = State#state.t_leaders,
+  EmptyQueue = queue:new(),
+  case lists:keyfind(LeaderId, 1, State#state.leader_queues) of
+    Res when Res =:= false orelse Res =:= EmptyQueue ->
+      %% try to unblock producers when there are no pending requests
+      Blocked0 = State#state.blocked_requests,
+      {Queue, Blocked} =
+        maybe_unblock(TabLeaders, LeaderId, WorkerPid, EmptyQueue, Blocked0),
+      LeaderQueues = [{LeaderId, Queue} | State#state.leader_queues],
+      {reply, ok, State#state{ leader_queues = LeaderQueues
+                             , blocked_requests = Blocked
+                             , sup_restarts_cnt = 0}}; % subscribe = recovery
+    {_, Queue} ->
+      %% re-send pending requests
+      %% blocked will be picked up later in 'ack' handler
+      ok = resend_outstanding(WorkerPid, queue:to_list(Queue)),
+      {reply, ok, State#state{sup_restarts_cnt = 0}} % subscribe = recovery
+  end;
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
-handle_call(get_sockets, _From, State) ->
-  {reply, {ok, State#state.sockets}, State};
-handle_call({produce, Sender, Ref, Topic, Partition, KVList}, _From, State0) ->
-  case handle_produce(Sender, Ref, Topic, Partition, KVList, State0) of
-    {ok, Leader, State1} ->
-      {ok, State} = maybe_send(Leader, State1),
-      {reply, {ok, Ref}, State};
-    {error, Error} ->
-      {reply, {error, Error}, State0}
-  end;
 handle_call(Request, _From, State) ->
   {reply, {error, {unsupported_call, Request}}, State}.
 
-handle_cast(_Msg, State) ->
+handle_cast(Msg, State) ->
+  error_logger:warning_msg("Unexpected cast in ~p(~p): ~p",
+                           [?MODULE, self(), Msg]),
   {noreply, State}.
 
-handle_info({msg, Leader, CorrId, #produce_response{} = R}, State0) ->
-  Errors = get_error_codes(R#produce_response.topics),
-  case handle_produce_response(Leader, CorrId, Errors, State0) of
-    {ok, State} ->
-      {noreply, State};
-    {error, Reason} ->
-      %% Errors found in produce response, terminate myself.
-      %% In a nicer way, it should recognize at least error code
-      %% ?EC_NOT_LEADER_FOR_PARTITION, then try to connect to the
-      %% new leader (if not yet connected) and migrate data buffer
-      %% and pending list from the old leader to the new leader.
-      %% We can not do this now because the payload is not kept in
-      %% the pending list for resend, there is no better solution
-      %% than crash myself and hope the brod clients would (and they
-      %% should) retry after restart.
-      {stop, Reason, State0}
-  end;
-handle_info({'EXIT', Pid, Reason}, State) ->
-  Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
-  %% Shutdown because cluster has elected other leaders for
-  %% every topic/partition most likely.
-  %% Users will have to resend outstanding messages
-  {stop, {socket_down, Reason}, State#state{sockets = Sockets}};
-handle_info(_Info, State) ->
+handle_info({'EXIT', Pid, _Reason}, #state{sup_pid = Pid} = State0) ->
+  %% protection agains restarts in a tight loop when cluster is unavailable
+  SupRestartsCnt = State0#state.sup_restarts_cnt + 1,
+  SleepMs = erlang:min(?SUP_RESTART_COOLDOWN_BASE_MS bsl SupRestartsCnt,
+                       ?MAX_SUP_RESTART_COOLDOWN_MS),
+  timer:sleep(SleepMs),
+  error_logger:info_msg("Workers supervisor ~p crashed, recovering~n", [Pid]),
+  TabLeaders = State0#state.t_leaders,
+  ets:delete_all_objects(TabLeaders),
+  {ok, SupPid} = brod_producer_sup:start_link(),
+  {ok, Brokers} = refresh_metadata(State0#state.hosts, TabLeaders),
+  State = State0#state{sup_pid = SupPid, brokers = Brokers},
+  BlockedList = queue:to_list(State#state.blocked_requests),
+  %% loop over ?T_REQUESTS and create new leader queues
+  %% skip requests which are in blocked_reqeusts queue
+  F = fun(#request{} = R, LeaderQueues) ->
+          Ref = R#request.ref,
+          case lists:keyfind(Ref, 2, BlockedList) of
+            false ->
+              Topic = R#request.topic,
+              Partition = R#request.partition,
+              {ok, LeaderId} = get_leader_id(TabLeaders, Topic, Partition),
+              case lists:keyfind(LeaderId, 1, LeaderQueues) of
+                {_, Q} ->
+                  lists:keystore(LeaderId, 1, LeaderQueues,
+                                 {LeaderId, queue:in(Ref, Q)});
+                false ->
+                  [{LeaderId, queue:in(Ref, queue:new())} | LeaderQueues]
+              end;
+            {_, _} ->
+              LeaderQueues
+          end
+      end,
+  LeaderQueues = ets:foldl(F, [], ?T_REQUESTS),
+  %% spawn workers for every leader
+  lists:foreach(
+    fun({LeaderId, _}) ->
+        Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+        ok = spawn_worker(Broker, State)
+    end, LeaderQueues),
+  {noreply, State#state{ leader_queues = LeaderQueues
+                       , sup_restarts_cnt = SupRestartsCnt}};
+handle_info({{Ref, WorkerPid}, ack}, State) ->
+  [Request] = ets:lookup(?T_REQUESTS, Ref),
+  Request#request.sender_pid ! {{Ref, self()}, ack},
+  ets:delete(?T_REQUESTS, Ref),
+  {LeaderId, WorkerPid} = lists:keyfind(WorkerPid, 2, State#state.workers),
+  {_, LeaderQueue0} = lists:keyfind(LeaderId, 1, State#state.leader_queues),
+  {{value, Ref}, LeaderQueue1} = queue:out(LeaderQueue0),
+  Blocked0 = State#state.blocked_requests,
+  TabLeaders = State#state.t_leaders,
+  {LeaderQueue, Blocked} =
+    maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue1, Blocked0),
+  LeaderQueues = lists:keystore(LeaderId, 1, State#state.leader_queues,
+                                {LeaderId, LeaderQueue}),
+  {noreply, State#state{ blocked_requests = Blocked
+                       , leader_queues = LeaderQueues}};
+handle_info(Info, State) ->
+  error_logger:warning_msg("Unexpected info: ~p", [Info]),
   {noreply, State}.
 
-terminate(_Reason, State) ->
-  F = fun(#socket{pid = Pid}) -> brod_sock:stop(Pid) end,
-  lists:foreach(F, State#state.sockets).
+terminate(_Reason, #state{sup_pid = SupPid}) ->
+  case brod_utils:is_pid_alive(SupPid) of
+    true  -> exit(SupPid, shutdown);
+    false -> ok
+  end.
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-format_status(_Opt, [_PDict, #state{ data_buffer    = DataBuffer
-                                   , senders_buffer = SendersBuffer
-                                   } = State0]) ->
-  State1 = State0#state{ data_buffer    = fmt_data_buffer(DataBuffer)
-                       , senders_buffer = fmt_senders_buffer(SendersBuffer)
-                       },
-  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State1))),
-  [{data, [{"State", State}]}].
-
 %%%_* Internal functions -------------------------------------------------------
+resend_outstanding(_WorkerPid, []) ->
+  ok;
+resend_outstanding(WorkerPid, [Ref | Tail]) ->
+  ok = brod_producer_worker:produce(WorkerPid, Ref),
+  resend_outstanding(WorkerPid, Tail).
 
-%% @private Report only the size of the pending data buffer for each leader.
--spec fmt_data_buffer(data_buffer) ->
-        [{leader(), [{topic(), {size, integer()}}]}].
-fmt_data_buffer(Buffer) ->
-  [{Leader, [{Topic, {size, dict:size(Dict)}} || {Topic, Dict} <- Topics]}
-   || {Leader, Topics} <- Buffer].
+maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue, BlockedQueue) ->
+  L = queue:to_list(BlockedQueue),
+  maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue, L, []).
 
-%% @private Report only the number of the pending requests in sender's buffer.
--spec fmt_senders_buffer(data_buffer) ->
-        [{leader(), [{topic(), {requests, integer()}}]}].
-fmt_senders_buffer(Dict) ->
-  [{Leader, {requests, length(Reqs)}} || {Leader, Reqs} <- dict:to_list(Dict)].
+maybe_unblock(_TabLeaders, _LeaderId, _WorkerPid, LeaderQueue, [], Acc) ->
+  {LeaderQueue, queue:from_list(lists:reverse(Acc))};
+maybe_unblock(TabLeaders, LeaderId, WorkerPid, LeaderQueue,
+              [{Ref, From} | Tail], Acc) ->
+  [[Topic, Partition]] = ets:match(?T_REQUESTS, #request{ ref = Ref
+                                                        , topic = '$1'
+                                                        , partition = '$2'
+                                                        , _ = '_'}),
+  case get_leader_id(TabLeaders, Topic, Partition) of
+    {ok, LeaderId} ->
+      ok = brod_producer_worker:produce(WorkerPid, Ref),
+      gen_server:reply(From, {ok, Ref}),
+      maybe_unblock(TabLeaders, LeaderId, WorkerPid,
+                    queue:in(Ref, LeaderQueue), Tail, Acc);
+    _ ->
+      maybe_unblock(TabLeaders, LeaderId, WorkerPid, Tail, [Ref | Acc])
+  end.
 
--spec handle_produce_response(pid(), corr_id(), [produce_error()], #state{}) ->
-        {ok, #state{}} | {error, any()}.
-handle_produce_response(Leader, CorrId, [], State0) ->
-  {value, {_, {CorrId, SendersList}}, Pending} =
-    lists:keytake(Leader, 1, State0#state.pending),
-  lists:foreach(fun({Sender, Ref}) ->
-                  Sender ! {{Ref, self()}, ack}
-                end, SendersList),
-  maybe_send(Leader, State0#state{pending = Pending});
-handle_produce_response(_Leader, _CorrId, Errors, _State0) ->
-  {error, Errors}.
+get_leader_id(Tab, Topic, Partition) ->
+  case ets:lookup(Tab, {Topic, Partition}) of
+    [{_, #broker_metadata{node_id = Id}}] ->
+      {ok, Id};
+    [] ->
+      false
+  end.
 
-%% @private Flatten the per-topic-partition error codes in produce result.
--spec get_error_codes([#produce_topic{}]) -> [produce_error()].
-get_error_codes(Topics) ->
-  lists:reverse(
-    lists:foldl(
-      fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
-        lists:foldl(
-          fun(#produce_offset{partition  = Partition,
-                              error_code = ErrorCode,
-                              offset     = Offset }, OffsetAcc) ->
-            case brod_kafka:is_error(ErrorCode) of
-              true  -> [{Partition, Offset, ErrorCode} | OffsetAcc];
-              false -> OffsetAcc
-            end
-          end, TopicAcc, Offsets)
-      end, [], Topics)).
-
-handle_produce(Sender, Ref, Topic, Partition, KVList, State0) ->
-  case get_leader(Topic, Partition, State0) of
-    {ok, Leader, State1} ->
-      DataBuffer0 = State1#state.data_buffer,
-      LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
-      TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
-      TopicBuffer = dict:append_list(Partition, KVList, TopicBuffer0),
-      LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
-      DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
-      SendersBuffer = dict:append(Leader, {Sender, Ref},
-                                  State1#state.senders_buffer),
-      State = State1#state{ data_buffer    = DataBuffer
-                          , senders_buffer = SendersBuffer},
-      {ok, Leader, State};
-    {error, Error} ->
+spawn_worker(Topic, Partition, State) ->
+  case ets:lookup(State#state.t_leaders, {Topic, Partition}) of
+    [{_, #broker_metadata{} = Broker}] ->
+      spawn_worker(Broker, State);
+    [] ->
+      Error = lists:flatten(
+                io_lib:format("Unknown Topic/Partittion: ~s.~B",
+                              [Topic, Partition])),
       {error, Error}
   end.
 
-get_leader(Topic, Partition, State) ->
-  case lists:keyfind({Topic, Partition}, 1, State#state.leaders) of
-    {_, Leader} ->
-      {ok, Leader, State};
-    false ->
-      connect(Topic, Partition, State)
+spawn_worker(#broker_metadata{} = Broker, State) ->
+  Id = Broker#broker_metadata.node_id,
+  Host = Broker#broker_metadata.host,
+  Port = Broker#broker_metadata.port,
+  Options = State#state.options,
+  Debug = State#state.debug,
+  Args = [self(), Id, Host, Port, Options, Debug],
+  case brod_producer_sup:start_worker(State#state.sup_pid, Args) of
+    {ok, _Pid} ->
+      ok;
+    Error ->
+      {error, Error}
   end.
 
-connect(Topic, Partition, #state{client_id = ClientId, debug = Dbg} = State) ->
-  case fetch_leader_broker_metadata(Topic, Partition, State) of
-    {ok, #broker_metadata{host = H, port = P, node_id = LeaderId}} ->
-      {ok, Pid} = brod_sock:start_link(self(), H, P, ClientId, Dbg),
-      Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
-      Sockets = [Socket | State#state.sockets],
-      Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
-      {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}};
-    {error, Reason} ->
-      {error, Reason}
-  end.
-
--spec fetch_leader_broker_metadata(topic(), partition(), #state{}) ->
-        {ok, #broker_metadata{}} | {error, any()}.
-fetch_leader_broker_metadata(Topic, Partition, State) ->
-  {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
+-spec refresh_metadata([brod:host()], ets:tab()) -> ok.
+refresh_metadata(Hosts, TabLeaders) ->
+  {ok, Metadata} = brod_utils:get_metadata(Hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
-  case lists:keyfind(Topic, #topic_metadata.name, Topics) of
-    false ->
-      {error, {unknown_topic, Topic}};
-    #topic_metadata{partitions = Partitions} ->
-      case lists:keyfind(Partition, #partition_metadata.id, Partitions) of
-        false ->
-          {error, {unknown_partition, Topic, Partition}};
-        #partition_metadata{leader_id = LeaderId} ->
-          Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-          {ok, #broker_metadata{} = Broker}
-      end
-  end.
-
-maybe_send(Leader, State) ->
-  case { get_leader_buffer(Leader, State#state.data_buffer)
-       , lists:keyfind(Leader, 1, State#state.pending)} of
-    {[], _} -> % nothing to send right now
-      {ok, State};
-    {LeaderBuffer, false} -> % no outstanding messages
-      Produce = #produce_request{ acks    = State#state.acks
-                                , timeout = State#state.ack_timeout
-                                , data    = LeaderBuffer},
-      {ok, CorrId} = brod_sock:send(Leader, Produce),
-      DataBuffer = lists:keydelete(Leader, 1, State#state.data_buffer),
-      SendersList = dict:fetch(Leader, State#state.senders_buffer),
-      SendersBuffer = dict:erase(Leader, State#state.senders_buffer),
-      Pending = [{Leader, {CorrId, SendersList}} | State#state.pending],
-      {ok, State#state{ data_buffer    = DataBuffer
-                      , senders_buffer = SendersBuffer
-                      , pending        = Pending}};
-    {_, _} -> % waiting for ack
-      {ok, State}
-  end.
-
-get_leader_buffer(Leader, DataBuffer) ->
-  case lists:keyfind(Leader, 1, DataBuffer) of
-    {_, LeaderBuffer} -> LeaderBuffer;
-    false             -> []
-  end.
-
-store_leader_buffer(Leader, DataBuffer, LeaderBuffer) ->
-  lists:keystore(Leader, 1, DataBuffer, {Leader, LeaderBuffer}).
-
-get_topic_buffer(Topic, LeaderBuffer) ->
-  case lists:keyfind(Topic, 1, LeaderBuffer) of
-    {_, TopicBuffer} -> TopicBuffer;
-    false            -> dict:new()
-  end.
-
-store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
-  lists:keystore(Topic, 1, LeaderBuffer, {Topic, TopicBuffer}).
-
-do_debug(Pid, Debug) ->
-  {ok, Sockets} = get_sockets(Pid),
-  lists:foreach(
-    fun(#socket{pid = SocketPid}) ->
-        {ok, _} = gen:call(SocketPid, system, {debug, Debug}, infinity)
-    end, Sockets),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
-  ok.
-
-ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
-ensure_binary(L) when is_list(L)   -> iolist_to_binary(L);
-ensure_binary(B) when is_binary(B) -> B.
+  ets:match_delete(TabLeaders, '_'),
+  %% fill in {Topic, Partition} -> Leader mapping table
+  [ begin
+      Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
+      ets:insert(TabLeaders, {{T, P}, Broker})
+    end || #topic_metadata{name = T, partitions = PS} <- Topics,
+           #partition_metadata{leader_id = Id, id = P} <- PS
+  ],
+  {ok, Brokers}.
 
 %% Tests -----------------------------------------------------------------------
 -include_lib("eunit/include/eunit.hrl").

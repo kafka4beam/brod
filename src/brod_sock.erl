@@ -49,10 +49,8 @@
 -include("brod_int.hrl").
 
 %%%_* Macros -------------------------------------------------------------------
--define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
 %%%_* Types --------------------------------------------------------------------
--type corr_id() :: integer().
 -ifdef(otp_before_17).
 -type api_keys() :: dict().
 -else.
@@ -79,11 +77,14 @@ start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
 start(Parent, Host, Port, ClientId, Debug) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
--spec send(pid(), term()) -> {ok, integer()} | {error, any()}.
+-spec send(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
 send(Pid, Request) ->
   call(Pid, {send, Request}).
 
--spec send_sync(pid(), term(), integer()) -> {ok, term()} | {error, any()}.
+-spec send_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
+send_sync(Pid, #produce_request{acks = 0} = Request, _Timeout) ->
+  {ok, _CorrId} = send(Pid, Request),
+  ok;
 send_sync(Pid, Request, Timeout) ->
   {ok, CorrId} = send(Pid, Request),
   receive
@@ -161,10 +162,9 @@ handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
 handle_msg({From, {send, Request}},
            #state{sock = Sock, client_id = ClientId} = State, Debug) ->
   CorrId = next_corr_id(State#state.corr_id),
-  %% reply faster
-  reply(From, {ok, CorrId}),
   RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
+  reply(From, {ok, CorrId}),
   ApiKey = brod_kafka:api_key(Request),
   ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
   ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);

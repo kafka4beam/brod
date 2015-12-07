@@ -24,10 +24,7 @@
 
 %% Producer API
 -export([ start_link_producer/1
-        , start_link_producer/3
-        , start_link_producer/4
-        , start_producer/1
-        , start_producer/3
+        , start_link_producer/2
         , stop_producer/1
         , produce/3
         , produce/4
@@ -71,39 +68,26 @@
 %%%_* Types --------------------------------------------------------------------
 -type host() :: {string(), integer()}.
 
-%%%_* Macros -------------------------------------------------------------------
--define(DEFAULT_ACKS,            1). % default required acks
--define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
-
 %%%_* API ----------------------------------------------------------------------
-%% @deprecated
-%% @equiv start_link_producer(Hosts)
--spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
-start_producer(Hosts) ->
-  start_link_producer(Hosts).
-
-%% @deprecated
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
--spec start_producer([host()], integer(), integer()) ->
-                   {ok, pid()} | {error, any()}.
-start_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
-
-%% @equiv start_link_producer(Hosts, 1, 1000)
+%% @equiv start_link_producer(Hosts, [])
 -spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
 start_link_producer(Hosts) ->
-  start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
-
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
--spec start_link_producer([host()], integer(), integer()) ->
-        {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
+  start_link_producer(Hosts, []).
 
 %% @doc Start a process to publish messages to kafka.
 %%      Hosts:
-%%        list of "bootstrap" kafka nodes, {"hostname", 1234}
-%%      RequiredAcks:
+%%        list of "bootstrap" kafka nodes, {"hostname", 9092}
+%%      Options:
+%%        list of tuples {atom(), any()} where atom can be:
+%%      producer_id (optional)
+%%        The producer PID is regisgred using this name if given.
+%%        This is mandatory for permanent producers configured in app env.
+%%        See brod_sup.erl for more info.
+%%      client_id (optional, default = ?DEFAULT_CLIENT_ID):
+%%        Atom or binary string (preferably unique) identifier of the client,
+%%        This ID is used by kafka broker for per-client statistic data
+%%        collection.
+%%      required_acks (optional, default = -1):
 %%        How many acknowledgements the kafka broker should receive
 %%        from the clustered replicas before responding to the
 %%        producer.
@@ -116,7 +100,7 @@ start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
 %%        number > 1 the broker will block waiting for this number of
 %%        acknowledgements to occur (but the broker will never wait
 %%        for more acknowledgements than there are in-sync replicas).
-%%      AckTimeout:
+%%      ack_timeout (optional, default = 1000 ms):
 %%        Maximum time in milliseconds the broker can await the
 %%        receipt of the number of acknowledgements in
 %%        RequiredAcks. The timeout is not an exact limit on
@@ -127,12 +111,17 @@ start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
 %%        time will not be included, (3) we will not terminate a
 %%        local write so if the local write time exceeds this
 %%        timeout it will not be respected.
-%%     ClientId:
-%%        Atom or binary string (preferably unique) identifier of the client.
--spec start_link_producer([host()], integer(), integer(), client_id()) ->
-        {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
-  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout, ClientId).
+%%     max_leader_queue_len (optional, default = 32):
+%%        How many requests sent to a kafka broker can stay
+%%        unacknowledged by a broker before blocking producing thread.
+%%     max_requests_in_flight (optional, default = 5):
+%%        Worker process will be sending produce reqeusts to kafka
+%%        without waiting for acknowledgements of a previous one.
+%%        This is to control how many such requests can be sent.
+-spec start_link_producer([host()], proplists:proplist()) ->
+                             {ok, pid()} | {error, any()}.
+start_link_producer(Hosts, Options) ->
+  brod_producer:start_link(Hosts, Options).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -140,23 +129,24 @@ stop_producer(Pid) ->
   brod_producer:stop(Pid).
 
 %% @equiv produce(Pid, Topic, 0, <<>>, Value)
--spec produce(pid(), binary(), binary()) -> {ok, reference()}.
+-spec produce(pid(), binary(), binary()) -> {ok, reference()} | ok.
 produce(Pid, Topic, Value) ->
   produce(Pid, Topic, 0, <<>>, Value).
 
 %% @equiv produce(Pid, Topic, Partition, [{Key, Value}])
 -spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 {ok, reference()}.
+                 {ok, reference()} | ok.
 produce(Pid, Topic, Partition, Key, Value) ->
   produce(Pid, Topic, Partition, [{Key, Value}]).
 
 %% @doc Send one or more {key, value} messages to a broker.
-%%      Returns a reference which can later be used to match on an
-%%      'ack' message from producer acknowledging that the payload
-%%      has been handled by kafka cluster.
+%%      If required_acks was set to 0, returns ok.
+%%      Otherwise returns a reference which can later be used to match
+%%      on an 'ack' message from producer acknowledging that the
+%%      payload has been handled by kafka cluster.
 %%      'ack' message has format {{Reference, ProducerPid}, ack}.
 -spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
-                 {ok, reference()}.
+                 {ok, reference()} | ok.
 produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
   brod_producer:produce(Pid, Topic, Partition, KVList).
 
@@ -172,17 +162,22 @@ produce_sync(Pid, Topic, Partition, Key, Value) ->
 
 %% @doc Send one or more {key, value} messages to a broker and block
 %%      until producer acknowledges the payload.
+%%      Does not block if required_acks was set to 0.
 -spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) ->
         ok | {error, any()}.
 produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
-  MonitorRef = erlang:monitor(process, Pid),
-  {ok, Ref} = produce(Pid, Topic, Partition, KVList),
-  receive
-    {'DOWN', MonitorRef, _, _, Info} ->
-      {error, Info};
-    {{Ref, Pid}, ack} ->
-      erlang:demonitor(MonitorRef, [flush]),
-      ok
+  case produce(Pid, Topic, Partition, KVList) of
+    ok ->
+      ok;
+    {ok, Ref} ->
+      MonitorRef = erlang:monitor(process, Pid),
+      receive
+        {'DOWN', MonitorRef, _, _, Info} ->
+          {error, Info};
+        {{Ref, Pid}, ack} ->
+          erlang:demonitor(MonitorRef, [flush]),
+          ok
+      end
   end.
 
 %% @deprecated
