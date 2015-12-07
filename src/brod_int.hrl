@@ -44,14 +44,23 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
+%% {cluster_id(), topic(), partition()} => pid()
+-define(PARTITION_WORKER_TAB, t_partition_workers).
+
 -type error_code() :: atom() | integer().
 
--type leader_id() :: non_neg_integer().
--type topic()     :: binary().
--type partition() :: non_neg_integer().
--type corr_id()   :: 0..?MAX_CORR_ID.
--type offset()    :: integer().
--type kafka_kv()  :: {binary(), binary()}.
+-type hostname()        :: string().
+-type portnum()         :: pos_integer().
+-type cluster_id()      :: atom().
+-type kafka_hosts()     :: [{hostname(), portnum()}].
+-type leader_id()       :: non_neg_integer().
+-type topic()           :: binary().
+-type partition()       :: non_neg_integer().
+-type corr_id()         :: 0..?MAX_CORR_ID.
+-type offset()          :: integer().
+-type kafka_kv()        :: {binary(), binary()}.
+-type produce_caller()  :: {reference(), pid()}.
+-type producer_config() :: proplists:proplist().
 
 -record(socket, { pid     :: pid()
                 , host    :: string()

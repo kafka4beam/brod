@@ -21,7 +21,6 @@
 %%%=============================================================================
 
 -module(brod_producer_worker).
-
 -behaviour(gen_server).
 
 %% Server API
