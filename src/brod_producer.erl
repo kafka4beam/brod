@@ -54,19 +54,39 @@ start_link(ClientId, Topic, Config) ->
   gen_server:start_link(?MODULE, {ClientId, Topic, Config}, []).
 
 %%%_* gen_server callbacks -----------------------------------------------------
-init({_ClientId, _Topic, _Config}) ->
-  #state{}.
+init({ClientId, Topic, Config}) ->
+  erlang:process_flag(trap_exit, true),
+  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
+  #metadata_response{topics = [TopicMetadata]} = Metadata,
+  #topic_metadata{ error_code = TopicErrorCode
+                 , partitions = PartitionsMetadataList
+                 } = TopicMetadata,
+  brod_kakfa:is_error(TopicErrorCode) orelse
+    erlang:throw({"topic metadata error", TopicErrorCode}),
+  Partitions = lists:map(fun(#partition_metadata{id = Id}) -> Id end,
+                         PartitionsMetadataList),
+  PartitionProducers =
+    [start_partition_producer(ClientId, Topic, P, Config) || P <- Partitions],
+  #state{ client_id  = ClientId
+        , topic      = Topic
+        , config     = Config
+        , partitions = PartitionProducers
+        }.
 
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(Request, _From, State) ->
   {reply, {error, {unsupported_call, Request}}, State}.
 
-%% TODO: handle produce req
+handle_cast({produce, _Caller, _Key, _Value}, State) ->
+  %% TODO round-robin, random, etc.
+  {noreply, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
-%% TODO: handle partition producer exits
+handle_info({'EXIT', _Pid, _Reason}, #state{} = State) ->
+  %% TODO: handle partition producer restart
+  {noreply, State};
 handle_info(Info, State) ->
   error_logger:warning_msg("Unexpected info: ~p", [Info]),
   {noreply, State}.
@@ -78,6 +98,14 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%%_* Internal functions -------------------------------------------------------
+
+-spec start_partition_producer(client_id(), topic(),
+                               partition(), producer_config()) ->
+        {partition(), pid()}.
+start_partition_producer(ClientId, Topic, Partition, Config) ->
+  {ok, Pid} =
+    brod_partition_producer:start_link(ClientId, Topic, Partition, Config),
+  {Partition, Pid}.
 
 %% Tests -----------------------------------------------------------------------
 

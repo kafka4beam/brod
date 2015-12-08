@@ -83,6 +83,17 @@ start_link(ClientId, Topic, Partition, Config) ->
 %%%_* gen_server callbacks------------------------------------------------------
 
 init({ClientId, Topic, Partition, Config}) ->
+  self() ! init_socket,
+  {ok, #state{ client_id  = ClientId
+             , topic      = Topic
+             , partition  = Partition
+             , config     = Config
+             }}.
+
+handle_info(init_socket, #state{ client_id = ClientId
+                               , topic     = Topic
+                               , partition = Partition
+                               } = State) ->
   {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
   #metadata_response{ brokers = Brokers
                     , topics  = [TopicMetadata]
@@ -100,34 +111,8 @@ init({ClientId, Topic, Partition, Config}) ->
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
   {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
   _ = erlang:monitor(process, SockPid),
-  {ok, #state{ client_id  = ClientId
-             , topic      = Topic
-             , partition  = Partition
-             , config     = Config
-             , sock_pid   = SockPid
-             }}.
-
-handle_call(stop, _From, State) ->
-  {stop, normal, ok, State};
-handle_call(_Call, _From, State) ->
-  {reply, {error, {unsupported_call, _Call}}, State}.
-
-handle_cast({produce, Caller, Partition, Key, Value},
-            #state{partition = MyPartition} = State) ->
-  %% this is more like a bug than error.
-  %% i.e. the request is sent to a wrong partition producer
-  %% TODO: worth the effort to reply error ?
-  Partition =:= MyPartition orelse
-    erlang:exit({"unexpected partition", Partition, MyPartition}),
-  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
-            , key    = Key
-            , value  = Value
-            },
-  {ok, NewState} = handle_produce_request(State, Req),
+  NewState = State#state{sock_pid = SockPid},
   {noreply, NewState};
-handle_cast(_Cast, State) ->
-  {noreply, State}.
-
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
@@ -156,6 +141,21 @@ handle_info({msg, Pid, CorrId, #produce_response{} = R},
       {noreply, NewState}
   end;
 handle_info(_Info, State) ->
+  {noreply, State}.
+
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
+handle_call(_Call, _From, State) ->
+  {reply, {error, {unsupported_call, _Call}}, State}.
+
+handle_cast({produce, Caller, Key, Value}, #state{} = State) ->
+  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
+            , key    = Key
+            , value  = Value
+            },
+  {ok, NewState} = handle_produce_request(State, Req),
+  {noreply, NewState};
+handle_cast(_Cast, State) ->
   {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->

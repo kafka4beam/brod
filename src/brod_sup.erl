@@ -43,6 +43,7 @@
 %%        ]
 %%      }
 %%    ].
+%% TODO: add permanent producers
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->

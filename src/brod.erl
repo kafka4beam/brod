@@ -32,9 +32,9 @@
         , start_link_producer/4
         , stop_producer/1
         , produce/2
-        , produce/4
+        , produce/3
         , produce_sync/2
-        , produce_sync/4
+        , produce_sync/3
         , sync_produce_request/2
         , sync_produce_requests/2
         ]).
@@ -120,6 +120,10 @@ start_client(ClientId, Config) ->
 %%        In case callers are producing faster than brokers can handle
 %%        (or congestion on wire), try to accumulate small requests as
 %%        much as possible but not exceeding message_set_bytes_limit.
+%% TODO: missing impl
+%%     partitionner (optional, default = fun brod_utils:random_partitionner/2):
+%%        A callback function to map message key to partition number.
+%%        By default, it randomly chooses an alive partition worker.
 %% @end
 -spec start_link_producer(client_id(), [endpoint()],
                           topic(), producer_config()) -> {ok, pid()}.
@@ -140,8 +144,8 @@ start_link_producer(ClientId, Topic, Config) ->
 %% Assuming client has been started already, @see start_client/2, or
 %% @see brod_sup:init/1 for app-env (sys.config) staticly configured clients.
 %% @end
--spec start_link_partition_producer(
-        client_id(), topic(), partition(), producer_config()) -> {ok, pid()}.
+-spec start_link_partition_producer(client_id(), topic(), partition(),
+                                    producer_config()) -> {ok, pid()}.
 start_link_partition_producer(ClientId, Topic, Partition, Config) ->
   brod_partition_producer:start_link(ClientId, Topic, Partition, Config).
 
@@ -150,21 +154,21 @@ start_link_partition_producer(ClientId, Topic, Partition, Config) ->
 stop_producer(Pid) -> gen_server:call(Pid, stop).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
--spec produce(pid(), binary()) -> {ok, reference()}.
+-spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
 produce(Pid, Value) ->
-  produce(Pid, 0, <<>>, Value).
+  produce(Pid, _Key = <<>>, Value).
 
 %% @doc Produce one message. The pid can be either a topic producer
 %% or a partition producer.
 %% TODO: support kv-list batch produce, need to update buffering
 %%       logics in brod_patition_producer.erl
 %% @end
--spec produce(pid(), partition(), binary(), binary()) ->
+-spec produce(pid(), binary(), binary()) ->
         {ok, reference()} | {error, any()}.
-produce(Pid, Partition, Key, Value) ->
+produce(Pid, Key, Value) ->
   Ref = make_ref(),
   Caller = ?produce_caller(Ref, self()),
-  ok = gen_server:cast(Pid, {produce, Caller, Partition, Key, Value}),
+  ok = gen_server:cast(Pid, {produce, Caller, Key, Value}),
   %% Wait for BROD_PRODUCE_REQ_BUFFERED
   case do_sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Ref)]) of
     ok              -> {ok, Ref};
@@ -174,15 +178,15 @@ produce(Pid, Partition, Key, Value) ->
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
 -spec produce_sync(pid(), binary()) -> ok.
 produce_sync(Pid, Value) ->
-  produce_sync(Pid, 0, <<>>, Value).
+  produce_sync(Pid, _Key = <<>>, Value).
 
 %% @doc Produce one message and wait for the ack from kafka.
 %% The pid can be either a topic producer or a partition producer.
 %% @end
--spec produce_sync(pid(), partition(), binary(), binary()) ->
+-spec produce_sync(pid(), binary(), binary()) ->
         ok | {error, any()}.
-produce_sync(Pid, Partition, Key, Value) ->
-  case produce(Pid, Partition, Key, Value) of
+produce_sync(Pid, Key, Value) ->
+  case produce(Pid, Key, Value) of
     {ok, Ref} ->
       %% Wait for BROD_PRODUCE_REQ_ACKED
       sync_produce_requests(Pid, [Ref]);
@@ -430,7 +434,7 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
   ok = ensure_client(brod_cli, Hosts),
   {ok, Pid} = brod:start_link_partition_producer(brod_cli, Topic, Partition, []),
-  Res = brod:produce_sync(Pid, Partition, Key, Value),
+  Res = brod:produce_sync(Pid, Key, Value),
   brod:stop_producer(Pid),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
