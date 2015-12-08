@@ -42,6 +42,9 @@
 -define(BROD_PRODUCE_REQ_BUFFERED(Ref), {brod_produce_req_buffered, Ref}).
 -define(BROD_PRODUCE_REQ_ACKED(Ref),    {brod_produce_req_acked, Ref}).
 
+-type brod_produce_reply() :: ?BROD_PRODUCE_REQ_BUFFERED(reference())
+                            | ?BROD_PRODUCE_REQ_ACKED(reference()).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

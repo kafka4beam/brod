@@ -35,6 +35,8 @@
         , produce/4
         , produce_sync/2
         , produce_sync/4
+        , sync_produce_request/2
+        , sync_produce_requests/2
         ]).
 
 %% Consumer API
@@ -161,15 +163,12 @@ produce(Pid, Value) ->
         {ok, reference()} | {error, any()}.
 produce(Pid, Partition, Key, Value) ->
   Ref = make_ref(),
-  Mref = erlang:monitor(process, Pid),
   Caller = ?produce_caller(Ref, self()),
   ok = gen_server:cast(Pid, {produce, Caller, Partition, Key, Value}),
-  receive
-    {'DOWN', Mref, process, Pid, Reason} ->
-      {error, {"producer down", Reason}};
-    ?BROD_PRODUCE_REQ_BUFFERED(Ref) ->
-      erlang:demonitor(Mref, [flush]),
-      {ok, Ref}
+  %% Wait for BROD_PRODUCE_REQ_BUFFERED
+  case do_sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Ref)]) of
+    ok              -> {ok, Ref};
+    {error, Reason} -> {error, Reason}
   end.
 
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
@@ -185,17 +184,28 @@ produce_sync(Pid, Value) ->
 produce_sync(Pid, Partition, Key, Value) ->
   case produce(Pid, Partition, Key, Value) of
     {ok, Ref} ->
-      Mref = erlang:monitor(process, Pid),
-      receive
-        {'DOWN', Mref, process, Pid, Reason} ->
-          {error, {"producer down", Reason}};
-        ?BROD_PRODUCE_REQ_ACKED(Ref) ->
-          erlang:demonitor(Mref, [flush]),
-          ok
-      end;
+      %% Wait for BROD_PRODUCE_REQ_ACKED
+      sync_produce_requests(Pid, [Ref]);
     {error, Reason} ->
       {error, Reason}
   end.
+
+%% @doc Block wait for sent produced request to be acked by kafka.
+%% TODO: add timeout? should restart producer pid in case timeout
+%% @end
+-spec sync_produce_request(Producer::pid(), ProduceRequestRef::reference()) ->
+        ok | {error, Reason::any()}.
+sync_produce_request(Producer, ProduceRequestRef) ->
+  true = is_pid(Producer), %% assert
+  true = is_reference(ProduceRequestRef), %% assert
+  sync_produce_request(Producer, [ProduceRequestRef]).
+
+%% @doc Block wait for sent produced requests to be acked by kafka.
+-spec sync_produce_requests(Producer::pid(), [reference()]) ->
+        ok | {error, Reason::any()}.
+sync_produce_requests(ProducerPid, Refs) when is_pid(ProducerPid) ->
+  ExpectList = [?BROD_PRODUCE_REQ_ACKED(Ref) || Ref <- Refs],
+  do_sync_produce_requests(ProducerPid, ExpectList).
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)
@@ -515,6 +525,26 @@ ensure_client(ClientId, Endpoints) ->
   case brod_sup:start_client(ClientId, [{endpoints, Endpoints}]) of
     ok                       -> ok;
     {error, already_started} -> ok
+  end.
+
+-spec do_sync_produce_requests(pid(), [brod_produce_reply()]) ->
+        ok | {error, Reason::any()}.
+do_sync_produce_requests(ProducerPid, ExpectedReplies) ->
+  Mref = erlang:monitor(process, ProducerPid),
+  Result = sync_produce_requests_loop(Mref, ExpectedReplies),
+  erlang:demonitor(Mref, [flush]),
+  Result.
+
+-spec sync_produce_requests_loop(ProducerPidMonitorRef::reference(),
+                               [brod_produce_reply()]) ->
+        ok | {error, Reason::any()}.
+sync_produce_requests_loop(_Mref, []) -> ok;
+sync_produce_requests_loop(Mref, [Reply | Replies]) ->
+  receive
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}};
+    Reply ->
+      sync_produce_requests_loop(Mref, Replies)
   end.
 
 %%% Local Variables:

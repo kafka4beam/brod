@@ -114,6 +114,9 @@ handle_call(_Call, _From, State) ->
 
 handle_cast({produce, Caller, Partition, Key, Value},
             #state{partition = MyPartition} = State) ->
+  %% this is more like a bug than error.
+  %% i.e. the request is sent to a wrong partition producer
+  %% TODO: worth the effort to reply error ?
   Partition =:= MyPartition orelse
     erlang:exit({"unexpected partition", Partition, MyPartition}),
   Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
