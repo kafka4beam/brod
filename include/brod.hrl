@@ -37,7 +37,7 @@
 
 -type client_id() :: atom().
 
--define(DEFAULT_CLIENT_ID, brod_default_client).
+-define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
 -define(BROD_PRODUCE_REQ_BUFFERED(Ref), {brod_produce_req_buffered, Ref}).
 -define(BROD_PRODUCE_REQ_ACKED(Ref),    {brod_produce_req_acked, Ref}).

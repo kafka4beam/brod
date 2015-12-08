@@ -26,7 +26,9 @@
 %% TODO: perhaps add a connect_leader/3 API?
 -export([ connect_broker/3
         , get_metadata/2
+        , start_link/1
         , start_link/2
+        , stop/1
         ]).
 
 -export([ code_change/3
@@ -59,21 +61,31 @@
 
 %%%_* APIs ---------------------------------------------------------------------
 
--spec start_link(client_id(), client_config()) -> {ok, pid()}.
-start_link(ClientId, Config) when is_atom(ClientId) ->
-  gen_server:start_link({local, ClientId}, ?MODULE, {ClientId, Config}, []).
+-spec start_link([endpoint()]) -> {ok, pid()}.
+start_link(Hosts) ->
+  gen_server:start_link(?MODULE,
+                        {?BROD_DEFAULT_CLIENT_ID, [{endpoints, Hosts}]}, []).
 
--spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
-get_metadata(ClientId, Topic) ->
-  gen_server:call(ClientId, {get_metadata, Topic}, infinity).
+-spec start_link(client_id(), client_config()) -> {ok, client()}.
+start_link(ClientId, Config) when is_atom(ClientId) ->
+  {ok, _Pid} =
+    gen_server:start_link({local, ClientId}, ?MODULE, {ClientId, Config}, []),
+  {ok, ClientId}.
+
+stop(Client) ->
+  gen_server:call(Client, stop).
+
+-spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
+get_metadata(Client, Topic) ->
+  gen_server:call(Client, {get_metadata, Topic}, infinity).
 
 %% @doc Establish a (maybe new) connection to kafka broker at Host:Port.
 %% In case there is alreay a connection established, it is re-used.
 %% @end
--spec connect_broker(client_id(), hostname(), portnum()) ->
+-spec connect_broker(client(), hostname(), portnum()) ->
         {ok, pid()} | {error, any()}.
-connect_broker(ClientId, Host, Port) ->
-  gen_server:call(ClientId, {connect, Host, Port}, infinity).
+connect_broker(Client, Host, Port) ->
+  gen_server:call(Client, {connect, Host, Port}, infinity).
 
 %%%_* gen_server callbacks -----------------------------------------------------
 
@@ -81,11 +93,27 @@ init({ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Endpoints = proplists:get_value(endpoints, Config),
   true = is_list(Endpoints) andalso length(Endpoints) > 0, %% assert
+  self() ! start_metadata_socket,
   {ok, #state{ client_id = ClientId
              , endpoints = Endpoints
-             , meta_sock = start_metadata_socket(Endpoints)
              }}.
 
+%% TODO: maybe add a timer to clean up very old ?dead_since sockets
+handle_info(start_metadata_socket, #state{endpoints = Endpoints} = State) ->
+  {noreply, State#state{sockets = start_metadata_socket(Endpoints)}};
+handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
+                                          , endpoints = Endpoints
+                                          } = State) ->
+  NewPid = start_metadata_socket(Endpoints),
+  {nereply, State#state{meta_sock = NewPid}};
+handle_info({'EXIT', Pid, Reason}, State) ->
+  {ok, NewState} = handle_socket_down(State, Pid, Reason),
+  {noreply, NewState};
+handle_info(_Info, State) ->
+  {noreply, State}.
+
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
 handle_call({get_metadata, Topic}, _From, #state{meta_sock = Sock} = State) ->
   Request = #metadata_request{topics = [Topic]},
   %% TODO: timeout configurable
@@ -98,18 +126,6 @@ handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast(_Cast, State) ->
-  {noreply, State}.
-
-%% TODO: maybe add a timer to clean up very old ?dead_since sockets
-handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
-                                          , endpoints = Endpoints
-                                          } = State) ->
-  NewPid = start_metadata_socket(Endpoints),
-  {nereply, State#state{meta_sock = NewPid}};
-handle_info({'EXIT', Pid, Reason}, State) ->
-  {ok, NewState} = handle_socket_down(State, Pid, Reason),
-  {noreply, NewState};
-handle_info(_Info, State) ->
   {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->

@@ -140,7 +140,7 @@ init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
       lists:keyfind(NodeId, #broker_metadata.node_id, Brokers),
     %% client id matters only for producer clients
     {ok, Pid} = brod_sock:start_link(self(), Host, Port,
-                                     ?DEFAULT_CLIENT_ID, Debug),
+                                     ?BROD_DEFAULT_CLIENT_ID, Debug),
     Socket = #socket{ pid = Pid
                     , host = Host
                     , port = Port

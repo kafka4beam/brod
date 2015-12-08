@@ -23,7 +23,6 @@
 -behaviour(brod_supervisor).
 
 -export([ start_link/0
-        , start_client/2
         , init/1
         ]).
 
@@ -48,22 +47,6 @@
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   brod_supervisor:start_link({local, ?MODULE}, ?MODULE, clients_sup).
-
-%% @doc Start client under brod_sup.
--spec start_client(client_id(), client_config()) -> ok | {error, any()}.
-start_client(ClientId, Config) ->
-  case brod_supervisor:find_child(brod_sup, ClientId) of
-    [ ] ->
-      Spec = client_spec(ClientId, Config),
-      case brod_supervisor:start_child(brod_sup, Spec) of
-        {ok, Pid} when is_pid(Pid)        -> ok;
-        {ok, Pid, _Info} when is_pid(Pid) -> ok;
-        {error, Reason}                   -> {error, Reason};
-        Other                             -> {error, {failed, Other}}
-      end;
-    [_] ->
-      {error, already_started}
-  end.
 
 %% @doc brod_supervisor callback.
 init(clients_sup) ->

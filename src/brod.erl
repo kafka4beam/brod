@@ -23,13 +23,13 @@
 -module(brod).
 
 %% Client API
--export([ start_client/2
+-export([ start_client/1
+        , start_client/2
+        , stop_client/1
         ]).
 
 %% Producer API
--export([ start_link_partition_producer/4
-        , start_link_producer/3
-        , start_link_producer/4
+-export([ start_link_producer/3
         , stop_producer/1
         , produce/2
         , produce/3
@@ -69,19 +69,28 @@
 
 %%%_* API ----------------------------------------------------------------------
 
+%5 @doc Start a client.
+-spec start_client([endpoint()]) -> {ok, pid()}.
+start_client(Hosts) ->
+  brod_client:start_link(Hosts).
+
 %5 @doc Start a client under supervisor brod_sup.
 %% @see brod_sup for permanent clients.
 %% @end
--spec start_client(client_id(), client_config()) -> ok | {error, any()}.
+-spec start_client(client_id(), client_config()) ->
+        {ok, client()} | {error, any()}.
 start_client(ClientId, Config) ->
-  brod_sup:start_client(ClientId, Config).
+  brod_client:start_link(ClientId, Config).
+
+-spec stop_client(client()) -> ok.
+stop_client(Client) ->
+  brod_client:stop(Client).
 
 %% @doc Start a process to publish messages to kafka.
-%%      ClientId:
-%%        Client ID used to register the client process pid.
-%%        Also for statistic data collection in kafka.
-%%      Hosts:
-%%        list of "bootstrap" kafka nodes, {"hostname", 9092}
+%%      Client:
+%%        Client PID or registered name (if started by brod_sup).
+%%        The registered name is also used by kafka for statistic
+%%        data collection.
 %%      Topic:
 %%        Topic name to produce data to.
 %%      Config:
@@ -120,34 +129,20 @@ start_client(ClientId, Config) ->
 %%        In case callers are producing faster than brokers can handle
 %%        (or congestion on wire), try to accumulate small requests as
 %%        much as possible but not exceeding message_set_bytes_limit.
-%% TODO: missing impl
-%%     partitionner (optional, default = fun brod_utils:random_partitionner/2):
+%%     partitionner (optional, default = random)
 %%        A callback function to map message key to partition number.
 %%        By default, it randomly chooses an alive partition worker.
+%%        spec: random
+%%            | roundrobin
+%%            | fun((Key, NrOfPartitions) -> Partition) when
+%%                Key            :: binary(),
+%%                NrOfPartitions :: non_neg_integer(),
+%%                Partition      :: partition().
 %% @end
--spec start_link_producer(client_id(), [endpoint()],
-                          topic(), producer_config()) -> {ok, pid()}.
-start_link_producer(ClientId, Hosts, Topic, Config) ->
-  ok = ensure_client(ClientId, Hosts),
-  start_link_producer(ClientId, Topic, Config).
-
-%% @doc Start a producer for a specific topic.
-%% Assuming client has been started already, @see start_client/2, or
-%% @see brod_sup:init/1 for app-env (sys.config) staticly configured clients.
-%% @end
--spec start_link_producer(client_id(), topic(), producer_config()) ->
+-spec start_link_producer(client(), topic(), producer_config()) ->
         {ok, pid()}.
-start_link_producer(ClientId, Topic, Config) ->
-  brod_producer:start_link(ClientId, Topic, Config).
-
-%% @doc Start a producer for a specific partition.
-%% Assuming client has been started already, @see start_client/2, or
-%% @see brod_sup:init/1 for app-env (sys.config) staticly configured clients.
-%% @end
--spec start_link_partition_producer(client_id(), topic(), partition(),
-                                    producer_config()) -> {ok, pid()}.
-start_link_partition_producer(ClientId, Topic, Partition, Config) ->
-  brod_partition_producer:start_link(ClientId, Topic, Partition, Config).
+start_link_producer(Client, Topic, Config) ->
+  brod_producer:start_link(Client, Topic, Config).
 
 %% @doc Stop producer process
 -spec stop_producer(pid()) -> ok.
@@ -432,10 +427,11 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  ok = ensure_client(brod_cli, Hosts),
-  {ok, Pid} = brod:start_link_partition_producer(brod_cli, Topic, Partition, []),
+  {ok, Client} = brod:start_client(Hosts),
+  {ok, Pid} = brod_partition_producer:start_link(Client, Topic, Partition, []),
   Res = brod:produce_sync(Pid, Key, Value),
   brod:stop_producer(Pid),
+  brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
   Hosts = parse_hosts_str(HostsStr),
@@ -507,7 +503,7 @@ connect_leader(Hosts, Topic, Partition) ->
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
   %% client id matters only for producer clients
-  brod_sock:start_link(self(), Host, Port, ?DEFAULT_CLIENT_ID, []).
+  brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
 
 print_message(Io, Offset, K, V) ->
   io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
@@ -521,14 +517,6 @@ simple_consumer_loop(C, Io) ->
     Other ->
       io:format(Io, "\nStrange msg: ~p\n", [Other]),
       simple_consumer_loop(C, Io)
-  end.
-
--spec ensure_client(client_id(), [endpoint()]) -> ok | no_return().
-ensure_client(ClientId, Endpoints) ->
-  _ = brod:start(), %% ensure started
-  case brod_sup:start_client(ClientId, [{endpoints, Endpoints}]) of
-    ok                       -> ok;
-    {error, already_started} -> ok
   end.
 
 -spec do_sync_produce_requests(pid(), [brod_produce_reply()]) ->

@@ -64,6 +64,7 @@
 -type produce_caller()  :: ?produce_caller(reference(), pid()).
 -type client_config()   :: proplists:proplist().
 -type producer_config() :: proplists:proplist().
+-type client()          :: client_id() | pid().
 
 
 -record(socket, { pid     :: pid()
@@ -183,6 +184,8 @@
                           }).
 
 -record(fetch_response, {topics = [#topic_fetch_data{}]}).
+
+-define(undef, undefined).
 
 -endif. % include brod_int.hrl
 

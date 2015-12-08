@@ -24,6 +24,7 @@
 -behaviour(gen_server).
 
 -export([ start_link/4
+        , start_link/5
         ]).
 
 -export([ code_change/3
@@ -35,8 +36,6 @@
         ]).
 
 -include("brod_int.hrl").
-
--define(undef, undefined).
 
 %% by default, keep 32 message in buffer
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 32).
@@ -62,39 +61,46 @@
         }).
 
 -record(state,
-        { client_id :: client_id()
-        , topic     :: topic()
-        , partition :: partition()
-        , config    :: producer_config()
-        , sock_pid  :: pid()
+        { client         :: client()
+        , topic          :: topic()
+        , partition      :: partition()
+        , config         :: producer_config()
+        , sock_pid       :: pid()
+        , topic_producer :: pid()
         %% TODO start-link a writer process to buffer
         %% to avoid huge log dumps in case of crash etc.
-        , buffer = [] :: [#req{}]
-        , onwire = [] :: [{corr_id(), [caller_state()]}]
+        , buffer = []    :: [#req{}]
+        , onwire = []    :: [{corr_id(), [caller_state()]}]
         }).
 
 %%%_* APIs ---------------------------------------------------------------------
 
--spec start_link(client_id(), topic(), partition(), producer_config()) ->
+-spec start_link(client(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
-start_link(ClientId, Topic, Partition, Config) ->
-  gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
+start_link(Client, Topic, Partition, Config) ->
+  start_link(Client, Topic, Partition, Config, _TopicProducer = ?undef).
+
+start_link(Client, Topic, Partition, Config, TopicProducer) ->
+  gen_server:start_link(?MODULE, {Client, Topic, Partition,
+                                  Config, TopicProducer}, []).
 
 %%%_* gen_server callbacks------------------------------------------------------
 
-init({ClientId, Topic, Partition, Config}) ->
+init({Client, Topic, Partition, Config, TopicProducer}) ->
   self() ! init_socket,
-  {ok, #state{ client_id  = ClientId
-             , topic      = Topic
-             , partition  = Partition
-             , config     = Config
+  {ok, #state{ client         = Client
+             , topic          = Topic
+             , partition      = Partition
+             , config         = Config
+             , topic_producer = TopicProducer
              }}.
 
-handle_info(init_socket, #state{ client_id = ClientId
-                               , topic     = Topic
-                               , partition = Partition
+handle_info(init_socket, #state{ client         = Client
+                               , topic          = Topic
+                               , partition      = Partition
+                               , topic_producer = TopicProducer
                                } = State) ->
-  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
+  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
   #metadata_response{ brokers = Brokers
                     , topics  = [TopicMetadata]
                     } = Metadata,
@@ -106,12 +112,17 @@ handle_info(init_socket, #state{ client_id = ClientId
   #partition_metadata{leader_id = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
   LeaderId >= 0 orelse
-    erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),
+    erlang:throw({"no leader for partition", {Client, Topic, Partition}}),
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-  {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
+  {ok, SockPid} = brod_client:connect_broker(Client, Host, Port),
   _ = erlang:monitor(process, SockPid),
   NewState = State#state{sock_pid = SockPid},
+  %% Tell topic producer that I'm ready to take traffic.
+  case TopicProducer =/= ?undef of
+    true  -> brod_producer:subscribe(TopicProducer, Partition);
+    false -> ok %% not started to work with topic producer
+  end,
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
