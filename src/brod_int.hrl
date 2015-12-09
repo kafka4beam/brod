@@ -63,24 +63,11 @@
 -type producer_config() :: proplists:proplist().
 -type client()          :: client_id() | pid().
 
-
 -record(socket, { pid     :: pid()
                 , host    :: string()
                 , port    :: integer()
                 , node_id :: integer()
                 }).
-
-
-%% 'from' is handle cases when worker's buffer is full
-%% and we need to block user's process via {noreply, State}
-%% and then release via gen_server:reply
--record(request, { ref        :: reference()
-                 , sender_pid :: pid()
-                 , from       :: term() % pretending it's opaque
-                 , topic      :: topic()
-                 , partition  :: partition()
-                 , data       :: [kafka_kv()]
-                 }).
 
 %%%_* metadata request ---------------------------------------------------------
 -record(metadata_request, {topics = [] :: [binary()]}).
