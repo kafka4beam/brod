@@ -49,8 +49,6 @@
 
 -type error_code() :: atom() | integer().
 
--define(produce_caller(REF, PID), {REF, PID}).
-
 -type hostname()        :: string().
 -type portnum()         :: pos_integer().
 -type endpoint()        :: {hostname(), portnum()}.
@@ -61,7 +59,6 @@
 -type corr_id()         :: 0..?MAX_CORR_ID.
 -type offset()          :: integer().
 -type kafka_kv()        :: {binary(), binary()}.
--type produce_caller()  :: ?produce_caller(reference(), pid()).
 -type client_config()   :: proplists:proplist().
 -type producer_config() :: proplists:proplist().
 -type client()          :: client_id() | pid().

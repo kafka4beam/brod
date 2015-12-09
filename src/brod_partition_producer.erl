@@ -25,6 +25,8 @@
 
 -export([ start_link/4
         , start_link/5
+        , produce/3
+        , sync_produce_requests/2
         ]).
 
 -export([ code_change/3
@@ -51,8 +53,8 @@
 -define(CALLER_PENDING_ON_BUF(Caller), {caller_pending_on_buf, Caller}).
 -define(CALLER_PENDING_ON_ACK(Caller), {caller_pending_on_ack, Caller}).
 
--type caller_state() :: ?CALLER_PENDING_ON_BUF(produce_caller())
-                      | ?CALLER_PENDING_ON_ACK(produce_caller()).
+-type caller_state() :: ?CALLER_PENDING_ON_BUF(brod_produce_call())
+                      | ?CALLER_PENDING_ON_ACK(brod_produce_call()).
 
 -record(req,
         { caller :: caller_state()
@@ -75,14 +77,48 @@
 
 %%%_* APIs ---------------------------------------------------------------------
 
+%% @doc Start (link) a partition producer.
 -spec start_link(client(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
 start_link(Client, Topic, Partition, Config) ->
   start_link(Client, Topic, Partition, Config, _TopicProducer = ?undef).
 
+%% @doc Start (link) a partition producer by topic producer.
+%% The alst argument TopicProducer is the topic worker which
+%% the newly started partition producer should subscribe to.
+%% @end
+-spec start_link(client(), topic(), partition(), producer_config(), pid()) ->
+        {ok, pid()}.
 start_link(Client, Topic, Partition, Config, TopicProducer) ->
   gen_server:start_link(?MODULE, {Client, Topic, Partition,
                                   Config, TopicProducer}, []).
+
+%% @doc Produce a message to partition asynchronizely.
+%% The call is blocked until the request has been buffered in producer worker
+%% The function returns a call reference of type brod_produce_call() to the
+%% caller so the caller can used it to expect (match) a BROD_PRODUCE_REQ_ACKED
+%% message after the produce request has been acked by configured number of
+%% replicas in kafka cluster.
+%% @end
+-spec produce(pid(), binary(), binary()) ->
+        {ok, brod_produce_call()} | {error, any()}.
+produce(Pid, Key, Value) ->
+  Ref = make_ref(),
+  Call = ?BROD_PRODUCE_CALL(self(), Ref),
+  ok = gen_server:cast(Pid, {produce, Call, Key, Value}),
+  %% Wait for BROD_PRODUCE_REQ_BUFFERED
+  case sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Call)]) of
+    ok              -> {ok, Call};
+    {error, Reason} -> {error, Reason}
+  end.
+
+-spec sync_produce_requests(pid(), [brod_produce_reply()]) ->
+        ok | {error, Reason::any()}.
+sync_produce_requests(ProducerPid, ExpectedReplies) ->
+  Mref = erlang:monitor(process, ProducerPid),
+  Result = sync_produce_requests_loop(Mref, ExpectedReplies),
+  erlang:demonitor(Mref, [flush]),
+  Result.
 
 %%%_* gen_server callbacks------------------------------------------------------
 
@@ -160,8 +196,8 @@ handle_call(stop, _From, State) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({produce, Caller, Key, Value}, #state{} = State) ->
-  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Caller)
+handle_cast({produce, Call, Key, Value}, #state{} = State) ->
+  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Call)
             , key    = Key
             , value  = Value
             },
@@ -289,13 +325,13 @@ handle_produce_response(#state{onwire = [{CorrId, Callers} | OnWire]} = State, C
 handle_produce_response(#state{onwire = OnWire}, CorrId) ->
   erlang:error({"unexpected response", CorrId, OnWire}).
 
--spec do_reply_buffered(produce_caller()) -> ok.
-do_reply_buffered(?produce_caller(Ref, Pid)) ->
-  safe_send(Pid, ?BROD_PRODUCE_REQ_BUFFERED(Ref)).
+-spec do_reply_buffered(brod_produce_call()) -> ok.
+do_reply_buffered(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
+  safe_send(Pid, ?BROD_PRODUCE_REQ_BUFFERED(Call)).
 
--spec do_reply_acked(produce_caller()) -> ok.
-do_reply_acked(?produce_caller(Ref, Pid)) ->
-  safe_send(Pid, ?BROD_PRODUCE_REQ_ACKED(Ref)).
+-spec do_reply_acked(brod_produce_call()) -> ok.
+do_reply_acked(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
+  safe_send(Pid, ?BROD_PRODUCE_REQ_ACKED(Call)).
 
 safe_send(Pid, Msg) ->
   try
@@ -347,6 +383,19 @@ get_ack_timeout(#state{config = Config}) ->
     N when is_integer(N) andalso N > 0 ->
       N
   end.
+
+-spec sync_produce_requests_loop(ProducerPidMonitorRef::reference(),
+                                 [brod_produce_reply()]) ->
+        ok | {error, Reason::any()}.
+sync_produce_requests_loop(_Mref, []) -> ok;
+sync_produce_requests_loop(Mref, [Reply | Replies]) ->
+  receive
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}};
+    Reply ->
+      sync_produce_requests_loop(Mref, Replies)
+  end.
+
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
