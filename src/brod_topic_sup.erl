@@ -32,11 +32,23 @@
 -spec start_link(client(), topic(), [partition()], producer_config()) ->
         {ok, pid()}.
 start_link(Client, Topic, Partitions, Config) ->
-  brod_supervisor:start_link(?MODULE, {Client, Topic, Partitions, Config}).
+  TopicProducerPid = self(),
+  brod_supervisor:start_link(?MODULE, {Client, Topic, Partitions,
+                                       Config, TopicProducerPid}).
 
-init({_Client, _Topic, _Partitions, _Config}) ->
-  PartitionWorkers = [], %% TODO
-  {ok, {{one_for_one, 0, 1}, PartitionWorkers}}.
+init({Client, Topic, Partitions, Config, TopicProducerPid}) ->
+  SpecFun =
+    fun(Partition) ->
+      { _Id       = Partition
+      , _Start    = {brod_partition_producer, start_link,
+                     [Client, Topic, Partition, Config, TopicProducerPid]}
+      , _Restart  = {permanent, 1} %% delay one second before restart
+      , _Shutdown = 5000
+      , _Type     = worker
+      , _Module   = [brod_partition_producer]
+      }
+    end,
+  {ok, {{one_for_one, 0, 1}, [SpecFun(P) || P <- Partitions]}}.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

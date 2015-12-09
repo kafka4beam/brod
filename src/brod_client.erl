@@ -117,7 +117,7 @@ handle_call(stop, _From, State) ->
 handle_call({get_metadata, Topic}, _From, #state{meta_sock = Sock} = State) ->
   Request = #metadata_request{topics = [Topic]},
   %% TODO: timeout configurable
-  Respons = brod_sock:send_sync(Sock, Request, 10000),
+  Respons = brod_sock:send_sync(Sock, Request, _Timeout = 10000),
   {reply, Respons, State};
 handle_call({connect, Host, Port}, _From, State) ->
   {NewState, Result} = do_connect(State, Host, Port),
@@ -229,8 +229,8 @@ is_cooled_down(Ts, _Reason) ->
 %%       Host:Port can be any of the brokers in the cluster which does not
 %%       necessarily have to be the leader of any partition, or it might
 %%       be a load-balanced entrypoint to the remote kakfa cluster.
-%% NOTE: crash in case failed to connect to any of the endpoints.
-%%       should be restarted by supervisor
+%% NOTE: crash in case failed to connect to all of the endpoints.
+%%       should be restarted by supervisor.
 %% @end
 -spec start_metadata_socket([endpoint()]) -> pid() | no_return().
 start_metadata_socket(Endpoints) ->

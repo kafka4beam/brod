@@ -87,6 +87,7 @@ start_link(Client, Topic, Partition, Config, TopicProducer) ->
 %%%_* gen_server callbacks------------------------------------------------------
 
 init({Client, Topic, Partition, Config, TopicProducer}) ->
+  erlang:put(brod_producer_type, ?MODULE),
   self() ! init_socket,
   {ok, #state{ client         = Client
              , topic          = Topic

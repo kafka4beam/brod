@@ -45,6 +45,10 @@
 -type brod_produce_reply() :: ?BROD_PRODUCE_REQ_BUFFERED(reference())
                             | ?BROD_PRODUCE_REQ_ACKED(reference()).
 
+-type brod_partitionner() :: random
+                           | roundrobin
+                           | fun((Key::binary(), NrOfPartitions::pos_integer()) -> partition()).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

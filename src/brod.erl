@@ -23,8 +23,8 @@
 -module(brod).
 
 %% Client API
--export([ start_client/1
-        , start_client/2
+-export([ start_link_client/1
+        , start_link_client/2
         , stop_client/1
         ]).
 
@@ -70,16 +70,16 @@
 %%%_* API ----------------------------------------------------------------------
 
 %5 @doc Start a client.
--spec start_client([endpoint()]) -> {ok, pid()}.
-start_client(Hosts) ->
+-spec start_link_client([endpoint()]) -> {ok, pid()}.
+start_link_client(Hosts) ->
   brod_client:start_link(Hosts).
 
 %5 @doc Start a client under supervisor brod_sup.
 %% @see brod_sup for permanent clients.
 %% @end
--spec start_client(client_id(), client_config()) ->
+-spec start_link_client(client_id(), client_config()) ->
         {ok, client()} | {error, any()}.
-start_client(ClientId, Config) ->
+start_link_client(ClientId, Config) ->
   brod_client:start_link(ClientId, Config).
 
 -spec stop_client(client()) -> ok.
@@ -129,15 +129,10 @@ stop_client(Client) ->
 %%        In case callers are producing faster than brokers can handle
 %%        (or congestion on wire), try to accumulate small requests as
 %%        much as possible but not exceeding message_set_bytes_limit.
-%%     partitionner (optional, default = random)
+%%     partitionner(optional, default = random)
 %%        A callback function to map message key to partition number.
 %%        By default, it randomly chooses an alive partition worker.
-%%        spec: random
-%%            | roundrobin
-%%            | fun((Key, NrOfPartitions) -> Partition) when
-%%                Key            :: binary(),
-%%                NrOfPartitions :: non_neg_integer(),
-%%                Partition      :: partition().
+%%        Possible values: see type spec brod_partitionner().
 %% @end
 -spec start_link_producer(client(), topic(), producer_config()) ->
         {ok, pid()}.
@@ -161,13 +156,11 @@ produce(Pid, Value) ->
 -spec produce(pid(), binary(), binary()) ->
         {ok, reference()} | {error, any()}.
 produce(Pid, Key, Value) ->
-  Ref = make_ref(),
-  Caller = ?produce_caller(Ref, self()),
-  ok = gen_server:cast(Pid, {produce, Caller, Key, Value}),
-  %% Wait for BROD_PRODUCE_REQ_BUFFERED
-  case do_sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Ref)]) of
-    ok              -> {ok, Ref};
-    {error, Reason} -> {error, Reason}
+  case brod_producer:get_partition_producer(Pid) of
+    {ok, PartitionProducerPid} ->
+      do_produce(PartitionProducerPid, Key, Value);
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
@@ -427,7 +420,7 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_client(Hosts),
+  {ok, Client} = brod:start_link_client(Hosts),
   {ok, Pid} = brod_partition_producer:start_link(Client, Topic, Partition, []),
   Res = brod:produce_sync(Pid, Key, Value),
   brod:stop_producer(Pid),
@@ -517,6 +510,16 @@ simple_consumer_loop(C, Io) ->
     Other ->
       io:format(Io, "\nStrange msg: ~p\n", [Other]),
       simple_consumer_loop(C, Io)
+  end.
+
+do_produce(Pid, Key, Value) ->
+  Ref = make_ref(),
+  Caller = ?produce_caller(Ref, self()),
+  ok = gen_server:cast(Pid, {produce, Caller, Key, Value}),
+  %% Wait for BROD_PRODUCE_REQ_BUFFERED
+  case do_sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Ref)]) of
+    ok              -> {ok, Ref};
+    {error, Reason} -> {error, Reason}
   end.
 
 -spec do_sync_produce_requests(pid(), [brod_produce_reply()]) ->
