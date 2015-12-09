@@ -57,6 +57,7 @@
         , endpoints    :: [endpoint()]
         , meta_sock    :: pid()
         , sockets = [] :: [#sock{}]
+        , topics_sup   :: pid()
         }).
 
 %%%_* APIs ---------------------------------------------------------------------
@@ -99,7 +100,13 @@ init({ClientId, Config}) ->
 
 %% TODO: maybe add a timer to clean up very old ?dead_since sockets
 handle_info(start_metadata_socket, #state{endpoints = Endpoints} = State) ->
+  self() ! start_topics_sup,
   {noreply, State#state{sockets = start_metadata_socket(Endpoints)}};
+handle_info(start_topics_sup, #state{client_id = ClientId} = State) ->
+  %% NOTE: in case this is not a permanent (configured in sys.config)
+  %%       the supervisor will be started empty (without any children).
+  {ok, Pid} = brod_sup:start_link_topics_sup(ClientId),
+  {noreply, State#state{topics_sup = Pid}};
 handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
                                           , endpoints = Endpoints
                                           } = State) ->

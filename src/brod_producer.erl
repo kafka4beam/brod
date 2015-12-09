@@ -49,7 +49,7 @@
 -record(state, { client          :: client()
                , topic           :: topic()
                , config          :: producer_config()
-               , topic_sup       :: pid()
+               , partitions_sup  :: pid()
                , client_mref     :: reference()
                , partitionner    :: brod_partitionner()
                , partitions = [] :: [partition_worker()]
@@ -106,7 +106,9 @@ handle_info(init, #state{ client       = Client
     erlang:throw({"topic metadata error", TopicErrorCode}),
   Partitions0 = lists:map(fun(#partition_metadata{id = Id}) -> Id end,
                           PartitionsMetadataList),
-  {ok, TopicSup} = brod_topic_sup:start_link(Client, Partitions0, Config),
+  {ok, PartitionsSup} =
+    brod_sup:start_link_partitions_sup(Client, Topic, Partitions0,
+                                       Config, self()),
   Mref = monitor_client(Client),
   Partitions =
     case Partitionner =:= roundrobin of
@@ -114,9 +116,9 @@ handle_info(init, #state{ client       = Client
       false -> Partitions0
     end,
   NewState =
-    State#state{ topic_sup   = TopicSup
-               , partitions  = [{P, waiting} || P <- Partitions]
-               , client_mref = Mref
+    State#state{ partitions_sup = PartitionsSup
+               , partitions     = [{P, waiting} || P <- Partitions]
+               , client_mref    = Mref
                },
   {noreply, NewState};
 handle_info({'DOWN', Mref, process, _Pid, Reason},
