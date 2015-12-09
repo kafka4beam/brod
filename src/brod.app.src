@@ -5,5 +5,5 @@
   {registered,[]},
   {applications,[kernel,stdlib]},
   {env,[]},
-  {mod, {brod_app, []}},
+  {mod, {brod, []}},
   {modules,[]}]}.

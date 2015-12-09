@@ -21,6 +21,14 @@
 %%%=============================================================================
 
 -module(brod).
+-behaviour(application).
+
+%% Application
+-export([ start/0
+        , start/2
+        , stop/0
+        , stop/1
+        ]).
 
 %% Client API
 -export([ start_link_client/1
@@ -69,13 +77,34 @@
 
 %%%_* API ----------------------------------------------------------------------
 
-%5 @doc Start a client.
+%% @doc Start brod application.
+start() -> application:start(brod).
+
+%% @doc Stop brod application.
+stop() -> application:stop(brod).
+
+%% @doc Application behaviour callback
+start(_StartType, _StartArgs) -> brod_sup:start_link().
+
+%% @doc Application behaviour callback
+stop(_State) -> ok.
+
+%% @doc Start a client.
+%% A client should work with only one kafka cluster
+%% Many producers may share the same client
+%% @end
 -spec start_link_client([endpoint()]) -> {ok, pid()}.
 start_link_client(Hosts) ->
   brod_client:start_link(Hosts).
 
 %5 @doc Start a client under supervisor brod_sup.
-%% @see brod_sup for permanent clients.
+%% ClientId: a unique atom() to identify the client process
+%% Config: a proplist, possible values:
+%%   endpoints(mandatory):
+%%     Kakfa cluster entrypoint which can be any of the brokers in the cluster
+%%     i.e. does not necessarily have to be a leader of any partition,
+%%     e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% @see brod_sup:start_link/0 for permanent clients.
 %% @end
 -spec start_link_client(client_id(), client_config()) ->
         {ok, client()} | {error, any()}.

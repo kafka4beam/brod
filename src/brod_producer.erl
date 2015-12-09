@@ -160,6 +160,11 @@ init_roundrobin_state(Partitions) ->
   {Head, Tail} = lists:split(N, Partitions),
   Tail ++ Head.
 
+%% @private Monitor the client process, in case the client is down
+%% a producer should restart too.
+%% NOTE: static producers are managed by supervision trees
+%%       this is needed for the dynamicly started producers
+%% @end
 monitor_client(ClientId) when is_atom(ClientId) ->
   ClientPid = erlang:whereis(ClientId),
   true = is_pid(ClientPid), %% assert

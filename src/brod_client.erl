@@ -63,8 +63,7 @@
 
 -spec start_link([endpoint()]) -> {ok, pid()}.
 start_link(Hosts) ->
-  gen_server:start_link(?MODULE,
-                        {?BROD_DEFAULT_CLIENT_ID, [{endpoints, Hosts}]}, []).
+  start_link(?BROD_DEFAULT_CLIENT_ID, [{endpoints, Hosts}]).
 
 -spec start_link(client_id(), client_config()) -> {ok, client()}.
 start_link(ClientId, Config) when is_atom(ClientId) ->
@@ -225,10 +224,9 @@ is_cooled_down(Ts, _Reason) ->
 
 %% @doc Establish a dedicated socket to kafka cluster endpoint(s) for
 %% metadata retrievals.
-%% NOTE: This socket is not intended for kafka payload, the endpoint
-%%       Host:Port can be any of the brokers in the cluster which does not
-%%       necessarily have to be the leader of any partition, or it might
-%%       be a load-balanced entrypoint to the remote kakfa cluster.
+%% NOTE: This socket is not intended for kafka payload. This is to avoid
+%%       burst of connection usage when many partition producers (re)start
+%%       at same time, if we use brod_util:get_metadata/2 to fetch metadata.
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
