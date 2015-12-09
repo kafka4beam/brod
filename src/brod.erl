@@ -104,6 +104,12 @@ start_link_client(Hosts) ->
 %%     Kakfa cluster entrypoint which can be any of the brokers in the cluster
 %%     i.e. does not necessarily have to be a leader of any partition,
 %%     e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%%   get_metadata_timout_seconds(optional, default=5)
+%%     Return timeout error from brod_client:get_metadata/2 in case the respons
+%%     is not received from kafka in this configured time.
+%%   reconnect_cool_down_seconds(optional, default=1)
+%%     Delay this configured number of seconds before retrying to estabilish
+%%     a new connection to the kafka partition leader.
 %% @see brod_sup:start_link/0 for permanent clients.
 %% @end
 -spec start_link_client(client_id(), client_config()) ->
@@ -212,8 +218,6 @@ produce_sync(Pid, Key, Value) ->
   end.
 
 %% @doc Block wait for sent produced request to be acked by kafka.
-%% TODO: add timeout? should restart producer pid in case timeout
-%% @end
 -spec sync_produce_request(Producer::pid(), brod_produce_call()) ->
         ok | {error, Reason::any()}.
 sync_produce_request(Producer, CallRef) ->

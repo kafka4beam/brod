@@ -43,6 +43,7 @@
 -include("brod_int.hrl").
 
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
+-define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
 
 -define(dead_since(TS, REASON), {dead_since, TS, REASON}).
 -type dead_socket() :: ?dead_since(erlang:timestamp(), any()).
@@ -58,6 +59,7 @@
         , meta_sock    :: pid()
         , sockets = [] :: [#sock{}]
         , topics_sup   :: pid()
+        , config       :: list(any())
         }).
 
 %%%_* APIs ---------------------------------------------------------------------
@@ -91,7 +93,7 @@ connect_broker(Client, Host, Port) ->
 
 init({ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
-  Endpoints = proplists:get_value(endpoints, Config),
+  Endpoints = proplists:get_value(endpoints, Config, []),
   true = is_list(Endpoints) andalso length(Endpoints) > 0, %% assert
   self() ! start_metadata_socket,
   {ok, #state{ client_id = ClientId
@@ -120,10 +122,13 @@ handle_info(_Info, State) ->
 
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
-handle_call({get_metadata, Topic}, _From, #state{meta_sock = Sock} = State) ->
+handle_call({get_metadata, Topic}, _From, #state{ meta_sock = Sock
+                                                , config    = Config
+                                                } = State) ->
   Request = #metadata_request{topics = [Topic]},
-  %% TODO: timeout configurable
-  Respons = brod_sock:send_sync(Sock, Request, _Timeout = 10000),
+  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
+                                ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
+  Respons = brod_sock:send_sync(Sock, Request, timer:seconds(Timeout)),
   {reply, Respons, State};
 handle_call({connect, Host, Port}, _From, State) ->
   {NewState, Result} = do_connect(State, Host, Port),
@@ -140,7 +145,7 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, #state{sockets = Sockets}) ->
   lists:foreach(
     fun(#sock{sock_pid = Pid}) ->
-      case brod_utils:is_pid_alive(Pid) of
+      case is_pid(Pid) andalso is_process_alive(Pid) of
         true  -> exit(Pid, shutdown);
         false -> ok
       end
@@ -166,7 +171,7 @@ maybe_reconnect(State, Host, Port, not_found) ->
   %% connect for the first time
   reconnect(State, Host, Port);
 maybe_reconnect(State, Host, Port, ?dead_since(Ts, Reason)) ->
-  case is_cooled_down(Ts, Reason) of
+  case is_cooled_down(Ts, State) of
     true  -> reconnect(State, Host, Port);
     false -> {State, {error, Reason}}
   end.
@@ -219,9 +224,8 @@ find_socket(#state{sockets = Sockets}, Host, Port) ->
   end.
 
 %% @private Check if the socket is down for long enough to retry.
-is_cooled_down(Ts, _Reason) ->
-  %% TODO make it a per-client config
-  Threshold = application:get_env(brod, reconnect_cool_down_seconds,
+is_cooled_down(Ts, #state{config = Config}) ->
+  Threshold = proplists:get_value(reconnect_cool_down_seconds, Config,
                                   ?DEFAULT_RECONNECT_COOL_DOWN_SECONDS),
   Now = os:timestamp(),
   case timer:now_diff(Now, Ts) div 1000000 of
