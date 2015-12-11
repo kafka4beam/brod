@@ -44,9 +44,6 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
-%% {cluster_id(), topic(), partition()} => pid()
--define(PARTITION_WORKER_TAB, t_partition_workers).
-
 -type error_code() :: atom() | integer().
 
 -type hostname()        :: string().

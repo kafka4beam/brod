@@ -74,7 +74,7 @@ get_partition_producer(Pid, KafkaMsgKey) ->
           %% the pid itself is a partition worker
           {ok, Pid};
         ?MODULE ->
-          %% the pid is a topic worker, get it from
+          %% the pid is a topic worker, get it from gen_server state
           gen_server:call(Pid, {get_partition_producer, KafkaMsgKey}, infinity)
       end;
     undefined ->

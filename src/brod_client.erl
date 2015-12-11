@@ -113,7 +113,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
                                           , endpoints = Endpoints
                                           } = State) ->
   NewPid = start_metadata_socket(Endpoints),
-  {nereply, State#state{meta_sock = NewPid}};
+  {noreply, State#state{meta_sock = NewPid}};
 handle_info({'EXIT', Pid, Reason}, State) ->
   {ok, NewState} = handle_socket_down(State, Pid, Reason),
   {noreply, NewState};

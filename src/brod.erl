@@ -97,7 +97,7 @@ stop(_State) -> ok.
 start_link_client(Hosts) ->
   brod_client:start_link(Hosts).
 
-%5 @doc Start a client under supervisor brod_sup.
+%5 @doc Start a client.
 %% ClientId: a unique atom() to identify the client process
 %% Config: a proplist, possible values:
 %%   endpoints(mandatory):

@@ -181,7 +181,7 @@ partition_spec(Client, Topic, Partition, Config, TopicProducer) ->
   , _Module   = [brod_partition_producer]
   }.
 
-%% @private Get configured delay seconds bfore clients restart.
+%% @private Get configured delay seconds before clients restart.
 %% NOTE: assuming the client exists in app env.
 -spec get_client_restart_delay_seconds(client_id()) -> pos_integer().
 get_client_restart_delay_seconds(ClientId) when is_atom(ClientId) ->
