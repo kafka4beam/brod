@@ -102,7 +102,7 @@ handle_info(init, #state{ client       = Client
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = PartitionsMetadataList
                  } = TopicMetadata,
-  brod_kakfa:is_error(TopicErrorCode) orelse
+  brod_kafka:is_error(TopicErrorCode) orelse
     erlang:throw({"topic metadata error", TopicErrorCode}),
   Partitions0 = lists:map(fun(#partition_metadata{id = Id}) -> Id end,
                           PartitionsMetadataList),
@@ -192,7 +192,7 @@ do_get_partition_worker(_KafkaMsgKey, #state{ partitionner = random
   Result =
     case length(AlivePids) of
       0 -> {error, no_alive_partition_producer};
-      N -> {ok, lists:nth(erlang:uniform(N), AlivePids)}
+      N -> {ok, lists:nth(random:uniform(N), AlivePids)}
     end,
   {Result, State};
 do_get_partition_worker(_KafkaMsgKey, #state{ partitionner = roundrobin

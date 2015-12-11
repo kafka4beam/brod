@@ -191,7 +191,7 @@ produce(Pid, Value) ->
 -spec produce(pid(), binary(), binary()) ->
         {ok, brod_produce_call()} | {error, any()}.
 produce(Pid, Key, Value) ->
-  case brod_producer:get_partition_producer(Pid) of
+  case brod_producer:get_partition_producer(Pid, Key) of
     {ok, PartitionProducerPid} ->
       brod_partition_producer:produce(PartitionProducerPid, Key, Value);
     {error, Reason} ->

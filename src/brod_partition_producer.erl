@@ -154,7 +154,7 @@ handle_info(init_socket, #state{ client         = Client
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = Partitions
                  } = TopicMetadata,
-  brod_kakfa:is_error(TopicErrorCode) orelse
+  brod_kafka:is_error(TopicErrorCode) orelse
     erlang:throw({"topic metadata error", TopicErrorCode}),
   #partition_metadata{leader_id = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
