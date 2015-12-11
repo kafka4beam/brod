@@ -26,7 +26,7 @@
 -export([ start_link/4
         , start_link/5
         , produce/3
-        , sync_produce_requests/2
+        , sync_produce_requests/1
         ]).
 
 -export([ code_change/3
@@ -103,22 +103,32 @@ start_link(Client, Topic, Partition, Config, TopicProducer) ->
 -spec produce(pid(), binary(), binary()) ->
         {ok, brod_produce_call()} | {error, any()}.
 produce(Pid, Key, Value) ->
-  Ref = make_ref(),
-  Call = ?BROD_PRODUCE_CALL(self(), Ref),
+  MRef = erlang:monitor(process, Pid),
+  Call = ?BROD_PRODUCE_CALL(self(), MRef),
   ok = gen_server:cast(Pid, {produce, Call, Key, Value}),
-  %% Wait for BROD_PRODUCE_REQ_BUFFERED
-  case sync_produce_requests(Pid, [?BROD_PRODUCE_REQ_BUFFERED(Call)]) of
+  ExpectedReply = #brod_produce_reply{ call   = Call
+                                     , result = brod_produce_req_buffered
+                                     },
+  %% Wait until the request is buffered
+  case sync_produce_requests([ExpectedReply]) of
     ok              -> {ok, Call};
     {error, Reason} -> {error, Reason}
   end.
 
--spec sync_produce_requests(pid(), [brod_produce_reply()]) ->
+-spec sync_produce_requests([brod_produce_reply()]) ->
         ok | {error, Reason::any()}.
-sync_produce_requests(ProducerPid, ExpectedReplies) ->
-  Mref = erlang:monitor(process, ProducerPid),
-  Result = sync_produce_requests_loop(Mref, ExpectedReplies),
-  erlang:demonitor(Mref, [flush]),
-  Result.
+sync_produce_requests([]) -> ok;
+sync_produce_requests([#brod_produce_reply{ call   = ?BROD_PRODUCE_CALL(_, Mref)
+                                          , result = Result
+                                          } = Reply | Replies]) ->
+  receive
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}};
+    Reply ->
+      %% demonitor if this is the last reply.
+      Result =:= brod_produce_req_acked andalso erlang:demonitor(Mref, [flush]),
+      sync_produce_requests(Replies)
+  end.
 
 %%%_* gen_server callbacks------------------------------------------------------
 
@@ -327,11 +337,17 @@ handle_produce_response(#state{onwire = OnWire}, CorrId) ->
 
 -spec do_reply_buffered(brod_produce_call()) -> ok.
 do_reply_buffered(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
-  safe_send(Pid, ?BROD_PRODUCE_REQ_BUFFERED(Call)).
+  Reply = #brod_produce_reply{ call   = Call
+                             , result = brod_produce_req_buffered
+                             },
+  safe_send(Pid, Reply).
 
 -spec do_reply_acked(brod_produce_call()) -> ok.
 do_reply_acked(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
-  safe_send(Pid, ?BROD_PRODUCE_REQ_ACKED(Call)).
+  Reply = #brod_produce_reply{ call   = Call
+                             , result = brod_produce_req_acked
+                             },
+  safe_send(Pid, Reply).
 
 safe_send(Pid, Msg) ->
   try
@@ -382,18 +398,6 @@ get_ack_timeout(#state{config = Config}) ->
       ?DEFAULT_ACK_TIMEOUT;
     N when is_integer(N) andalso N > 0 ->
       N
-  end.
-
--spec sync_produce_requests_loop(ProducerPidMonitorRef::reference(),
-                                 [brod_produce_reply()]) ->
-        ok | {error, Reason::any()}.
-sync_produce_requests_loop(_Mref, []) -> ok;
-sync_produce_requests_loop(Mref, [Reply | Replies]) ->
-  receive
-    {'DOWN', Mref, process, _Pid, Reason} ->
-      {error, {producer_down, Reason}};
-    Reply ->
-      sync_produce_requests_loop(Mref, Replies)
   end.
 
 

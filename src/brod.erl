@@ -43,8 +43,8 @@
         , produce/3
         , produce_sync/2
         , produce_sync/3
-        , sync_produce_request/2
-        , sync_produce_requests/2
+        , sync_produce_request/1
+        , sync_produce_requests/1
         ]).
 
 %% Consumer API
@@ -189,7 +189,7 @@ produce(Pid, Value) ->
 %%       logics in brod_patition_producer.erl
 %% @end
 -spec produce(pid(), binary(), binary()) ->
-        {ok, reference()} | {error, any()}.
+        {ok, brod_produce_call()} | {error, any()}.
 produce(Pid, Key, Value) ->
   case brod_producer:get_partition_producer(Pid) of
     {ok, PartitionProducerPid} ->
@@ -211,30 +211,31 @@ produce_sync(Pid, Value) ->
 produce_sync(Pid, Key, Value) ->
   case produce(Pid, Key, Value) of
     {ok, CallRef} ->
-      %% Wait for BROD_PRODUCE_REQ_ACKED
-      sync_produce_requests(Pid, [CallRef]);
+      %% Wait until the request is acked by kafka
+      sync_produce_requests([CallRef]);
     {error, Reason} ->
       {error, Reason}
   end.
 
 %% @doc Block wait for sent produced request to be acked by kafka.
--spec sync_produce_request(Producer::pid(), brod_produce_call()) ->
+-spec sync_produce_request(brod_produce_call()) ->
         ok | {error, Reason::any()}.
-sync_produce_request(Producer, CallRef) ->
-  true = is_pid(Producer), %% assert
-  sync_produce_requests(Producer, [CallRef]).
+sync_produce_request(CallRef) ->
+  sync_produce_requests([CallRef]).
 
 %% @doc Block wait for sent produced requests to be acked by kafka.
--spec sync_produce_requests(Producer::pid(), [brod_produce_call()]) ->
+-spec sync_produce_requests([brod_produce_call()]) ->
         ok | {error, Reason::any()}.
-sync_produce_requests(ProducerPid, CallRefs) when is_pid(ProducerPid) ->
+sync_produce_requests(CallRefs) ->
   lists:foreach(
     fun(?BROD_PRODUCE_CALL(Pid, _Ref)) ->
       self() =:= Pid orelse
         erlang:error({badarg, [{caller_pid, Pid}, {sync_pid, self()}]})
     end, CallRefs),
-  ExpectList = [?BROD_PRODUCE_REQ_ACKED(Call) || Call <- CallRefs],
-  brod_partition_producer:sync_produce_requests(ProducerPid, ExpectList).
+  ExpectList = [ #brod_produce_reply{ call   = CallRef
+                                    , result = brod_produce_req_acked
+                                    } || CallRef <- CallRefs ],
+  brod_partition_producer:sync_produce_requests(ExpectList).
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)
