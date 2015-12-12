@@ -45,25 +45,14 @@
         ]).
 
 %%%_* Includes =================================================================
--include("brod.hrl").
 -include("brod_int.hrl").
 
-%%%_* Macros -------------------------------------------------------------------
-
-%%%_* Types --------------------------------------------------------------------
--ifdef(otp_before_17).
--type api_keys() :: dict().
--else.
--type api_keys() :: dict:dict(corr_id(), term()).
--endif.
-
 %%%_* Records ==================================================================
--record(state, { parent                :: pid()
-               , sock                  :: port()
-               , corr_id = 0           :: corr_id()
-               , tail    = <<>>        :: binary()
-               , api_keys = dict:new() :: api_keys()
-               , client_id             :: client_id()
+-record(state, { client_id   :: client_id()
+               , parent      :: pid()
+               , sock        :: port()
+               , tail = <<>> :: binary() %% leftover of last data stream
+               , requests    :: brod_kafka_requests:requests()
                }).
 
 %%%_* API ======================================================================
@@ -86,9 +75,11 @@ send_sync(Pid, #produce_request{acks = 0} = Request, _Timeout) ->
   {ok, _CorrId} = send(Pid, Request),
   ok;
 send_sync(Pid, Request, Timeout) ->
+  Mref = erlang:monitor(process, Pid),
   {ok, CorrId} = send(Pid, Request),
   receive
-    {msg, Pid, CorrId, Response} -> {ok, Response}
+    {msg, Pid, CorrId, Response} -> {ok, Response};
+    {'DOWN', Mref, _, _, Reason} -> {error, {sock_down, Reason}}
   after
     Timeout -> {error, timeout}
   end.
@@ -111,7 +102,11 @@ init(Parent, Host, Port, ClientId, Debug0) ->
     {ok, Sock} ->
       proc_lib:init_ack(Parent, {ok, self()}),
       try
-        loop(#state{parent = Parent, sock = Sock, client_id = ClientId}, Debug)
+        loop(#state{ client_id = ClientId
+                   , parent    = Parent
+                   , sock      = Sock
+                   , requests  = brod_kafka_requests:new()
+                   }, Debug)
       catch error : E ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
@@ -147,27 +142,36 @@ decode_msg(Msg, State, Debug0) ->
   Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
   handle_msg(Msg, State, Debug).
 
-handle_msg({tcp, _Sock, Bin}, #state{tail = Tail0} = State, Debug) ->
+handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
+                                    , requests = Requests
+                                    } = State, Debug) ->
   Stream = <<Tail0/binary, Bin/binary>>,
-  {Tail, Responses, ApiKeys} =
-    brod_kafka:parse_stream(Stream, State#state.api_keys),
-  lists:foreach(fun({CorrId, Response}) ->
-                    State#state.parent ! {msg, self(), CorrId, Response}
-                end, Responses),
-  ?MODULE:loop(State#state{tail = Tail, api_keys = ApiKeys}, Debug);
+  {Tail, Responses} = brod_kafka:parse_stream(Stream, Requests),
+  NewRequests =
+    lists:foldl(
+      fun({CorrId, Response}, Reqs) ->
+        Caller = brod_kafka_requests:get_caller(Reqs, CorrId),
+        safe_send(Caller, {msg, self(), CorrId, Response}),
+        brod_kafka_requests:del(Reqs, CorrId)
+      end, Requests, Responses),
+  ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
 handle_msg({tcp_closed, _Sock}, _State, _) ->
   exit(tcp_closed);
 handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
   exit({tcp_error, Reason});
 handle_msg({From, {send, Request}},
-           #state{sock = Sock, client_id = ClientId} = State, Debug) ->
-  CorrId = next_corr_id(State#state.corr_id),
+           #state{ client_id = ClientId
+                 , sock      = Sock
+                 , requests  = Requests
+                 } = State, Debug) ->
+  {Caller, _Ref} = From,
+  ApiKey = brod_kafka:api_key(Request),
+  {CorrId, NewRequests} =
+    brod_kafka_requests:add(Requests, Caller, ApiKey),
   RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   reply(From, {ok, CorrId}),
-  ApiKey = brod_kafka:api_key(Request),
-  ApiKeys = dict:store(CorrId, ApiKey, State#state.api_keys),
-  ?MODULE:loop(State#state{corr_id = CorrId, api_keys = ApiKeys}, Debug);
+  ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
   reply(From, {ok, State#state.sock}),
   ?MODULE:loop(State, Debug);
@@ -178,8 +182,14 @@ handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
 handle_msg(_Msg, State, Debug) ->
   ?MODULE:loop(State, Debug).
 
-next_corr_id(?MAX_CORR_ID) -> 0;
-next_corr_id(CorrId)       -> CorrId + 1.
+safe_send(Pid, Msg) ->
+  try
+    Pid ! Msg,
+    ok
+  catch _ : _ ->
+    %% TODO maybe log?
+    ok
+  end.
 
 system_continue(_Parent, Debug, State) ->
   ?MODULE:loop(State, Debug).
@@ -208,7 +218,7 @@ print_msg(Device, Msg, State) ->
   do_print_msg(Device, "unknown msg: ~p", [Msg], State).
 
 do_print_msg(Device, Fmt, Args, State) ->
-  CorrId = State#state.corr_id,
+  CorrId = brod_kafka_requests:get_corr_id(State#state.requests),
   io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~n",
             [ts(), self(), CorrId] ++ Args).
 

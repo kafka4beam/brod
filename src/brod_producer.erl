@@ -148,7 +148,8 @@ sync_produce_requests([#brod_produce_reply{ call   = ?BROD_PRODUCE_CALL(_, Mref)
       {error, {producer_down, Reason}};
     Reply ->
       %% demonitor if this is the last reply.
-      Result =:= brod_produce_req_acked andalso erlang:demonitor(Mref, [flush]),
+      Result =:= brod_produce_req_acked andalso
+        erlang:demonitor(Mref, [flush]),
       sync_produce_requests(Replies)
   end.
 

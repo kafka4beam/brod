@@ -69,7 +69,7 @@ handle_info(init, #state{ client = ClientId
                         , topic  = Topic
                         , config = Config
                         } = State) ->
-  {ok, Partitions} = brod_client:get_partitions(ClientId),
+  {ok, Partitions} = brod_client:get_partitions(ClientId, Topic),
   {ok, PartitionsSup} =
     brod_sup:start_link_producer_sup(ClientId, Topic, Partitions, Config),
   NewState = State#state{producer_sup = PartitionsSup},

@@ -123,7 +123,7 @@ register_producer(Client, Topic, Partition) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down | not_registered | restarting.
 get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
-  case eralng:process_info(ClientPid, registered_name) of
+  case erlang:process_info(ClientPid, registered_name) of
     {registered_name, ClientId} ->
       get_producer(ClientId, Topic, Partition);
     undefined ->

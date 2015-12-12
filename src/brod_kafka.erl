@@ -42,20 +42,20 @@
 %%%_* API ----------------------------------------------------------------------
 %% @doc Parse binary stream of kafka responses.
 %%      Returns list of {CorrId, Response} tuples and remaining binary.
-%%      CorrIdDict: dict(CorrId -> ApiKey)
-parse_stream(Bin, CorrIdDict) ->
-  parse_stream(Bin, [], CorrIdDict).
+-spec parse_stream(binary(), brod_kakfa_requests:requests()) ->
+        {binary(), [{corr_id(), term()}]}.
+parse_stream(Bin, Requests) ->
+  parse_stream(Bin, [], Requests).
 
 parse_stream(<<Size:32/?INT,
                Bin0:Size/binary,
-               Tail/binary>>, Acc, CorrIdDict0) ->
+               Tail/binary>>, Acc, Requests) ->
   <<CorrId:32/?INT, Bin/binary>> = Bin0,
-  ApiKey = dict:fetch(CorrId, CorrIdDict0),
+  ApiKey = brod_kafka_requests:get_api_key(Requests, CorrId),
   Response = decode(ApiKey, Bin),
-  CorrIdDict = dict:erase(CorrId, CorrIdDict0),
-  parse_stream(Tail, [{CorrId, Response} | Acc], CorrIdDict);
-parse_stream(Bin, Acc, CorrIdDict) ->
-  {Bin, Acc, CorrIdDict}.
+  parse_stream(Tail, [{CorrId, Response} | Acc], Requests);
+parse_stream(Bin, Acc, _Requests) ->
+  {Bin, Acc}.
 
 encode(ClientId, CorrId, Request) ->
   Header = header(api_key(Request), ClientId, CorrId),
