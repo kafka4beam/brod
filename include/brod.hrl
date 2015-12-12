@@ -57,6 +57,10 @@
                            | roundrobin
                            | fun((Key::binary(), NrOfPartitions::pos_integer()) -> partition()).
 
+-type brod_client_config() :: proplists:proplist().
+-type brod_producer_config() :: proplists:proplist().
+-type brod_consumer_config() :: proplists:proplist().
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

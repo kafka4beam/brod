@@ -56,8 +56,9 @@
 -type corr_id()         :: 0..?MAX_CORR_ID.
 -type offset()          :: integer().
 -type kafka_kv()        :: {binary(), binary()}.
--type client_config()   :: proplists:proplist().
--type producer_config() :: proplists:proplist().
+-type client_config()   :: brod_client_config().
+-type producer_config() :: brod_producer_config().
+-type consumer_config() :: brod_consumer_config().
 -type client()          :: client_id() | pid().
 
 -record(socket, { pid     :: pid()

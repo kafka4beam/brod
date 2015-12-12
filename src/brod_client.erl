@@ -23,11 +23,12 @@
 -module(brod_client).
 -behaviour(gen_server).
 
-%% TODO: perhaps add a connect_leader/3 API?
 -export([ connect_broker/3
         , get_metadata/2
-        , start_link/1
-        , start_link/2
+        , get_partitions/2
+        , get_producer/3
+        , register_producer/3
+        , start_link/4
         , stop/1
         ]).
 
@@ -39,7 +40,6 @@
         , terminate/2
         ]).
 
--include_lib("stdlib/include/ms_transform.hrl").
 -include("brod_int.hrl").
 
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
@@ -48,36 +48,40 @@
 -define(dead_since(TS, REASON), {dead_since, TS, REASON}).
 -type dead_socket() :: ?dead_since(erlang:timestamp(), any()).
 
+%% ClientId as ets table name.
+-define(ETS(ClientId), ClientId).
+-define(PRODUCER_KEY(Topic, Partition),
+        {producer, Topic, Partition}).
+-define(PRODUCER(Topic, Partition, Pid),
+        {?PRODUCER_KEY(Topic, Partition), Pid}).
+
 -record(sock,
         { endpoint :: endpoint()
         , sock_pid :: pid() | dead_socket()
         }).
 
 -record(state,
-        { client_id    :: client_id()
-        , endpoints    :: [endpoint()]
-        , meta_sock    :: pid()
-        , sockets = [] :: [#sock{}]
-        , topics_sup   :: pid()
-        , config       :: list(any())
+        { client_id     :: client_id()
+        , endpoints     :: [endpoint()]
+        , meta_sock     :: pid()
+        , sockets = []  :: [#sock{}]
+        , producers_sup :: pid()
+        , config        :: client_config()
         }).
 
 %%%_* APIs ---------------------------------------------------------------------
 
--spec start_link([endpoint()]) -> {ok, pid()}.
-start_link(Hosts) ->
-  start_link(?BROD_DEFAULT_CLIENT_ID, [{endpoints, Hosts}]).
+-spec start_link(client_id(), [endpoint()], client_config(),
+                 [{topic(), producer_config()}]) -> {ok, pid()}.
+start_link(ClientId, Endpoints, Config, Producers) when is_atom(ClientId) ->
+  gen_server:start_link({local, ClientId}, ?MODULE,
+                        {ClientId, Endpoints, Config, Producers}, []).
 
--spec start_link(client_id(), client_config()) -> {ok, client()}.
-start_link(ClientId, Config) when is_atom(ClientId) ->
-  {ok, _Pid} =
-    gen_server:start_link({local, ClientId}, ?MODULE, {ClientId, Config}, []),
-  {ok, ClientId}.
-
+-spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop).
 
--spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
+-spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
@@ -89,26 +93,78 @@ get_metadata(Client, Topic) ->
 connect_broker(Client, Host, Port) ->
   gen_server:call(Client, {connect, Host, Port}, infinity).
 
+%% @doc Get all partition numbers of a given topic.
+-spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
+get_partitions(Client, Topic) ->
+  case get_metadata(Client, Topic) of
+    {ok, #metadata_response{topics = TopicsMetadata}} ->
+      [TopicMetadata] = TopicsMetadata,
+      try
+        {ok, do_get_partitions(TopicMetadata)}
+      catch
+        throw:Reason ->
+          {error, Reason}
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+%% @doc Register self() as a partition producer the pid is registered in an ETS
+%% table, then the callers may lookup a producer pid from the table and make
+%% produce requests to the producer process directly.
+%% @end
+-spec register_producer(client(), topic(), partition()) -> ok.
+register_producer(Client, Topic, Partition) ->
+  Producer = self(),
+  gen_server:cast(Client, {register_producer, Topic, Partition, Producer}).
+
+%% @doc Get producer of a given topic-partition.
+-spec get_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down | not_registered | restarting.
+get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
+  case eralng:process_info(ClientPid, registered_name) of
+    {registered_name, ClientId} ->
+      get_producer(ClientId, Topic, Partition);
+    undefined ->
+      {error, client_down}
+  end;
+get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
+  try
+    case ets:lookup(?ETS(ClientId), ?PRODUCER_KEY(Topic, Partition)) of
+      [] ->
+        %% not yet started?
+        {error, not_registered};
+      [?PRODUCER(Topic, Partition, Pid)] ->
+        case is_alive(Pid) of
+          true  -> {ok, Pid};
+          false -> {error, restarting}
+        end
+    end
+  catch error:badarg ->
+    {error, client_down}
+  end.
+
 %%%_* gen_server callbacks -----------------------------------------------------
 
-init({ClientId, Config}) ->
+init({ClientId, Endpoints, Config, Producers}) ->
   erlang:process_flag(trap_exit, true),
-  Endpoints = proplists:get_value(endpoints, Config, []),
-  true = is_list(Endpoints) andalso length(Endpoints) > 0, %% assert
-  self() ! start_metadata_socket,
+  ets:new(?ETS(ClientId), [named_table, protected, {read_concurrency, true}]),
+  self() ! {init, Producers},
   {ok, #state{ client_id = ClientId
              , endpoints = Endpoints
+             , config    = Config
              }}.
 
 %% TODO: maybe add a timer to clean up very old ?dead_since sockets
-handle_info(start_metadata_socket, #state{endpoints = Endpoints} = State) ->
-  self() ! start_topics_sup,
-  {noreply, State#state{sockets = start_metadata_socket(Endpoints)}};
-handle_info(start_topics_sup, #state{client_id = ClientId} = State) ->
-  %% NOTE: in case this is not a permanent (configured in sys.config)
-  %%       the supervisor will be started empty (without any children).
-  {ok, Pid} = brod_sup:start_link_topics_sup(ClientId),
-  {noreply, State#state{topics_sup = Pid}};
+handle_info({init, Producers}, #state{ client_id = ClientId
+                                     , endpoints = Endpoints
+                                     } = State) ->
+  Sockets = start_metadata_socket(Endpoints),
+  {ok, Pid} = brod_sup:start_link_producers_sup(ClientId, Producers),
+  {noreply, State#state{ sockets       = Sockets
+                       , producers_sup = Pid
+                       }};
 handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
                                           , endpoints = Endpoints
                                           } = State) ->
@@ -120,22 +176,22 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 handle_info(_Info, State) ->
   {noreply, State}.
 
-handle_call(stop, _From, State) ->
-  {stop, normal, ok, State};
-handle_call({get_metadata, Topic}, _From, #state{ meta_sock = Sock
-                                                , config    = Config
-                                                } = State) ->
-  Request = #metadata_request{topics = [Topic]},
-  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
-                                ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  Respons = brod_sock:send_sync(Sock, Request, timer:seconds(Timeout)),
-  {reply, Respons, State};
+handle_call({get_metadata, Topic}, _From, State) ->
+  Result = do_get_metadata(Topic, State),
+  {reply, Result, State};
 handle_call({connect, Host, Port}, _From, State) ->
   {NewState, Result} = do_connect(State, Host, Port),
   {reply, Result, NewState};
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+handle_cast({register_producer, Topic, Partition, ProducerPid},
+            #state{client_id = ClientId} = State) ->
+  Tab = ?ETS(ClientId),
+  ets:insert(Tab, ?PRODUCER(Topic, Partition, ProducerPid)),
+  {noreply, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -152,6 +208,30 @@ terminate(_Reason, #state{sockets = Sockets}) ->
     end, Sockets).
 
 %%%_* Internal functions -------------------------------------------------------
+
+-spec do_get_partitions(#topic_metadata{}) -> [partition()].
+do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
+                                 , partitions = Partitions}) ->
+  brod_kafka:is_error(TopicErrorCode) orelse
+    erlang:throw({"topic metadata error", TopicErrorCode}),
+  lists:map(
+    fun(#partition_metadata{ error_code = PartitionErrorCode
+                           , id         = Partition
+                           }) ->
+      brod_kafka:is_error(PartitionErrorCode) orelse
+        erlang:throw({"partition metadata error", PartitionErrorCode}),
+      Partition
+    end, Partitions).
+
+-spec do_get_metadata(topic(), #state{}) ->
+        {ok, #metadata_response{}} | {error, any()}.
+do_get_metadata(Topic, #state{ meta_sock = Sock
+                             , config    = Config
+                             }) ->
+  Request = #metadata_request{topics = [Topic]},
+  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
+                                ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
+  brod_sock:send_sync(Sock, Request, timer:seconds(Timeout)).
 
 -spec do_connect(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
@@ -247,6 +327,8 @@ start_metadata_socket(Endpoints) ->
     {ok, Pid}       -> Pid;
     {error, Reason} -> erlang:error({"metadata socket failure", Reason})
   end.
+
+is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
 
 %%% Local Variables:
 %%% erlang-indent-level: 2

@@ -31,16 +31,17 @@
         ]).
 
 %% Client API
--export([ start_link_client/1
+-export([ get_partitions/2
+        , get_producer/3
         , start_link_client/2
+        , start_link_client/4
         , stop_client/1
         ]).
 
 %% Producer API
--export([ start_link_producer/3
-        , stop_producer/1
-        , produce/2
+-export([ produce/2
         , produce/3
+        , produce/5
         , produce_sync/2
         , produce_sync/3
         , sync_produce_request/1
@@ -89,113 +90,85 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
-%% @doc Start a client.
-%% A client should work with only one kafka cluster
-%% Many producers may share the same client
+%% @doc Simple version of start_link_client/4.
+%% Deafult client ID and default configs are used.
+%% @see start_link_client/4 for more details.
 %% @end
--spec start_link_client([endpoint()]) -> {ok, pid()}.
-start_link_client(Hosts) ->
-  brod_client:start_link(Hosts).
+-spec start_link_client([endpoint()], [{topic(), producer_config()}]) ->
+        {ok, pid()} | {error, any()}.
+start_link_client(Endpoints, Producers) ->
+  start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
+                    _Config = [], Producers).
 
 %5 @doc Start a client.
-%% ClientId: a unique atom() to identify the client process
-%% Config: a proplist, possible values:
-%%   endpoints(mandatory):
-%%     Kakfa cluster entrypoint which can be any of the brokers in the cluster
-%%     i.e. does not necessarily have to be a leader of any partition,
-%%     e.g. a load-balanced entrypoint to the remote kakfa cluster.
-%%   get_metadata_timout_seconds(optional, default=5)
-%%     Return timeout error from brod_client:get_metadata/2 in case the respons
-%%     is not received from kafka in this configured time.
-%%   reconnect_cool_down_seconds(optional, default=1)
-%%     Delay this configured number of seconds before retrying to estabilish
-%%     a new connection to the kafka partition leader.
-%% @see brod_sup:start_link/0 for permanent clients.
+%% ClientId:
+%%   Atom to identify the client process
+%% Endpoints:
+%%   Kafka cluster endpoints, can be any of the brokers in the cluster
+%%   which does not necessarily have to be a leader of any partition,
+%%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% Config:
+%%   Proplist, possible values:
+%%     get_metadata_timout_seconds(optional, default=5)
+%%       Return timeout error from brod_client:get_metadata/2 in case the
+%%       respons is not received from kafka in this configured time.
+%%     reconnect_cool_down_seconds(optional, default=1)
+%%       Delay this configured number of seconds before retrying to
+%%       estabilish a new connection to the kafka partition leader.
+%% Producers:
+%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
+%%   proplist, @see brod_producers:start_link/3 for more details
+% @end
+-spec start_link_client(client_id(), [endpoint()], client_config(),
+                        [{topic(), producer_config()}]) ->
+        {ok, pid()} | {error, any()}.
+start_link_client(ClientId, Endpoints, Config, Producers) ->
+  brod_client:start_link(ClientId, Endpoints, Config, Producers).
+
+%% @doc Stop a client.
+-spec stop_client(client_id()) -> ok.
+stop_client(ClientId) ->
+  brod_client:stop(ClientId).
+
+%% @doc Get all partition numbers of a given topic.
+%% The higher level producers may need the partition numbers to
+%% find the partition producer pid --- if the number of partitions
+%% is not statically configured for them.
+%% It is up to the callers how they want to distribute their data
+%% (e.g. random, roundrobin or consistent-hashing) to the partitions.
 %% @end
--spec start_link_client(client_id(), client_config()) ->
-        {ok, client()} | {error, any()}.
-start_link_client(ClientId, Config) ->
-  brod_client:start_link(ClientId, Config).
+-spec get_partitions(client(), topic()) ->
+        {ok, [partition()]} | {error, any()}.
+get_partitions(Client, Topic) ->
+  brod_client:get_partitions(Client, Topic).
 
--spec stop_client(client()) -> ok.
-stop_client(Client) ->
-  brod_client:stop(Client).
-
-%% @doc Start a process to publish messages to kafka.
-%%      Client:
-%%        Client PID or registered name (if started by brod_sup).
-%%        The registered name is also used by kafka for statistic
-%%        data collection.
-%%      Topic:
-%%        Topic name to produce data to.
-%%      Config:
-%%        list of tuples {atom(), any()} where atom can be:
-%%      required_acks (optional, default = -1):
-%%        How many acknowledgements the kafka broker should receive
-%%        from the clustered replicas before responding to the
-%%        producer.
-%%        If it is 0 the broker will not send any response (this is
-%%        the only case where the broker will not reply to a
-%%        request). If it is 1, the broker will wait the data is
-%%        written to the local log before sending a response. If it is
-%%        -1 the broker will block until the message is committed by
-%%        all in sync replicas before sending a response. For any
-%%        number > 1 the broker will block waiting for this number of
-%%        acknowledgements to occur (but the broker will never wait
-%%        for more acknowledgements than there are in-sync replicas).
-%%      ack_timeout (optional, default = 1000 ms):
-%%        Maximum time in milliseconds the broker can await the
-%%        receipt of the number of acknowledgements in
-%%        RequiredAcks. The timeout is not an exact limit on
-%%        the request time for a few reasons: (1) it does not
-%%        include network latency, (2) the timer begins at the
-%%        beginning of the processing of this request so if many
-%%        requests are queued due to broker overload that wait
-%%        time will not be included, (3) we will not terminate a
-%%        local write so if the local write time exceeds this
-%%        timeout it will not be respected.
-%%     partition_buffer_limit(optional, default = 32):
-%%        How many requests (per-partition) can be buffered without
-%%        blocking the caller.
-%%     partition_onwire_limit(optional, default = 8):
-%%        How many requests (per-partition) can be sent to kafka broker
-%%        asynchronously before receiving ACKs from broker.
-%%     message_set_bytes_limit(optional, default = 1M):
-%%        In case callers are producing faster than brokers can handle
-%%        (or congestion on wire), try to accumulate small requests as
-%%        much as possible but not exceeding message_set_bytes_limit.
-%%     partitionner(optional, default = random)
-%%        A callback function to map message key to partition number.
-%%        By default, it randomly chooses an alive partition worker.
-%%        Possible values: see type spec brod_partitionner().
-%% @end
--spec start_link_producer(client(), topic(), producer_config()) ->
-        {ok, pid()}.
-start_link_producer(Client, Topic, Config) ->
-  brod_producer:start_link(Client, Topic, Config).
-
-%% @doc Stop producer process
--spec stop_producer(pid()) -> ok.
-stop_producer(Pid) -> gen_server:call(Pid, stop).
+%% @equiv brod_client:get_producer/3.
+-spec get_producer(client_id(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down | not_registered | restarting.
+get_producer(ClientId, Topic, Partition) ->
+  brod_client:get_producer(ClientId, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
 -spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
-%% @doc Produce one message. The pid can be either a topic producer
-%% or a partition producer.
-%% TODO: support kv-list batch produce, need to update buffering
-%%       logics in brod_patition_producer.erl
-%% @end
+%% @doc Produce one message. The pid should be a producer pid.
 -spec produce(pid(), binary(), binary()) ->
         {ok, brod_produce_call()} | {error, any()}.
 produce(Pid, Key, Value) ->
-  case brod_producer:get_partition_producer(Pid, Key) of
-    {ok, PartitionProducerPid} ->
-      brod_partition_producer:produce(PartitionProducerPid, Key, Value);
-    {error, Reason} ->
-      {error, Reason}
+  brod_producer:produce(Pid, Key, Value).
+
+%% @doc Produce one message. This function first lookup the producer
+%% pid, then call produce/3 to do the actual job.
+%% @end
+-spec produce(client_id(), topic(), partition(), binary(), binary()) ->
+        {ok, brod_produce_call()} | {error, any()}.
+produce(ClientId, Topic, Partition, Key, Value) when is_atom(ClientId) ->
+  case brod_client:get_producer(ClientId, Topic, Partition) of
+    {ok, Pid}       -> produce(Pid, Key, Value);
+    {error, Reason} -> {error, Reason}
   end.
 
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
@@ -235,7 +208,7 @@ sync_produce_requests(CallRefs) ->
   ExpectList = [ #brod_produce_reply{ call   = CallRef
                                     , result = brod_produce_req_acked
                                     } || CallRef <- CallRefs ],
-  brod_partition_producer:sync_produce_requests(ExpectList).
+  brod_producer:sync_produce_requests(ExpectList).
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)
@@ -458,10 +431,8 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts),
-  {ok, Pid} = brod_partition_producer:start_link(Client, Topic, Partition, []),
-  Res = brod:produce_sync(Pid, Key, Value),
-  brod:stop_producer(Pid),
+  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}]),
+  Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
   brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->

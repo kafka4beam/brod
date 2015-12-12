@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2015 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,246 +16,407 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2015 Klarna AB
 %%% @end
 %%%=============================================================================
 
 -module(brod_producer).
-
 -behaviour(gen_server).
 
-%% Server API
--export([ get_partition_producer/2
-        , start_link/3
-        , subscribe/2
+-export([ start_link/4
+        , produce/3
+        , sync_produce_requests/1
         ]).
 
-%% gen_server callbacks
--export([ init/1
+-export([ code_change/3
         , handle_call/3
         , handle_cast/2
         , handle_info/2
+        , init/1
         , terminate/2
-        , code_change/3
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
-%%%_* Records ------------------------------------------------------------------
+%% default number of messages in buffer
+-define(DEFAULT_PARITION_BUFFER_LIMIT, 256).
+%% default number of message message-sets on wire
+-define(DEFAULT_PARITION_ONWIRE_LIMIT, 128).
+%% by default, send 1 MB message-set
+-define(DEFAULT_MESSAGE_SET_BYTES_LIMIT, 1048576).
+%% by default, require acks from all ISR
+-define(DEFAULT_REQUIRED_ACKS, -1).
+%% by default, leader should wait 1 second for replicas to ack
+-define(DEFAULT_ACK_TIMEOUT, 1000).
 
--type partition_worker() :: {partition(), waiting | pid()}.
+-define(CALLER_PENDING_ON_BUF(Caller), {caller_pending_on_buf, Caller}).
+-define(CALLER_PENDING_ON_ACK(Caller), {caller_pending_on_ack, Caller}).
 
--record(state, { client          :: client()
-               , topic           :: topic()
-               , config          :: producer_config()
-               , partitions_sup  :: pid()
-               , client_mref     :: reference()
-               , partitionner    :: brod_partitionner()
-               , partitions = [] :: [partition_worker()]
-               }).
+-type caller_state() :: ?CALLER_PENDING_ON_BUF(brod_produce_call())
+                      | ?CALLER_PENDING_ON_ACK(brod_produce_call()).
 
-%%%_* API ----------------------------------------------------------------------
--spec start_link(client(), topic(), producer_config()) -> {ok, pid()}.
-start_link(Client, Topic, Config) ->
-  gen_server:start_link(?MODULE, {Client, Topic, Config}, []).
+-record(req,
+        { caller :: caller_state()
+        , key    :: binary()
+        , value  :: binary()
+        }).
 
--spec subscribe(pid(), partition()) -> ok.
-subscribe(TopicProducerPid, Partition) ->
-  Msg = {subscribe, Partition, _PartitionProducerPid = self()},
-  gen_server:cast(TopicProducerPid, Msg).
+-record(state,
+        { client_id      :: client_id()
+        , topic          :: topic()
+        , partition      :: partition()
+        , config         :: producer_config()
+        , sock_pid       :: pid()
+        , topic_producer :: pid()
+        %% TODO start-link a writer process to buffer
+        %% to avoid huge log dumps in case of crash etc.
+        , buffer = []    :: [#req{}]
+        , onwire = []    :: [{corr_id(), [caller_state()]}]
+        }).
 
--spec get_partition_producer(pid(), binary()) -> {ok, pid()} | {error, any()}.
-get_partition_producer(Pid, KafkaMsgKey) ->
-  case erlang:process_info(Pid, dictionary) of
-    {dictionary, ProccessDict} ->
-      case proplists:get_value(brod_producer_type, ProccessDict) of
-        brod_partition_producer ->
-          %% the pid itself is a partition worker
-          {ok, Pid};
-        ?MODULE ->
-          %% the pid is a topic worker, get it from gen_server state
-          gen_server:call(Pid, {get_partition_producer, KafkaMsgKey}, infinity)
-      end;
-    undefined ->
-      {error, {producer_down, noproc}}
+%%%_* APIs ---------------------------------------------------------------------
+
+%% @doc Start (link) a partition producer.
+%% Possible configs:
+%%   required_acks (optional, default = -1):
+%%     How many acknowledgements the kafka broker should receive from the
+%%     clustered replicas before acking producer.
+%%       0: the broker will not send any response
+%%          (this is the only case where the broker will not reply to a request)
+%%       1: The leader will wait the data is written to the local log before
+%%          sending a response.
+%%      -1: If it is -1 the broker will block until the message is committed by
+%%          all in sync replicas before acking.
+%%   ack_timeout (optional, default = 1000 ms):
+%%     Maximum time in milliseconds the broker can await the receipt of the
+%%     number of acknowledgements in RequiredAcks. The timeout is not an exact
+%%     limit on the request time for a few reasons: (1) it does not include
+%%     network latency, (2) the timer begins at the beginning of the processing
+%%     of this request so if many requests are queued due to broker overload
+%%     that wait time will not be included, (3) kafka leader will not terminate
+%%     a local write so if the local write time exceeds this timeout it will
+%%     not be respected.
+%%   partition_buffer_limit(optional, default = 256):
+%%     How many requests (per-partition) can be buffered without blocking the
+%%     caller.
+%%   partition_onwire_limit(optional, default = 128):
+%%     How many requests (per-partition) can be sent to kafka broker
+%%     asynchronously before receiving ACKs from broker.
+%%   message_set_bytes_limit(optional, default = 1M):
+%%     In case callers are producing faster than brokers can handle (or
+%%     congestion on wire), try to accumulate small requests as much as possible
+%%     but not exceeding message_set_bytes_limit.
+%% @end
+-spec start_link(client_id(), topic(), partition(), producer_config()) ->
+        {ok, pid()}.
+start_link(ClientId, Topic, Partition, Config) when is_atom(ClientId) ->
+  gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
+
+%% @doc Produce a message to partition asynchronizely.
+%% The call is blocked until the request has been buffered in producer worker
+%% The function returns a call reference of type brod_produce_call() to the
+%% caller so the caller can used it to expect (match) a BROD_PRODUCE_REQ_ACKED
+%% message after the produce request has been acked by configured number of
+%% replicas in kafka cluster.
+%% @end
+-spec produce(pid(), binary(), binary()) ->
+        {ok, brod_produce_call()} | {error, any()}.
+produce(Pid, Key, Value) ->
+  MRef = erlang:monitor(process, Pid),
+  Call = ?BROD_PRODUCE_CALL(self(), MRef),
+  ok = gen_server:cast(Pid, {produce, Call, Key, Value}),
+  ExpectedReply = #brod_produce_reply{ call   = Call
+                                     , result = brod_produce_req_buffered
+                                     },
+  %% Wait until the request is buffered
+  case sync_produce_requests([ExpectedReply]) of
+    ok              -> {ok, Call};
+    {error, Reason} -> {error, Reason}
   end.
 
-%%%_* gen_server callbacks -----------------------------------------------------
-init({Client, Topic, Config}) ->
-  erlang:put(brod_producer_type, ?MODULE),
-  random:seed(os:timestamp()),
-  self() ! init,
-  #state{ client       = Client
-        , topic        = Topic
-        , config       = Config
-        , partitionner = get_partitionner(Config)
-        }.
+%% @doc Block sync the produce requests. The caller pid of this function
+%% Must be the caller of produce/3 in which the call reference was created
+%% @end
+-spec sync_produce_requests([brod_produce_reply()]) ->
+        ok | {error, Reason::any()}.
+sync_produce_requests([]) -> ok;
+sync_produce_requests([#brod_produce_reply{ call   = ?BROD_PRODUCE_CALL(_, Mref)
+                                          , result = Result
+                                          } = Reply | Replies]) ->
+  receive
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}};
+    Reply ->
+      %% demonitor if this is the last reply.
+      Result =:= brod_produce_req_acked andalso erlang:demonitor(Mref, [flush]),
+      sync_produce_requests(Replies)
+  end.
 
-handle_info(init, #state{ client       = Client
-                        , topic        = Topic
-                        , config       = Config
-                        , partitionner = Partitionner
-                        } = State) ->
-  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
-  #metadata_response{topics = [TopicMetadata]} = Metadata,
+%%%_* gen_server callbacks------------------------------------------------------
+
+init({ClientId, Topic, Partition, Config}) ->
+  self() ! init_socket,
+  {ok, #state{ client_id = ClientId
+             , topic     = Topic
+             , partition = Partition
+             , config    = Config
+             }}.
+
+handle_info(init_socket, #state{ client_id = ClientId
+                               , topic     = Topic
+                               , partition = Partition
+                               } = State) ->
+  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
+  #metadata_response{ brokers = Brokers
+                    , topics  = [TopicMetadata]
+                    } = Metadata,
   #topic_metadata{ error_code = TopicErrorCode
-                 , partitions = PartitionsMetadataList
+                 , partitions = Partitions
                  } = TopicMetadata,
   brod_kafka:is_error(TopicErrorCode) orelse
     erlang:throw({"topic metadata error", TopicErrorCode}),
-  Partitions0 = lists:map(fun(#partition_metadata{id = Id}) -> Id end,
-                          PartitionsMetadataList),
-  {ok, PartitionsSup} =
-    brod_sup:start_link_partitions_sup(Client, Topic, Partitions0,
-                                       Config, self()),
-  Mref = monitor_client(Client),
-  Partitions =
-    case Partitionner =:= roundrobin of
-      true  -> init_roundrobin_state(Partitions0);
-      false -> Partitions0
-    end,
-  NewState =
-    State#state{ partitions_sup = PartitionsSup
-               , partitions     = [{P, waiting} || P <- Partitions]
-               , client_mref    = Mref
-               },
+  #partition_metadata{ error_code = PartitionErrorCode
+                     , leader_id  = LeaderId} =
+    lists:keyfind(Partition, #partition_metadata.id, Partitions),
+  brod_kafka:is_error(PartitionErrorCode) orelse
+    erlang:throw({"partition metadata error", PartitionErrorCode}),
+  LeaderId >= 0 orelse
+    erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),
+  #broker_metadata{host = Host, port = Port} =
+    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+  {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
+  _ = erlang:monitor(process, SockPid),
+  ok = brod_client:register_producer(ClientId, Topic, Partition),
+  NewState = State#state{sock_pid = SockPid},
   {noreply, NewState};
-handle_info({'DOWN', Mref, process, _Pid, Reason},
-            #state{client_mref = Mref} = State) ->
-  {stop, {client_down, Reason}, State};
-handle_info(Info, State) ->
-  error_logger:warning_msg("Unexpected info: ~p", [Info]),
+handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
+            #state{sock_pid = Pid} = State) ->
+  {stop, {socket_down, Reason}, State};
+handle_info({msg, Pid, CorrId, #produce_response{} = R},
+            #state{sock_pid = Pid} = State) ->
+  #produce_response{topics = [ProduceTopic]} = R,
+  #produce_topic{topic = Topic, offsets = [ProduceOffset]} = ProduceTopic,
+  #produce_offset{ partition  = Partition
+                 , error_code = ErrorCode
+                 , offset     = Offset
+                 } = ProduceOffset,
+  Topic = State#state.topic, %% assert
+  Partition = State#state.partition, %% assert
+  case brod_kafka:is_error(ErrorCode) of
+    true ->
+      error_logger:error_msg(
+        "Error in produce response\n"
+        "Topic: ~s\n"
+        "Partition: ~B\n"
+        "Offset: ~B\n"
+        "Error code: ~p",
+        [Topic, Partition, Offset, ErrorCode]),
+      {stop, {produce_error, {Topic, Partition, Offset, ErrorCode}}, State};
+    false ->
+      {ok, NewState} = handle_produce_response(State, CorrId),
+      {noreply, NewState}
+  end;
+handle_info(_Info, State) ->
   {noreply, State}.
 
-handle_call({get_partition_producer, KafkaMsgKey}, _From, State) ->
-  {Result, NewState} = do_get_partition_worker(KafkaMsgKey, State),
-  {reply, Result, NewState};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
-handle_call(Request, _From, State) ->
-  {reply, {error, {unsupported_call, Request}}, State}.
+handle_call(_Call, _From, State) ->
+  {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({subscribe, Partition, PartitionProducerPid},
-            #state{partitions = Workers} = State) ->
-  NewWorkers =
-    lists:keystore(Partition, 1, Workers, {Partition, PartitionProducerPid}),
-  {noreply, State#state{partitions = NewWorkers}};
+handle_cast({produce, Call, Key, Value}, #state{} = State) ->
+  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Call)
+            , key    = Key
+            , value  = Value
+            },
+  {ok, NewState} = handle_produce_request(State, Req),
+  {noreply, NewState};
 handle_cast(_Cast, State) ->
   {noreply, State}.
-
-terminate(_Reason, #state{}) ->
-  ok.
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
+terminate(_Reason, _State) ->
+  %% TODO: log
+  ok.
+
 %%%_* Internal functions -------------------------------------------------------
 
-%% @private Randomize the fist candidate of roundrobin list.
-%% This is to avoid always producing to the same partition
-%% in case of restart/retry repeatedly.
-%% @end
--spec init_roundrobin_state([partition()]) -> [partition()].
-init_roundrobin_state(Partitions) ->
-  N = random:uniform(length(Partitions)),
-  {Head, Tail} = lists:split(N, Partitions),
-  Tail ++ Head.
+-spec handle_produce_request(#state{}, #req{}) -> {ok, #state{}}.
+handle_produce_request(#state{buffer = Buffer} = State, Req) ->
+  BufferCountLimit = get_buffer_count_limit(State),
+  NewBuffer = reply_buffered(BufferCountLimit, Buffer ++ [Req]),
+  NewState = State#state{buffer = NewBuffer},
+  maybe_send_reqs(NewState).
 
-%% @private Monitor the client process, in case the client is down
-%% a producer should restart too.
-%% NOTE: static producers are managed by supervision trees
-%%       this is needed for the dynamicly started producers
-%% @end
-monitor_client(ClientId) when is_atom(ClientId) ->
-  ClientPid = erlang:whereis(ClientId),
-  true = is_pid(ClientPid), %% assert
-  monitor_client(ClientPid);
-monitor_client(ClientPid) ->
-  erlang:monitor(process, ClientPid).
+-spec maybe_send_reqs(#state{}) -> {ok, #state{}}.
+maybe_send_reqs(#state{buffer = []} = State) ->
+  {ok, State};
+maybe_send_reqs(#state{} = State) ->
+  OnWireMsgSetCountLimit = get_onwire_count_limit(State),
+  maybe_send_reqs(State, OnWireMsgSetCountLimit).
 
--spec get_partitionner(producer_config()) -> brod_partitionner().
-get_partitionner(Config) ->
-  proplists:get_value(partitionner, Config, random).
-
--spec do_get_partition_worker(binary(), #state{}) ->
-        {Result, #state{}} when
-          Result :: {ok, pid()} | {error, any()}.
-do_get_partition_worker(_KafkaMsgKey, #state{ partitionner = random
-                                            , partitions   = Partitions
-                                            } = State) ->
-  AlivePids =
-    lists:filtermap(
-      fun({_Partition, Pid}) ->
-        is_alive(Pid) andalso {true, Pid}
-      end, Partitions),
-  Result =
-    case length(AlivePids) of
-      0 -> {error, no_alive_partition_producer};
-      N -> {ok, lists:nth(random:uniform(N), AlivePids)}
-    end,
-  {Result, State};
-do_get_partition_worker(_KafkaMsgKey, #state{ partitionner = roundrobin
-                                            , partitions   = Partitions
-                                            } = State) ->
-  {Result, NewPartitions} = roundrobin_next(Partitions, _Acc = []),
-  {Result, State#state{partitions = NewPartitions}};
-do_get_partition_worker(KafkaMsgKey, #state{ partitionner = F
-                                           , partitions   = Partitions
-                                           } = State) when is_function(F, 2) ->
-  %% Caller defined partitionner
-  NrOfPartitions = length(Partitions),
-  PartitionResult =
-    try
-      {ok, F(KafkaMsgKey, NrOfPartitions)}
-    catch C : E ->
-      {error, {partitionner_error, {C, E, erlang:get_stacktrace()}}}
-    end,
-  Result =
-    case PartitionResult of
-      {ok, Partition} when is_integer(Partition) andalso
-                           Partition >= 0        andalso
-                           Partition =< NrOfPartitions ->
-        {Partition, Pid} = lists:keyfind(Partition, 1, Partitions),
-        case is_alive(Pid) of
-          true ->
-            {ok, Pid};
-          false ->
-            {error, {partition_producer_not_alive, Partition}}
-        end;
-      {ok, Partition} ->
-        {error, {bad_partitionner_result, Partition}};
-      {error, Reason} ->
-        {error, Reason}
-  end,
-  {Result, State}.
-
--spec roundrobin_next([partition_worker()], [partition_worker()]) ->
-        {Result, [partition_worker()]} when
-          Result :: {ok, pid()} | {error, any()}.
-roundrobin_next([], Acc) ->
-  Result = {error, no_alive_partition_producer},
-  {Result, lists:reverse(Acc)};
-roundrobin_next([{Partition, Pid} | Rest], Acc) ->
-  case is_alive(Pid) of
-    true ->
-      Result = {ok, Pid},
-      {Result, Rest ++ lists:reverse([{Partition, Pid} | Acc])};
-    false ->
-      %% not alive, continue try the next one
-      roundrobin_next(Rest, [{Partition, Pid} | Acc])
+-spec maybe_send_reqs(#state{}, pos_integer()) -> {ok, #state{}}.
+maybe_send_reqs(#state{onwire = OnWire} = State, OnWireMsgSetCountLimit)
+ when length(OnWire) >= OnWireMsgSetCountLimit ->
+  {ok, State};
+maybe_send_reqs(#state{ buffer    = Buffer
+                      , onwire    = OnWire
+                      , sock_pid  = SockPid
+                      , topic     = Topic
+                      , partition = Partition
+                      } = State, _OnWireCntLimit) ->
+  MessageSetBytesLimit = get_message_set_bytes(State),
+  {Callers, MessageSet, NewBuffer} = get_message_set(Buffer, MessageSetBytesLimit),
+  RequiredAcks = get_required_acks(State),
+  %% TODO: change to plain kv-list ?
+  PartitionDict = dict:from_list([{Partition, MessageSet}]),
+  Data = [{Topic, PartitionDict}],
+  KafkaReq = #produce_request{ acks    = RequiredAcks
+                             , timeout = get_ack_timeout(State)
+                             , data    = Data
+                             },
+  {ok, CorrId} = brod_sock:send(SockPid, KafkaReq),
+  NewState =
+    State#state{ buffer = NewBuffer
+               , onwire = OnWire ++ [{CorrId, Callers}]
+               },
+  %% in case require no ack, fake one as if received from kafka
+  case RequiredAcks =:= 0 of
+    true  -> handle_produce_response(NewState, CorrId);
+    false -> {ok, NewState}
   end.
 
-is_alive(Pid) ->
-  is_pid(Pid) andalso is_process_alive(Pid).
+%% @private Get the next message-set to send from buffer.
+-spec get_message_set([#req{}], pos_integer()) ->
+        {[caller_state()], [kafka_kv()], [#req{}]}.
+get_message_set(Buffer, MessageSetBytesLimit) ->
+  get_message_set(Buffer, MessageSetBytesLimit, [], [], 0).
 
-%% Tests -----------------------------------------------------------------------
+get_message_set([], _BytesLimit, Callers, KVList, _Bytes) ->
+  %% no request left
+  {lists:reverse(Callers), lists:reverse(KVList), []};
+get_message_set([#req{ caller = CallerState
+                     , key    = Key
+                     , value  = Value
+                     } | Buffer], BytesLimit, Callers, KVList, Bytes) ->
+  NewBytes = Bytes + size(Key) + size(Value),
+  case NewBytes > BytesLimit of
+    true when Bytes > 0 ->
+      %% keep accumulating would exceed limit
+      {lists:reverse(Callers), lists:reverse(KVList), Buffer};
+    true when Bytes =:= 0 ->
+      %% the first request itself exceeded limit
+      [] = KVList, %% assert
+      NewCallerState = maybe_reply_buffered(CallerState),
+      {[NewCallerState], [{Key, Value}], Buffer};
+    false ->
+      %% keep pulling in messages to message-set
+      NewCallerState = maybe_reply_buffered(CallerState),
+      get_message_set(Buffer, BytesLimit,
+                     [NewCallerState | Callers],
+                     [{Key, Value} | KVList], NewBytes)
+  end.
 
--include_lib("eunit/include/eunit.hrl").
+%% @private Reply PRODUCE_REQ_BUFFERED to caller for the first N requests,
+%% Keep the callers of the ones at tail blocked.
+%% @end
+-spec reply_buffered(non_neg_integer(), [#req{}]) -> [#req{}].
+reply_buffered(FirstN, Reqs) ->
+  reply_buffered(FirstN, Reqs, []).
 
--ifdef(TEST).
+reply_buffered(0, Reqs, Replied) ->
+  lists:reverse(Replied) ++ Reqs;
+reply_buffered(_N, [], Replied) ->
+  lists:reverse(Replied);
+reply_buffered(N, [Req | Reqs], Replied) ->
+  NewCallerState = maybe_reply_buffered(Req#req.caller),
+  NewReq = Req#req{caller = NewCallerState},
+  reply_buffered(N-1, Reqs, [NewReq | Replied]).
 
--endif. % TEST
+%% @private Reply buffered if the caller is pending on ?PRODUCE_REQ_BUFFERED.
+-spec maybe_reply_buffered(caller_state()) -> caller_state().
+maybe_reply_buffered(?CALLER_PENDING_ON_BUF(Caller)) ->
+  ok = do_reply_buffered(Caller),
+  ?CALLER_PENDING_ON_ACK(Caller);
+maybe_reply_buffered(?CALLER_PENDING_ON_ACK(Caller)) ->
+  %% already replied
+  ?CALLER_PENDING_ON_ACK(Caller).
+
+-spec handle_produce_response(#state{}, corr_id()) -> {ok, #state{}}.
+handle_produce_response(#state{onwire = [{CorrId, Callers} | OnWire]} = State, CorrId) ->
+  lists:foreach(fun(?CALLER_PENDING_ON_ACK(Caller)) ->
+                  do_reply_acked(Caller)
+                end, Callers),
+  {ok, State#state{onwire = OnWire}};
+handle_produce_response(#state{onwire = OnWire}, CorrId) ->
+  erlang:error({"unexpected response", CorrId, OnWire}).
+
+-spec do_reply_buffered(brod_produce_call()) -> ok.
+do_reply_buffered(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
+  Reply = #brod_produce_reply{ call   = Call
+                             , result = brod_produce_req_buffered
+                             },
+  safe_send(Pid, Reply).
+
+-spec do_reply_acked(brod_produce_call()) -> ok.
+do_reply_acked(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
+  Reply = #brod_produce_reply{ call   = Call
+                             , result = brod_produce_req_acked
+                             },
+  safe_send(Pid, Reply).
+
+safe_send(Pid, Msg) ->
+  try
+    Pid ! Msg,
+    ok
+  catch _ : _ ->
+    ok
+  end.
+
+-spec get_buffer_count_limit(#state{}) -> non_neg_integer().
+get_buffer_count_limit(#state{config = Config}) ->
+  case proplists:get_value(partition_buffer_limit, Config) of
+    ?undef ->
+      ?DEFAULT_PARITION_BUFFER_LIMIT;
+    N when is_integer(N) andalso N >= 0 ->
+      N
+  end.
+
+-spec get_onwire_count_limit(#state{}) -> pos_integer().
+get_onwire_count_limit(#state{config = Config}) ->
+  case proplists:get_value(partition_onwire_limit, Config) of
+    ?undef ->
+      ?DEFAULT_PARITION_ONWIRE_LIMIT;
+    N when is_integer(N) andalso N > 0 ->
+      N
+  end.
+
+-spec get_message_set_bytes(#state{}) -> pos_integer().
+get_message_set_bytes(#state{config = Config}) ->
+  case proplists:get_value(message_set_bytes_limit, Config) of
+    ?undef ->
+      ?DEFAULT_MESSAGE_SET_BYTES_LIMIT;
+    N when is_integer(N) andalso N > 0 ->
+      N
+  end.
+
+get_required_acks(#state{config = Config}) ->
+  case proplists:get_value(required_acks, Config) of
+    ?undef ->
+      ?DEFAULT_REQUIRED_ACKS;
+    N when is_integer(N) ->
+      N
+  end.
+
+get_ack_timeout(#state{config = Config}) ->
+  case proplists:get_value(ack_timeout, Config) of
+    ?undef ->
+      ?DEFAULT_ACK_TIMEOUT;
+    N when is_integer(N) andalso N > 0 ->
+      N
+  end.
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
