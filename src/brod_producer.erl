@@ -25,7 +25,7 @@
 
 -export([ start_link/4
         , produce/3
-        , sync_produce_requests/1
+        , sync_produce_request/1
         ]).
 
 -export([ code_change/3
@@ -52,8 +52,8 @@
 -define(CALLER_PENDING_ON_BUF(Caller), {caller_pending_on_buf, Caller}).
 -define(CALLER_PENDING_ON_ACK(Caller), {caller_pending_on_ack, Caller}).
 
--type caller_state() :: ?CALLER_PENDING_ON_BUF(brod_produce_call())
-                      | ?CALLER_PENDING_ON_ACK(brod_produce_call()).
+-type caller_state() :: ?CALLER_PENDING_ON_BUF(brod_call_ref())
+                      | ?CALLER_PENDING_ON_ACK(brod_call_ref()).
 
 -record(req,
         { caller :: caller_state()
@@ -114,43 +114,43 @@ start_link(ClientId, Topic, Partition, Config) when is_atom(ClientId) ->
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
-%% The function returns a call reference of type brod_produce_call() to the
-%% caller so the caller can used it to expect (match) a BROD_PRODUCE_REQ_ACKED
+%% The function returns a call reference of type brod_call_ref() to the
+%% caller so the caller can used it to expect (match) a brod_produce_req_acked
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
 -spec produce(pid(), binary(), binary()) ->
-        {ok, brod_produce_call()} | {error, any()}.
+        {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
-  MRef = erlang:monitor(process, Pid),
-  Call = ?BROD_PRODUCE_CALL(self(), MRef),
-  ok = gen_server:cast(Pid, {produce, Call, Key, Value}),
-  ExpectedReply = #brod_produce_reply{ call   = Call
-                                     , result = brod_produce_req_buffered
+  CallRef = #brod_call_ref{ caller = self()
+                          , callee = Pid
+                          , ref    = make_ref()
+                          },
+  ok = gen_server:cast(Pid, {produce, CallRef, Key, Value}),
+  ExpectedReply = #brod_produce_reply{ call_ref = CallRef
+                                     , result   = brod_produce_req_buffered
                                      },
   %% Wait until the request is buffered
-  case sync_produce_requests([ExpectedReply]) of
-    ok              -> {ok, Call};
+  case sync_produce_request(ExpectedReply) of
+    ok              -> {ok, CallRef};
     {error, Reason} -> {error, Reason}
   end.
 
 %% @doc Block sync the produce requests. The caller pid of this function
 %% Must be the caller of produce/3 in which the call reference was created
 %% @end
--spec sync_produce_requests([brod_produce_reply()]) ->
-        ok | {error, Reason::any()}.
-sync_produce_requests([]) -> ok;
-sync_produce_requests([#brod_produce_reply{ call   = ?BROD_PRODUCE_CALL(_, Mref)
-                                          , result = Result
-                                          } = Reply | Replies]) ->
+sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
+  #brod_call_ref{ caller = Caller
+                , callee = Callee
+                } = CallRef,
+  Caller = self(), %% assert
+  Mref = erlang:monitor(process, Callee),
   receive
-    {'DOWN', Mref, process, _Pid, Reason} ->
-      {error, {producer_down, Reason}};
     Reply ->
-      %% demonitor if this is the last reply.
-      Result =:= brod_produce_req_acked andalso
-        erlang:demonitor(Mref, [flush]),
-      sync_produce_requests(Replies)
+      erlang:demonitor(Mref, [flush]),
+      ok;
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}}
   end.
 
 %%%_* gen_server callbacks------------------------------------------------------
@@ -225,8 +225,8 @@ handle_call(stop, _From, State) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({produce, Call, Key, Value}, #state{} = State) ->
-  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(Call)
+handle_cast({produce, CallRef, Key, Value}, #state{} = State) ->
+  Req = #req{ caller = ?CALLER_PENDING_ON_BUF(CallRef)
             , key    = Key
             , value  = Value
             },
@@ -338,33 +338,34 @@ reply_buffered(N, [Req | Reqs], Replied) ->
 
 %% @private Reply buffered if the caller is pending on ?PRODUCE_REQ_BUFFERED.
 -spec maybe_reply_buffered(caller_state()) -> caller_state().
-maybe_reply_buffered(?CALLER_PENDING_ON_BUF(Caller)) ->
-  ok = do_reply_buffered(Caller),
-  ?CALLER_PENDING_ON_ACK(Caller);
-maybe_reply_buffered(?CALLER_PENDING_ON_ACK(Caller)) ->
+maybe_reply_buffered(?CALLER_PENDING_ON_BUF(CallRef)) ->
+  ok = do_reply_buffered(CallRef),
+  ?CALLER_PENDING_ON_ACK(CallRef);
+maybe_reply_buffered(?CALLER_PENDING_ON_ACK(CallRef)) ->
   %% already replied
-  ?CALLER_PENDING_ON_ACK(Caller).
+  ?CALLER_PENDING_ON_ACK(CallRef).
 
 -spec handle_produce_response(#state{}, corr_id()) -> {ok, #state{}}.
-handle_produce_response(#state{onwire = [{CorrId, Callers} | OnWire]} = State, CorrId) ->
-  lists:foreach(fun(?CALLER_PENDING_ON_ACK(Caller)) ->
-                  do_reply_acked(Caller)
+handle_produce_response(#state{ onwire = [{CorrId, Callers} | OnWire]
+                              } = State, CorrId) ->
+  lists:foreach(fun(?CALLER_PENDING_ON_ACK(CallRef)) ->
+                  do_reply_acked(CallRef)
                 end, Callers),
   {ok, State#state{onwire = OnWire}};
 handle_produce_response(#state{onwire = OnWire}, CorrId) ->
   erlang:error({"unexpected response", CorrId, OnWire}).
 
--spec do_reply_buffered(brod_produce_call()) -> ok.
-do_reply_buffered(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
-  Reply = #brod_produce_reply{ call   = Call
-                             , result = brod_produce_req_buffered
+-spec do_reply_buffered(brod_call_ref()) -> ok.
+do_reply_buffered(#brod_call_ref{caller = Pid} = CallRef) ->
+  Reply = #brod_produce_reply{ call_ref = CallRef
+                             , result   = brod_produce_req_buffered
                              },
   safe_send(Pid, Reply).
 
--spec do_reply_acked(brod_produce_call()) -> ok.
-do_reply_acked(?BROD_PRODUCE_CALL(Pid, _Ref) = Call) ->
-  Reply = #brod_produce_reply{ call   = Call
-                             , result = brod_produce_req_acked
+-spec do_reply_acked(brod_call_ref()) -> ok.
+do_reply_acked(#brod_call_ref{caller = Pid} = CallRef) ->
+  Reply = #brod_produce_reply{ call_ref = CallRef
+                             , result   = brod_produce_req_acked
                              },
   safe_send(Pid, Reply).
 

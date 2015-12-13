@@ -45,7 +45,6 @@
         , produce_sync/2
         , produce_sync/3
         , sync_produce_request/1
-        , sync_produce_requests/1
         ]).
 
 %% Consumer API
@@ -156,7 +155,7 @@ produce(Pid, Value) ->
 
 %% @doc Produce one message. The pid should be a producer pid.
 -spec produce(pid(), binary(), binary()) ->
-        {ok, brod_produce_call()} | {error, any()}.
+        {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   brod_producer:produce(Pid, Key, Value).
 
@@ -164,9 +163,9 @@ produce(Pid, Key, Value) ->
 %% pid, then call produce/3 to do the actual job.
 %% @end
 -spec produce(client_id(), topic(), partition(), binary(), binary()) ->
-        {ok, brod_produce_call()} | {error, any()}.
+        {ok, brod_call_ref()} | {error, any()}.
 produce(ClientId, Topic, Partition, Key, Value) when is_atom(ClientId) ->
-  case brod_client:get_producer(ClientId, Topic, Partition) of
+  case get_producer(ClientId, Topic, Partition) of
     {ok, Pid}       -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
   end.
@@ -185,30 +184,19 @@ produce_sync(Pid, Key, Value) ->
   case produce(Pid, Key, Value) of
     {ok, CallRef} ->
       %% Wait until the request is acked by kafka
-      sync_produce_requests([CallRef]);
+      sync_produce_request(CallRef);
     {error, Reason} ->
       {error, Reason}
   end.
 
 %% @doc Block wait for sent produced request to be acked by kafka.
--spec sync_produce_request(brod_produce_call()) ->
+-spec sync_produce_request(brod_call_ref()) ->
         ok | {error, Reason::any()}.
 sync_produce_request(CallRef) ->
-  sync_produce_requests([CallRef]).
-
-%% @doc Block wait for sent produced requests to be acked by kafka.
--spec sync_produce_requests([brod_produce_call()]) ->
-        ok | {error, Reason::any()}.
-sync_produce_requests(CallRefs) ->
-  lists:foreach(
-    fun(?BROD_PRODUCE_CALL(Pid, _Ref)) ->
-      self() =:= Pid orelse
-        erlang:error({badarg, [{caller_pid, Pid}, {sync_pid, self()}]})
-    end, CallRefs),
-  ExpectList = [ #brod_produce_reply{ call   = CallRef
-                                    , result = brod_produce_req_acked
-                                    } || CallRef <- CallRefs ],
-  brod_producer:sync_produce_requests(ExpectList).
+  Expect = #brod_produce_reply{ call_ref = CallRef
+                              , result   = brod_produce_req_acked
+                              },
+  brod_producer:sync_produce_request(Expect).
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)

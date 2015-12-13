@@ -39,16 +39,18 @@
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
--define(BROD_PRODUCE_CALL(CallerPid, PartitionProducerPidMonitorRef),
-        {CallerPid, PartitionProducerPidMonitorRef}).
+-record(brod_call_ref, { caller :: pid()
+                       , callee :: pid()
+                       , ref    :: reference()
+                       }).
 
--type brod_produce_call() :: ?BROD_PRODUCE_CALL(pid(), reference()).
+-type brod_call_ref() :: #brod_call_ref{}.
 
--type brod_produce_reply_result() :: brod_produce_req_buffered
-                                   | brod_produce_req_acked.
+-type brod_produce_result() :: brod_produce_req_buffered
+                             | brod_produce_req_acked.
 
--record(brod_produce_reply, { call   :: brod_produce_call()
-                            , result :: brod_produce_reply_result()
+-record(brod_produce_reply, { call_ref :: brod_call_ref()
+                            , result   :: brod_produce_result()
                             }).
 
 -type brod_produce_reply() :: #brod_produce_reply{}.
