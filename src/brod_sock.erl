@@ -56,8 +56,11 @@
                }).
 
 %%%_* API ======================================================================
--spec start_link(pid(), string(), integer(), client_id(), term()) ->
+-spec start_link(pid(), string(), integer(), client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
+start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
+  RealClientId = list_to_binary(atom_to_list(ClientId)),
+  start_link(Parent, Host, Port, RealClientId, Debug);
 start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 

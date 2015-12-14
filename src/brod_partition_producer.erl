@@ -165,12 +165,12 @@ handle_info(init_socket, #state{ client_id = ClientId
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = Partitions
                  } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) orelse
+  brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw({"topic metadata error", TopicErrorCode}),
   #partition_metadata{ error_code = PartitionErrorCode
                      , leader_id  = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionErrorCode) orelse
+  brod_kafka:is_error(PartitionErrorCode) andalso
     erlang:throw({"partition metadata error", PartitionErrorCode}),
   LeaderId >= 0 orelse
     erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),

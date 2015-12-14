@@ -243,15 +243,15 @@ do_get_topic_worker(#state{producers_sup = Sup}, Topic) ->
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
-  brod_kafka:is_error(TopicErrorCode) orelse
+  brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw({"topic metadata error", TopicErrorCode}),
   lists:map(
     fun(#partition_metadata{ error_code = PartitionErrorCode
                            , id         = Partition
                            }) ->
-      brod_kafka:is_error(PartitionErrorCode) orelse
-        erlang:throw({"partition metadata error", PartitionErrorCode}),
-      Partition
+        brod_kafka:is_error(PartitionErrorCode) andalso
+          erlang:throw({"partition metadata error", PartitionErrorCode}),
+        Partition
     end, Partitions).
 
 -spec do_get_metadata(topic(), #state{}) ->
@@ -298,7 +298,7 @@ reconnect(#state{ client_id = ClientId
       S = #sock{ endpoint = {Host, Port}
                , sock_pid = Pid
                },
-      error_logger:info_msg("~p connected to ~p:~p", [ClientId, Host, Port]),
+      error_logger:info_msg("~p connected to ~p:~p~n", [ClientId, Host, Port]),
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
