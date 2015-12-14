@@ -243,13 +243,13 @@ do_get_topic_worker(#state{producers_sup = Sup}, Topic) ->
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
-  brod_kafka:is_error(TopicErrorCode) orelse
+  brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw({"topic metadata error", TopicErrorCode}),
   lists:map(
     fun(#partition_metadata{ error_code = PartitionErrorCode
                            , id         = Partition
                            }) ->
-      brod_kafka:is_error(PartitionErrorCode) orelse
+      brod_kafka:is_error(PartitionErrorCode) andalso
         erlang:throw({"partition metadata error", PartitionErrorCode}),
       Partition
     end, Partitions).
