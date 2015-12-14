@@ -55,10 +55,6 @@
 
 -type brod_produce_reply() :: #brod_produce_reply{}.
 
--type brod_partitionner() :: random
-                           | roundrobin
-                           | fun((Key::binary(), NrOfPartitions::pos_integer()) -> partition()).
-
 -type brod_client_config() :: proplists:proplist().
 -type brod_producer_config() :: proplists:proplist().
 -type brod_consumer_config() :: proplists:proplist().

@@ -60,6 +60,7 @@
 -type producer_config() :: brod_producer_config().
 -type consumer_config() :: brod_consumer_config().
 -type client()          :: client_id() | pid().
+-type required_acks()   :: -1..1.
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
