@@ -26,7 +26,7 @@
 %%%     |    |     |
 %%%     |    |     +-- topic_1_worker
 %%%     |    |     |     |
-%%%     |    |     |     +-- producer_sup (one for one)
+%%%     |    |     |     +-- partition_workers_sup (one for one)
 %%%     |    |     |           |
 %%%     |    |     |           +-- partition_0_worker
 %%%     |    |     |           |
@@ -59,7 +59,7 @@
 -export([ init/1
         , start_link/0
         , start_link_producers_sup/2
-        , start_link_producer_sup/4
+        , start_link_partition_producers_sup/4
         ]).
 
 -include("brod_int.hrl").
@@ -116,15 +116,15 @@ start_link_producers_sup(ClientId, Producers) ->
   brod_supervisor:start_link(?MODULE, {producers_sup, ClientId, Producers}).
 
 %% @doc Start a supervisor to manage all partition producers of a topic.
-%%      This supervisor is started in brod_producers worker after it fetchs
+%%      This supervisor is started in brod_producer worker after it fetches
 %%      metadata of the topic from kafka.
 %% @end
--spec start_link_producer_sup(client_id(), topic(),
-                              partition(), producer_config()) ->
-        {ok, pid()}.
-start_link_producer_sup(ClientId, Topic, Partition, Config) ->
-  brod_supervisor:start_link(?MODULE, {producer_sup, ClientId, Topic,
-                                       Partition, Config}).
+-spec start_link_partition_producers_sup(
+        client_id(), topic(), partition(), producer_config()) ->
+                                            {ok, pid()}.
+start_link_partition_producers_sup(ClientId, Topic, Partition, Config) ->
+  Args = {partition_producers_sup, ClientId, Topic, Partition, Config},
+  brod_supervisor:start_link(?MODULE, Args).
 
 %% @doc brod_supervisor callback.
 init(clients_sup) ->
@@ -136,21 +136,21 @@ init(clients_sup) ->
   %% In this case, restart right away will very likely fail again.
   %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {one_for_one, 0, 1}, ClientSpecs};
+  {ok, {{one_for_one, 0, 1}, ClientSpecs}};
 init({producers_sup, ClientId, Producers}) ->
   ProducerSpecs =
-    [ producer_topic_worker_spec(ClientId, TopicName, Config)
+    [ producer_spec(ClientId, TopicName, Config)
     || {TopicName, Config} <- Producers ],
-  %% brod_producers may crash in case of exception (error code received)
-  %% when fetching topic metata from kafka.
+  %% brod_producer may crash in case of exception (error code received)
+  %% when fetching topic metadata from kafka.
   %% In this case, restart right away will very likely fail again
   %% as kafka errors may very likely last seconds.
   %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
   {ok, {{one_for_one, 0, 1}, ProducerSpecs}};
-init({producer_sup, ClientId, Topic, Partitions, Config}) ->
+init({partition_producers_sup, ClientId, Topic, Partitions, Config}) ->
   PartitionSpecs =
-    [ producer_spec(ClientId, Topic, Partition, Config)
+    [ partition_producer_spec(ClientId, Topic, Partition, Config)
     || Partition <- Partitions ],
   %% Producer may crash in case of exception in case of network failure,
   %% or error code received in produce response (e.g. leader transition)
@@ -176,29 +176,29 @@ client_spec(ClientId, Args) ->
   , _Module   = [brod_client]
   }.
 
-producer_topic_worker_spec(ClientId, TopicName, Config0) ->
+producer_spec(ClientId, TopicName, Config0) ->
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_TOPIC_WORKER_RESTART_DELAY),
   Config    = proplists:delete(restart_delay_seconds, Config0),
   { _Id       = TopicName
-  , _Start    = {brod_producers, start_link, [ClientId, TopicName, Config]}
+  , _Start    = {brod_producer, start_link, [ClientId, TopicName, Config]}
   , _Restart  = {permanent, DelaySecs}
   , _Shutdown = 5000
   , _Type     = worker
-  , _Module   = [brod_producers]
+  , _Module   = [brod_producer]
   }.
 
-producer_spec(ClientId, Topic, Partition, Config0) ->
+partition_producer_spec(ClientId, Topic, Partition, Config0) ->
   DelaySecs = proplists:get_value(producer_restart_delay_seconds, Config0,
                                   ?DEFAULT_PRODUCER_RESTART_DELAY),
   Config    = proplists:delete(producer_restart_delay_seconds, Config0),
   Args      = [ClientId, Topic, Partition, Config],
   { _Id       = Partition
-  , _Start    = {brod_producer, start_link, Args}
+  , _Start    = {brod_partition_producer, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
   , _Shutdown = 5000
   , _Type     = worker
-  , _Module   = [brod_producer]
+  , _Module   = [brod_partition_producer]
   }.
 
 %%%_* Emacs ====================================================================
