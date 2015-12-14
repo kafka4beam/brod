@@ -26,6 +26,7 @@
 -export([new/4]).
 -export([maybe_send/4]).
 -export([ack/2]).
+-export([is_empty/1]).
 
 -export_type([buf/0]).
 
@@ -41,18 +42,18 @@
         }).
 
 -type send_fun() :: fun(([{binary(), binary()}]) -> {ok, corr_id()}).
--define(SEND_ERR, fun() -> erlang:error(bad_init) end).
+-define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -record(buf,
-        { buffer_limit = 1         :: pos_integer()
-        , onwire_limit = 1         :: pos_integer()
-        , msgset_bytes = 1         :: pos_integer()
-        , send_fun     = ?SEND_ERR :: send_fun()
-        , buffer_count = 0         :: non_neg_integer()
-        , onwire_count = 0         :: non_neg_integer()
-        , pending      = []        :: [#req{}]
-        , buffer       = []        :: [#req{}]
-        , onwire       = []        :: [{corr_id(), [call()]}]
+        { buffer_limit = 1        :: pos_integer()
+        , onwire_limit = 1        :: pos_integer()
+        , msgset_bytes = 1        :: pos_integer()
+        , send_fun     = ?ERR_FUN :: send_fun()
+        , buffer_count = 0        :: non_neg_integer()
+        , onwire_count = 0        :: non_neg_integer()
+        , pending      = []       :: [#req{}]
+        , buffer       = []       :: [#req{}]
+        , onwire       = []       :: [{corr_id(), [call()]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -96,15 +97,22 @@ ack(#buf{ onwire_count = OnWireCount
                   },
   do_maybe_send(NewBuf).
 
+%% @doc Return true if there is no message pending, buffered or waiting for ack.
+is_empty(#buf{ pending = []
+             , buffer  = []
+             , onwire  = []
+             }) -> true;
+is_empty(#buf{}) -> false.
+
 %%%_* Internal functions =======================================================
 
 %% @private Maybe send a message set on wire.
 -spec do_maybe_send(buf()) -> buf().
 do_maybe_send(#buf{ onwire_limit = OnWireLimit
-               , send_fun     = SendFun
-               , onwire_count = OnWireCount
-               , onwire       = OnWire
-               } = Buf) when OnWireCount < OnWireLimit ->
+                  , send_fun     = SendFun
+                  , onwire_count = OnWireCount
+                  , onwire       = OnWire
+                  } = Buf) when OnWireCount < OnWireLimit ->
   case take_reqs_to_send(Buf) of
     {Reqs, NewBuf} when Reqs =/= [] ->
       CallRefs   = lists:map(fun(#req{call = C}) -> C   end, Reqs),
