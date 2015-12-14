@@ -121,7 +121,10 @@ register_producer(Client, Topic, Partition) ->
 %% @doc Get producer of a given topic-partition.
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
-          when Reason :: client_down | not_registered | restarting.
+          when Reason :: client_down
+                       | restarting
+                       | {not_found, topic()}
+                       | {not_found, topic(), partition()}.
 get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
   case erlang:process_info(ClientPid, registered_name) of
     {registered_name, ClientId} ->
@@ -133,8 +136,12 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
   try
     case ets:lookup(?ETS(ClientId), ?PRODUCER_KEY(Topic, Partition)) of
       [] ->
-        %% not yet started?
-        {error, not_registered};
+        %% not yet registered, 2 possible reasons:
+        %% 1. caller is too fast, producers are starting up
+        %%    make a synced call all the way down the supervision tree
+        %%    to the partition producer sup should resolve the race
+        %% 2. bad argument, no such worker started, supervisors should know
+        find_producer(ClientId, Topic, Partition);
       [?PRODUCER(Topic, Partition, Pid)] ->
         case is_alive(Pid) of
           true  -> {ok, Pid};
@@ -160,22 +167,25 @@ init({ClientId, Endpoints, Config, Producers}) ->
 handle_info({init, Producers}, #state{ client_id = ClientId
                                      , endpoints = Endpoints
                                      } = State) ->
-  Sockets = start_metadata_socket(Endpoints),
+  Sock = start_metadata_socket(Endpoints),
   {ok, Pid} = brod_sup:start_link_producers_sup(ClientId, Producers),
-  {noreply, State#state{ sockets       = Sockets
+  {noreply, State#state{ meta_sock     = Sock
                        , producers_sup = Pid
                        }};
-handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = Pid
+handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = #sock{sock_pid = Pid}
                                           , endpoints = Endpoints
                                           } = State) ->
-  NewPid = start_metadata_socket(Endpoints),
-  {noreply, State#state{meta_sock = NewPid}};
+  NewSock = start_metadata_socket(Endpoints),
+  {noreply, State#state{meta_sock = NewSock}};
 handle_info({'EXIT', Pid, Reason}, State) ->
   {ok, NewState} = handle_socket_down(State, Pid, Reason),
   {noreply, NewState};
 handle_info(_Info, State) ->
   {noreply, State}.
 
+handle_call({get_topic_woker, Topic}, _From, State) ->
+  Result = do_get_topic_worker(State, Topic),
+  {reply, Result, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   Result = do_get_metadata(Topic, State),
   {reply, Result, State};
@@ -198,16 +208,37 @@ handle_cast(_Cast, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-terminate(_Reason, #state{sockets = Sockets}) ->
+terminate(_Reason, #state{meta_sock = MetaSock, sockets = Sockets}) ->
   lists:foreach(
     fun(#sock{sock_pid = Pid}) ->
       case is_pid(Pid) andalso is_process_alive(Pid) of
         true  -> exit(Pid, shutdown);
         false -> ok
       end
-    end, Sockets).
+    end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
+
+find_producer(ClientId, Topic, Partition) ->
+  case gen_server:call(ClientId, {get_topic_worker, Topic}, infinity) of
+    {ok, Pid} ->
+      brod_producers:get_producer(Pid, Partition);
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+do_get_topic_worker(#state{producers_sup = Sup}, Topic) ->
+  case brod_supervisor:find_child(Sup, Topic) of
+    [] ->
+      %% no such topic worker started,
+      %% check sys.config or brod:start_link_client args
+      {error, {not_found, Topic}};
+    [Pid] ->
+      case is_alive(Pid) of
+        true  -> {ok, Pid};
+        false -> {error, restarting}
+      end
+  end.
 
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
@@ -225,19 +256,20 @@ do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
 
 -spec do_get_metadata(topic(), #state{}) ->
         {ok, #metadata_response{}} | {error, any()}.
-do_get_metadata(Topic, #state{ meta_sock = Sock
+do_get_metadata(Topic, #state{ meta_sock = #sock{sock_pid = SockPid}
                              , config    = Config
                              }) ->
   Request = #metadata_request{topics = [Topic]},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  brod_sock:send_sync(Sock, Request, timer:seconds(Timeout)).
+  brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)).
 
 -spec do_connect(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
-do_connect(#state{} = State, Host, Port) ->
+do_connect(#state{client_id = ClientId} = State, Host, Port) ->
   case find_socket(State, Host, Port) of
     {ok, Pid} ->
+      error_logger:info_msg("~p connected to ~p:~p", [ClientId, Host, Port]),
       {State, {ok, Pid}};
     {error, Reason} ->
       maybe_reconnect(State, Host, Port, Reason)
@@ -266,6 +298,7 @@ reconnect(#state{ client_id = ClientId
       S = #sock{ endpoint = {Host, Port}
                , sock_pid = Pid
                },
+      error_logger:info_msg("~p connected to ~p:~p", [ClientId, Host, Port]),
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
@@ -278,10 +311,13 @@ reconnect(#state{ client_id = ClientId
 %% worker requests so.
 %% @end
 -spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
-handle_socket_down(#state{sockets = Sockets} = State, Pid, Reason) ->
+handle_socket_down(#state{ client_id = ClientId
+                         , sockets = Sockets
+                         } = State, Pid, Reason) ->
   case lists:keyfind(Pid, #sock.sock_pid, Sockets) of
-    #sock{endpoint = Endpoint} -> mark_socket_dead(State, Endpoint, Reason);
-    false                      -> {ok, State}
+    #sock{endpoint = {Host, Port} = Endpoint} ->
+      error_logger:info_msg("~p socket down ~p:~p", [ClientId, Host, Port]),
+      mark_socket_dead(State, Endpoint, Reason)
   end.
 
 -spec mark_socket_dead(#state{}, endpoint(), any()) -> {ok, #state{}}.
@@ -322,10 +358,17 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %%       should be restarted by supervisor.
 %% @end
 -spec start_metadata_socket([endpoint()]) -> pid() | no_return().
-start_metadata_socket(Endpoints) ->
-  case brod_utils:try_connect(Endpoints) of
-    {ok, Pid}       -> Pid;
-    {error, Reason} -> erlang:error({"metadata socket failure", Reason})
+start_metadata_socket([_|_] = Endpoints) ->
+  start_metadata_socket(Endpoints, ?undef).
+
+start_metadata_socket([], Reason) ->
+  erlang:error(Reason);
+start_metadata_socket([Endpoint | Endpoints], _Reason) ->
+  case brod_utils:try_connect([Endpoint]) of
+    {ok, Pid}       -> #sock{ endpoint = Endpoint
+                            , sock_pid = Pid
+                            };
+    {error, Reason} -> start_metadata_socket(Endpoints, Reason)
   end.
 
 is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).

@@ -143,7 +143,10 @@ get_partitions(Client, Topic) ->
 %% @equiv brod_client:get_producer/3.
 -spec get_producer(client_id(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
-          when Reason :: client_down | not_registered | restarting.
+          when Reason :: client_down
+                       | restarting
+                       | {not_found, topic()}
+                       | {not_found, topic(), partition()}.
 get_producer(ClientId, Topic, Partition) ->
   brod_client:get_producer(ClientId, Topic, Partition).
 

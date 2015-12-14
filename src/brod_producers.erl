@@ -25,6 +25,7 @@
 
 %% Server API
 -export([ start_link/3
+        , get_producer/2
         ]).
 
 %% gen_server callbacks
@@ -55,14 +56,20 @@
 start_link(ClientId, Topic, Config) ->
   gen_server:start_link(?MODULE, {ClientId, Topic, Config}, []).
 
+-spec get_producer(pid(), partition()) -> {ok, pid()} | {error, Reason}
+        when Reason :: restarting
+                     | {not_found, {topic(), partition()}}.
+get_producer(Pid, Partition) ->
+  gen_server:call(Pid, {get_producer, Partition}, infinity).
+
 %%%_* gen_server callbacks =====================================================
 
 init({ClientId, Topic, Config}) ->
   self() ! init,
-  #state{ client = ClientId
-        , topic  = Topic
-        , config = Config
-        }.
+  {ok, #state{ client = ClientId
+             , topic  = Topic
+             , config = Config
+             }}.
 
 handle_info(init, #state{ client = ClientId
                         , topic  = Topic
@@ -77,6 +84,20 @@ handle_info(Info, State) ->
   error_logger:warning_msg("Unexpected info: ~p", [Info]),
   {noreply, State}.
 
+handle_call({get_producer, Partition}, _From,
+            #state{ topic        = Topic
+                  , producer_sup = Sup
+                  }) ->
+  case brod_supervisor:find_child(Sup, Partition) of
+    [] ->
+      %% no such partition?
+      {error, {not_found, Topic, Partition}};
+    [Pid] ->
+      case is_alive(Pid) of
+        true  -> {ok, Pid};
+        false -> {error, restarting}
+      end
+  end;
 handle_call(Request, _From, State) ->
   {reply, {error, {unsupported_call, Request}}, State}.
 
@@ -90,6 +111,8 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%%_* Internal Functions =======================================================
+
+is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
 
 %%%_* Tests ====================================================================
 
