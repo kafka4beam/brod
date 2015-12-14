@@ -129,7 +129,8 @@ do_maybe_send(#buf{ onwire_limit = OnWireLimit
       end;
     {[], NewBuf} ->
       NewBuf
-  end.
+  end;
+do_maybe_send(Buf) -> Buf.
 
 take_reqs_to_send(Buf) ->
   take_reqs_to_send(Buf, _Acc = [], _AccLength = 0, _AccBytes = 0).
