@@ -69,7 +69,7 @@
         , config        :: client_config()
         }).
 
-%%%_* APIs ---------------------------------------------------------------------
+%%%_* APIs =====================================================================
 
 -spec start_link(client_id(), [endpoint()], client_config(),
                  [{topic(), producer_config()}]) -> {ok, pid()}.
@@ -145,7 +145,7 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
     {error, client_down}
   end.
 
-%%%_* gen_server callbacks -----------------------------------------------------
+%%%_* gen_server callbacks =====================================================
 
 init({ClientId, Endpoints, Config, Producers}) ->
   erlang:process_flag(trap_exit, true),
@@ -207,7 +207,7 @@ terminate(_Reason, #state{sockets = Sockets}) ->
       end
     end, Sockets).
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
 
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
@@ -330,6 +330,8 @@ start_metadata_socket(Endpoints) ->
 
 is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

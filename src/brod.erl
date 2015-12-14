@@ -72,10 +72,9 @@
 %% escript
 -export([main/1]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
-%%%_* API ----------------------------------------------------------------------
+%%%_* APIs =====================================================================
 
 %% @doc Start brod application.
 start() -> application:start(brod).
@@ -268,6 +267,7 @@ consume(Pid, Callback, Offset) ->
 %%           responding).
 %% MaxBytes: The maximum bytes to include in the message set for this
 %%           partition. This helps bound the size of the response.
+%% @end
 -spec consume(pid(), callback_fun(), integer(),
              integer(), integer(), integer()) -> ok | {error, any()}.
 consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
@@ -472,7 +472,8 @@ call_api(file_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr, Filename])
     {'DOWN', MRef, process, Pid, _} -> ok
   end.
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal functions =======================================================
+
 parse_hosts_str(HostsStr) ->
   F = fun(HostPortStr) ->
           Pair = string:tokens(HostPortStr, ":"),
@@ -510,6 +511,8 @@ simple_consumer_loop(C, Io) ->
       simple_consumer_loop(C, Io)
   end.
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

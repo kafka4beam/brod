@@ -73,7 +73,7 @@
 %% By default, restart partition producer process after a 2-seconds delay
 -define(DEFAULT_PRODUCER_RESTART_DELAY, 2).
 
-%%%_* APIs ---------------------------------------------------------------------
+%%%_* APIs =====================================================================
 
 %% @doc Start root supervisor.
 %%
@@ -201,6 +201,8 @@ producer_spec(ClientId, Topic, Partition, Config0) ->
   , _Module   = [brod_producer]
   }.
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

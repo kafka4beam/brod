@@ -29,10 +29,10 @@
         , try_connect/1
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
-%%%_* Code ---------------------------------------------------------------------
+%%%_* APIs =====================================================================
+
 %% try to connect to any of bootstrapped nodes and fetch metadata
 get_metadata(Hosts) ->
   get_metadata(Hosts, []).
@@ -68,6 +68,17 @@ fetch_response_to_message_set(#fetch_response{topics = [TopicFetchData]}) ->
               , high_wm_offset = HighWmOffset
               , messages = Messages}.
 
+%%%_* Internal Functions =======================================================
+
+%%%_* Tests ====================================================================
+
+-include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+
+-endif. % TEST
+
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
-%%% End:

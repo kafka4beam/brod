@@ -33,13 +33,13 @@
         , is_error/1
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 -include("brod_kafka.hrl").
 
 -define(INT, signed-integer).
 
-%%%_* API ----------------------------------------------------------------------
+%%%_* APIs =====================================================================
+
 %% @doc Parse binary stream of kafka responses.
 %%      Returns list of {CorrId, Response} tuples and remaining binary.
 -spec parse_stream(binary(), brod_kakfa_requests:requests()) ->
@@ -76,7 +76,8 @@ decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
 
 is_error(X) -> brod_kafka_errors:is_error(X).
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
+
 header(ApiKey, ClientId, CorrId) when is_binary(ClientId) ->
   ClientIdLength = size(ClientId),
   <<ApiKey:16/?INT,
@@ -357,7 +358,8 @@ parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
   {binary:copy(Bytes), Bin}.
 
-%% Tests -----------------------------------------------------------------------
+%%%_* Tests ====================================================================
+
 -include_lib("eunit/include/eunit.hrl").
 
 -ifdef(TEST).
@@ -398,6 +400,8 @@ parse_bytes_test() ->
 
 -endif. % TEST
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

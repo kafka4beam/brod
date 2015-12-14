@@ -36,10 +36,8 @@
         , code_change/3
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
-%%%_* Records ------------------------------------------------------------------
 
 -record(state, { client       :: client()
                , topic        :: topic()
@@ -47,7 +45,7 @@
                , producer_sup :: pid()
                }).
 
-%%%_* API ----------------------------------------------------------------------
+%%%_* APIs =====================================================================
 
 %% @doc Start a per-topic worker to fetch topic metadata and start
 %% per-partition producer workers. the config is passed down to the producers
@@ -57,7 +55,8 @@
 start_link(ClientId, Topic, Config) ->
   gen_server:start_link(?MODULE, {ClientId, Topic, Config}, []).
 
-%%%_* gen_server callbacks -----------------------------------------------------
+%%%_* gen_server callbacks =====================================================
+
 init({ClientId, Topic, Config}) ->
   self() ! init,
   #state{ client = ClientId
@@ -90,9 +89,9 @@ terminate(_Reason, #state{}) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
 
-%% Tests -----------------------------------------------------------------------
+%%%_* Tests ====================================================================
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -100,6 +99,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 -endif. % TEST
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
