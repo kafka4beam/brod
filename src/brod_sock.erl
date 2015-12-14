@@ -58,7 +58,7 @@
 %%%_* API ======================================================================
 -spec start_link(pid(), string(), integer(), client_id(), term()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
+start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
 -spec start(pid(), string(), integer(), client_id(), term()) ->

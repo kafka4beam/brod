@@ -87,17 +87,19 @@ handle_info(Info, State) ->
 handle_call({get_producer, Partition}, _From,
             #state{ topic        = Topic
                   , producer_sup = Sup
-                  }) ->
-  case brod_supervisor:find_child(Sup, Partition) of
-    [] ->
-      %% no such partition?
-      {error, {not_found, Topic, Partition}};
-    [Pid] ->
-      case is_alive(Pid) of
-        true  -> {ok, Pid};
-        false -> {error, restarting}
-      end
-  end;
+                  } = State) ->
+  Result =
+    case brod_supervisor:find_child(Sup, Partition) of
+      [] ->
+        %% no such partition?
+        {error, {not_found, Topic, Partition}};
+      [Pid] ->
+        case is_alive(Pid) of
+          true  -> {ok, Pid};
+          false -> {error, restarting}
+        end
+    end,
+  {reply, Result, State};
 handle_call(Request, _From, State) ->
   {reply, {error, {unsupported_call, Request}}, State}.
 

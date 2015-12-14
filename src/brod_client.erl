@@ -183,7 +183,7 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 handle_info(_Info, State) ->
   {noreply, State}.
 
-handle_call({get_topic_woker, Topic}, _From, State) ->
+handle_call({get_topic_worker, Topic}, _From, State) ->
   Result = do_get_topic_worker(State, Topic),
   {reply, Result, State};
 handle_call({get_metadata, Topic}, _From, State) ->
@@ -269,7 +269,7 @@ do_get_metadata(Topic, #state{ meta_sock = #sock{sock_pid = SockPid}
 do_connect(#state{client_id = ClientId} = State, Host, Port) ->
   case find_socket(State, Host, Port) of
     {ok, Pid} ->
-      error_logger:info_msg("~p connected to ~p:~p", [ClientId, Host, Port]),
+      error_logger:info_msg("~p connected to ~p:~p~n", [ClientId, Host, Port]),
       {State, {ok, Pid}};
     {error, Reason} ->
       maybe_reconnect(State, Host, Port, Reason)
@@ -298,7 +298,7 @@ reconnect(#state{ client_id = ClientId
       S = #sock{ endpoint = {Host, Port}
                , sock_pid = Pid
                },
-      error_logger:info_msg("~p connected to ~p:~p", [ClientId, Host, Port]),
+      error_logger:info_msg("~p connected to ~p:~p~n", [ClientId, Host, Port]),
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
