@@ -41,11 +41,11 @@ api_key_test() ->
   ok.
 
 parse_stream_test() ->
-  D0 = dict:new(),
-  ?assertMatch({<<>>, [], D0}, brod_kafka:parse_stream(<<>>, D0)),
-  ?assertMatch({<<"foo">>, [], D0}, brod_kafka:parse_stream(<<"foo">>, D0)),
-  D1 = dict:store(1, ?API_KEY_METADATA, D0),
-  ?assertMatch({<<"foo">>, [], D1}, brod_kafka:parse_stream(<<"foo">>, D1)),
+  R0 = brod_kafka_requests:new(),
+  ?assertMatch({<<>>, []}, brod_kafka:parse_stream(<<>>, R0)),
+  ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R0)),
+  R1 = brod_kafka_requests:add(R0, self(), ?API_KEY_METADATA),
+  ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R1)),
   ok.
 
 encode_metadata_test() ->
