@@ -4,6 +4,7 @@
 %% with following modifications:
 %% 1) the module name is brod_supervisor
 %% 2) call os:timestamp/0 and timer:now_diff/2 for timestamps
+%% 3) introduce post_init callback
 %%
 %% Original file header:
 %%
