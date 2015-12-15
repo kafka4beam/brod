@@ -213,6 +213,13 @@ safe_send(Pid, Msg) ->
 
 -ifdef(TEST).
 
+safe_send_test() ->
+  Ref = make_ref(),
+  ok = safe_send(self(), Ref),
+  receive Ref -> ok
+  end,
+  ok = safe_send(?undef, Ref).
+
 -endif. % TEST
 
 %%%_* Emacs ====================================================================
