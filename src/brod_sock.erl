@@ -78,10 +78,15 @@ send_sync(Pid, Request, Timeout) ->
   Mref = erlang:monitor(process, Pid),
   {ok, CorrId} = send(Pid, Request),
   receive
-    {msg, Pid, CorrId, Response} -> {ok, Response};
-    {'DOWN', Mref, _, _, Reason} -> {error, {sock_down, Reason}}
+    {msg, Pid, CorrId, Response} ->
+      erlang:demonitor(Mref, [flush]),
+      {ok, Response};
+    {'DOWN', Mref, _, _, Reason} ->
+      {error, {sock_down, Reason}}
   after
-    Timeout -> {error, timeout}
+    Timeout ->
+      erlang:demonitor(Mref, [flush]),
+      {error, timeout}
   end.
 
 -spec stop(pid()) -> ok | {error, any()}.
