@@ -115,7 +115,7 @@ start_link_client(Endpoints, Producers) ->
 %%       estabilish a new connection to the kafka partition leader.
 %% Producers:
 %%   A list of {Topic, ProducerConfig} where ProducerConfig is a
-%%   proplist, @see brod_producers:start_link/3 for more details
+%%   proplist, @see brod_producers_sup:start_link/2 for more details
 % @end
 -spec start_link_client(client_id(), [endpoint()], client_config(),
                         [{topic(), producer_config()}]) ->

@@ -1,0 +1,24 @@
+%% -*- mode: Erlang; fill-column: 80; -*-
+[ {brod,
+   [ { clients
+     , [ {client_1
+         , [ { endpoints, [{"localhost", 9092}]}
+           , { config
+             , [ {restart_delay_seconds, 10}]
+             }
+           , { producers
+             , [ { <<"brod">>
+                   , [ {restart_delay_seconds, 10}
+                     , {producer_restart_delay_seconds, 2}
+                     , {required_acks, -1}
+                     ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   ]
+  }
+].

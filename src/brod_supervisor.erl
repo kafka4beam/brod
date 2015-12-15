@@ -179,13 +179,22 @@
            MaxR            :: non_neg_integer(),
            MaxT            :: non_neg_integer()},
            [ChildSpec :: child_spec()]}}
+    | ignore
+    | post_init.
+
+-callback post_init(Args :: term()) ->
+    {ok, {{RestartStrategy :: strategy(),
+           MaxR            :: non_neg_integer(),
+           MaxT            :: non_neg_integer()},
+           [ChildSpec :: child_spec()]}}
     | ignore.
 -else.
 
 -export([behaviour_info/1]).
 
 behaviour_info(callbacks) ->
-    [{init,1}];
+    [ {init,1}
+    , {post_init,1}];
 behaviour_info(_Other) ->
     undefined.
 
@@ -366,6 +375,9 @@ init({SupName, Mod, Args}) ->
         Error ->
           {stop, {supervisor_data, Error}}
       end;
+    post_init ->
+      self() ! {post_init, SupName, Mod, Args},
+      {ok, #state{}};
     ignore ->
       ignore;
     Error ->
@@ -678,8 +690,30 @@ handle_cast({try_again_restart,Name,Reason}, State) ->
 %%
 -ifdef(use_specs).
 -spec handle_info(term(), state()) ->
-        {'noreply', state()} | {'stop', 'shutdown', state()}.
+        {'noreply', state()} | {'stop', term(), state()}.
 -endif.
+handle_info({post_init, SupName, Mod, Args}, State0) ->
+  Res =
+    case Mod:post_init(Args) of
+      {ok, {SupFlags, StartSpec}} ->
+        case init_state(SupName, SupFlags, Mod, Args) of
+          {ok, State} when ?is_simple(State) ->
+            init_dynamic(State, StartSpec);
+          {ok, State} ->
+            init_children(State, StartSpec);
+          Error ->
+            {stop, {supervisor_data, Error}}
+        end;
+      Error ->
+        {stop, {bad_return, {Mod, post_init, Error}}}
+    end,
+  %% map init/1 result type to handle_* result type
+  case Res of
+    {ok, NewState} ->
+      {noreply, NewState};
+    {stop, Reason} ->
+      {stop, Reason, State0}
+  end;
 handle_info({'EXIT', Pid, Reason}, State) ->
     case restart_child(Pid, Reason, State) of
   {ok, State1} ->
