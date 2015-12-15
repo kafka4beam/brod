@@ -136,7 +136,7 @@ init(clients_sup) ->
   %% In this case, restart right away will very likely fail again.
   %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {one_for_one, 0, 1}, ClientSpecs};
+  {ok, {{one_for_one, 0, 1}, ClientSpecs}};
 init({producers_sup, ClientId, Producers}) ->
   ProducerSpecs =
     [ producer_topic_worker_spec(ClientId, TopicName, Config)
