@@ -198,9 +198,7 @@ handle_info(init_socket, #state{ client_id = ClientId
   AckTimeout = get_ack_timeout(Config),
   SendFun =
     fun(KafkaKvList) ->
-      %% TODO: change to plain kv-list ?
-      PartitionDict = dict:from_list([{Partition, KafkaKvList}]),
-      Data = [{Topic, PartitionDict}],
+      Data = [{Topic, [{Partition, KafkaKvList}]}],
       KafkaReq = #produce_request{ acks    = RequiredAcks
                                  , timeout = AckTimeout
                                  , data    = Data

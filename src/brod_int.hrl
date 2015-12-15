@@ -95,12 +95,8 @@
                            }).
 
 %%%_* produce request ----------------------------------------------------------
--ifdef(otp_before_17).
--type produce_request_data() :: [{topic(), dict()}].
--else.
--type produce_request_data() :: [{topic(),
-                                  dict:dict(partition(), [kafka_kv()])}].
--endif.
+
+-type produce_request_data() :: [{topic(), [{partition(), [kafka_kv()]}]}].
 
 -record(produce_request, { acks    :: integer()
                          , timeout :: integer()

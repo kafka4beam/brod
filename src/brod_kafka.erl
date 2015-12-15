@@ -162,10 +162,9 @@ produce_request_body(#produce_request{} = Produce) ->
 
 encode_topics([], Acc) ->
   Acc;
-encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
+encode_topics([{Topic, Partitions} | T], Acc0) ->
   Size = erlang:size(Topic),
-  Partitions = dict:to_list(PartitionsDict),
-  PartitionsCount = erlang:length(Partitions),
+  PartitionsCount = length(Partitions),
   Acc1 = <<Acc0/binary, Size:16/?INT, Topic/binary,
            PartitionsCount:32/?INT>>,
   Acc = encode_partitions(Partitions, Acc1),

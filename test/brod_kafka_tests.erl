@@ -142,17 +142,17 @@ encode_produce_test() ->
   T1 = <<"t1">>,
   T2 = <<"t2">>,
   T3 = <<"topic3">>,
-  T1Dict1 = dict:append_list(0, [], dict:new()),
-  T1Dict2 = dict:append_list(1, [ {<<>>, <<>>}
-                                , {<<>>, <<>>}
-                                , {<<>>, <<?i16(3)>>}], T1Dict1),
-  T1Dict = dict:append(2, {<<"foo">>, <<"bar">>}, T1Dict2),
-  T2Dict = dict:append_list(0, [ {<<?i32(1)>>, <<?i32(2)>>}
-                               , {<<>>, <<"foobar">>}], dict:new()),
-  T3Dict = dict:append_list(0, [], dict:new()),
-  Data = [ {T1, T1Dict}
-         , {T2, T2Dict}
-         , {T3, T3Dict}],
+  T1P0Data = [],
+  T1P1Data = [{<<>>, <<>>}, {<<>>, <<>>}, {<<>>, <<?i16(3)>>}],
+  T1P2Data = [{<<"foo">>, <<"bar">>}],
+  T2P0Data = [{<<?i32(1)>>, <<?i32(2)>>}, {<<>>, <<"foobar">>}],
+  T3P0Data = [],
+  Data = [ {T1, [{0, T1P0Data}
+                ,{1, T1P1Data}
+                ,{2, T1P2Data}]}
+         , {T2, [{0, T2P0Data}]}
+         , {T3, [{0, T3P0Data}]}
+         ],
   Acks2 = ?max8,
   Timeout2 = ?max32,
   R2 = #produce_request{acks = Acks2, timeout = Timeout2, data = Data},
@@ -176,14 +176,7 @@ encode_produce_test() ->
   ?assertEqual(<<?i16(Acks2), ?i32(Timeout2), ?i32(3), % metadata
                  ?i16(2), T1/binary, ?i32(3),     % t1 start
                  ?i32(0), ?i32(0),                % p0 start/end
-                 %% in brod_kafka:group_by_topics/2 dict puts p2 before p0
-                 ?i32(2), ?i32(32),               % p2 start
-                                                  % message set start
-                 ?i64(0), ?i32(20), ?i32(Crc2),   % msg1
-                 ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
-                 ?i32(3), "foo", ?i32(3), "bar",
-                                                 % message set end
-                                                 % p2 end
+
                  ?i32(1), ?i32(80),              % p1 start
                                                  % message set start
                  ?i64(0), ?i32(14), ?i32(Crc1),  % msg1
@@ -197,6 +190,15 @@ encode_produce_test() ->
                  ?i32(-1), ?i32(2), ?i16(3),
                                                  % message set end
                                                  % p1 end
+
+                 ?i32(2), ?i32(32),               % p2 start
+                                                  % message set start
+                 ?i64(0), ?i32(20), ?i32(Crc2),   % msg1
+                 ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
+                 ?i32(3), "foo", ?i32(3), "bar",
+                                                 % message set end
+                                                 % p2 end
+
                                                  % t1 end
                  ?i16(2), T2/binary, ?i32(1),    % t2 start
                  ?i32(0), ?i32(66),              % p0 start
