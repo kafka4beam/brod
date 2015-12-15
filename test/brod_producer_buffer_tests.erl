@@ -36,12 +36,12 @@ no_ack_test_() ->
 
 random_latency_ack_test_() ->
   {timeout, 60,
-   fun() -> ?assert(proper:quickcheck(prop_random_latency_ack_run(), 1000)) end
+   fun() -> ?assert(proper:quickcheck(prop_random_latency_ack_run(), 500)) end
   }.
 
 %%%_* Help functions ===========================================================
 
--define(MAX_DELAY, 5).
+-define(MAX_DELAY, 3).
 
 prop_buffer_limit() -> proper_types:pos_integer().
 prop_onwire_limit() -> proper_types:pos_integer().
@@ -135,17 +135,14 @@ random_latency_ack_produce(FakeKafka, Buf, KvList) ->
   true.
 
 produce_loop(FakeKafka, Buf, [], Buffered, Acked) ->
-  %% no more to send, block wait for all acks if still pending
-  try
-    FakeKafka ! flush
-  catch _ : _ ->
-    ok
-  end,
-  {NewBuffered, NewAcked, NewBuf} =
-    collect_replies(Buffered, Acked, Buf, ?MAX_DELAY),
-  brod_producer_buffer:is_empty(NewBuf) orelse
-    erlang:error({buffer_not_empty, NewBuf}),
-  {NewBuffered, NewAcked};
+  case brod_producer_buffer:is_empty(Buf) of
+    true ->
+      {Buffered, Acked};
+    false ->
+      {NewBuffered, NewAcked, NewBuf} =
+        collect_replies(Buffered, Acked, Buf, ?MAX_DELAY),
+      produce_loop(FakeKafka, NewBuf, [], NewBuffered, NewAcked)
+  end;
 produce_loop(FakeKafka, Buf0, [{Key, Value} | Rest], Buffered, Acked) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = ignore
@@ -181,7 +178,7 @@ assert_reply_sequence([N | Rest], N) ->
   assert_reply_sequence(Rest, N-1).
 
 spawn_fake_kafka() ->
-  erlang:spawn_link(fun() -> fake_kafka_loop(_IsFlushing = false) end).
+  erlang:spawn_link(fun() -> fake_kafka_loop() end).
 
 stop_fake_kafka(FakeKafka) when is_pid(FakeKafka) ->
   MRef = monitor(process, FakeKafka),
@@ -194,32 +191,22 @@ stop_fake_kafka(FakeKafka) when is_pid(FakeKafka) ->
     erlang:error(timeout)
   end.
 
-fake_kafka_loop(IsFlushing) ->
+fake_kafka_loop() ->
   receive
     {produce, FromPid, CorrId, KvList} ->
-      NewIsFlushing = fake_kafka_process_msgs(IsFlushing, KvList),
+      ok = fake_kafka_process_msgs(KvList),
       FromPid ! {ack_from_kafka, CorrId},
-      fake_kafka_loop(NewIsFlushing);
+      fake_kafka_loop();
     stop ->
       exit(normal);
-    flush ->
-      fake_kafka_loop(true);
     Msg ->
       exit({fake_kafka, unexpected, Msg})
   end.
 
-fake_kafka_process_msgs(IsFlushing, []) -> IsFlushing;
-fake_kafka_process_msgs(IsFlushing, [{_Key, {DelayMs0, _Value}} | Rest]) ->
-  DelayMs = case IsFlushing of
-              true  -> 0;
-              false -> DelayMs0
-            end,
-  receive
-    flush ->
-      fake_kafka_process_msgs(true, Rest)
-  after DelayMs ->
-    fake_kafka_process_msgs(IsFlushing, Rest)
-  end.
+fake_kafka_process_msgs([]) -> ok;
+fake_kafka_process_msgs([{_Key, {DelayMs, _Value}} | Rest]) ->
+  timer:sleep(DelayMs),
+  fake_kafka_process_msgs(Rest).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
