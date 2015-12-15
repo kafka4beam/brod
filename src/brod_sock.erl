@@ -192,7 +192,6 @@ safe_send(Pid, Msg) ->
     Pid ! Msg,
     ok
   catch _ : _ ->
-    %% TODO maybe log?
     ok
   end.
 

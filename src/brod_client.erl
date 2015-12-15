@@ -167,7 +167,6 @@ init({ClientId, Endpoints, Config, Producers}) ->
              , config    = Config
              }}.
 
-%% TODO: maybe add a timer to clean up very old ?dead_since sockets
 handle_info({init, Producers}, #state{ client_id = ClientId
                                      , endpoints = Endpoints
                                      } = State) ->
@@ -328,7 +327,7 @@ handle_socket_down(#state{ client_id = ClientId
                          } = State, Pid, Reason) ->
   case lists:keyfind(Pid, #sock.sock_pid, Sockets) of
     #sock{endpoint = {Host, Port} = Endpoint} ->
-      error_logger:info_msg("~p socket down ~p:~p", [ClientId, Host, Port]),
+      error_logger:info_msg("~p socket down ~s:~p", [ClientId, Host, Port]),
       mark_socket_dead(State, Endpoint, Reason)
   end.
 
