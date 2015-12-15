@@ -24,18 +24,19 @@
 %%%     |    |
 %%%     |    +-- producers_sup (one_for_one)
 %%%     |    |     |
-%%%     |    |     +-- topic_1_worker
+%%%     |    |     +-- per-topic partition_workers_sup (one for one)
 %%%     |    |     |     |
-%%%     |    |     |     +-- partition_workers_sup (one for one)
-%%%     |    |     |           |
-%%%     |    |     |           +-- partition_0_worker
-%%%     |    |     |           |
-%%%     |    |     |           +-- partition_1_worker
-%%%     |    |     |           |...
-%%%     |    |     |
-%%%     |    |     +-- topic_2_worker
+%%%     |    |     |     +-- partition_0_worker
+%%%     |    |     |     |
+%%%     |    |     |     +-- partition_1_worker
 %%%     |    |     |     |...
-%%%     |    |     |...
+%%%     |    |     |
+%%%     |    |     +-- per-topic partition_workers_sup (one for one)
+%%%     |    |           |
+%%%     |    |           +-- partition_0_worker
+%%%     |    |           |
+%%%     |    |           +-- partition_1_worker
+%%%     |    |           |...
 %%%     |    |
 %%%     |    +-- consumers_sup (one_for_one)
 %%%     |          |
@@ -59,16 +60,13 @@
 -export([ init/1
         , start_link/0
         , start_link_producers_sup/2
-        , start_link_partition_producers_sup/4
+        , start_link_partition_workers_sup/4
         ]).
 
 -include("brod_int.hrl").
 
 %% By deafult, restart client process after a 10-seconds delay
 -define(DEFAULT_CLIENT_RESTART_DELAY, 10).
-
-%% By default, restart topic worker proess after a 10-seconds delay
--define(DEFAULT_TOPIC_WORKER_RESTART_DELAY, 10).
 
 %% By default, restart partition producer process after a 2-seconds delay
 -define(DEFAULT_PRODUCER_RESTART_DELAY, 2).

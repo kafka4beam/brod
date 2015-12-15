@@ -145,18 +145,18 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
 %%%_* gen_server callbacks------------------------------------------------------
 
 init({ClientId, Topic, Partition, Config}) ->
-  self() ! init_socket,
+  self() ! init,
   {ok, #state{ client_id = ClientId
              , topic     = Topic
              , partition = Partition
              , config    = Config
              }}.
 
-handle_info(init_socket, #state{ client_id = ClientId
-                               , topic     = Topic
-                               , partition = Partition
-                               , config    = Config0
-                               } = State) ->
+handle_info(init, #state{ client_id = ClientId
+                        , topic     = Topic
+                        , partition = Partition
+                        , config    = Config0
+                        } = State0) ->
   %% 1. Fetch and validate metadata
   {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
   #metadata_response{ brokers = Brokers
@@ -172,19 +172,8 @@ handle_info(init_socket, #state{ client_id = ClientId
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
   brod_kafka:is_error(PartitionErrorCode) andalso
     erlang:throw({"partition metadata error", PartitionErrorCode}),
-  LeaderId >= 0 orelse
-    erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),
-  #broker_metadata{host = Host, port = Port} =
-    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
-  %% 2. Establish (and monitor) the connection to partition leader
-  {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
-  _ = erlang:monitor(process, SockPid),
-
-  %% 3. Register self() to client.
-  ok = brod_client:register_producer(ClientId, Topic, Partition),
-
-  %% 4. Create the producing buffer
+  %% 2. Initialize variables
   {BufferLimit, Config1} = take_config(partition_buffer_limit,
                                        ?DEFAULT_PARITION_BUFFER_LIMIT,
                                        Config0),
@@ -196,6 +185,18 @@ handle_info(init_socket, #state{ client_id = ClientId
                                        Config2),
   RequiredAcks = get_required_acks(Config),
   AckTimeout = get_ack_timeout(Config),
+  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
+                                    MsgSetBytes, SendFun),
+  LeaderId >= 0 orelse
+    erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),
+  #broker_metadata{host = Host, port = Port} =
+    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+
+
+  case connect_broker(
+  %% 2. Establish (and monitor) the connection to partition leader
+  {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
+  _ = erlang:monitor(process, SockPid),
   SendFun =
     fun(KafkaKvList) ->
       %% TODO: change to plain kv-list ?
@@ -207,8 +208,10 @@ handle_info(init_socket, #state{ client_id = ClientId
                                  },
       brod_sock:send(SockPid, KafkaReq)
     end,
-  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                    MsgSetBytes, SendFun),
+
+  %% 3. Register self() to client.
+  ok = brod_client:register_producer(ClientId, Topic, Partition),
+
   %% 5. Update state.
   NewState = State#state{ sock_pid = SockPid
                         , buffer   = Buffer
