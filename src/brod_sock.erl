@@ -48,7 +48,7 @@
 -include("brod_int.hrl").
 
 %%%_* Records ==================================================================
--record(state, { client_id   :: client_id()
+-record(state, { client_id   :: binary()
                , parent      :: pid()
                , sock        :: port()
                , tail = <<>> :: binary() %% leftover of last data stream
@@ -56,14 +56,20 @@
                }).
 
 %%%_* API ======================================================================
--spec start_link(pid(), string(), integer(), client_id(), term()) ->
+-spec start_link(pid(), string(), integer(), client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
+  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  start_link(Parent, Host, Port, BinClientId, Debug);
+start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
--spec start(pid(), string(), integer(), client_id(), term()) ->
+-spec start(pid(), string(), integer(), client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
-start(Parent, Host, Port, ClientId, Debug) ->
+start(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
+  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  start(Parent, Host, Port, BinClientId, Debug);
+start(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
 -spec send(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.

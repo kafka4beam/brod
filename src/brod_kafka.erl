@@ -78,9 +78,7 @@ is_error(X) -> brod_kafka_errors:is_error(X).
 
 %%%_* Internal Functions =======================================================
 
-header(ApiKey, ClientId, CorrId) when is_atom(ClientId) ->
-  header(ApiKey, list_to_binary(atom_to_list(ClientId)), CorrId);
-header(ApiKey, ClientId, CorrId) when is_binary(ClientId) ->
+header(ApiKey, ClientId, CorrId) ->
   ClientIdLength = size(ClientId),
   <<ApiKey:16/?INT,
     ?API_VERSION:16/?INT,
