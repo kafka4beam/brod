@@ -177,8 +177,8 @@ handle_info(init_socket, #state{ client_id = ClientId
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
-  %% 2. Establish (and monitor) the connection to partition leader
-  {ok, SockPid} = brod_client:connect_broker(ClientId, Host, Port),
+  %% 2. Lookup, or maybe (re-)establish a connection to partition leader
+  {ok, SockPid} = brod_client:get_connection(ClientId, Host, Port),
   _ = erlang:monitor(process, SockPid),
 
   %% 3. Register self() to client.

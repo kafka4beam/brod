@@ -23,7 +23,7 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ connect_broker/3
+-export([ get_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
@@ -85,13 +85,17 @@ stop(Client) ->
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
-%% @doc Establish a (maybe new) connection to kafka broker at Host:Port.
-%% In case there is alreay a connection established, it is re-used.
+%% @doc Get the connection to kafka broker at Host:Port.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another producer
+%% the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
 %% @end
--spec connect_broker(client(), hostname(), portnum()) ->
+-spec get_connection(client(), hostname(), portnum()) ->
         {ok, pid()} | {error, any()}.
-connect_broker(Client, Host, Port) ->
-  gen_server:call(Client, {connect, Host, Port}, infinity).
+get_connection(Client, Host, Port) ->
+  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
@@ -189,8 +193,8 @@ handle_call({get_topic_worker, Topic}, _From, State) ->
 handle_call({get_metadata, Topic}, _From, State) ->
   Result = do_get_metadata(Topic, State),
   {reply, Result, State};
-handle_call({connect, Host, Port}, _From, State) ->
-  {NewState, Result} = do_connect(State, Host, Port),
+handle_call({get_connection, Host, Port}, _From, State) ->
+  {NewState, Result} = do_get_connection(State, Host, Port),
   {reply, Result, NewState};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
@@ -264,38 +268,38 @@ do_get_metadata(Topic, #state{ meta_sock = #sock{sock_pid = SockPid}
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)).
 
--spec do_connect(#state{}, hostname(), portnum()) ->
+-spec do_get_connection(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
-do_connect(#state{client_id = ClientId} = State, Host, Port) ->
+do_get_connection(#state{} = State, Host, Port) ->
   case find_socket(State, Host, Port) of
     {ok, Pid} ->
-      error_logger:info_msg("~p connected to ~p:~p~n", [ClientId, Host, Port]),
       {State, {ok, Pid}};
     {error, Reason} ->
-      maybe_reconnect(State, Host, Port, Reason)
+      maybe_connect(State, Host, Port, Reason)
   end.
 
--spec maybe_reconnect(#state{}, hostname(), portnum(), Reason) ->
+-spec maybe_connect(#state{}, hostname(), portnum(), Reason) ->
         {#state{}, Result} when
           Reason :: not_found | dead_socket(),
           Result :: {ok, pid()} | {error, any()}.
-maybe_reconnect(State, Host, Port, not_found) ->
+maybe_connect(State, Host, Port, not_found) ->
   %% connect for the first time
-  reconnect(State, Host, Port);
-maybe_reconnect(#state{client_id = ClientId} = State,
+  connect(State, Host, Port);
+maybe_connect(#state{client_id = ClientId} = State,
                 Host, Port, ?dead_since(Ts, Reason)) ->
   case is_cooled_down(Ts, State) of
     true ->
-      reconnect(State, Host, Port);
+      connect(State, Host, Port);
     false ->
-      error_logger:error_msg("~p reconnect to ~p:~p~n aborted, last failure reason:~p",
+      error_logger:error_msg("~p (re)connect to ~p:~p~n aborted, "
+                             "last failure reason:~p",
                              [ClientId, Host, Port, Reason]),
      {State, {error, Reason}}
   end.
 
--spec reconnect(#state{}, hostname(), portnum()) -> {#state{}, Result}
+-spec connect(#state{}, hostname(), portnum()) -> {#state{}, Result}
         when Result :: {ok, pid()} | {error, any()}.
-reconnect(#state{ client_id = ClientId
+connect(#state{ client_id = ClientId
                 , sockets = Sockets
                 } = State, Host, Port) ->
   case brod_sock:start_link(self(), Host, Port, ClientId, []) of
@@ -314,8 +318,9 @@ reconnect(#state{ client_id = ClientId
   end.
 
 %% @private Handle socket pid EXIT event, keep the timestamp.
-%% But do not restart yet. Connection will be re-established when the partition
-%% worker requests so.
+%% But do not restart yet. Connection will be re-established when a
+%% per-partition producer restarts and requests for a connection after
+%% it is cooled down.
 %% @end
 -spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
 handle_socket_down(#state{ client_id = ClientId
