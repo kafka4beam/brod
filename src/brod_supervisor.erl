@@ -368,14 +368,7 @@ init({SupName, Mod, Args}) ->
   process_flag(trap_exit, true),
   case Mod:init(Args) of
     {ok, {SupFlags, StartSpec}} ->
-      case init_state(SupName, SupFlags, Mod, Args) of
-        {ok, State} when ?is_simple(State) ->
-          init_dynamic(State, StartSpec);
-        {ok, State} ->
-          init_children(State, StartSpec);
-        Error ->
-          {stop, {supervisor_data, Error}}
-      end;
+      do_init(SupName, SupFlags, StartSpec, Mod, Args);
     post_init ->
       self() ! {post_init, SupName, Mod, Args},
       {ok, #state{}};
@@ -384,90 +377,6 @@ init({SupName, Mod, Args}) ->
     Error ->
       {stop, {bad_return, {Mod, init, Error}}}
   end.
-
-init_children(State, StartSpec) ->
-    SupName = State#state.name,
-    case check_startspec(StartSpec) of
-        {ok, Children} ->
-            case start_children(Children, SupName) of
-                {ok, NChildren} ->
-                    {ok, State#state{children = NChildren}};
-                {error, NChildren, Reason} ->
-                    terminate_children(NChildren, SupName),
-                    {stop, {shutdown, Reason}}
-            end;
-        Error ->
-            {stop, {start_spec, Error}}
-    end.
-
-init_dynamic(State, [StartSpec]) ->
-    case check_startspec([StartSpec]) of
-        {ok, Children} ->
-      {ok, State#state{children = Children}};
-        Error ->
-            {stop, {start_spec, Error}}
-    end;
-init_dynamic(_State, StartSpec) ->
-    {stop, {bad_start_spec, StartSpec}}.
-
-%%-----------------------------------------------------------------
-%% Func: start_children/2
-%% Args: Children = [child_rec()] in start order
-%%       SupName = {local, atom()} | {global, atom()} | {pid(), Mod}
-%% Purpose: Start all children.  The new list contains #child's
-%%          with pids.
-%% Returns: {ok, NChildren} | {error, NChildren, Reason}
-%%          NChildren = [child_rec()] in termination order (reversed
-%%                        start order)
-%%-----------------------------------------------------------------
-start_children(Children, SupName) -> start_children(Children, [], SupName).
-
-start_children([Child|Chs], NChildren, SupName) ->
-    case do_start_child(SupName, Child) of
-  {ok, undefined} when Child#child.restart_type =:= temporary ->
-      start_children(Chs, NChildren, SupName);
-  {ok, Pid} ->
-      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
-  {ok, Pid, _Extra} ->
-      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
-  {error, Reason} ->
-      report_error(start_error, Reason, Child, SupName),
-      {error, lists:reverse(Chs) ++ [Child | NChildren],
-       {failed_to_start_child,Child#child.name,Reason}}
-    end;
-start_children([], NChildren, _SupName) ->
-    {ok, NChildren}.
-
-do_start_child(SupName, Child) ->
-    #child{mfargs = {M, F, Args}} = Child,
-    case catch apply(M, F, Args) of
-  {ok, Pid} when is_pid(Pid) ->
-      NChild = Child#child{pid = Pid},
-      report_progress(NChild, SupName),
-      {ok, Pid};
-  {ok, Pid, Extra} when is_pid(Pid) ->
-      NChild = Child#child{pid = Pid},
-      report_progress(NChild, SupName),
-      {ok, Pid, Extra};
-  ignore ->
-      {ok, undefined};
-  {error, What} -> {error, What};
-  What -> {error, What}
-    end.
-
-do_start_child_i(M, F, A) ->
-    case catch apply(M, F, A) of
-  {ok, Pid} when is_pid(Pid) ->
-      {ok, Pid};
-  {ok, Pid, Extra} when is_pid(Pid) ->
-      {ok, Pid, Extra};
-  ignore ->
-      {ok, undefined};
-  {error, Error} ->
-      {error, Error};
-  What ->
-      {error, What}
-    end.
 
 %%% ---------------------------------------------------
 %%% 
@@ -694,27 +603,17 @@ handle_cast({try_again_restart,Name,Reason}, State) ->
         {'noreply', state()} | {'stop', term(), state()}.
 -endif.
 handle_info({post_init, SupName, Mod, Args}, State0) ->
-  Res =
-    case Mod:post_init(Args) of
-      {ok, {SupFlags, StartSpec}} ->
-        case init_state(SupName, SupFlags, Mod, Args) of
-          {ok, State} when ?is_simple(State) ->
-            init_dynamic(State, StartSpec);
-          {ok, State} ->
-            init_children(State, StartSpec);
-          Error ->
-            {stop, {supervisor_data, Error}}
-        end;
-      Error ->
-        {stop, {bad_return, {Mod, post_init, Error}}}
-    end,
-  %% map init/1 result type to handle_* result type
-  case Res of
-    {ok, NewState} ->
-      {noreply, NewState};
-    {stop, Reason} ->
-      {stop, Reason, State0}
-  end;
+    Res = case Mod:post_init(Args) of
+              {ok, {SupFlags, StartSpec}} ->
+                  do_init(SupName, SupFlags, StartSpec, Mod, Args);
+              Error ->
+                  {stop, {bad_return, {Mod, post_init, Error}}}
+          end,
+    %% map init/1 result type to handle_* result type
+    case Res of
+        {ok, NewState} -> {noreply, NewState};
+        {stop, Reason} -> {stop, Reason, State0}
+    end;
 handle_info({'EXIT', Pid, Reason}, State) ->
     case restart_child(Pid, Reason, State) of
   {ok, State1} ->
@@ -1387,27 +1286,30 @@ remove_child(Child, State) ->
     State#state{children = Chs}.
 
 %%-----------------------------------------------------------------
-%% Func: init_state/4
+%% Func: do_init/5
 %% Args: SupName = {local, atom()} | {global, atom()} | self
 %%       Type = {Strategy, MaxIntensity, Period}
 %%         Strategy = one_for_one | one_for_all | simple_one_for_one |
 %%                    rest_for_one
 %%         MaxIntensity = integer() >= 0
 %%         Period = integer() > 0
+%%       StartSpec :== see check_startspec/1
 %%       Mod :== atom()
 %%       Args :== term()
 %% Purpose: Check that Type is of correct type (!)
 %% Returns: {ok, state()} | Error
 %%-----------------------------------------------------------------
-init_state(SupName, Type, Mod, Args) ->
-    case catch init_state1(SupName, Type, Mod, Args) of
-  {ok, State} ->
-      {ok, State};
-  Error ->
-      Error
+do_init(SupName, Type, StartSpec, Mod, Args) ->
+    case catch init_state(SupName, Type, Mod, Args) of
+        {ok, State} when ?is_simple(State) ->
+            init_dynamic(State, StartSpec);
+        {ok, State} ->
+            init_children(State, StartSpec);
+        Error ->
+            {stop, {supervisor_data, Error}}
     end.
 
-init_state1(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
+init_state(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
     validStrategy(Strategy),
     validIntensity(MaxIntensity),
     validPeriod(Period),
@@ -1417,8 +1319,92 @@ init_state1(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
     period = Period,
     module = Mod,
     args = Args}};
-init_state1(_SupName, Type, _, _) ->
+init_state(_SupName, Type, _, _) ->
     {invalid_type, Type}.
+
+init_children(State, StartSpec) ->
+    SupName = State#state.name,
+    case check_startspec(StartSpec) of
+        {ok, Children} ->
+            case start_children(Children, SupName) of
+                {ok, NChildren} ->
+                    {ok, State#state{children = NChildren}};
+                {error, NChildren, Reason} ->
+                    terminate_children(NChildren, SupName),
+                    {stop, {shutdown, Reason}}
+            end;
+        Error ->
+            {stop, {start_spec, Error}}
+    end.
+
+init_dynamic(State, [StartSpec]) ->
+    case check_startspec([StartSpec]) of
+        {ok, Children} ->
+      {ok, State#state{children = Children}};
+        Error ->
+            {stop, {start_spec, Error}}
+    end;
+init_dynamic(_State, StartSpec) ->
+    {stop, {bad_start_spec, StartSpec}}.
+
+%%-----------------------------------------------------------------
+%% Func: start_children/2
+%% Args: Children = [child_rec()] in start order
+%%       SupName = {local, atom()} | {global, atom()} | {pid(), Mod}
+%% Purpose: Start all children.  The new list contains #child's
+%%          with pids.
+%% Returns: {ok, NChildren} | {error, NChildren, Reason}
+%%          NChildren = [child_rec()] in termination order (reversed
+%%                        start order)
+%%-----------------------------------------------------------------
+start_children(Children, SupName) -> start_children(Children, [], SupName).
+
+start_children([Child|Chs], NChildren, SupName) ->
+    case do_start_child(SupName, Child) of
+  {ok, undefined} when Child#child.restart_type =:= temporary ->
+      start_children(Chs, NChildren, SupName);
+  {ok, Pid} ->
+      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
+  {ok, Pid, _Extra} ->
+      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
+  {error, Reason} ->
+      report_error(start_error, Reason, Child, SupName),
+      {error, lists:reverse(Chs) ++ [Child | NChildren],
+       {failed_to_start_child,Child#child.name,Reason}}
+    end;
+start_children([], NChildren, _SupName) ->
+    {ok, NChildren}.
+
+do_start_child(SupName, Child) ->
+    #child{mfargs = {M, F, Args}} = Child,
+    case catch apply(M, F, Args) of
+  {ok, Pid} when is_pid(Pid) ->
+      NChild = Child#child{pid = Pid},
+      report_progress(NChild, SupName),
+      {ok, Pid};
+  {ok, Pid, Extra} when is_pid(Pid) ->
+      NChild = Child#child{pid = Pid},
+      report_progress(NChild, SupName),
+      {ok, Pid, Extra};
+  ignore ->
+      {ok, undefined};
+  {error, What} -> {error, What};
+  What -> {error, What}
+    end.
+
+do_start_child_i(M, F, A) ->
+    case catch apply(M, F, A) of
+  {ok, Pid} when is_pid(Pid) ->
+      {ok, Pid};
+  {ok, Pid, Extra} when is_pid(Pid) ->
+      {ok, Pid, Extra};
+  ignore ->
+      {ok, undefined};
+  {error, Error} ->
+      {error, Error};
+  What ->
+      {error, What}
+    end.
 
 validStrategy(simple_one_for_one) -> true;
 validStrategy(one_for_one)        -> true;
