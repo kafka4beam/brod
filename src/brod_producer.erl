@@ -60,7 +60,7 @@
         , buffer      :: brod_producer_buffer:buf()
         }).
 
-%%%_* APIs ---------------------------------------------------------------------
+%%%_* APIs =====================================================================
 
 %% @doc Start (link) a partition producer.
 %% Possible configs:
@@ -142,7 +142,7 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
       {error, {producer_down, Reason}}
   end.
 
-%%%_* gen_server callbacks------------------------------------------------------
+%%%_* gen_server callbacks =====================================================
 
 init({ClientId, Topic, Partition, Config}) ->
   self() ! init_socket,
@@ -263,7 +263,7 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, _State) ->
   ok.
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
 
 -spec take_config(atom(), any(), config()) -> {any(), config()}.
 take_config(Key, Default, Config) when is_list(Config) ->

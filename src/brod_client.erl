@@ -282,10 +282,15 @@ do_connect(#state{client_id = ClientId} = State, Host, Port) ->
 maybe_reconnect(State, Host, Port, not_found) ->
   %% connect for the first time
   reconnect(State, Host, Port);
-maybe_reconnect(State, Host, Port, ?dead_since(Ts, Reason)) ->
+maybe_reconnect(#state{client_id = ClientId} = State,
+                Host, Port, ?dead_since(Ts, Reason)) ->
   case is_cooled_down(Ts, State) of
-    true  -> reconnect(State, Host, Port);
-    false -> {State, {error, Reason}}
+    true ->
+      reconnect(State, Host, Port);
+    false ->
+      error_logger:error_msg("~p reconnect to ~p:~p~n aborted, last failure reason:~p",
+                             [ClientId, Host, Port, Reason]),
+     {State, {error, Reason}}
   end.
 
 -spec reconnect(#state{}, hostname(), portnum()) -> {#state{}, Result}
@@ -302,6 +307,8 @@ reconnect(#state{ client_id = ClientId
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
+      error_logger:error_msg("~p failed to connect to ~p:~p~n, reason:~p",
+                             [ClientId, Host, Port, Reason]),
       {ok, NewState} = mark_socket_dead(State, {Host, Port}, Reason),
       {NewState, {error, Reason}}
   end.
@@ -349,8 +356,8 @@ is_cooled_down(Ts, #state{config = Config}) ->
     _                          -> false
   end.
 
-%% @doc Establish a dedicated socket to kafka cluster endpoint(s) for
-%% metadata retrievals.
+%% @private Establish a dedicated socket to kafka cluster endpoint(s) for
+%%          metadata retrievals.
 %% NOTE: This socket is not intended for kafka payload. This is to avoid
 %%       burst of connection usage when many partition producers (re)start
 %%       at same time, if we use brod_util:get_metadata/2 to fetch metadata.
