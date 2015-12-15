@@ -307,11 +307,11 @@ connect(#state{ client_id = ClientId
       S = #sock{ endpoint = {Host, Port}
                , sock_pid = Pid
                },
-      error_logger:info_msg("~p connected to ~p:~p~n", [ClientId, Host, Port]),
+      error_logger:info_msg("~p connected to ~s:~p~n", [ClientId, Host, Port]),
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
-      error_logger:error_msg("~p failed to connect to ~p:~p~n, reason:~p",
+      error_logger:error_msg("~p failed to connect to ~s:~p~n, reason:~p",
                              [ClientId, Host, Port, Reason]),
       {ok, NewState} = mark_socket_dead(State, {Host, Port}, Reason),
       {NewState, {error, Reason}}
