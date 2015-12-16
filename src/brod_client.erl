@@ -156,8 +156,11 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
     {error, client_down}
   end.
 
+-spec find_producer(client_id(), topic(), partition()) ->
+                       {ok, pid()} | {error, any()}.
 find_producer(ClientId, Topic, Partition) ->
-  gen_server:call(ClientId, {find_producer, Topic, Partition}, infinity).
+  SupPid = gen_server:call(ClientId, get_producers_sup_pid, infinity),
+  brod_producers_sup:find_producer(SupPid, Topic, Partition).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -189,10 +192,8 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 handle_info(_Info, State) ->
   {noreply, State}.
 
-handle_call({find_producer, Topic, Partition}, _From, State) ->
-  SupPid = State#state.producers_sup,
-  Result = brod_producers_sup:find_producer(SupPid, Topic, Partition),
-  {reply, Result, State};
+handle_call(get_producers_sup_pid, _From, State) ->
+  {reply, State#state.producers_sup, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   Result = do_get_metadata(Topic, State),
   {reply, Result, State};
