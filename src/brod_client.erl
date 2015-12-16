@@ -23,7 +23,8 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ get_connection/3
+-export([ find_producer/3
+        , get_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
