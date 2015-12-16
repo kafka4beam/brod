@@ -23,7 +23,8 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ get_connection/3
+-export([ find_producer/3
+        , get_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
@@ -156,6 +157,12 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
     {error, client_down}
   end.
 
+-spec find_producer(client_id(), topic(), partition()) ->
+                       {ok, pid()} | {error, any()}.
+find_producer(ClientId, Topic, Partition) ->
+  SupPid = gen_server:call(ClientId, get_producers_sup_pid, infinity),
+  brod_producers_sup:find_producer(SupPid, Topic, Partition).
+
 %%%_* gen_server callbacks =====================================================
 
 init({ClientId, Endpoints, Config, Producers}) ->
@@ -171,7 +178,7 @@ handle_info({init, Producers}, #state{ client_id = ClientId
                                      , endpoints = Endpoints
                                      } = State) ->
   Sock = start_metadata_socket(Endpoints),
-  {ok, Pid} = brod_sup:start_link_producers_sup(ClientId, Producers),
+  {ok, Pid} = brod_producers_sup:start_link(ClientId, Producers),
   {noreply, State#state{ meta_sock     = Sock
                        , producers_sup = Pid
                        }};
@@ -186,9 +193,8 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 handle_info(_Info, State) ->
   {noreply, State}.
 
-handle_call({get_topic_worker, Topic}, _From, State) ->
-  Result = do_get_topic_worker(State, Topic),
-  {reply, Result, State};
+handle_call(get_producers_sup_pid, _From, State) ->
+  {reply, State#state.producers_sup, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   Result = do_get_metadata(Topic, State),
   {reply, Result, State};
@@ -221,27 +227,6 @@ terminate(_Reason, #state{meta_sock = MetaSock, sockets = Sockets}) ->
     end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
-
-find_producer(ClientId, Topic, Partition) ->
-  case gen_server:call(ClientId, {get_topic_worker, Topic}, infinity) of
-    {ok, Pid} ->
-      brod_producers:get_producer(Pid, Partition);
-    {error, Reason} ->
-      {error, Reason}
-  end.
-
-do_get_topic_worker(#state{producers_sup = Sup}, Topic) ->
-  case brod_supervisor:find_child(Sup, Topic) of
-    [] ->
-      %% no such topic worker started,
-      %% check sys.config or brod:start_link_client args
-      {error, {not_found, Topic}};
-    [Pid] ->
-      case is_alive(Pid) of
-        true  -> {ok, Pid};
-        false -> {error, restarting}
-      end
-  end.
 
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode

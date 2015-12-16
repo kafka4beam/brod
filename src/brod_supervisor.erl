@@ -4,6 +4,7 @@
 %% with following modifications:
 %% 1) the module name is brod_supervisor
 %% 2) call os:timestamp/0 and timer:now_diff/2 for timestamps
+%% 3) introduce post_init callback
 %%
 %% Original file header:
 %%
@@ -179,13 +180,22 @@
            MaxR            :: non_neg_integer(),
            MaxT            :: non_neg_integer()},
            [ChildSpec :: child_spec()]}}
+    | ignore
+    | post_init.
+
+-callback post_init(Args :: term()) ->
+    {ok, {{RestartStrategy :: strategy(),
+           MaxR            :: non_neg_integer(),
+           MaxT            :: non_neg_integer()},
+           [ChildSpec :: child_spec()]}}
     | ignore.
 -else.
 
 -export([behaviour_info/1]).
 
 behaviour_info(callbacks) ->
-    [{init,1}];
+    [ {init,1}
+    , {post_init,1}];
 behaviour_info(_Other) ->
     undefined.
 
@@ -358,14 +368,10 @@ init({SupName, Mod, Args}) ->
   process_flag(trap_exit, true),
   case Mod:init(Args) of
     {ok, {SupFlags, StartSpec}} ->
-      case init_state(SupName, SupFlags, Mod, Args) of
-        {ok, State} when ?is_simple(State) ->
-          init_dynamic(State, StartSpec);
-        {ok, State} ->
-          init_children(State, StartSpec);
-        Error ->
-          {stop, {supervisor_data, Error}}
-      end;
+      do_init(SupName, SupFlags, StartSpec, Mod, Args);
+    post_init ->
+      self() ! {post_init, SupName, Mod, Args},
+      {ok, #state{}};
     ignore ->
       ignore;
     Error ->
@@ -678,8 +684,20 @@ handle_cast({try_again_restart,Name,Reason}, State) ->
 %%
 -ifdef(use_specs).
 -spec handle_info(term(), state()) ->
-        {'noreply', state()} | {'stop', 'shutdown', state()}.
+        {'noreply', state()} | {'stop', term(), state()}.
 -endif.
+handle_info({post_init, SupName, Mod, Args}, State0) ->
+    Res = case Mod:post_init(Args) of
+              {ok, {SupFlags, StartSpec}} ->
+                  do_init(SupName, SupFlags, StartSpec, Mod, Args);
+              Error ->
+                  {stop, {bad_return, {Mod, post_init, Error}}}
+          end,
+    %% map init/1 result type to handle_* result type
+    case Res of
+        {ok, NewState} -> {noreply, NewState};
+        {stop, Reason} -> {stop, Reason, State0}
+    end;
 handle_info({'EXIT', Pid, Reason}, State) ->
     case restart_child(Pid, Reason, State) of
   {ok, State1} ->
@@ -1352,27 +1370,30 @@ remove_child(Child, State) ->
     State#state{children = Chs}.
 
 %%-----------------------------------------------------------------
-%% Func: init_state/4
+%% Func: do_init/5
 %% Args: SupName = {local, atom()} | {global, atom()} | self
 %%       Type = {Strategy, MaxIntensity, Period}
 %%         Strategy = one_for_one | one_for_all | simple_one_for_one |
 %%                    rest_for_one
 %%         MaxIntensity = integer() >= 0
 %%         Period = integer() > 0
+%%       StartSpec :== see check_startspec/1
 %%       Mod :== atom()
 %%       Args :== term()
 %% Purpose: Check that Type is of correct type (!)
 %% Returns: {ok, state()} | Error
 %%-----------------------------------------------------------------
-init_state(SupName, Type, Mod, Args) ->
-    case catch init_state1(SupName, Type, Mod, Args) of
-  {ok, State} ->
-      {ok, State};
-  Error ->
-      Error
+do_init(SupName, Type, StartSpec, Mod, Args) ->
+    case catch init_state(SupName, Type, Mod, Args) of
+        {ok, State} when ?is_simple(State) ->
+            init_dynamic(State, StartSpec);
+        {ok, State} ->
+            init_children(State, StartSpec);
+        Error ->
+            {stop, {supervisor_data, Error}}
     end.
 
-init_state1(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
+init_state(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
     validStrategy(Strategy),
     validIntensity(MaxIntensity),
     validPeriod(Period),
@@ -1382,7 +1403,7 @@ init_state1(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
     period = Period,
     module = Mod,
     args = Args}};
-init_state1(_SupName, Type, _, _) ->
+init_state(_SupName, Type, _, _) ->
     {invalid_type, Type}.
 
 validStrategy(simple_one_for_one) -> true;
