@@ -52,7 +52,7 @@
 %%%=============================================================================
 
 -module(brod_sup).
--behaviour(brod_supervisor).
+-behaviour(supervisor3).
 
 -export([ init/1
         , post_init/1
@@ -98,9 +98,9 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  brod_supervisor:start_link({local, ?MODULE}, ?MODULE, clients_sup).
+  supervisor3:start_link({local, ?MODULE}, ?MODULE, clients_sup).
 
-%% @doc brod_supervisor callback.
+%% @doc supervisor3 callback.
 init(clients_sup) ->
   Clients = application:get_env(brod, clients, []),
   ClientSpecs =

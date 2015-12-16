@@ -22,7 +22,7 @@
 %%%=============================================================================
 
 -module(brod_producers_sup).
--behaviour(brod_supervisor).
+-behaviour(supervisor3).
 
 -export([ init/1
         , post_init/1
@@ -50,14 +50,14 @@
 %% @end
 -spec start_link(client_id(), [{topic(), producer_config()}]) -> {ok, pid()}.
 start_link(ClientId, Producers) ->
-  brod_supervisor:start_link(?MODULE, {?SUP, ClientId, Producers}).
+  supervisor3:start_link(?MODULE, {?SUP, ClientId, Producers}).
 
 %% @doc Find a brod_producer process pid running under sup2
 %% @end
 -spec find_producer(pid(), topic(), partition()) ->
                        {ok, pid()} | {error, any()}.
 find_producer(SupPid, Topic, Partition) ->
-  case brod_supervisor:find_child(SupPid, Topic) of
+  case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
@@ -65,7 +65,7 @@ find_producer(SupPid, Topic, Partition) ->
     [Sup2Pid] ->
       case is_alive(Sup2Pid) of
         true ->
-          case brod_supervisor:find_child(Sup2Pid, Partition) of
+          case supervisor3:find_child(Sup2Pid, Partition) of
             [] ->
               %% no such partition?
               {error, {not_found, Topic, Partition}};
@@ -80,7 +80,7 @@ find_producer(SupPid, Topic, Partition) ->
       end
   end.
 
-%% @doc brod_supervisor callback.
+%% @doc supervisor3 callback.
 init({?SUP, ClientId, Producers}) ->
   Children = [ producers_sup_spec(ClientId, TopicName, Config)
              || {TopicName, Config} <- Producers ],
@@ -107,7 +107,7 @@ producers_sup_spec(ClientId, TopicName, Config0) ->
   Config    = proplists:delete(restart_delay_seconds, Config0),
   Args      = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
   { _Id       = TopicName
-  , _Start    = {brod_supervisor, start_link, Args}
+  , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
   , _Shutdown = infinity
   , _Type     = supervisor
