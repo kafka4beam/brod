@@ -378,6 +378,90 @@ init({SupName, Mod, Args}) ->
       {stop, {bad_return, {Mod, init, Error}}}
   end.
 
+init_children(State, StartSpec) ->
+    SupName = State#state.name,
+    case check_startspec(StartSpec) of
+        {ok, Children} ->
+            case start_children(Children, SupName) of
+                {ok, NChildren} ->
+                    {ok, State#state{children = NChildren}};
+                {error, NChildren, Reason} ->
+                    terminate_children(NChildren, SupName),
+                    {stop, {shutdown, Reason}}
+            end;
+        Error ->
+            {stop, {start_spec, Error}}
+    end.
+
+init_dynamic(State, [StartSpec]) ->
+    case check_startspec([StartSpec]) of
+        {ok, Children} ->
+      {ok, State#state{children = Children}};
+        Error ->
+            {stop, {start_spec, Error}}
+    end;
+init_dynamic(_State, StartSpec) ->
+    {stop, {bad_start_spec, StartSpec}}.
+
+%%-----------------------------------------------------------------
+%% Func: start_children/2
+%% Args: Children = [child_rec()] in start order
+%%       SupName = {local, atom()} | {global, atom()} | {pid(), Mod}
+%% Purpose: Start all children.  The new list contains #child's
+%%          with pids.
+%% Returns: {ok, NChildren} | {error, NChildren, Reason}
+%%          NChildren = [child_rec()] in termination order (reversed
+%%                        start order)
+%%-----------------------------------------------------------------
+start_children(Children, SupName) -> start_children(Children, [], SupName).
+
+start_children([Child|Chs], NChildren, SupName) ->
+    case do_start_child(SupName, Child) of
+  {ok, undefined} when Child#child.restart_type =:= temporary ->
+      start_children(Chs, NChildren, SupName);
+  {ok, Pid} ->
+      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
+  {ok, Pid, _Extra} ->
+      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
+  {error, Reason} ->
+      report_error(start_error, Reason, Child, SupName),
+      {error, lists:reverse(Chs) ++ [Child | NChildren],
+       {failed_to_start_child,Child#child.name,Reason}}
+    end;
+start_children([], NChildren, _SupName) ->
+    {ok, NChildren}.
+
+do_start_child(SupName, Child) ->
+    #child{mfargs = {M, F, Args}} = Child,
+    case catch apply(M, F, Args) of
+  {ok, Pid} when is_pid(Pid) ->
+      NChild = Child#child{pid = Pid},
+      report_progress(NChild, SupName),
+      {ok, Pid};
+  {ok, Pid, Extra} when is_pid(Pid) ->
+      NChild = Child#child{pid = Pid},
+      report_progress(NChild, SupName),
+      {ok, Pid, Extra};
+  ignore ->
+      {ok, undefined};
+  {error, What} -> {error, What};
+  What -> {error, What}
+    end.
+
+do_start_child_i(M, F, A) ->
+    case catch apply(M, F, A) of
+  {ok, Pid} when is_pid(Pid) ->
+      {ok, Pid};
+  {ok, Pid, Extra} when is_pid(Pid) ->
+      {ok, Pid, Extra};
+  ignore ->
+      {ok, undefined};
+  {error, Error} ->
+      {error, Error};
+  What ->
+      {error, What}
+    end.
+
 %%% ---------------------------------------------------
 %%% 
 %%% Callback functions.
@@ -1321,90 +1405,6 @@ init_state(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
     args = Args}};
 init_state(_SupName, Type, _, _) ->
     {invalid_type, Type}.
-
-init_children(State, StartSpec) ->
-    SupName = State#state.name,
-    case check_startspec(StartSpec) of
-        {ok, Children} ->
-            case start_children(Children, SupName) of
-                {ok, NChildren} ->
-                    {ok, State#state{children = NChildren}};
-                {error, NChildren, Reason} ->
-                    terminate_children(NChildren, SupName),
-                    {stop, {shutdown, Reason}}
-            end;
-        Error ->
-            {stop, {start_spec, Error}}
-    end.
-
-init_dynamic(State, [StartSpec]) ->
-    case check_startspec([StartSpec]) of
-        {ok, Children} ->
-      {ok, State#state{children = Children}};
-        Error ->
-            {stop, {start_spec, Error}}
-    end;
-init_dynamic(_State, StartSpec) ->
-    {stop, {bad_start_spec, StartSpec}}.
-
-%%-----------------------------------------------------------------
-%% Func: start_children/2
-%% Args: Children = [child_rec()] in start order
-%%       SupName = {local, atom()} | {global, atom()} | {pid(), Mod}
-%% Purpose: Start all children.  The new list contains #child's
-%%          with pids.
-%% Returns: {ok, NChildren} | {error, NChildren, Reason}
-%%          NChildren = [child_rec()] in termination order (reversed
-%%                        start order)
-%%-----------------------------------------------------------------
-start_children(Children, SupName) -> start_children(Children, [], SupName).
-
-start_children([Child|Chs], NChildren, SupName) ->
-    case do_start_child(SupName, Child) of
-  {ok, undefined} when Child#child.restart_type =:= temporary ->
-      start_children(Chs, NChildren, SupName);
-  {ok, Pid} ->
-      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
-  {ok, Pid, _Extra} ->
-      start_children(Chs, [Child#child{pid = Pid}|NChildren], SupName);
-  {error, Reason} ->
-      report_error(start_error, Reason, Child, SupName),
-      {error, lists:reverse(Chs) ++ [Child | NChildren],
-       {failed_to_start_child,Child#child.name,Reason}}
-    end;
-start_children([], NChildren, _SupName) ->
-    {ok, NChildren}.
-
-do_start_child(SupName, Child) ->
-    #child{mfargs = {M, F, Args}} = Child,
-    case catch apply(M, F, Args) of
-  {ok, Pid} when is_pid(Pid) ->
-      NChild = Child#child{pid = Pid},
-      report_progress(NChild, SupName),
-      {ok, Pid};
-  {ok, Pid, Extra} when is_pid(Pid) ->
-      NChild = Child#child{pid = Pid},
-      report_progress(NChild, SupName),
-      {ok, Pid, Extra};
-  ignore ->
-      {ok, undefined};
-  {error, What} -> {error, What};
-  What -> {error, What}
-    end.
-
-do_start_child_i(M, F, A) ->
-    case catch apply(M, F, A) of
-  {ok, Pid} when is_pid(Pid) ->
-      {ok, Pid};
-  {ok, Pid, Extra} when is_pid(Pid) ->
-      {ok, Pid, Extra};
-  ignore ->
-      {ok, undefined};
-  {error, Error} ->
-      {error, Error};
-  What ->
-      {error, What}
-    end.
 
 validStrategy(simple_one_for_one) -> true;
 validStrategy(one_for_one)        -> true;
