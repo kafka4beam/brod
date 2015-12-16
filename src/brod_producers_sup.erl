@@ -50,8 +50,7 @@
 %% @end
 -spec start_link(client_id(), [{topic(), producer_config()}]) -> {ok, pid()}.
 start_link(ClientId, Producers) ->
-  brod_supervisor:start_link({local, ?SUP}, ?MODULE,
-                             {?SUP, ClientId, Producers}).
+  brod_supervisor:start_link(?MODULE, {?SUP, ClientId, Producers}).
 
 %% @doc Find a brod_producer process pid running under sup2
 %% @end
