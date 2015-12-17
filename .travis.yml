@@ -25,7 +25,7 @@ script:
   - set -e
   - make test
   - make xref
-  - make doc
+  - make docs
   - make escriptize
   - scripts/cli-produce-test.sh
 
