@@ -9,10 +9,10 @@ env:
 language: erlang
 
 before_install:
-  - docker pull spotify/kafka
-  - docker --name kafka -d -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST="localhost" --env ADVERTISED_PORT=9092 spotify/kafka
-  - docker ps -a
-  - docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
+  - sudo docker pull spotify/kafka
+  - sudo docker --name kafka -d -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST="localhost" --env ADVERTISED_PORT=9092 spotify/kafka
+  - sudo docker ps -a
+  - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
 
 notifications:
   email: false
