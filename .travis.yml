@@ -1,5 +1,17 @@
-
 language: erlang
+
+sudo: required
+
+env:
+  BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
+
+install:
+  - sudo apt-get install -y linux-image-virtual kernel linux-image-extra-virtual
+  - curl -sSL https://get.docker.com/ | sudo sh
+  - sudo docker pull spotify/kafka
+  - sudo docker --name kafka -d -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST="localhost" --env ADVERTISED_PORT=9092 spotify/kafka
+  - sudo docker ps -a
+  - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
 
 notifications:
   email: false
@@ -9,5 +21,11 @@ otp_release:
   - 17.4
   - R16B03-1
 
-script: "make xref test doc escriptize"
+script:
+  - set -e
+  - make test
+  - make xref
+  - make doc
+  - make escriptize
+  - scripts/cli-produce-test.sh
 
