@@ -217,13 +217,21 @@ handle_cast(_Cast, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-terminate(_Reason, #state{meta_sock = MetaSock, sockets = Sockets}) ->
+terminate(Reason, #state{ client_id = ClientId
+                        , meta_sock = MetaSock
+                        , sockets   = Sockets
+                        }) ->
+  Reason =:= normal orelse
+    error_logger:warning_msg("client ~p down, reason:~p~n",
+                             [ClientId, Reason]),
   lists:foreach(
-    fun(#sock{sock_pid = Pid}) ->
-      case is_pid(Pid) andalso is_process_alive(Pid) of
-        true  -> exit(Pid, shutdown);
-        false -> ok
-      end
+    fun (undefined) ->
+          ok;
+        (#sock{sock_pid = Pid}) ->
+          case is_pid(Pid) andalso is_process_alive(Pid) of
+            true  -> exit(Pid, shutdown);
+            false -> ok
+          end
     end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
