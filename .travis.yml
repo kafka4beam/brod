@@ -1,12 +1,12 @@
 sudo: required
 
+services:
+  - docker
+
 env:
   BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
 
 language: erlang
-
-services:
-  - docker
 
 before_install:
   - docker pull spotify/kafka
@@ -16,10 +16,12 @@ before_install:
 
 notifications:
   email: false
+
 otp_release:
   - 18.1
   - 17.4
   - R16B03-1
   - R15B03
+
 script: "make test doc escriptize && scripts/cli-produce-test.sh"
 
