@@ -69,6 +69,7 @@
 %% @doc Start root supervisor.
 %%
 %% To start permanent clients, a minimal example of app env (sys.config):
+%% ```
 %%  [
 %%     %% Permanent clients
 %%    { clients
@@ -95,6 +96,7 @@
 %%      ]
 %%    }
 %%  ].
+%% '''
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->

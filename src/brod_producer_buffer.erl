@@ -61,7 +61,7 @@
 %%%_* APIs =====================================================================
 
 %% @doc Create a new buffer
-%% @see brod_producer:start_link/4 for more details
+%% For more detail: @see brod_producer:start_link/4
 %% @end
 -spec new(pos_integer(), pos_integer(), pos_integer(), send_fun()) -> buf().
 new(BufferLimit, OnWireLimit, MsgSetBytes, SendFun) ->

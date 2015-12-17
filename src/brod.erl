@@ -90,7 +90,7 @@ stop(_State) -> ok.
 
 %% @doc Simple version of start_link_client/4.
 %% Deafult client ID and default configs are used.
-%% @see start_link_client/4 for more details.
+%% For more details: @see start_link_client/4
 %% @end
 -spec start_link_client([endpoint()], [{topic(), producer_config()}]) ->
         {ok, pid()} | {error, any()}.
@@ -140,7 +140,7 @@ stop_client(ClientId) ->
 get_partitions(Client, Topic) ->
   brod_client:get_partitions(Client, Topic).
 
-%% @equiv brod_client:get_producer/3.
+%% @equiv brod_client:get_producer/3
 -spec get_producer(client_id(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down

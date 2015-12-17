@@ -46,7 +46,7 @@
 %% @doc Start a root producers supervisor,
 %%      per-topic supervisors and per-partition producer workers.
 %%      The config is passed down to the producers.
-%% @see brod_producer:start_link/4 for more details.
+%% For more details: @see brod_producer:start_link/4
 %% @end
 -spec start_link(client_id(), [{topic(), producer_config()}]) -> {ok, pid()}.
 start_link(ClientId, Producers) ->
