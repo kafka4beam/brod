@@ -5,9 +5,9 @@ sudo: required
 env:
   BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
 
-install:
-  - sudo apt-get install -y linux-image-virtual kernel linux-image-extra-virtual
+before_install:
   - curl -sSL https://get.docker.com/ | sudo sh
+  - sudo docker info
   - sudo docker pull spotify/kafka
   - sudo docker --name kafka -d -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST="localhost" --env ADVERTISED_PORT=9092 spotify/kafka
   - sudo docker ps -a
