@@ -51,11 +51,9 @@
         , format_status/2
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod.hrl").
 -include("brod_int.hrl").
 
-%%%_* Records ------------------------------------------------------------------
 -record(state, { hosts         :: [{string(), integer()}]
                , socket        :: #socket{}
                , topic         :: binary()
@@ -68,10 +66,10 @@
                , sleep_timeout :: integer()
                }).
 
-%%%_* Macros -------------------------------------------------------------------
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
-%%%_* API ----------------------------------------------------------------------
+%%%_* APIs =====================================================================
+
 -spec start_link([{string(), integer()}], binary(), integer(), integer()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Hosts, Topic, Partition, SleepTimeout) ->
@@ -115,7 +113,8 @@ no_debug(Pid) ->
 get_socket(Pid) ->
   gen_server:call(Pid, get_socket, infinity).
 
-%%%_* gen_server callbacks -----------------------------------------------------
+%%%_* gen_server callbacks =====================================================
+
 init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
   erlang:process_flag(trap_exit, true),
   {ok, Metadata} = brod_utils:get_metadata(Hosts),
@@ -140,7 +139,7 @@ init([Hosts, Topic, Partition, SleepTimeout, Debug]) ->
       lists:keyfind(NodeId, #broker_metadata.node_id, Brokers),
     %% client id matters only for producer clients
     {ok, Pid} = brod_sock:start_link(self(), Host, Port,
-                                     ?DEFAULT_CLIENT_ID, Debug),
+                                     ?BROD_DEFAULT_CLIENT_ID, Debug),
     Socket = #socket{ pid = Pid
                     , host = Host
                     , port = Port
@@ -210,7 +209,8 @@ format_status(_Opt, [_PDict, State0]) ->
   State = lists:zip(record_info(fields, state), tl(tuple_to_list(State0))),
   [{data, [{"State", State}]}].
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
+
 get_valid_offset(Offset, _State) when Offset > 0 ->
   {ok, Offset};
 get_valid_offset(Time, #state{socket = Socket} = State) ->
@@ -283,7 +283,8 @@ do_debug(Pid, Debug) ->
   {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
 
-%% Tests -----------------------------------------------------------------------
+%%%_* Tests ====================================================================
+
 -include_lib("eunit/include/eunit.hrl").
 
 -ifdef(TEST).
@@ -308,6 +309,8 @@ handle_fetch_response_test() ->
 
 -endif. % TEST
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

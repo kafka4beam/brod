@@ -35,9 +35,29 @@
 -type callback_fun() :: fun((#message_set{}) -> any()) |
                         fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any()).
 
--type client_id() :: atom() | binary().
+-type client_id() :: atom().
 
--define(DEFAULT_CLIENT_ID, <<"brod">>).
+-define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
+
+-record(brod_call_ref, { caller :: pid()
+                       , callee :: pid()
+                       , ref    :: reference()
+                       }).
+
+-type brod_call_ref() :: #brod_call_ref{}.
+
+-type brod_produce_result() :: brod_produce_req_buffered
+                             | brod_produce_req_acked.
+
+-record(brod_produce_reply, { call_ref :: brod_call_ref()
+                            , result   :: brod_produce_result()
+                            }).
+
+-type brod_produce_reply() :: #brod_produce_reply{}.
+
+-type brod_client_config() :: proplists:proplist().
+-type brod_producer_config() :: proplists:proplist().
+-type brod_consumer_config() :: proplists:proplist().
 
 -endif. % include brod.hrl
 

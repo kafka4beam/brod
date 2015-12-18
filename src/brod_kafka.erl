@@ -33,29 +33,29 @@
         , is_error/1
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 -include("brod_kafka.hrl").
 
 -define(INT, signed-integer).
 
-%%%_* API ----------------------------------------------------------------------
+%%%_* APIs =====================================================================
+
 %% @doc Parse binary stream of kafka responses.
 %%      Returns list of {CorrId, Response} tuples and remaining binary.
-%%      CorrIdDict: dict(CorrId -> ApiKey)
-parse_stream(Bin, CorrIdDict) ->
-  parse_stream(Bin, [], CorrIdDict).
+-spec parse_stream(binary(), brod_kakfa_requests:requests()) ->
+        {binary(), [{corr_id(), term()}]}.
+parse_stream(Bin, Requests) ->
+  parse_stream(Bin, [], Requests).
 
 parse_stream(<<Size:32/?INT,
                Bin0:Size/binary,
-               Tail/binary>>, Acc, CorrIdDict0) ->
+               Tail/binary>>, Acc, Requests) ->
   <<CorrId:32/?INT, Bin/binary>> = Bin0,
-  ApiKey = dict:fetch(CorrId, CorrIdDict0),
+  ApiKey = brod_kafka_requests:get_api_key(Requests, CorrId),
   Response = decode(ApiKey, Bin),
-  CorrIdDict = dict:erase(CorrId, CorrIdDict0),
-  parse_stream(Tail, [{CorrId, Response} | Acc], CorrIdDict);
-parse_stream(Bin, Acc, CorrIdDict) ->
-  {Bin, Acc, CorrIdDict}.
+  parse_stream(Tail, [{CorrId, Response} | Acc], Requests);
+parse_stream(Bin, Acc, _Requests) ->
+  {Bin, Acc}.
 
 encode(ClientId, CorrId, Request) ->
   Header = header(api_key(Request), ClientId, CorrId),
@@ -76,8 +76,9 @@ decode(?API_KEY_FETCH, Bin)    -> fetch_response(Bin).
 
 is_error(X) -> brod_kafka_errors:is_error(X).
 
-%%%_* Internal functions -------------------------------------------------------
-header(ApiKey, ClientId, CorrId) when is_binary(ClientId) ->
+%%%_* Internal Functions =======================================================
+
+header(ApiKey, ClientId, CorrId) ->
   ClientIdLength = size(ClientId),
   <<ApiKey:16/?INT,
     ?API_VERSION:16/?INT,
@@ -159,10 +160,9 @@ produce_request_body(#produce_request{} = Produce) ->
 
 encode_topics([], Acc) ->
   Acc;
-encode_topics([{Topic, PartitionsDict} | T], Acc0) ->
+encode_topics([{Topic, Partitions} | T], Acc0) ->
   Size = erlang:size(Topic),
-  Partitions = dict:to_list(PartitionsDict),
-  PartitionsCount = erlang:length(Partitions),
+  PartitionsCount = length(Partitions),
   Acc1 = <<Acc0/binary, Size:16/?INT, Topic/binary,
            PartitionsCount:32/?INT>>,
   Acc = encode_partitions(Partitions, Acc1),
@@ -357,7 +357,8 @@ parse_bytes(Size, Bin0) ->
   <<Bytes:Size/binary, Bin/binary>> = Bin0,
   {binary:copy(Bytes), Bin}.
 
-%% Tests -----------------------------------------------------------------------
+%%%_* Tests ====================================================================
+
 -include_lib("eunit/include/eunit.hrl").
 
 -ifdef(TEST).
@@ -398,6 +399,8 @@ parse_bytes_test() ->
 
 -endif. % TEST
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
