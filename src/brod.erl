@@ -158,15 +158,15 @@ produce(Pid, Value) ->
 %% @doc Produce one message. The pid should be a producer pid.
 -spec produce(pid(), binary(), binary()) ->
         {ok, brod_call_ref()} | {error, any()}.
-produce(Pid, Key, Value) ->
-  brod_producer:produce(Pid, Key, Value).
+produce(ProducerPid, Key, Value) ->
+  brod_producer:produce(ProducerPid, Key, Value).
 
 %% @doc Produce one message. This function first lookup the producer
 %% pid, then call produce/3 to do the actual job.
 %% @end
 -spec produce(client(), topic(), partition(), binary(), binary()) ->
         {ok, brod_call_ref()} | {error, any()}.
-produce(Client, Topic, Partition, Key, Value) when is_atom(ClientId) ->
+produce(Client, Topic, Partition, Key, Value) ->
   case get_producer(Client, Topic, Partition) of
     {ok, Pid}       -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}

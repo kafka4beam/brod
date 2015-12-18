@@ -89,7 +89,7 @@ Unless brod:produce_sync was called, callers of brod:produce should expect a mes
                        , brod_produce_req_acked
                        }
 
-NOTE: In case required_acks is set to 0, kafka will not ack the request, and the reply message is sent back to caller immediately after the message has been sent to the socket process.
+NOTE: If required_acks is set to 0 in producer config, kafka will not ack the request, and the reply message is sent back to caller immediately after the message has been sent to the socket process.
 
 In case the brod:produce caller is a process like gen_server which receives ALL messages,
 the callers should keep the call references in its looping state and match them later.
