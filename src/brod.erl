@@ -21,20 +21,30 @@
 %%%=============================================================================
 
 -module(brod).
+-behaviour(application).
+
+%% Application
+-export([ start/0
+        , start/2
+        , stop/0
+        , stop/1
+        ]).
+
+%% Client API
+-export([ get_partitions/2
+        , get_producer/3
+        , start_link_client/2
+        , start_link_client/4
+        , stop_client/1
+        ]).
 
 %% Producer API
--export([ start_link_producer/1
-        , start_link_producer/3
-        , start_link_producer/4
-        , start_producer/1
-        , start_producer/3
-        , stop_producer/1
+-export([ produce/2
         , produce/3
-        , produce/4
         , produce/5
+        , produce_sync/2
         , produce_sync/3
-        , produce_sync/4
-        , produce_sync/5
+        , sync_produce_request/1
         ]).
 
 %% Consumer API
@@ -62,138 +72,143 @@
 %% escript
 -export([main/1]).
 
--export_type([host/0]).
-
-%%%_* Includes -----------------------------------------------------------------
--include("brod.hrl").
 -include("brod_int.hrl").
 
-%%%_* Types --------------------------------------------------------------------
--type host() :: {string(), integer()}.
+%%%_* APIs =====================================================================
 
-%%%_* Macros -------------------------------------------------------------------
--define(DEFAULT_ACKS,            1). % default required acks
--define(DEFAULT_ACK_TIMEOUT,  1000). % default broker ack timeout
+%% @doc Start brod application.
+start() -> application:start(brod).
 
-%%%_* API ----------------------------------------------------------------------
-%% @deprecated
-%% @equiv start_link_producer(Hosts)
--spec start_producer([host()]) -> {ok, pid()} | {error, any()}.
-start_producer(Hosts) ->
-  start_link_producer(Hosts).
+%% @doc Stop brod application.
+stop() -> application:stop(brod).
 
-%% @deprecated
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
--spec start_producer([host()], integer(), integer()) ->
-                   {ok, pid()} | {error, any()}.
-start_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
+%% @doc Application behaviour callback
+start(_StartType, _StartArgs) -> brod_sup:start_link().
 
-%% @equiv start_link_producer(Hosts, 1, 1000)
--spec start_link_producer([host()]) -> {ok, pid()} | {error, any()}.
-start_link_producer(Hosts) ->
-  start_link_producer(Hosts, ?DEFAULT_ACKS, ?DEFAULT_ACK_TIMEOUT).
+%% @doc Application behaviour callback
+stop(_State) -> ok.
 
-%% @equiv start_link_producer(Hosts, RequiredAcks, AckTimeout, <<"brod">>)
--spec start_link_producer([host()], integer(), integer()) ->
+%% @doc Simple version of start_link_client/4.
+%% Deafult client ID and default configs are used.
+%% For more details: @see start_link_client/4
+%% @end
+-spec start_link_client([endpoint()], [{topic(), producer_config()}]) ->
         {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout) ->
-  start_link_producer(Hosts, RequiredAcks, AckTimeout, ?DEFAULT_CLIENT_ID).
+start_link_client(Endpoints, Producers) ->
+  start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
+                    _Config = [], Producers).
 
-%% @doc Start a process to publish messages to kafka.
-%%      Hosts:
-%%        list of "bootstrap" kafka nodes, {"hostname", 1234}
-%%      RequiredAcks:
-%%        How many acknowledgements the kafka broker should receive
-%%        from the clustered replicas before responding to the
-%%        producer.
-%%        If it is 0 the broker will not send any response (this is
-%%        the only case where the broker will not reply to a
-%%        request). If it is 1, the broker will wait the data is
-%%        written to the local log before sending a response. If it is
-%%        -1 the broker will block until the message is committed by
-%%        all in sync replicas before sending a response. For any
-%%        number > 1 the broker will block waiting for this number of
-%%        acknowledgements to occur (but the broker will never wait
-%%        for more acknowledgements than there are in-sync replicas).
-%%      AckTimeout:
-%%        Maximum time in milliseconds the broker can await the
-%%        receipt of the number of acknowledgements in
-%%        RequiredAcks. The timeout is not an exact limit on
-%%        the request time for a few reasons: (1) it does not
-%%        include network latency, (2) the timer begins at the
-%%        beginning of the processing of this request so if many
-%%        requests are queued due to broker overload that wait
-%%        time will not be included, (3) we will not terminate a
-%%        local write so if the local write time exceeds this
-%%        timeout it will not be respected.
-%%     ClientId:
-%%        Atom or binary string (preferably unique) identifier of the client.
--spec start_link_producer([host()], integer(), integer(), client_id()) ->
+%5 @doc Start a client.
+%% ClientId:
+%%   Atom to identify the client process
+%% Endpoints:
+%%   Kafka cluster endpoints, can be any of the brokers in the cluster
+%%   which does not necessarily have to be a leader of any partition,
+%%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% Config:
+%%   Proplist, possible values:
+%%     get_metadata_timout_seconds(optional, default=5)
+%%       Return timeout error from brod_client:get_metadata/2 in case the
+%%       respons is not received from kafka in this configured time.
+%%     reconnect_cool_down_seconds(optional, default=1)
+%%       Delay this configured number of seconds before retrying to
+%%       estabilish a new connection to the kafka partition leader.
+%% Producers:
+%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
+%%   proplist, @see brod_producers_sup:start_link/2 for more details
+% @end
+-spec start_link_client(client_id(), [endpoint()], client_config(),
+                        [{topic(), producer_config()}]) ->
         {ok, pid()} | {error, any()}.
-start_link_producer(Hosts, RequiredAcks, AckTimeout, ClientId) ->
-  brod_producer:start_link(Hosts, RequiredAcks, AckTimeout, ClientId).
+start_link_client(ClientId, Endpoints, Config, Producers) ->
+  brod_client:start_link(ClientId, Endpoints, Config, Producers).
 
-%% @doc Stop producer process
--spec stop_producer(pid()) -> ok.
-stop_producer(Pid) ->
-  brod_producer:stop(Pid).
+%% @doc Stop a client.
+-spec stop_client(client_id()) -> ok.
+stop_client(ClientId) ->
+  brod_client:stop(ClientId).
 
-%% @equiv produce(Pid, Topic, 0, <<>>, Value)
--spec produce(pid(), binary(), binary()) -> {ok, reference()}.
-produce(Pid, Topic, Value) ->
-  produce(Pid, Topic, 0, <<>>, Value).
+%% @doc Get all partition numbers of a given topic.
+%% The higher level producers may need the partition numbers to
+%% find the partition producer pid --- if the number of partitions
+%% is not statically configured for them.
+%% It is up to the callers how they want to distribute their data
+%% (e.g. random, roundrobin or consistent-hashing) to the partitions.
+%% @end
+-spec get_partitions(client(), topic()) ->
+        {ok, [partition()]} | {error, any()}.
+get_partitions(Client, Topic) ->
+  brod_client:get_partitions(Client, Topic).
 
-%% @equiv produce(Pid, Topic, Partition, [{Key, Value}])
--spec produce(pid(), binary(), integer(), binary(), binary()) ->
-                 {ok, reference()}.
-produce(Pid, Topic, Partition, Key, Value) ->
-  produce(Pid, Topic, Partition, [{Key, Value}]).
+%% @equiv brod_client:get_producer/3
+-spec get_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down
+                       | restarting
+                       | {not_found, topic()}
+                       | {not_found, topic(), partition()}.
+get_producer(Client, Topic, Partition) ->
+  brod_client:get_producer(Client, Topic, Partition).
 
-%% @doc Send one or more {key, value} messages to a broker.
-%%      Returns a reference which can later be used to match on an
-%%      'ack' message from producer acknowledging that the payload
-%%      has been handled by kafka cluster.
-%%      'ack' message has format {{Reference, ProducerPid}, ack}.
--spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
-                 {ok, reference()}.
-produce(Pid, Topic, Partition, KVList) when is_list(KVList) ->
-  brod_producer:produce(Pid, Topic, Partition, KVList).
+%% @equiv produce(Pid, 0, <<>>, Value)
+-spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
+produce(Pid, Value) ->
+  produce(Pid, _Key = <<>>, Value).
 
-%% @equiv produce_sync(Pid, Topic, 0, <<>>, Value)
--spec produce_sync(pid(), binary(), binary()) -> ok.
-produce_sync(Pid, Topic, Value) ->
-  produce_sync(Pid, Topic, 0, <<>>, Value).
+%% @doc Produce one message. The pid should be a producer pid.
+-spec produce(pid(), binary(), binary()) ->
+        {ok, brod_call_ref()} | {error, any()}.
+produce(ProducerPid, Key, Value) ->
+  brod_producer:produce(ProducerPid, Key, Value).
 
-%% @equiv produce_sync(Pid, Topic, Partition, [{Key, Value}])
--spec produce_sync(pid(), binary(), integer(), binary(), binary()) -> ok.
-produce_sync(Pid, Topic, Partition, Key, Value) ->
-  produce_sync(Pid, Topic, Partition, [{Key, Value}]).
-
-%% @doc Send one or more {key, value} messages to a broker and block
-%%      until producer acknowledges the payload.
--spec produce_sync(pid(), binary(), integer(), [{binary(), binary()}]) ->
-        ok | {error, any()}.
-produce_sync(Pid, Topic, Partition, KVList) when is_list(KVList) ->
-  MonitorRef = erlang:monitor(process, Pid),
-  {ok, Ref} = produce(Pid, Topic, Partition, KVList),
-  receive
-    {'DOWN', MonitorRef, _, _, Info} ->
-      {error, Info};
-    {{Ref, Pid}, ack} ->
-      erlang:demonitor(MonitorRef, [flush]),
-      ok
+%% @doc Produce one message. This function first lookup the producer
+%% pid, then call produce/3 to do the actual job.
+%% @end
+-spec produce(client(), topic(), partition(), binary(), binary()) ->
+        {ok, brod_call_ref()} | {error, any()}.
+produce(Client, Topic, Partition, Key, Value) ->
+  case get_producer(Client, Topic, Partition) of
+    {ok, Pid}       -> produce(Pid, Key, Value);
+    {error, Reason} -> {error, Reason}
   end.
+
+%% @equiv produce_sync(Pid, 0, <<>>, Value)
+-spec produce_sync(pid(), binary()) -> ok.
+produce_sync(Pid, Value) ->
+  produce_sync(Pid, _Key = <<>>, Value).
+
+%% @doc Produce one message and wait for the ack from kafka.
+%% The pid can be either a topic producer or a partition producer.
+%% @end
+-spec produce_sync(pid(), binary(), binary()) ->
+        ok | {error, any()}.
+produce_sync(Pid, Key, Value) ->
+  case produce(Pid, Key, Value) of
+    {ok, CallRef} ->
+      %% Wait until the request is acked by kafka
+      sync_produce_request(CallRef);
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+%% @doc Block wait for sent produced request to be acked by kafka.
+-spec sync_produce_request(brod_call_ref()) ->
+        ok | {error, Reason::any()}.
+sync_produce_request(CallRef) ->
+  Expect = #brod_produce_reply{ call_ref = CallRef
+                              , result   = brod_produce_req_acked
+                              },
+  brod_producer:sync_produce_request(Expect).
 
 %% @deprecated
 %% @equiv start_link_consumer(Hosts, Topic, Partition)
--spec start_consumer([host()], binary(), integer()) ->
+-spec start_consumer([endpoint()], binary(), integer()) ->
                    {ok, pid()} | {error, any()}.
 start_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition).
 
 %% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
--spec start_link_consumer([host()], binary(), integer()) ->
+-spec start_link_consumer([endpoint()], binary(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition) ->
   start_link_consumer(Hosts, Topic, Partition, 1000).
@@ -201,7 +216,7 @@ start_link_consumer(Hosts, Topic, Partition) ->
 %% @doc Start consumer process
 %%      SleepTimeout: how much time to wait before sending next fetch
 %%      request when we got no messages in the last one
--spec start_link_consumer([host()], binary(), integer(), integer()) ->
+-spec start_link_consumer([endpoint()], binary(), integer(), integer()) ->
                         {ok, pid()} | {error, any()}.
 start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
   brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
@@ -255,30 +270,31 @@ consume(Pid, Callback, Offset) ->
 %%           responding).
 %% MaxBytes: The maximum bytes to include in the message set for this
 %%           partition. This helps bound the size of the response.
+%% @end
 -spec consume(pid(), callback_fun(), integer(),
              integer(), integer(), integer()) -> ok | {error, any()}.
 consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
 
 %% @doc Fetch broker metadata
--spec get_metadata([host()]) -> {ok, #metadata_response{}} | {error, any()}.
+-spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
--spec get_metadata([host()], [binary()]) ->
+-spec get_metadata([endpoint()], [binary()]) ->
                       {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
--spec get_offsets([host()], binary(), non_neg_integer()) ->
+-spec get_offsets([endpoint()], binary(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([host()], binary(), non_neg_integer(),
+-spec get_offsets([endpoint()], binary(), non_neg_integer(),
                   integer(), non_neg_integer()) ->
                      {ok, #offset_response{}} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
@@ -292,13 +308,13 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
   Response.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
--spec fetch([host()], binary(), non_neg_integer(), integer()) ->
+-spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
                {ok, #message_set{}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([host()], binary(), non_neg_integer(),
+-spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
                {ok, #message_set{}} | {error, any()}.
@@ -406,9 +422,10 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Pid} = brod:start_link_producer(Hosts),
-  Res = brod:produce_sync(Pid, Topic, Partition, Key, Value),
-  brod:stop_producer(Pid),
+  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}]),
+  {ok, ProducerPid} = brod:get_producer(Client, Topic, Partition),
+  Res = brod:produce_sync(ProducerPid, Key, Value),
+  brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
   Hosts = parse_hosts_str(HostsStr),
@@ -458,7 +475,8 @@ call_api(file_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr, Filename])
     {'DOWN', MRef, process, Pid, _} -> ok
   end.
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal functions =======================================================
+
 parse_hosts_str(HostsStr) ->
   F = fun(HostPortStr) ->
           Pair = string:tokens(HostPortStr, ":"),
@@ -480,7 +498,7 @@ connect_leader(Hosts, Topic, Partition) ->
   Host = Broker#broker_metadata.host,
   Port = Broker#broker_metadata.port,
   %% client id matters only for producer clients
-  brod_sock:start_link(self(), Host, Port, ?DEFAULT_CLIENT_ID, []).
+  brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
 
 print_message(Io, Offset, K, V) ->
   io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
@@ -496,6 +514,8 @@ simple_consumer_loop(C, Io) ->
       simple_consumer_loop(C, Io)
   end.
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

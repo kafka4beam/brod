@@ -108,6 +108,8 @@ do_desc(?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND) ->
 do_desc(X) when is_integer(X) ->
   <<"Undefeind error code for kafka", ?KAFKA_VERSION/binary>>.
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

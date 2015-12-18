@@ -32,6 +32,8 @@
 -define(API_KEY_OFFSET_COMMIT,  6).
 -define(API_KEY_OFFSET_FETCH,   7).
 
+-type api_key() :: ?API_KEY_PRODUCE..?API_KEY_OFFSET_FETCH.
+
 %% Compression
 -define(COMPRESS_NONE, 0).
 -define(COMPRESS_GZIP, 1).

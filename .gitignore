@@ -4,4 +4,4 @@ erl_crash.dump
 /.rebar/
 /deps/
 ebin
-/brod
+scripts/brod

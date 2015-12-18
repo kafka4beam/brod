@@ -1,5 +1,27 @@
+%%%
+%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%
+%%%   Licensed under the Apache License, Version 2.0 (the "License");
+%%%   you may not use this file except in compliance with the License.
+%%%   You may obtain a copy of the License at
+%%%
+%%%       http://www.apache.org/licenses/LICENSE-2.0
+%%%
+%%%   Unless required by applicable law or agreed to in writing, software
+%%%   distributed under the License is distributed on an "AS IS" BASIS,
+%%%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%%   See the License for the specific language governing permissions and
+%%%   limitations under the License.
+%%%
+
+%%%=============================================================================
+%%% @doc
+%%% @copyright 2015 Klarna AB
+%%% @end
+%%% ============================================================================
+
 %% @private
--module(kafka_tests).
+-module(brod_kafka_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("src/brod_int.hrl").
@@ -41,11 +63,11 @@ api_key_test() ->
   ok.
 
 parse_stream_test() ->
-  D0 = dict:new(),
-  ?assertMatch({<<>>, [], D0}, brod_kafka:parse_stream(<<>>, D0)),
-  ?assertMatch({<<"foo">>, [], D0}, brod_kafka:parse_stream(<<"foo">>, D0)),
-  D1 = dict:store(1, ?API_KEY_METADATA, D0),
-  ?assertMatch({<<"foo">>, [], D1}, brod_kafka:parse_stream(<<"foo">>, D1)),
+  R0 = brod_kafka_requests:new(),
+  ?assertMatch({<<>>, []}, brod_kafka:parse_stream(<<>>, R0)),
+  ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R0)),
+  R1 = brod_kafka_requests:add(R0, self(), ?API_KEY_METADATA),
+  ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R1)),
   ok.
 
 encode_metadata_test() ->
@@ -120,17 +142,17 @@ encode_produce_test() ->
   T1 = <<"t1">>,
   T2 = <<"t2">>,
   T3 = <<"topic3">>,
-  T1Dict1 = dict:append_list(0, [], dict:new()),
-  T1Dict2 = dict:append_list(1, [ {<<>>, <<>>}
-                                , {<<>>, <<>>}
-                                , {<<>>, <<?i16(3)>>}], T1Dict1),
-  T1Dict = dict:append(2, {<<"foo">>, <<"bar">>}, T1Dict2),
-  T2Dict = dict:append_list(0, [ {<<?i32(1)>>, <<?i32(2)>>}
-                               , {<<>>, <<"foobar">>}], dict:new()),
-  T3Dict = dict:append_list(0, [], dict:new()),
-  Data = [ {T1, T1Dict}
-         , {T2, T2Dict}
-         , {T3, T3Dict}],
+  T1P0Data = [],
+  T1P1Data = [{<<>>, <<>>}, {<<>>, <<>>}, {<<>>, <<?i16(3)>>}],
+  T1P2Data = [{<<"foo">>, <<"bar">>}],
+  T2P0Data = [{<<?i32(1)>>, <<?i32(2)>>}, {<<>>, <<"foobar">>}],
+  T3P0Data = [],
+  Data = [ {T1, [{0, T1P0Data}
+                ,{1, T1P1Data}
+                ,{2, T1P2Data}]}
+         , {T2, [{0, T2P0Data}]}
+         , {T3, [{0, T3P0Data}]}
+         ],
   Acks2 = ?max8,
   Timeout2 = ?max32,
   R2 = #produce_request{acks = Acks2, timeout = Timeout2, data = Data},
@@ -154,14 +176,7 @@ encode_produce_test() ->
   ?assertEqual(<<?i16(Acks2), ?i32(Timeout2), ?i32(3), % metadata
                  ?i16(2), T1/binary, ?i32(3),     % t1 start
                  ?i32(0), ?i32(0),                % p0 start/end
-                 %% in brod_kafka:group_by_topics/2 dict puts p2 before p0
-                 ?i32(2), ?i32(32),               % p2 start
-                                                  % message set start
-                 ?i64(0), ?i32(20), ?i32(Crc2),   % msg1
-                 ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
-                 ?i32(3), "foo", ?i32(3), "bar",
-                                                 % message set end
-                                                 % p2 end
+
                  ?i32(1), ?i32(80),              % p1 start
                                                  % message set start
                  ?i64(0), ?i32(14), ?i32(Crc1),  % msg1
@@ -175,6 +190,15 @@ encode_produce_test() ->
                  ?i32(-1), ?i32(2), ?i16(3),
                                                  % message set end
                                                  % p1 end
+
+                 ?i32(2), ?i32(32),               % p2 start
+                                                  % message set start
+                 ?i64(0), ?i32(20), ?i32(Crc2),   % msg1
+                 ?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE),
+                 ?i32(3), "foo", ?i32(3), "bar",
+                                                 % message set end
+                                                 % p2 end
+
                                                  % t1 end
                  ?i16(2), T2/binary, ?i32(1),    % t2 start
                  ?i32(0), ?i32(66),              % p0 start
@@ -476,6 +500,8 @@ msgcrc(K, V) ->
 
 random_bytes() -> crypto:rand_bytes(random:uniform(1 bsl 16 - 1)).
 
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
