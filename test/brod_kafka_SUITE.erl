@@ -157,7 +157,7 @@ t_encode_produce(Config) when is_list(Config) ->
   Acks1 = -1,
   Timeout1 = 0,
   R1 = #produce_request{acks = Acks1, timeout = Timeout1, data = []},
-  ?assertMatch(<<?i32(Acks1), ?i32(Timeout1), ?i32(0)>>,
+  ?assertMatch(<<?i16(Acks1), ?i32(Timeout1), ?i32(0)>>,
                brod_kafka:encode(R1)),
   T1 = <<"t1">>,
   T2 = <<"t2">>,
