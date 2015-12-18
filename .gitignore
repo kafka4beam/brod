@@ -7,3 +7,4 @@ logs/
 ebin/
 *.beam
 scripts/brod
+test/brod_eunit_SUITE.erl
