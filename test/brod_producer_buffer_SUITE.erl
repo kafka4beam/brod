@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2015, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -21,23 +21,40 @@
 %%% ============================================================================
 
 %% @private
--module(brod_producer_buffer_tests).
+-module(brod_producer_buffer_SUITE).
+-compile(export_all).
 
 -include_lib("proper/include/proper.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include("src/brod_int.hrl").
+-include_lib("brod/src/brod_int.hrl").
+
+%%%_* ct callbacks =============================================================
+
+suite() -> [{timetrap, {seconds, 30}}].
+
+init_per_suite(Config) -> Config.
+
+end_per_suite(_Config) -> ok.
+
+init_per_testcase(_Case, Config) -> Config.
+
+end_per_testcase(_Case, Config) -> Config.
+
+all() -> [F || {F, _A} <- module_info(exports),
+                  case atom_to_list(F) of
+                    "t_" ++ _ -> true;
+                    _         -> false
+                  end].
+
 
 %%%_* Test functions ===========================================================
 
-no_ack_test_() ->
-  {timeout, 10,
-   fun() -> ?assert(proper:quickcheck(prop_no_ack_run(), 1000)) end
-  }.
+t_no_ack(Config) when is_list(Config) ->
+  ?assert(proper:quickcheck(prop_no_ack_run(), 1000)).
 
-random_latency_ack_test_() ->
-  {timeout, 60,
-   fun() -> ?assert(proper:quickcheck(prop_random_latency_ack_run(), 500)) end
-  }.
+t_random_latency_ack(Config) when is_list(Config) ->
+  ?assert(proper:quickcheck(prop_random_latency_ack_run(), 500)).
 
 %%%_* Help functions ===========================================================
 
