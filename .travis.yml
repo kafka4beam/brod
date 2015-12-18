@@ -24,10 +24,7 @@ otp_release:
   - R16B03-1
 
 script:
-  - make test
-  - TEST_RESULT=$?
-  - if [ ! $TEST_RESULT -eq 0 ]; then cat logs/ct_run.test@*/*.brod.logs/run.*/suite.log; exit $TEST_RESULT; fi
-  - set -e
+  - make test; TEST_RESULT=$?; if [ ! $TEST_RESULT -eq 0 ]; then cat logs/ct_run.test@*/*.brod.logs/run.*/suite.log; echo $TEST_RESULT; exit 1; fi
   - make xref
   - make docs
   - make escriptize
