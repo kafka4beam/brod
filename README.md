@@ -83,17 +83,19 @@ Start a client
 
 ### Handle acks from kafka
 
-Unless brod:produce_sync was called, callers of brod:produce should expect a message of below pattern
+Unless brod:produce_sync was called, callers of brod:produce should expect a message of below pattern for each produce call
 
-    #brod_produce_reply{ call_ref = CallRef
-                       , brod_produce_req_acked
+    #brod_produce_reply{ call_ref = CallRef %% the reference returned from brod:produce call
+                       , result   = brod_produce_req_acked
                        }
 
 NOTE: If required_acks is set to 0 in producer config, kafka will not ack the request, and the reply message is sent back to caller immediately after the message has been sent to the socket process.
 
 In case the brod:produce caller is a process like gen_server which receives ALL messages,
-the callers should keep the call references in its looping state and match them later.
+the callers should keep the call references in its looping state and math the replies against them when received.
 Otherwise brod:sync_produce_request/1 can be used to block-wait for acks.
+
+NOTE: The replies are only strictly ordered per-partition. i.e. If the caller is producing to more than one partitions, it may receive replies ordered differently than in which order bord:produce API was called.
 
 ## Consumer as a part of an application
 
