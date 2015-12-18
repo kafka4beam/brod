@@ -38,7 +38,7 @@
 %% By default, restart sup2 after a 10-seconds delay
 -define(DEFAULT_SUP2_RESTART_DELAY, 10).
 
-%% By default, restart partition producer process after a 2-seconds delay
+%% By default, restart partition producer worker process after a 2-seconds delay
 -define(DEFAULT_PRODUCER_RESTART_DELAY, 2).
 
 %%%_* APIs =====================================================================
@@ -102,9 +102,9 @@ post_init(_) ->
   ignore.
 
 producers_sup_spec(ClientId, TopicName, Config0) ->
-  DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
+  DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,
                                   ?DEFAULT_SUP2_RESTART_DELAY),
-  Config    = proplists:delete(restart_delay_seconds, Config0),
+  Config    = proplists:delete(topic_restart_delay_seconds, Config0),
   Args      = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
@@ -115,9 +115,9 @@ producers_sup_spec(ClientId, TopicName, Config0) ->
   }.
 
 producer_spec(ClientId, Topic, Partition, Config0) ->
-  DelaySecs = proplists:get_value(producer_restart_delay_seconds, Config0,
+  DelaySecs = proplists:get_value(partition_restart_delay_seconds, Config0,
                                   ?DEFAULT_PRODUCER_RESTART_DELAY),
-  Config    = proplists:delete(producer_restart_delay_seconds, Config0),
+  Config    = proplists:delete(partition_restart_delay_seconds, Config0),
   Args      = [ClientId, Topic, Partition, Config],
   { _Id       = Partition
   , _Start    = {brod_producer, start_link, Args}

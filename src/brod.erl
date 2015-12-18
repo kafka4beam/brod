@@ -141,14 +141,14 @@ get_partitions(Client, Topic) ->
   brod_client:get_partitions(Client, Topic).
 
 %% @equiv brod_client:get_producer/3
--spec get_producer(client_id(), topic(), partition()) ->
+-spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
                        | restarting
                        | {not_found, topic()}
                        | {not_found, topic(), partition()}.
-get_producer(ClientId, Topic, Partition) ->
-  brod_client:get_producer(ClientId, Topic, Partition).
+get_producer(Client, Topic, Partition) ->
+  brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
 -spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
@@ -164,10 +164,10 @@ produce(Pid, Key, Value) ->
 %% @doc Produce one message. This function first lookup the producer
 %% pid, then call produce/3 to do the actual job.
 %% @end
--spec produce(client_id(), topic(), partition(), binary(), binary()) ->
+-spec produce(client(), topic(), partition(), binary(), binary()) ->
         {ok, brod_call_ref()} | {error, any()}.
-produce(ClientId, Topic, Partition, Key, Value) when is_atom(ClientId) ->
-  case get_producer(ClientId, Topic, Partition) of
+produce(Client, Topic, Partition, Key, Value) when is_atom(ClientId) ->
+  case get_producer(Client, Topic, Partition) of
     {ok, Pid}       -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
   end.
