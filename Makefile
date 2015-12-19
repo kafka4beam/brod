@@ -23,6 +23,7 @@ test:
 	$(REBAR) get-deps
 	$(REBAR) compile
 	$(REBAR) skip_deps=true ct
+	./scripts/cover-summary.escript ./logs
 
 clean:
 	@$(RM) -rf deps
