@@ -44,6 +44,7 @@
         , produce/5
         , produce_sync/2
         , produce_sync/3
+        , produce_sync/5
         , sync_produce_request/1
         ]).
 
@@ -177,8 +178,8 @@ produce(Client, Topic, Partition, Key, Value) ->
 produce_sync(Pid, Value) ->
   produce_sync(Pid, _Key = <<>>, Value).
 
-%% @doc Produce one message and wait for the ack from kafka.
-%% The pid can be either a topic producer or a partition producer.
+%% @doc Produce one message and wait for ack from kafka.
+%% The pid should be a partition producer pid, NOT client pid.
 %% @end
 -spec produce_sync(pid(), binary(), binary()) ->
         ok | {error, any()}.
@@ -186,6 +187,17 @@ produce_sync(Pid, Key, Value) ->
   case produce(Pid, Key, Value) of
     {ok, CallRef} ->
       %% Wait until the request is acked by kafka
+      sync_produce_request(CallRef);
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+%% @doc Produce one message and wait for ack from kafka.
+-spec produce_sync(client(), topic(), partition(), binary(), binary()) ->
+        ok | {error, any()}.
+produce_sync(Client, Topic, Partition, Key, Value) ->
+  case produce(Client, Topic, Partition, Key, Value) of
+    {ok, CallRef} ->
       sync_produce_request(CallRef);
     {error, Reason} ->
       {error, Reason}

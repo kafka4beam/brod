@@ -4,6 +4,7 @@ sudo: required
 
 env:
   BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
+  BROD_PRODUCER_SUITE_TOPIC: brod_producer_SUITE
 
 before_install:
   - sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 36A1D7869245C8950F966E92D8576A8BA88D21E9
@@ -24,10 +25,12 @@ otp_release:
   - R16B03-1
 
 script:
-  - make test; TEST_RESULT=$?; if [ ! $TEST_RESULT -eq 0 ]; then cat logs/ct_run.test@*/*.brod.logs/run.*/suite.log; echo $TEST_RESULT; exit 1; fi
+  - make compile
   - make xref
   - make docs
   - make escriptize
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
+  - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_PRODUCER_SUITE_TOPIC"
+  - make test; TEST_RESULT=$?; if [ ! $TEST_RESULT -eq 0 ]; then cat logs/ct_run.test@*/*.brod.logs/run.*/suite.log; echo $TEST_RESULT; exit 1; fi
   - scripts/cli-produce-test.sh
 
