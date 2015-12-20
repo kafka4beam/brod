@@ -25,12 +25,12 @@ otp_release:
   - R16B03-1
 
 script:
-  - make compile
-  - make xref
-  - make docs
-  - make escriptize
+  - make deps
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_PRODUCER_SUITE_TOPIC"
   - make test; TEST_RESULT=$?; if [ ! $TEST_RESULT -eq 0 ]; then cat logs/ct_run.test@*/*.brod.logs/run.*/suite.log; echo $TEST_RESULT; exit 1; fi
+  - make xref
+  - make docs
+  - make escriptize
   - scripts/cli-produce-test.sh
 
