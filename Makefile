@@ -22,8 +22,9 @@ test: REBAR := BROD_TEST=1 $(REBAR)
 test:
 	$(REBAR) get-deps
 	$(REBAR) compile
+	$(REBAR) eunit -v apps=brod
 	$(REBAR) skip_deps=true ct
-	./scripts/cover-summary.escript ./logs
+	./scripts/cover-summary.escript ./.eunit ./logs
 
 clean:
 	@$(RM) -rf deps

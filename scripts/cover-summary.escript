@@ -26,9 +26,11 @@
 
 -mode(compile).
 
-main([CoverDataFileDir]) ->
-  {ok, CoverDataFile} = find_latest_coverdata(CoverDataFileDir),
-  io:format("using coverdata file: ~s\n", [CoverDataFile]),
+main([UtCoverDataDir, CtCoverDataDir]) ->
+  {ok, UtCoverDataFile} = find_latest_coverdata(UtCoverDataDir),
+  io:format("using coverdata file: ~s\n", [UtCoverDataFile]),
+  {ok, CtCoverDataFile} = find_latest_coverdata(CtCoverDataDir),
+  io:format("using coverdata file: ~s\n", [CtCoverDataFile]),
   Parent = self(),
   Ref = make_ref(),
   erlang:spawn_link(
@@ -36,8 +38,9 @@ main([CoverDataFileDir]) ->
       %% shutup the chatty prints from cover:xxx calls
       {ok, F} = file:open("/dev/null", [write]),
       group_leader(F, self()),
-      ok = cover:import(CoverDataFile),
-      Modules = cover:imported_modules(),
+      ok = cover:import(UtCoverDataFile),
+      ok = cover:import(CtCoverDataFile),
+      Modules = get_imported_modules(),
       Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
       Parent ! {Ref, Result}
     end),
@@ -46,8 +49,20 @@ main([CoverDataFileDir]) ->
       print_summary(Result)
   end.
 
+get_imported_modules() ->
+  All = cover:imported_modules(),
+  Filtered =
+    lists:filter(
+      fun(Mod) ->
+        case lists:reverse(atom_to_list(Mod)) of
+          "ETIUS_" ++ _ -> false; %% ignore coverage for xxx_SUITE
+          _             -> true
+        end
+      end, All),
+  lists:sort(Filtered).
+
 find_latest_coverdata(Dir) ->
-  Files = filelib:fold_files(Dir, ".*all.coverdata", true,
+  Files = filelib:fold_files(Dir, ".*.coverdata", true,
                              fun(N, Acc) -> [N | Acc] end, []),
   {ok, lists:last(lists:sort(Files))}.
 
