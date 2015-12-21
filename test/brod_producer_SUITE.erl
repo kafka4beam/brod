@@ -28,9 +28,10 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("brod/src/brod_int.hrl").
 
--define(CLIENT, ?MODULE).
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
+
+-define(config(Name), proplists:get_value(Name, Config)).
 
 %%%_* ct callbacks =============================================================
 
@@ -40,7 +41,8 @@ init_per_suite(Config) -> Config.
 
 end_per_suite(_Config) -> ok.
 
-init_per_testcase(_Case, Config) ->
+init_per_testcase(Case, Config) ->
+  Client = Case,
   Producer = {?TOPIC, []},
   case whereis(?MODULE) of
     ?undef -> ok;
@@ -49,16 +51,16 @@ init_per_testcase(_Case, Config) ->
   Pid =
     erlang:spawn(
       fun() ->
-        brod:start_link_client(?CLIENT, ?HOSTS, _Config = [], [Producer]),
+        brod:start_link_client(Client, ?HOSTS, _Config = [], [Producer]),
         receive stop ->
-          ok = brod:stop_client(?CLIENT),
+          ok = brod:stop_client(Client),
           exit(normal)
         end
       end),
   [{producer, Pid} | Config].
 
 end_per_testcase(_Case, Config) ->
-  Pid = proplists:get_value(producer, Config),
+  Pid = ?config(producer),
   try
     Ref = erlang:monitor(process, Pid),
     Pid ! stop,
@@ -89,7 +91,7 @@ t_produce_sync(Config) when is_list(Config) ->
                Tester ! {Ref, K, V}
              end,
   ok = brod:consume(ConsumerPid, Callback, -1),
-  ok = brod:produce_sync(?MODULE, ?TOPIC, Partition, Key, Value),
+  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, Key, Value),
   receive
     {Ref, K, V} ->
       ok = brod:stop_consumer(ConsumerPid),
@@ -110,7 +112,7 @@ t_produce_async(Config) when is_list(Config) ->
                Tester ! {Ref, K, V}
              end,
   ok = brod:consume(ConsumerPid, Callback, -1),
-  {ok, CallRef} = brod:produce(?MODULE, ?TOPIC, Partition, Key, Value),
+  {ok, CallRef} = brod:produce(t_produce_async, ?TOPIC, Partition, Key, Value),
   receive
     #brod_produce_reply{ call_ref = CallRef
                        , result   = brod_produce_req_acked
@@ -130,13 +132,15 @@ t_produce_async(Config) when is_list(Config) ->
 
 
 t_producer_topic_not_found(Config) when is_list(Config) ->
+  Client = t_producer_topic_not_found,
   ?assertEqual({error, {not_found, <<"no-such-topic">>}},
-               brod:produce(?MODULE, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
+               brod:produce(Client, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
 
 
 t_producer_partition_not_found(Config) when is_list(Config) ->
+  Client = t_producer_partition_not_found,
   ?assertEqual({error, {not_found, ?TOPIC, 100}},
-               brod:produce(?MODULE, ?TOPIC, 100, <<"k">>, <<"v">>)).
+               brod:produce(Client, ?TOPIC, 100, <<"k">>, <<"v">>)).
 
 %%%_* Help functions ===========================================================
 
