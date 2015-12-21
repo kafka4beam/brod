@@ -183,7 +183,11 @@ handle_info({init, Producers}, #state{ client_id = ClientId
                        , producers_sup = Pid
                        }};
 
-handle_info({'EXIT', Pid, Reason}, #state{producers_sup = Pid} = State) ->
+handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
+                                         , producers_sup = Pid
+                                         } = State) ->
+  error_logger:error_msg("client ~p producers supervisor down~nReason: ~p",
+                         [ClientId, Pid, Reason]),
   %% shutdown all producers?
   {noreply, State#state{producers_sup = ?undef}};
 handle_info({'EXIT', Pid, Reason},
