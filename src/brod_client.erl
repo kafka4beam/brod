@@ -182,9 +182,19 @@ handle_info({init, Producers}, #state{ client_id = ClientId
   {noreply, State#state{ meta_sock     = Sock
                        , producers_sup = Pid
                        }};
-handle_info({'EXIT', Pid, _Reason}, #state{ meta_sock = #sock{sock_pid = Pid}
-                                          , endpoints = Endpoints
-                                          } = State) ->
+
+handle_info({'EXIT', Pid, Reason}, #state{producers_sup = Pid} = State) ->
+  %% shutdown all producers?
+  {noreply, State#state{producers_sup = ?undef}};
+handle_info({'EXIT', Pid, Reason},
+            #state{ client_id = ClientId
+                  , meta_sock = #sock{ sock_pid = Pid
+                                     , endpoint = {Host, Port}
+                                     }
+                  , endpoints = Endpoints
+                  } = State) ->
+  error_logger:info_msg("client ~p metadata socket down ~s:~p~nReason:~p",
+                        [ClientId, Host, Port, Reason]),
   NewSock = start_metadata_socket(Endpoints),
   {noreply, State#state{meta_sock = NewSock}};
 handle_info({'EXIT', Pid, Reason}, State) ->
@@ -226,7 +236,7 @@ terminate(Reason, #state{ client_id     = ClientId
     error_logger:warning_msg("client ~p down, reason:~p~n",
                              [ClientId, Reason]),
   %% stop producers first because they are monitoring socket pids
-  exit(ProducersSup, shutdown),
+  is_pid(ProducersSup) andalso exit(ProducersSup, shutdown),
   %% TODO stop consumers too
   CloseSockFun =
     fun(#sock{sock_pid = Pid}) ->
@@ -319,13 +329,13 @@ connect(#state{ client_id = ClientId
 %% per-partition producer restarts and requests for a connection after
 %% it is cooled down.
 %% @end
--spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
 handle_socket_down(#state{ client_id = ClientId
-                         , sockets = Sockets
+                         , sockets   = Sockets
                          } = State, Pid, Reason) ->
   case lists:keyfind(Pid, #sock.sock_pid, Sockets) of
-    #sock{endpoint = {Host, Port} = Endpoint} ->
-      error_logger:info_msg("~p socket down ~s:~p", [ClientId, Host, Port]),
+    #sock{endpoint = {Host, Port} = Endpoint}  ->
+      error_logger:info_msg("client ~p payload socket down ~s:~p~nReason:~p",
+                            [ClientId, Host, Port, Reason]),
       mark_socket_dead(State, Endpoint, Reason)
   end.
 
