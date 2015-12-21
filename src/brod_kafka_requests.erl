@@ -32,7 +32,6 @@
 -export([ new/0
         , add/3
         , del/2
-        , get_corr_id/1
         , get_api_key/2
         , get_caller/2
         ]).
@@ -90,15 +89,20 @@ get_caller(#requests{sent = Sent}, CorrId) ->
   {Caller, _ApiKey} = gb_trees:get(CorrId, Sent),
   Caller.
 
-%% @doc Get the correction to be sent for the next request.
--spec get_corr_id(requests()) -> corr_id().
-get_corr_id(#requests{ corr_id = CorrId }) ->
-  CorrId.
-
 %%%_* Internal functions =======================================================
 
 next_corr_id(?MAX_CORR_ID) -> 0;
 next_corr_id(CorrId)       -> CorrId + 1.
+
+-include_lib("eunit/include/eunit.hrl").
+
+-ifdef(TEST).
+
+next_corr_id_test() ->
+  ?assertEqual(0, next_corr_id((1 bsl 31) - 1)).
+
+-endif. % TEST
+
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

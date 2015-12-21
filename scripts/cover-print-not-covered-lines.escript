@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -smp enable -sname coversummay
+%%! -smp enable -sname notcoveredlinessummary -pa ebin -pa ../ebin
 
 %%%
 %%%   Copyright (c) 2014, 2015, Klarna AB
@@ -46,7 +46,9 @@ main([UtCoverDataDir, CtCoverDataDir]) ->
     end),
   receive
     {Ref, Result} ->
-      print_summary(Result)
+      lists:foreach(fun({Module, NotCoveredLines}) ->
+                      print_mod_summary(Module, lists:sort(NotCoveredLines))
+                    end, Result)
   end.
 
 get_imported_modules() ->
@@ -66,63 +68,53 @@ find_latest_coverdata(Dir) ->
                              fun(N, Acc) -> [N | Acc] end, []),
   {ok, lists:last(lists:sort(Files))}.
 
--spec analyse_module([{module(), Line::integer(), {Covered, NotCovered}}]) ->
-        {Covered, NotCovered} when Covered :: integer(),
-                                   NotCovered :: integer().
 analyse_module(Module) ->
   {ok, Lines} = cover:analyse(Module, coverage, line),
-  lists:foldl(
-    fun({{_Mod, 0}, _}, Acc)                   -> Acc;
-       ({{_Mod, _}, {C, Nc}}, {C_Acc, Nc_Acc}) -> {C + C_Acc, Nc + Nc_Acc}
-    end, {0, 0}, Lines).
+  lists:foldr(
+    fun({{_Mod, 0}, _}, Acc)         -> Acc;
+       ({{_Mod, Line}, {1, 0}}, Acc) -> Acc;
+       ({{_Mod, Line}, {0, 1}}, Acc) -> [Line | Acc]
+    end, [], Lines).
 
--spec print_summary([{module(), {Covered :: integer(),
-                                 NotCovered :: integer()}}]) -> ok.
-print_summary(Coverage) ->
-  Width = lists:max([length(atom_to_list(M)) || {M, _} <- Coverage]),
-  fmt_line(Width, hd, hd, hd, hd),
-  fmt_line(Width, hl, hl, hl, hl),
-  print_coverage(Width, Coverage).
+print_mod_summary(_Module, []) -> ok;
+print_mod_summary(Module, NotCoveredLines) ->
+  io:format("================ ~p ================\n", [Module]),
+  case whicherl(Module) of
+    Filename when is_list(Filename) ->
+      print_lines(Filename, NotCoveredLines);
+    _ ->
+      erlang:error({erl_file_not_found, Module})
+  end.
 
-print_coverage(_Width, []) -> ok;
-print_coverage(Width, [{Module, {Covered, NotCovered}} | Rest]) ->
-  Percent =
-    case Covered + NotCovered of
-      0 -> 0;
-      N -> erlang:round(100 * Covered / N)
+print_lines(Filename, []) ->
+  ok;
+print_lines(Filename, Lines) ->
+  {ok, Fd} = file:open(Filename, [read]),
+  try
+    print_lines(Fd, 1, Lines)
+  after
+    file:close(Fd)
+  end.
+
+print_lines(_Fd, _N, []) ->
+  ok;
+print_lines(Fd, N, [M | Rest] = Lines) ->
+  Continue =
+    case io:get_line(Fd, "") of
+      eof ->
+        erlang:error({eof, N, Lines});
+      Line when N =:= M ->
+        io:format("~5p: ~s", [N, Line]),
+        Rest;
+     _ ->
+       Lines
     end,
-  fmt_line(Width, Module, Covered, NotCovered, Percent),
-  print_coverage(Width, Rest).
+  print_lines(Fd, N+1, Continue).
 
-fmt_line(Width, Mod, Covered, NotCovered, Coverage) ->
-  io:format("~s ~s ~s ~s\n",
-            [ col_module(Mod, Width)
-            , col_covered(Covered)
-            , col_not_covered(NotCovered)
-            , col_coverage(Coverage)
-            ]).
-
-module_str(Width, Module) ->
-  FmtStr = "~" ++ integer_to_list(Width) ++ "s",
-  lists:flatten(io_lib:format(FmtStr, [atom_to_list(Module)])).
-
-col_module(hd, Width)  -> module_str(Width, 'module');
-col_module(hl, Width)  -> lists:duplicate(Width, $-);
-col_module(Mod, Width) -> module_str(Width, Mod).
-
-col_covered(hd)  -> "covered";
-col_covered(hl)  -> "-------";
-col_covered(Val) -> str("~7B", [Val]).
-
-col_not_covered(hd)  -> "not-covered";
-col_not_covered(hl)  -> "-----------";
-col_not_covered(Val) -> str("~11B", [Val]).
-
-col_coverage(hd)  -> "coverage";
-col_coverage(hl)  -> "--------";
-col_coverage(Val) -> str("~7B%", [Val]).
-
-str(Fmt, Args) -> lists:flatten(io_lib:format(Fmt, Args)).
+whicherl(Module) when is_atom(Module) ->
+  {ok, {Module, [{compile_info, Props}]}} =
+    beam_lib:chunks(code:which(Module), [compile_info]),
+  proplists:get_value(source, Props).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
