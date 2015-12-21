@@ -21,7 +21,7 @@
 %%% ============================================================================
 
 %% @private
--module(brod_producer_SUITE).
+-module(brod_client_SUITE).
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -30,7 +30,6 @@
 
 -define(CLIENT, ?MODULE).
 -define(HOSTS, [{"localhost", 9092}]).
--define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
 
 %%%_* ct callbacks =============================================================
 
@@ -41,33 +40,9 @@ init_per_suite(Config) -> Config.
 end_per_suite(_Config) -> ok.
 
 init_per_testcase(_Case, Config) ->
-  Producer = {?TOPIC, []},
-  case whereis(?MODULE) of
-    ?undef -> ok;
-    Pid_   -> brod:stop_client(Pid_)
-  end,
-  Pid =
-    erlang:spawn(
-      fun() ->
-        brod:start_link_client(?CLIENT, ?HOSTS, _Config = [], [Producer]),
-        receive stop ->
-          ok = brod:stop_client(?CLIENT),
-          exit(normal)
-        end
-      end),
-  [{producer, Pid} | Config].
+  Config.
 
 end_per_testcase(_Case, Config) ->
-  Pid = proplists:get_value(producer, Config),
-  try
-    Ref = erlang:monitor(process, Pid),
-    Pid ! stop,
-    receive
-      {'DOWN', Ref, process, Pid, _} -> ok
-    end
-  catch _ : _ ->
-    ok
-  end,
   Config.
 
 all() -> [F || {F, _A} <- module_info(exports),
@@ -79,25 +54,18 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 %%%_* Test functions ===========================================================
 
-t_produce_sync(Config) when is_list(Config) ->
-  Partition = 0,
-  Key = <<"key">>,
-  Value = iolist_to_binary(
-            io_lib:format(
-              "~p", [calendar:now_to_universal_time(os:timestamp())])),
-  {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
-  Tester = self(),
-  Ref = make_ref(),
-  Callback = fun(_Offset, K, V) ->
-               Tester ! {Ref, K, V}
-             end,
-  ok = brod:consume(ConsumerPid, Callback, -1),
-  ok = brod:produce_sync(?MODULE, ?TOPIC, Partition, Key, Value),
+t_skip_unreachable_endpoint(Config) when is_list(Config) ->
+  {ok, Pid} = brod:start_link_client(?CLIENT, [{"badhost", 9092} | ?HOSTS],
+                                     _Config = [], _Producers = []),
+  ?assert(is_pid(Pid)),
+  _Res = brod_client:get_partitions(Pid, <<"some-unknown-topic">>),
+  % auto.create.topics.enabled is 'true' in default spotify/kafka container
+  % ?assertEqual({error, 'UnknownTopicOrPartitionException'}, _Res),
+  Ref = erlang:monitor(process, Pid),
+  ok = brod:stop_client(Pid),
   receive
-    {Ref, K, V} ->
-      ok = brod:stop_consumer(ConsumerPid),
-      ?assertEqual(Key, K),
-      ?assertEqual(Value, V)
+    {'DOWN', Ref, process, Pid, Reason} ->
+      ?assertEqual(normal, Reason)
   after 5000 ->
     ct:fail({?MODULE, ?LINE, timeout})
   end.

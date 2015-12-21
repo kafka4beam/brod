@@ -80,7 +80,7 @@ start_link(ClientId, Endpoints, Config, Producers) when is_atom(ClientId) ->
 
 -spec stop(client()) -> ok.
 stop(Client) ->
-  gen_server:call(Client, stop).
+  gen_server:call(Client, stop, infinity).
 
 -spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
@@ -217,22 +217,27 @@ handle_cast(_Cast, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-terminate(Reason, #state{ client_id = ClientId
-                        , meta_sock = MetaSock
-                        , sockets   = Sockets
+terminate(Reason, #state{ client_id     = ClientId
+                        , meta_sock     = MetaSock
+                        , sockets       = Sockets
+                        , producers_sup = ProducersSup
                         }) ->
   Reason =:= normal orelse
     error_logger:warning_msg("client ~p down, reason:~p~n",
                              [ClientId, Reason]),
-  lists:foreach(
-    fun (undefined) ->
-          ok;
-        (#sock{sock_pid = Pid}) ->
-          case is_pid(Pid) andalso is_process_alive(Pid) of
-            true  -> exit(Pid, shutdown);
-            false -> ok
-          end
-    end, [MetaSock | Sockets]).
+  %% stop producers first because they are monitoring socket pids
+  exit(ProducersSup, shutdown),
+  %% TODO stop consumers too
+  CloseSockFun =
+    fun(#sock{sock_pid = Pid}) ->
+      case is_pid(Pid) andalso is_process_alive(Pid) of
+        true  -> exit(Pid, shutdown);
+        false -> ok
+      end
+    end,
+  lists:foreach(CloseSockFun, Sockets),
+  MetaSock =:= ?undef orelse CloseSockFun(MetaSock),
+  ok.
 
 %%%_* Internal Functions =======================================================
 
@@ -240,13 +245,13 @@ terminate(Reason, #state{ client_id = ClientId
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
   brod_kafka:is_error(TopicErrorCode) andalso
-    erlang:throw({"topic metadata error", TopicErrorCode}),
+    erlang:throw(TopicErrorCode),
   lists:map(
     fun(#partition_metadata{ error_code = PartitionErrorCode
                            , id         = Partition
                            }) ->
       brod_kafka:is_error(PartitionErrorCode) andalso
-        erlang:throw({"partition metadata error", PartitionErrorCode}),
+        erlang:throw(PartitionErrorCode),
       Partition
     end, Partitions).
 
