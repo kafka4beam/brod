@@ -48,15 +48,24 @@ init_per_testcase(Case, Config) ->
     ?undef -> ok;
     Pid_   -> brod:stop_client(Pid_)
   end,
+  Parent = self(),
+  Ref = make_ref(),
   Pid =
     erlang:spawn(
       fun() ->
         brod:start_link_client(Client, ?HOSTS, _Config = [], [Producer]),
+        Parent ! {Ref, started},
         receive stop ->
           ok = brod:stop_client(Client),
           exit(normal)
         end
       end),
+  receive
+    {Ref, started} ->
+      ok
+  after 2000 ->
+    ct:fail({?MODULE, ?LINE, timeout})
+  end,
   [{producer, Pid} | Config].
 
 end_per_testcase(_Case, Config) ->
