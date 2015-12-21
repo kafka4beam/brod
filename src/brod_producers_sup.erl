@@ -97,9 +97,7 @@ post_init({?SUP2, ClientId, Topic, Config}) ->
   %% In any case, restart right away will erry likely fail again.
   %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {{one_for_one, 0, 1}, Children}};
-post_init(_) ->
-  ignore.
+  {ok, {{one_for_one, 0, 1}, Children}}.
 
 producers_sup_spec(ClientId, TopicName, Config0) ->
   DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,

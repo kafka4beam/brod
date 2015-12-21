@@ -81,10 +81,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_produce_sync(Config) when is_list(Config) ->
   Partition = 0,
-  Key = <<"key">>,
-  Value = iolist_to_binary(
-            io_lib:format(
-              "~p", [calendar:now_to_universal_time(os:timestamp())])),
+  {Key, Value} = make_unique_kv(),
   {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
   Tester = self(),
   Ref = make_ref(),
@@ -102,7 +99,60 @@ t_produce_sync(Config) when is_list(Config) ->
     ct:fail({?MODULE, ?LINE, timeout})
   end.
 
+
+t_produce_async(Config) when is_list(Config) ->
+  Partition = 0,
+  {Key, Value} = make_unique_kv(),
+  {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
+  Tester = self(),
+  Ref = make_ref(),
+  Callback = fun(_Offset, K, V) ->
+               Tester ! {Ref, K, V}
+             end,
+  ok = brod:consume(ConsumerPid, Callback, -1),
+  {ok, CallRef} = brod:produce(?MODULE, ?TOPIC, Partition, Key, Value),
+  receive
+    #brod_produce_reply{ call_ref = CallRef
+                       , result   = brod_produce_req_acked
+                       } ->
+      ok
+  after 5000 ->
+    ct:fail({?MODULE, ?LINE, timeout})
+  end,
+  receive
+    {Ref, K, V} ->
+      ok = brod:stop_consumer(ConsumerPid),
+      ?assertEqual(Key, K),
+      ?assertEqual(Value, V)
+  after 5000 ->
+    ct:fail({?MODULE, ?LINE, timeout})
+  end.
+
+
+t_producer_topic_not_found(Config) when is_list(Config) ->
+  ?assertEqual({error, {not_found, <<"no-such-topic">>}},
+               brod:produce(?MODULE, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
+
+
+t_producer_partition_not_found(Config) when is_list(Config) ->
+  ?assertEqual({error, {not_found, ?TOPIC, 100}},
+               brod:produce(?MODULE, ?TOPIC, 100, <<"k">>, <<"v">>)).
+
 %%%_* Help functions ===========================================================
+
+%% os:timestamp should be unique enough for testing
+make_unique_kv() ->
+  { iolist_to_binary(["key-", make_ts_str()])
+  , iolist_to_binary(["val-", make_ts_str()])
+  }.
+
+make_ts_str() ->
+  Ts = os:timestamp(),
+  {{Y,M,D}, {H,Min,Sec}} = calendar:now_to_universal_time(Ts),
+  {_, _, Micro} = Ts,
+  S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
+                    [Y, M, D, H, Min, Sec, Micro]),
+  lists:flatten(S).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
