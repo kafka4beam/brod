@@ -52,31 +52,29 @@
 start_link(ClientId, Producers) ->
   supervisor3:start_link(?MODULE, {?SUP, ClientId, Producers}).
 
-%% @doc Find a brod_producer process pid running under sup2
-%% @end
+%% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->
-                       {ok, pid()} | {error, any()}.
+                       {ok, pid()} | {error, Reason} when
+        Reason :: {producer_not_found, topic()}
+                | {producer_not_found, topic(), partition()}
+                | {producer_down, noproc}.
 find_producer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
-      {error, {not_found, Topic}};
+      {error, {producer_not_found, Topic}};
     [Sup2Pid] ->
-      case is_alive(Sup2Pid) of
-        true ->
-          case supervisor3:find_child(Sup2Pid, Partition) of
-            [] ->
-              %% no such partition?
-              {error, {not_found, Topic, Partition}};
-            [Pid] ->
-              case is_alive(Pid) of
-                true  -> {ok, Pid};
-                false -> {error, restarting}
-              end
-          end;
-        false ->
-          {error, restarting}
+      try
+        case supervisor3:find_child(Sup2Pid, Partition) of
+          [] ->
+            %% no such partition?
+            {error, {producer_not_found, Topic, Partition}};
+          [Pid] ->
+            {ok, Pid}
+        end
+      catch exit : {noproc, _} ->
+        {error, {producer_down, noproc}}
       end
   end.
 
@@ -84,7 +82,7 @@ find_producer(SupPid, Topic, Partition) ->
 init({?SUP, ClientId, Producers}) ->
   Children = [ producers_sup_spec(ClientId, TopicName, Config)
              || {TopicName, Config} <- Producers ],
-  {ok, {{one_for_one, 0, 1}, Children}};
+  {ok, {{one_for_one, 1, 1}, Children}};
 init({?SUP2, _ClientId, _Topic, _Config}) ->
   post_init.
 
@@ -95,9 +93,9 @@ post_init({?SUP2, ClientId, Topic, Config}) ->
   %% Producer may crash in case of exception in case of network failure,
   %% or error code received in produce response (e.g. leader transition)
   %% In any case, restart right away will erry likely fail again.
-  %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
+  %% Hence set MaxR=1 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {{one_for_one, 0, 1}, Children}}.
+  {ok, {{one_for_one, 1, 1}, Children}}.
 
 producers_sup_spec(ClientId, TopicName, Config0) ->
   DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,
@@ -126,8 +124,6 @@ producer_spec(ClientId, Topic, Partition, Config0) ->
   }.
 
 %%%_* Internal Functions =======================================================
-
-is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

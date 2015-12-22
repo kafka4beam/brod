@@ -145,9 +145,9 @@ get_partitions(Client, Topic) ->
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
-                       | restarting
-                       | {not_found, topic()}
-                       | {not_found, topic(), partition()}.
+                       | {producer_down, noproc}
+                       | {producer_not_found, topic()}
+                       | {producer_not_found, topic(), partition()}.
 get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 

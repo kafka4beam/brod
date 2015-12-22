@@ -127,9 +127,9 @@ register_producer(Client, Topic, Partition) ->
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
-                       | restarting
-                       | {not_found, topic()}
-                       | {not_found, topic(), partition()}.
+                       | {producer_down, noproc}
+                       | {producer_not_found, topic()}
+                       | {producer_not_found, topic(), partition()}.
 get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
   case erlang:process_info(ClientPid, registered_name) of
     {registered_name, ClientId} ->
@@ -148,20 +148,25 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
         %% 2. bad argument, no such worker started, supervisors should know
         find_producer(ClientId, Topic, Partition);
       [?PRODUCER(Topic, Partition, Pid)] ->
-        case is_alive(Pid) of
-          true  -> {ok, Pid};
-          false -> {error, restarting}
-        end
+        {ok, Pid}
     end
   catch error:badarg ->
     {error, client_down}
   end.
 
 -spec find_producer(client_id(), topic(), partition()) ->
-                       {ok, pid()} | {error, any()}.
+                       {ok, pid()} | {error, Reason} when
+        Reason :: {producer_not_found, topic()}
+                | {producer_not_found, topic(), partition()}
+                | {producer_down, noproc}
+                | client_down.
 find_producer(ClientId, Topic, Partition) ->
-  SupPid = gen_server:call(ClientId, get_producers_sup_pid, infinity),
-  brod_producers_sup:find_producer(SupPid, Topic, Partition).
+  try
+    SupPid = gen_server:call(ClientId, get_producers_sup_pid, infinity),
+    brod_producers_sup:find_producer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -329,6 +334,7 @@ connect(#state{ client_id = ClientId
 %% per-partition producer restarts and requests for a connection after
 %% it is cooled down.
 %% @end
+-spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
 handle_socket_down(#state{ client_id = ClientId
                          , sockets   = Sockets
                          } = State, Pid, Reason) ->
@@ -390,8 +396,6 @@ start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
                             };
     {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
   end.
-
-is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
