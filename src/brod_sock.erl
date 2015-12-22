@@ -122,8 +122,10 @@ init(Parent, Host, Port, ClientId, Debug0) ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
       end;
-    Error ->
-      proc_lib:init_ack(Parent, {error, Error})
+    {error, Reason} ->
+      %% exit instead of {error, Reason}
+      %% otherwise exit reason will be 'normal'
+      exit(Reason)
   end.
 
 call(Pid, Request) ->

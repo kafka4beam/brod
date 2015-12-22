@@ -4,6 +4,7 @@ sudo: required
 
 env:
   BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
+  BROD_CLIENT_SUITE_TOPIC: brod-client-SUITE-topic
   BROD_PRODUCER_SUITE_TOPIC: brod_producer_SUITE
 
 before_install:
@@ -17,6 +18,7 @@ before_install:
   - sudo docker ps -a
   - n=0; while [ "$(sudo docker exec kafka bash -c '/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --list')" != '' ]; do if [ $n -gt 4 ]; then echo timeout; exit 1; fi; n=$(( n + 1 )); sleep 1; done
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
+  - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLIENT_SUITE_TOPIC"
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_PRODUCER_SUITE_TOPIC"
 
 notifications:

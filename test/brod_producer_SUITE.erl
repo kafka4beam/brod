@@ -92,7 +92,6 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_produce_sync(Config) when is_list(Config) ->
   Partition = 0,
-  {Key, Value} = make_unique_kv(),
   {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
   Tester = self(),
   Ref = make_ref(),
@@ -100,16 +99,23 @@ t_produce_sync(Config) when is_list(Config) ->
                Tester ! {Ref, K, V}
              end,
   ok = brod:consume(ConsumerPid, Callback, -1),
-  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, Key, Value),
-  receive
-    {Ref, K, V} ->
-      ok = brod:stop_consumer(ConsumerPid),
-      ?assertEqual(Key, K),
-      ?assertEqual(Value, V)
-  after 5000 ->
-    ct:fail({?MODULE, ?LINE, timeout})
-  end.
-
+  {K1, V1} = make_unique_kv(),
+  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K1, V1),
+  {K2, V2} = make_unique_kv(),
+  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K2, V2),
+  ReceiveFun =
+    fun(ExpectedK, ExpectedV) ->
+      receive
+        {Ref, K, V} ->
+          ?assertEqual(ExpectedK, K),
+          ?assertEqual(ExpectedV, V)
+        after 5000 ->
+          ct:fail({?MODULE, ?LINE, timeout, ExpectedK, ExpectedV})
+      end
+    end,
+  ReceiveFun(K1, V1),
+  ReceiveFun(K2, V2),
+  ok = brod:stop_consumer(ConsumerPid).
 
 t_produce_async(Config) when is_list(Config) ->
   Partition = 0,
@@ -147,7 +153,8 @@ t_producer_topic_not_found(Config) when is_list(Config) ->
 
 
 t_producer_partition_not_found(Config) when is_list(Config) ->
-  Client = t_producer_partition_not_found,
+  Client = whereis(t_producer_partition_not_found),
+  ?assert(is_pid(Client)),
   ?assertEqual({error, {not_found, ?TOPIC, 100}},
                brod:produce(Client, ?TOPIC, 100, <<"k">>, <<"v">>)).
 
