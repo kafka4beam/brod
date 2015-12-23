@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2015, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -21,11 +21,13 @@
 %%% ============================================================================
 
 %% @private
--module(brod_kafka_tests).
+-module(brod_kafka_SUITE).
+-compile(export_all).
 
+-include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include("src/brod_int.hrl").
--include("src/brod_kafka.hrl").
+-include_lib("brod/src/brod_int.hrl").
+-include_lib("brod/src/brod_kafka.hrl").
 
 -define(PORT, 1234).
 
@@ -54,7 +56,25 @@
       end
     end)(Expect))).
 
-api_key_test() ->
+%%%_* ct callbacks =============================================================
+
+suite() -> [{timetrap, {seconds, 30}}].
+
+init_per_suite(Config) -> Config.
+
+end_per_suite(_Config) -> ok.
+
+init_per_testcase(_Case, Config) -> Config.
+
+end_per_testcase(_Case, Config) -> Config.
+
+all() -> [F || {F, _A} <- module_info(exports),
+                  case atom_to_list(F) of
+                    "t_" ++ _ -> true;
+                    _         -> false
+                  end].
+
+t_api_key(Config) when is_list(Config) ->
   ?assertMatch(?API_KEY_METADATA, brod_kafka:api_key(#metadata_request{})),
   ?assertMatch(?API_KEY_PRODUCE, brod_kafka:api_key(#produce_request{})),
   ?assertMatch(?API_KEY_OFFSET, brod_kafka:api_key(#offset_request{})),
@@ -62,7 +82,7 @@ api_key_test() ->
   ?assertError(function_clause, brod_kafka:api_key(foo)),
   ok.
 
-parse_stream_test() ->
+t_parse_stream(Config) when is_list(Config) ->
   R0 = brod_kafka_requests:new(),
   ?assertMatch({<<>>, []}, brod_kafka:parse_stream(<<>>, R0)),
   ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R0)),
@@ -70,14 +90,14 @@ parse_stream_test() ->
   ?assertMatch({<<"foo">>, []}, brod_kafka:parse_stream(<<"foo">>, R1)),
   ok.
 
-encode_metadata_test() ->
+t_encode_metadata(Config) when is_list(Config) ->
   ?assertMatch(<<?i32(0), ?i16(-1)>>, brod_kafka:encode(#metadata_request{})),
   R = #metadata_request{topics = [<<"FOO">>, <<"BARR">>]},
   ?assertMatch(<<?i32(2), ?i16(4), "BARR", ?i16(3), "FOO">>,
                brod_kafka:encode(R)),
   ok.
 
-decode_metadata_test() ->
+t_decode_metadata(Config) when is_list(Config) ->
   %% array: 32b length (number of items), [item]
   %% metadata response: array of brokers, array of topics
   %% broker: 32b node id, 16b host size, host, 32b port
@@ -133,7 +153,7 @@ decode_metadata_test() ->
                brod_kafka:decode(?API_KEY_METADATA, Bin2)),
   ok.
 
-encode_produce_test() ->
+t_encode_produce(Config) when is_list(Config) ->
   Acks1 = -1,
   Timeout1 = 0,
   R1 = #produce_request{acks = Acks1, timeout = Timeout1, data = []},
@@ -219,7 +239,7 @@ encode_produce_test() ->
                >>, brod_kafka:encode(R2)),
   ok.
 
-decode_produce_test() ->
+t_decode_produce(Config) when is_list(Config) ->
   %% array: 32b length (number of items), [item]
   %% produce response: array of topics
   %% topic: 16b name size, name, array of offsets
@@ -263,7 +283,7 @@ decode_produce_test() ->
               brod_kafka:decode(?API_KEY_PRODUCE, Bin2)),
   ok.
 
-encode_offset_test() ->
+t_encode_offset(Config) when is_list(Config) ->
   Topic = <<"topic">>,
   Partition = 0,
   Time1 = -1,
@@ -282,7 +302,7 @@ encode_offset_test() ->
   ?assertEqual(Bin2, brod_kafka:encode(R2)),
   ok.
 
-decode_offset_test() ->
+t_decode_offset(Config) when is_list(Config) ->
   %% array: 32b length (number of items), [item]
   %% offset response: array of topics
   %% topic: 16b name size, name, array of partitions
@@ -320,7 +340,7 @@ decode_offset_test() ->
   ?assertEqual(R3, brod_kafka:decode(?API_KEY_OFFSET, Bin3)),
   ok.
 
-encode_fetch_test() ->
+t_encode_fetch(Config) when is_list(Config) ->
   MaxWaitTime = ?max32,
   MinBytes = ?max32,
   Topic = <<"topic">>,
@@ -339,7 +359,7 @@ encode_fetch_test() ->
   ?assertEqual(Bin, brod_kafka:encode(R)),
   ok.
 
-decode_fetch_test() ->
+t_decode_fetch(Config) when is_list(Config) ->
   %% array: 32b length (number of items), [item]
   %% offset response: array of topics
   %% topic: 16b name size, name, array of partition message sets
@@ -484,6 +504,8 @@ decode_fetch_test() ->
            >>,
   ?assertEqual(R3, brod_kafka:decode(?API_KEY_FETCH, Bin4)),
   ok.
+
+%%%_* Help functions ===========================================================
 
 msgcrc(<<>>, <<>>) ->
   erlang:crc32(<<?i8(?MAGIC_BYTE), ?i8(?COMPRESS_NONE), ?i32(-1),

@@ -165,20 +165,21 @@ handle_info(init_socket, #state{ client_id = ClientId
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = Partitions
                  } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso
-    erlang:throw({"topic metadata error", TopicErrorCode}),
-  #partition_metadata{ error_code = PartitionErrorCode
+  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
+  #partition_metadata{ error_code = PartitionEC
                      , leader_id  = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionErrorCode) andalso
-    erlang:throw({"partition metadata error", PartitionErrorCode}),
-  LeaderId >= 0 orelse
-    erlang:throw({"no leader for partition", {ClientId, Topic, Partition}}),
+  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
+  LeaderId >= 0 orelse erlang:throw({no_leader, {ClientId, Topic, Partition}}),
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
   %% 2. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SockPid} = brod_client:get_connection(ClientId, Host, Port),
+  SockPid =
+    case brod_client:get_connection(ClientId, Host, Port) of
+      {ok, Pid}           -> Pid;
+      {error, SocketDown} -> exit({no_connection, SocketDown})
+    end,
   _ = erlang:monitor(process, SockPid),
 
   %% 3. Register self() to client.
@@ -203,7 +204,11 @@ handle_info(init_socket, #state{ client_id = ClientId
                                  , timeout = AckTimeout
                                  , data    = Data
                                  },
-      brod_sock:send(SockPid, KafkaReq)
+      case brod_sock:send(SockPid, KafkaReq) of
+        ok              -> ok;
+        {ok, CorrId}    -> {ok, CorrId};
+        {error, Reason} -> exit(Reason)
+      end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                     MsgSetBytes, SendFun),

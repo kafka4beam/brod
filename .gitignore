@@ -3,5 +3,7 @@ erl_crash.dump
 /.eunit/
 /.rebar/
 /deps/
-ebin
+logs/
+ebin/
+*.beam
 scripts/brod

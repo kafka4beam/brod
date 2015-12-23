@@ -35,11 +35,14 @@
 -define(SUP, brod_producers_sup).
 -define(SUP2, brod_producers_sup2).
 
+%% Minimum delay seconds to work with supervisor3
+-define(MIN_SUPERVISOR3_DELAY_SECS, 1).
+
 %% By default, restart sup2 after a 10-seconds delay
 -define(DEFAULT_SUP2_RESTART_DELAY, 10).
 
-%% By default, restart partition producer worker process after a 2-seconds delay
--define(DEFAULT_PRODUCER_RESTART_DELAY, 2).
+%% By default, restart partition producer worker process after a 5-seconds delay
+-define(DEFAULT_PRODUCER_RESTART_DELAY, 5).
 
 %%%_* APIs =====================================================================
 
@@ -52,31 +55,29 @@
 start_link(ClientId, Producers) ->
   supervisor3:start_link(?MODULE, {?SUP, ClientId, Producers}).
 
-%% @doc Find a brod_producer process pid running under sup2
-%% @end
+%% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->
-                       {ok, pid()} | {error, any()}.
+                       {ok, pid()} | {error, Reason} when
+        Reason :: {producer_not_found, topic()}
+                | {producer_not_found, topic(), partition()}
+                | {producer_down, noproc}.
 find_producer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
-      {error, {not_found, Topic}};
+      {error, {producer_not_found, Topic}};
     [Sup2Pid] ->
-      case is_alive(Sup2Pid) of
-        true ->
-          case supervisor3:find_child(Sup2Pid, Partition) of
-            [] ->
-              %% no such partition?
-              {error, {not_found, Topic, Partition}};
-            [Pid] ->
-              case is_alive(Pid) of
-                true  -> {ok, Pid};
-                false -> {error, restarting}
-              end
-          end;
-        false ->
-          {error, restarting}
+      try
+        case supervisor3:find_child(Sup2Pid, Partition) of
+          [] ->
+            %% no such partition?
+            {error, {producer_not_found, Topic, Partition}};
+          [Pid] ->
+            {ok, Pid}
+        end
+      catch exit : {noproc, _} ->
+        {error, {producer_down, noproc}}
       end
   end.
 
@@ -97,15 +98,13 @@ post_init({?SUP2, ClientId, Topic, Config}) ->
   %% In any case, restart right away will erry likely fail again.
   %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {{one_for_one, 0, 1}, Children}};
-post_init(_) ->
-  ignore.
+  {ok, {{one_for_one, 0, 1}, Children}}.
 
 producers_sup_spec(ClientId, TopicName, Config0) ->
-  DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,
-                                  ?DEFAULT_SUP2_RESTART_DELAY),
-  Config    = proplists:delete(topic_restart_delay_seconds, Config0),
-  Args      = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
+  {Config, DelaySecs} =
+    take_delay_secs(Config0, topic_restart_delay_seconds,
+                    ?DEFAULT_SUP2_RESTART_DELAY),
+  Args = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
@@ -115,9 +114,9 @@ producers_sup_spec(ClientId, TopicName, Config0) ->
   }.
 
 producer_spec(ClientId, Topic, Partition, Config0) ->
-  DelaySecs = proplists:get_value(partition_restart_delay_seconds, Config0,
-                                  ?DEFAULT_PRODUCER_RESTART_DELAY),
-  Config    = proplists:delete(partition_restart_delay_seconds, Config0),
+  {Config, DelaySecs} =
+    take_delay_secs(Config0, partition_restart_delay_seconds,
+                    ?DEFAULT_PRODUCER_RESTART_DELAY),
   Args      = [ClientId, Topic, Partition, Config],
   { _Id       = Partition
   , _Start    = {brod_producer, start_link, Args}
@@ -129,7 +128,17 @@ producer_spec(ClientId, Topic, Partition, Config0) ->
 
 %%%_* Internal Functions =======================================================
 
-is_alive(Pid) -> is_pid(Pid) andalso is_process_alive(Pid).
+-spec take_delay_secs(producer_config(), atom(), integer()) ->
+        {producer_config(), integer()}.
+take_delay_secs(Config, Name, DefaultValue) ->
+  Secs =
+    case proplists:get_value(Name, Config) of
+      N when is_integer(N) andalso N >= ?MIN_SUPERVISOR3_DELAY_SECS ->
+        N;
+      _ ->
+        DefaultValue
+    end,
+  {proplists:delete(Name, Config), Secs}.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
