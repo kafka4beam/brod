@@ -342,7 +342,8 @@ handle_socket_down(#state{ client_id = ClientId
                          } = State, Pid, Reason) ->
   case lists:keyfind(Pid, #sock.sock_pid, Sockets) of
     #sock{endpoint = {Host, Port} = Endpoint}  ->
-      error_logger:info_msg("client ~p payload socket down ~s:~p~nReason:~p",
+      error_logger:info_msg("client ~p: payload socket down ~s:~p~n"
+                            "reason:~p",
                             [ClientId, Host, Port, Reason]),
       mark_socket_dead(State, Endpoint, Reason)
   end.
