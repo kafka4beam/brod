@@ -28,7 +28,9 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("brod/src/brod_int.hrl").
 
--define(HOSTS, [{"localhost", 9092}]).
+-define(HOST, "localhost").
+-define(PORT, 9092).
+-define(HOSTS, [{?HOST, ?PORT}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
 
@@ -52,6 +54,7 @@ init_per_suite(Config) -> Config.
 end_per_suite(_Config) -> ok.
 
 init_per_testcase(Case, Config) ->
+  ct:pal("=== ~p begin ===", [Case]),
   try
     ?MODULE:Case({init, Config})
   catch
@@ -64,8 +67,10 @@ end_per_testcase(Case, Config) ->
     ?MODULE:Case({'end', Config})
   catch
     error : function_clause ->
-      Config
-  end.
+      ok
+  end,
+  ct:pal("=== ~p end ===", [Case]),
+  ok.
 
 all() -> [F || {F, _A} <- module_info(exports),
                   case atom_to_list(F) of
@@ -146,15 +151,16 @@ t_payload_socket_restart({'end', Config}) ->
 t_payload_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
   CooldownSecs = 5,
+  ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {?TOPIC, [{topic_restart_delay_seconds, 2},
-                       {partition_restart_delay_seconds, 2}]},
+  Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
+  Partition = 0,
   {ok, Client} =
     brod:start_link_client(t_payload_socket_restart, ?HOSTS,
                            ClientConfig, [Producer]),
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
   ProduceFun =
-    fun() -> brod:produce_sync(Client, ?TOPIC, _Partition = 0, <<"k">>, <<"v">>)
+    fun() -> brod:produce_sync(Client, ?TOPIC, Partition, <<"k">>, <<"v">>)
     end,
   %% producing data should trigger a payload connection to be established
   ok = ProduceFun(),
@@ -180,12 +186,18 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   ?WAIT({WriterPid, <<"i'm ready">>}, ok, 1000),
   %% kill the payload pid
   exit(PayloadSock, kill),
-  Timeout = timer:seconds(CooldownSecs + 5),
-  %% socket should be restarted after cooldown timeout
-  ?WAIT({socket_started, Ref, _}, ok, Timeout),
+  %% socket should be restarted after cooldown timeou
+  %% and the restart is triggered by producer restart
+  %% add 1 seconds more in wait timeout to avoid race
+  Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 1),
+  SockPid = ?WAIT({socket_started, Ref, Pid_}, Pid_, Timeout),
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
   ?WAIT({'DOWN', Mref, process, WriterPid, normal}, ok, 5000),
+  {ok, SockPid_} = brod_client:get_connection(Client, ?HOST, ?PORT),
+  ?assertEqual(SockPid, SockPid_),
+  {ok, ProducerPid} = brod_client:find_producer(Client, ?TOPIC, Partition),
+  ?assert(is_process_alive(ProducerPid)),
   ok = ProduceFun().
 
 %%%_* Help functions ===========================================================
@@ -201,7 +213,7 @@ mock_brod_sock() ->
       {ok, Pid} = meck:passthrough([Parent, Host, Port, ClientId, Dbg]),
       %% assert the caller
       ?assertEqual(Parent, whereis(ClientId)),
-      ct:pal("client ~p socket to ~s:~p started at ~p",
+      ct:pal("client ~p: socket to ~s:~p intercepted. pid=~p",
              [ClientId, Host, Port, Pid]),
       Tester ! {socket_started, Ref, Pid},
       {ok, Pid}

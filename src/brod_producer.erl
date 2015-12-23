@@ -175,7 +175,11 @@ handle_info(init_socket, #state{ client_id = ClientId
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
   %% 2. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SockPid} = brod_client:get_connection(ClientId, Host, Port),
+  SockPid =
+    case brod_client:get_connection(ClientId, Host, Port) of
+      {ok, Pid}           -> Pid;
+      {error, SocketDown} -> exit({no_connection, SocketDown})
+    end,
   _ = erlang:monitor(process, SockPid),
 
   %% 3. Register self() to client.
@@ -200,7 +204,11 @@ handle_info(init_socket, #state{ client_id = ClientId
                                  , timeout = AckTimeout
                                  , data    = Data
                                  },
-      brod_sock:send(SockPid, KafkaReq)
+      case brod_sock:send(SockPid, KafkaReq) of
+        ok              -> ok;
+        {ok, CorrId}    -> {ok, CorrId};
+        {error, Reason} -> exit(Reason)
+      end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                     MsgSetBytes, SendFun),

@@ -35,11 +35,14 @@
 -define(SUP, brod_producers_sup).
 -define(SUP2, brod_producers_sup2).
 
+%% Minimum delay seconds to work with supervisor3
+-define(MIN_SUPERVISOR3_DELAY_SECS, 1).
+
 %% By default, restart sup2 after a 10-seconds delay
 -define(DEFAULT_SUP2_RESTART_DELAY, 10).
 
-%% By default, restart partition producer worker process after a 2-seconds delay
--define(DEFAULT_PRODUCER_RESTART_DELAY, 2).
+%% By default, restart partition producer worker process after a 5-seconds delay
+-define(DEFAULT_PRODUCER_RESTART_DELAY, 5).
 
 %%%_* APIs =====================================================================
 
@@ -82,7 +85,7 @@ find_producer(SupPid, Topic, Partition) ->
 init({?SUP, ClientId, Producers}) ->
   Children = [ producers_sup_spec(ClientId, TopicName, Config)
              || {TopicName, Config} <- Producers ],
-  {ok, {{one_for_one, 1, 1}, Children}};
+  {ok, {{one_for_one, 0, 1}, Children}};
 init({?SUP2, _ClientId, _Topic, _Config}) ->
   post_init.
 
@@ -93,15 +96,15 @@ post_init({?SUP2, ClientId, Topic, Config}) ->
   %% Producer may crash in case of exception in case of network failure,
   %% or error code received in produce response (e.g. leader transition)
   %% In any case, restart right away will erry likely fail again.
-  %% Hence set MaxR=1 here to cool-down for a configurable N-seconds
+  %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
   %% before supervisor tries to restart it.
-  {ok, {{one_for_one, 1, 1}, Children}}.
+  {ok, {{one_for_one, 0, 1}, Children}}.
 
 producers_sup_spec(ClientId, TopicName, Config0) ->
-  DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,
-                                  ?DEFAULT_SUP2_RESTART_DELAY),
-  Config    = proplists:delete(topic_restart_delay_seconds, Config0),
-  Args      = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
+  {Config, DelaySecs} =
+    take_delay_secs(Config0, topic_restart_delay_seconds,
+                    ?DEFAULT_SUP2_RESTART_DELAY),
+  Args = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
@@ -111,9 +114,9 @@ producers_sup_spec(ClientId, TopicName, Config0) ->
   }.
 
 producer_spec(ClientId, Topic, Partition, Config0) ->
-  DelaySecs = proplists:get_value(partition_restart_delay_seconds, Config0,
-                                  ?DEFAULT_PRODUCER_RESTART_DELAY),
-  Config    = proplists:delete(partition_restart_delay_seconds, Config0),
+  {Config, DelaySecs} =
+    take_delay_secs(Config0, partition_restart_delay_seconds,
+                    ?DEFAULT_PRODUCER_RESTART_DELAY),
   Args      = [ClientId, Topic, Partition, Config],
   { _Id       = Partition
   , _Start    = {brod_producer, start_link, Args}
@@ -124,6 +127,18 @@ producer_spec(ClientId, Topic, Partition, Config0) ->
   }.
 
 %%%_* Internal Functions =======================================================
+
+-spec take_delay_secs(producer_config(), atom(), integer()) ->
+        {producer_config(), integer()}.
+take_delay_secs(Config, Name, DefaultValue) ->
+  Secs =
+    case proplists:get_value(Name, Config) of
+      N when is_integer(N) andalso N >= ?MIN_SUPERVISOR3_DELAY_SECS ->
+        N;
+      _ ->
+        DefaultValue
+    end,
+  {proplists:delete(Name, Config), Secs}.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

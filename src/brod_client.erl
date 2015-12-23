@@ -319,11 +319,13 @@ connect(#state{ client_id = ClientId
       S = #sock{ endpoint = {Host, Port}
                , sock_pid = Pid
                },
-      error_logger:info_msg("~p connected to ~s:~p~n", [ClientId, Host, Port]),
+      error_logger:info_msg("client ~p connected to ~s:~p~n",
+                            [ClientId, Host, Port]),
       NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
       {State#state{sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
-      error_logger:error_msg("~p failed to connect to ~s:~p~n, reason:~p",
+      error_logger:error_msg("client ~p failed to connect to ~s:~p~n"
+                             "reason:~p",
                              [ClientId, Host, Port, Reason]),
       {ok, NewState} = mark_socket_dead(State, {Host, Port}, Reason),
       {NewState, {error, Reason}}
@@ -369,10 +371,8 @@ is_cooled_down(Ts, #state{config = Config}) ->
   Threshold = proplists:get_value(reconnect_cool_down_seconds, Config,
                                   ?DEFAULT_RECONNECT_COOL_DOWN_SECONDS),
   Now = os:timestamp(),
-  case timer:now_diff(Now, Ts) div 1000000 of
-    Diff when Diff > Threshold -> true;
-    _                          -> false
-  end.
+  Diff = timer:now_diff(Now, Ts) div 1000000,
+  Diff >= Threshold.
 
 %% @private Establish a dedicated socket to kafka cluster endpoint(s) for
 %%          metadata retrievals.

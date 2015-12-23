@@ -77,12 +77,20 @@ send(Pid, Request) ->
   call(Pid, {send, Request}).
 
 -spec send_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
-send_sync(Pid, #produce_request{acks = 0} = Request, _Timeout) ->
-  {ok, _CorrId} = send(Pid, Request),
-  ok;
 send_sync(Pid, Request, Timeout) ->
+  case send(Pid, Request) of
+    {ok, CorrId} ->
+      maybe_wait_for_resp(Pid, Request, CorrId, Timeout);
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec maybe_wait_for_resp(pid(), term(), integer(), timeout()) ->
+        ok | {ok, term()} | {error, any()}.
+maybe_wait_for_resp(_Pid, #produce_request{acks = 0}, _CorrId, _Timeout) ->
+  ok;
+maybe_wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),
-  {ok, CorrId} = send(Pid, Request),
   receive
     {msg, Pid, CorrId, Response} ->
       erlang:demonitor(Mref, [flush]),
@@ -137,7 +145,7 @@ call(Pid, Request) ->
       erlang:demonitor(Mref, [flush]),
       Reply;
     {'DOWN', Mref, _, _, Reason} ->
-      {error, {process_down, Reason}}
+      {error, {sock_down, Reason}}
   end.
 
 reply({To, Tag}, Reply) ->
