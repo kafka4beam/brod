@@ -148,14 +148,14 @@ t_produce_async(Config) when is_list(Config) ->
 
 t_producer_topic_not_found(Config) when is_list(Config) ->
   Client = t_producer_topic_not_found,
-  ?assertEqual({error, {not_found, <<"no-such-topic">>}},
+  ?assertEqual({error, {producer_not_found, <<"no-such-topic">>}},
                brod:produce(Client, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
 
 
 t_producer_partition_not_found(Config) when is_list(Config) ->
   Client = whereis(t_producer_partition_not_found),
   ?assert(is_pid(Client)),
-  ?assertEqual({error, {not_found, ?TOPIC, 100}},
+  ?assertEqual({error, {producer_not_found, ?TOPIC, 100}},
                brod:produce(Client, ?TOPIC, 100, <<"k">>, <<"v">>)).
 
 %%%_* Help functions ===========================================================
