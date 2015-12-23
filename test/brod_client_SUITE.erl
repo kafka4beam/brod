@@ -188,8 +188,8 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   exit(PayloadSock, kill),
   %% socket should be restarted after cooldown timeou
   %% and the restart is triggered by producer restart
-  %% add 1 seconds more in wait timeout to avoid race
-  Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 1),
+  %% add 2 seconds more in wait timeout to avoid race
+  Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
   SockPid = ?WAIT({socket_started, Ref, Pid_}, Pid_, Timeout),
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
