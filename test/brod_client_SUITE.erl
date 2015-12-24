@@ -110,7 +110,7 @@ t_not_a_brod_client(Config) when is_list(Config) ->
   ?assertEqual({error, client_down}, Res2).
 
 t_metadata_socket_restart({init, Config}) ->
-  meck:new(brod_sock, [passthrough]),
+  meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_metadata_socket_restart({'end', Config}) ->
   case whereis(t_metadata_socket_restart) of
@@ -138,7 +138,7 @@ t_metadata_socket_restart(Config) when is_list(Config) ->
   ok.
 
 t_payload_socket_restart({init, Config}) ->
-  meck:new(brod_sock, [passthrough]),
+  meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_payload_socket_restart({'end', Config}) ->
   case whereis(t_payload_socket_restart) of
