@@ -25,16 +25,6 @@
                  , value      :: binary()
                  }).
 
-%% delivered to subsriber by brod_consumer
--record(message_set, { topic          :: binary()
-                     , partition      :: integer()
-                     , high_wm_offset :: integer()
-                     , messages       :: [#message{}]
-                     }).
-
--type callback_fun() :: fun((#message_set{}) -> any()) |
-                        fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any()).
-
 -type client_id() :: atom().
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).

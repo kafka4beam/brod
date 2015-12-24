@@ -157,35 +157,14 @@ handle_info(init_socket, #state{ client_id = ClientId
                                , partition = Partition
                                , config    = Config0
                                } = State) ->
-  %% 1. Fetch and validate metadata
-  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
-  #metadata_response{ brokers = Brokers
-                    , topics  = [TopicMetadata]
-                    } = Metadata,
-  #topic_metadata{ error_code = TopicErrorCode
-                 , partitions = Partitions
-                 } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-  #partition_metadata{ error_code = PartitionEC
-                     , leader_id  = LeaderId} =
-    lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {ClientId, Topic, Partition}}),
-  #broker_metadata{host = Host, port = Port} =
-    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-
-  %% 2. Lookup, or maybe (re-)establish a connection to partition leader
-  SockPid =
-    case brod_client:get_connection(ClientId, Host, Port) of
-      {ok, Pid}           -> Pid;
-      {error, SocketDown} -> exit({no_connection, SocketDown})
-    end,
+  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  {ok, SockPid} = brod_client:get_leader(ClientId, Topic, Partition),
   _ = erlang:monitor(process, SockPid),
 
-  %% 3. Register self() to client.
+  %% 2. Register self() to client.
   ok = brod_client:register_producer(ClientId, Topic, Partition),
 
-  %% 4. Create the producing buffer
+  %% 3. Create the producing buffer
   {BufferLimit, Config1} = take_config(partition_buffer_limit,
                                        ?DEFAULT_PARITION_BUFFER_LIMIT,
                                        Config0),
@@ -212,7 +191,7 @@ handle_info(init_socket, #state{ client_id = ClientId
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                     MsgSetBytes, SendFun),
-  %% 5. Update state.
+  %% 4. Update state.
   NewState = State#state{ sock_pid = SockPid
                         , buffer   = Buffer
                         },

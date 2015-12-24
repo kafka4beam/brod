@@ -24,12 +24,14 @@
 -behaviour(gen_server).
 
 -export([ find_producer/3
+        , find_consumer/3
         , get_connection/3
+        , get_leader/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
         , register_producer/3
-        , start_link/4
+        , start_link/5
         , stop/1
         ]).
 
@@ -66,21 +68,51 @@
         , endpoints     :: [endpoint()]
         , meta_sock     :: pid()
         , sockets = []  :: [#sock{}]
-        , producers_sup :: pid()
+        , producers_sup :: pid() | undefined
+        , consumers_sup :: pid() | undefined
         , config        :: client_config()
         }).
 
 %%%_* APIs =====================================================================
 
--spec start_link(client_id(), [endpoint()], client_config(),
-                 [{topic(), producer_config()}]) -> {ok, pid()}.
-start_link(ClientId, Endpoints, Config, Producers) when is_atom(ClientId) ->
-  gen_server:start_link({local, ClientId}, ?MODULE,
-                        {ClientId, Endpoints, Config, Producers}, []).
+-spec start_link( client_id()
+                , [endpoint()]
+                , [{topic(), producer_config()}]
+                , [{topic(), consumer_config()}]
+                , client_config()) -> {ok, pid()}.
+start_link(ClientId, Endpoints, Producers, Consumers, Config)
+  when is_atom(ClientId) ->
+  Args = {ClientId, Endpoints, Producers, Consumers, Config},
+  gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
+
+%% @doc Returns brod_sock connected to a broker which is a leader
+%% for given topic and partition.
+-spec get_leader(client_id(), topic(), partition()) -> {ok, pid()}.
+get_leader(ClientId, Topic, Partition) ->
+  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
+  #metadata_response{ brokers = Brokers
+                    , topics  = [TopicMetadata]
+                    } = Metadata,
+  #topic_metadata{ error_code = TopicErrorCode
+                 , partitions = Partitions
+                 } = TopicMetadata,
+  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
+  #partition_metadata{ error_code = PartitionEC
+                     , leader_id  = LeaderId} =
+    lists:keyfind(Partition, #partition_metadata.id, Partitions),
+  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
+  LeaderId >= 0 orelse erlang:throw({no_leader, {ClientId, Topic, Partition}}),
+  #broker_metadata{host = Host, port = Port} =
+    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+
+  case brod_client:get_connection(ClientId, Host, Port) of
+    {ok, Pid}      -> {ok, Pid};
+    {error, Error} -> exit({no_connection, Error})
+  end.
 
 -spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
@@ -88,8 +120,8 @@ get_metadata(Client, Topic) ->
 
 %% @doc Get the connection to kafka broker at Host:Port.
 %% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another producer
-%% the same socket is returned.
+%% If the connection is already established per request from another
+%% producer/consumer the same socket is returned.
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.
 %% @end
@@ -168,24 +200,34 @@ find_producer(ClientId, Topic, Partition) ->
     {error, client_down}
   end.
 
+find_consumer(ClientId, Topic, Partition) ->
+  try
+    SupPid = gen_server:call(ClientId, get_consumers_sup_pid, infinity),
+    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
+
 %%%_* gen_server callbacks =====================================================
 
-init({ClientId, Endpoints, Config, Producers}) ->
+init({ClientId, Endpoints, Producers, Consumers, Config}) ->
   erlang:process_flag(trap_exit, true),
   ets:new(?ETS(ClientId), [named_table, protected, {read_concurrency, true}]),
-  self() ! {init, Producers},
+  self() ! {init, Producers, Consumers},
   {ok, #state{ client_id = ClientId
              , endpoints = Endpoints
              , config    = Config
              }}.
 
-handle_info({init, Producers}, #state{ client_id = ClientId
-                                     , endpoints = Endpoints
-                                     } = State) ->
+handle_info({init, Producers, Consumers}, State) ->
+  ClientId = State#state.client_id,
+  Endpoints = State#state.endpoints,
   Sock = start_metadata_socket(ClientId, Endpoints),
-  {ok, Pid} = brod_producers_sup:start_link(ClientId, Producers),
+  ProducersSupPid = maybe_start_producers_sup(ClientId, Producers),
+  ConsumersSupPid = maybe_start_consumers_sup(ClientId, Consumers),
   {noreply, State#state{ meta_sock     = Sock
-                       , producers_sup = Pid
+                       , producers_sup = ProducersSupPid
+                       , consumers_sup = ConsumersSupPid
                        }};
 
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
@@ -206,14 +248,18 @@ handle_info({'EXIT', Pid, Reason},
                         [ClientId, Host, Port, Reason]),
   NewSock = start_metadata_socket(ClientId, Endpoints),
   {noreply, State#state{meta_sock = NewSock}};
-handle_info({'EXIT', Pid, Reason}, State) ->
+handle_info({'EXIT', Pid, Reason}, #state{meta_sock = Pid} = State) ->
   {ok, NewState} = handle_socket_down(State, Pid, Reason),
   {noreply, NewState};
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+  error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
+                          [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
 handle_call(get_producers_sup_pid, _From, State) ->
   {reply, State#state.producers_sup, State};
+handle_call(get_consumers_sup_pid, _From, State) ->
+  {reply, State#state.consumers_sup, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   Result = do_get_metadata(Topic, State),
   {reply, Result, State};
@@ -230,7 +276,9 @@ handle_cast({register_producer, Topic, Partition, ProducerPid},
   Tab = ?ETS(ClientId),
   ets:insert(Tab, ?PRODUCER(Topic, Partition, ProducerPid)),
   {noreply, State};
-handle_cast(_Cast, State) ->
+handle_cast(Cast, State) ->
+  error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",
+                          [?MODULE, self(), State#state.client_id, Cast]),
   {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -240,19 +288,22 @@ terminate(Reason, #state{ client_id     = ClientId
                         , meta_sock     = MetaSock
                         , sockets       = Sockets
                         , producers_sup = ProducersSup
+                        , consumers_sup = ConsumersSup
                         }) ->
-  Reason =:= normal orelse
-    error_logger:warning_msg("client ~p down, reason:~p~n",
-                             [ClientId, Reason]),
-  %% stop producers first because they are monitoring socket pids
-  is_pid(ProducersSup) andalso exit(ProducersSup, shutdown),
-  %% TODO stop consumers too
-  CloseSockFun = fun(#sock{sock_pid = Pid}) ->
-                   is_pid(Pid) andalso exit(Pid, shutdown)
-                 end,
-  ok = lists:foreach(CloseSockFun, Sockets),
-  MetaSock =:= ?undef orelse CloseSockFun(MetaSock),
-  ok.
+  case brod_utils:is_normal_reason(Reason) of
+    true ->
+      ok;
+    false ->
+      error_logger:warning_msg("~p [~p] ~p is terminating, reason: ~p~n",
+                               [?MODULE, self(), ClientId, Reason])
+  end,
+  %% stop producers and consumers first because they are monitoring socket pids
+  brod_utils:shutdown_pid(ProducersSup),
+  brod_utils:shutdown_pid(ConsumersSup),
+  lists:foreach(
+    fun(#sock{sock_pid = Pid}) ->
+        brod_utils:shutdown_pid(Pid)
+    end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
 
@@ -397,6 +448,18 @@ start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
                             };
     {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
   end.
+
+maybe_start_producers_sup(_ClientId, []) ->
+  undefined;
+maybe_start_producers_sup(ClientId, Producers) ->
+  {ok, Pid} = brod_producers_sup:start_link(ClientId, Producers),
+  Pid.
+
+maybe_start_consumers_sup(_ClientId, []) ->
+  undefined;
+maybe_start_consumers_sup(ClientId, Consumers) ->
+  {ok, Pid} = brod_consumers_sup:start_link(ClientId, Consumers),
+  Pid.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

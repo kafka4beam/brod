@@ -23,10 +23,12 @@
 -module(brod_utils).
 
 %% Exports
--export([ fetch_response_to_message_set/1
-        , get_metadata/1
+-export([ get_metadata/1
         , get_metadata/2
         , try_connect/1
+        , is_normal_reason/1
+        , is_pid_alive/1
+        , shutdown_pid/1
         ]).
 
 -include("brod_int.hrl").
@@ -58,15 +60,20 @@ try_connect([{Host, Port} | Hosts], _) ->
     Error     -> try_connect(Hosts, Error)
   end.
 
-fetch_response_to_message_set(#fetch_response{topics = [TopicFetchData]}) ->
-  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
-  #partition_messages{ partition = Partition
-                     , high_wm_offset = HighWmOffset
-                     , messages = Messages} = PM,
-  #message_set{ topic = Topic
-              , partition = Partition
-              , high_wm_offset = HighWmOffset
-              , messages = Messages}.
+%% @doc Check terminate reason for a gen_server implementation
+is_normal_reason(normal)        -> true;
+is_normal_reason(shutdown)      -> true;
+is_normal_reason({shutdown, _}) -> true;
+is_normal_reason(_)             -> false.
+
+is_pid_alive(Pid) ->
+  is_pid(Pid) andalso is_process_alive(Pid).
+
+shutdown_pid(Pid) ->
+  case is_pid_alive(Pid) of
+    true  -> exit(Pid, shutdown);
+    false -> ok
+  end.
 
 %%%_* Internal Functions =======================================================
 

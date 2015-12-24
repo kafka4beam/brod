@@ -53,9 +53,6 @@
         , start_link_consumer/4
         , start_consumer/3
         , stop_consumer/1
-        , consume/2
-        , consume/3
-        , consume/6
         ]).
 
 %% Management and testing API
@@ -238,56 +235,6 @@ start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
 stop_consumer(Pid) ->
   brod_consumer:stop(Pid).
 
--spec consume(pid(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset)
-%% @doc A simple alternative for consume/6 with predefined defaults.
-%%      Calling process will receive messages from consumer process.
-consume(Pid, Offset) ->
-  Self = self(),
-  Callback = fun(MsgSet) -> Self ! MsgSet end,
-  consume(Pid, Callback, Offset).
-
--spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, Callback, Offset, 1000, 0, 100000)
-%% @doc A simple alternative for consume/6 with predefined defaults.
-%%      Callback() will be called to handle incoming messages.
-consume(Pid, Callback, Offset) ->
-  consume(Pid, Callback, Offset, 1000, 0, 100000).
-
-%% @doc Start consuming data from a partition.
-%%      Messages are delivered as #message_set{}.
-%% Pid: brod consumer pid, @see start_link_consumer/3
-%% Callback: a function which will be called by brod_consumer to
-%%           handle incoming messages
-%% Offset: Where to start to fetch data from.
-%%                  -1: start from the latest available offset
-%%                  -2: start from the earliest available offset
-%%               N > 0: valid offset for the given partition
-%% MaxWaitTime: The max wait time is the maximum amount of time in
-%%              milliseconds to block waiting if insufficient data is
-%%              available at the time the request is issued.
-%% MinBytes: This is the minimum number of bytes of messages that must
-%%           be available to give a response. If the client sets this
-%%           to 0, the server will always respond immediately. If
-%%           there is no new data since their last request, clients
-%%           will get back empty message sets. If this is set to 1,
-%%           the server will respond as soon as at least one partition
-%%           has at least 1 byte of data or the specified timeout
-%%           occurs. By setting higher values in combination with the
-%%           timeout the consumer can tune for throughput and trade a
-%%           little additional latency for reading only large chunks
-%%           of data (e.g. setting MaxWaitTime to 100 ms and setting
-%%           MinBytes to 64k would allow the server to wait up to
-%%           100ms to try to accumulate 64k of data before
-%%           responding).
-%% MaxBytes: The maximum bytes to include in the message set for this
-%%           partition. This helps bound the size of the response.
-%% @end
--spec consume(pid(), callback_fun(), integer(),
-             integer(), integer(), integer()) -> ok | {error, any()}.
-consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
-
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
@@ -321,7 +268,7 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, #message_set{}} | {error, any()}.
+               {ok, [#message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
@@ -329,7 +276,7 @@ fetch(Hosts, Topic, Partition, Offset) ->
 -spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
-               {ok, #message_set{}} | {error, any()}.
+               {ok, [#message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
@@ -339,12 +286,17 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
   Response = brod_sock:send_sync(Pid, Request, 10000),
+  #fetch_response{topics = [TopicFetchData]} = Response,
+  #topic_fetch_data{ topic = Topic
+                   , partitions = [PM]} = TopicFetchData,
+  #partition_messages{ error_code = ErrorCode
+                     , messages = Messages} = PM,
   ok = brod_sock:stop(Pid),
-  case Response of
-    {ok, FetchResponse} ->
-      {ok, brod_utils:fetch_response_to_message_set(FetchResponse)};
-    _ ->
-      Response
+  case brod_kafka:is_error(ErrorCode) of
+    true ->
+      {error, brod_kafka_errors:desc(ErrorCode)};
+    false ->
+      {ok, Messages}
   end.
 
 console_consumer(Hosts, Topic, Partition, Offset) ->
