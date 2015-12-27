@@ -248,9 +248,6 @@ handle_info({'EXIT', Pid, Reason},
                         [ClientId, Host, Port, Reason]),
   NewSock = start_metadata_socket(ClientId, Endpoints),
   {noreply, State#state{meta_sock = NewSock}};
-handle_info({'EXIT', Pid, Reason}, #state{meta_sock = Pid} = State) ->
-  {ok, NewState} = handle_socket_down(State, Pid, Reason),
-  {noreply, NewState};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
                           [?MODULE, self(), State#state.client_id, Info]),
@@ -301,8 +298,8 @@ terminate(Reason, #state{ client_id     = ClientId
   brod_utils:shutdown_pid(ProducersSup),
   brod_utils:shutdown_pid(ConsumersSup),
   lists:foreach(
-    fun(#sock{sock_pid = Pid}) ->
-        brod_utils:shutdown_pid(Pid)
+    fun(?undef) -> ok;
+       (#sock{sock_pid = Pid}) -> brod_utils:shutdown_pid(Pid)
     end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
