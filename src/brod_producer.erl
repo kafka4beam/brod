@@ -158,7 +158,8 @@ handle_info(init_socket, #state{ client_id = ClientId
                                , config    = Config0
                                } = State) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SockPid} = brod_client:get_leader(ClientId, Topic, Partition),
+  {ok, SockPid} =
+    brod_client:get_leader_connection(ClientId, Topic, Partition),
   _ = erlang:monitor(process, SockPid),
 
   %% 2. Register self() to client.

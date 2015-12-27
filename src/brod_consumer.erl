@@ -126,7 +126,8 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
                                , config    = Config
                                } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SocketPid} = brod_client:get_leader(ClientId, Topic, Partition),
+  {ok, SocketPid} =
+    brod_client:get_leader_connection(ClientId, Topic, Partition),
   _ = erlang:monitor(process, SocketPid),
 
   %% 2. Get options from callback module and merge with Config
@@ -180,9 +181,13 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
       %% 3) stop if CbMod:handle_error is not defined
       {stop, {broker_error, ErrorCode}, State0};
     false ->
+      SleepTimeout = State0#state.sleep_timeout,
       case Messages of
-        [] ->
-          erlang:send_after(State0#state.sleep_timeout, self(), ?SEND_FETCH_REQUEST),
+        [] when SleepTimeout =:= 0 ->
+          {ok, NewCorrId} = send_fetch_request(State0),
+          {noreply, State0#state{corr_id = NewCorrId}};
+        [] when SleepTimeout > 0 ->
+          erlang:send_after(SleepTimeout, self(), ?SEND_FETCH_REQUEST),
           {noreply, State0};
         [_|_] ->
           CbMod = State0#state.cb_mod,

@@ -25,8 +25,7 @@
 
 -export([ find_producer/3
         , find_consumer/3
-        , get_connection/3
-        , get_leader/3
+        , get_leader_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
@@ -89,10 +88,16 @@ start_link(ClientId, Endpoints, Producers, Consumers, Config)
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
 
-%% @doc Returns brod_sock connected to a broker which is a leader
-%% for given topic and partition.
--spec get_leader(client_id(), topic(), partition()) -> {ok, pid()}.
-get_leader(ClientId, Topic, Partition) ->
+%% @doc Get the connection to kafka broker at Host:Port which is a leader
+%% for Topic.Partition.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another
+%% producer/consumer the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+%% @end
+-spec get_leader_connection(client_id(), topic(), partition()) -> {ok, pid()}.
+get_leader_connection(ClientId, Topic, Partition) ->
   {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
   #metadata_response{ brokers = Brokers
                     , topics  = [TopicMetadata]
@@ -109,26 +114,11 @@ get_leader(ClientId, Topic, Partition) ->
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
-  case brod_client:get_connection(ClientId, Host, Port) of
-    {ok, Pid}      -> {ok, Pid};
-    {error, Error} -> exit({no_connection, Error})
-  end.
+  gen_server:call(ClientId, {get_connection, Host, Port}, infinity).
 
 -spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
-
-%% @doc Get the connection to kafka broker at Host:Port.
-%% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another
-%% producer/consumer the same socket is returned.
-%% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
-%% @end
--spec get_connection(client(), hostname(), portnum()) ->
-        {ok, pid()} | {error, any()}.
-get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
@@ -237,6 +227,12 @@ handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                          [ClientId, Pid, Reason]),
   %% shutdown all producers?
   {noreply, State#state{producers_sup = ?undef}};
+handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
+                                         , consumers_sup = Pid
+                                         } = State) ->
+  error_logger:error_msg("client ~p consumers supervisor down~nReason: ~p",
+                         [ClientId, Pid, Reason]),
+  {noreply, State#state{consumers_sup = ?undef}};
 handle_info({'EXIT', Pid, Reason},
             #state{ client_id = ClientId
                   , meta_sock = #sock{ sock_pid = Pid
@@ -248,6 +244,9 @@ handle_info({'EXIT', Pid, Reason},
                         [ClientId, Host, Port, Reason]),
   NewSock = start_metadata_socket(ClientId, Endpoints),
   {noreply, State#state{meta_sock = NewSock}};
+handle_info({'EXIT', Pid, Reason}, State) ->
+  {ok, NewState} = handle_socket_down(State, Pid, Reason),
+  {noreply, NewState};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
                           [?MODULE, self(), State#state.client_id, Info]),
