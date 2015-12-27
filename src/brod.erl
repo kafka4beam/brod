@@ -48,13 +48,6 @@
         , sync_produce_request/1
         ]).
 
-%% Consumer API
--export([ start_link_consumer/3
-        , start_link_consumer/4
-        , start_consumer/3
-        , stop_consumer/1
-        ]).
-
 %% Management and testing API
 -export([ get_metadata/1
         , get_metadata/2
@@ -62,9 +55,6 @@
         , get_offsets/5
         , fetch/4
         , fetch/7
-        , console_consumer/4
-        , file_consumer/5
-        , simple_consumer/5
         ]).
 
 %% escript
@@ -217,32 +207,6 @@ sync_produce_request(CallRef) ->
                               },
   brod_producer:sync_produce_request(Expect).
 
-%% @deprecated
-%% @equiv start_link_consumer(Hosts, Topic, Partition)
--spec start_consumer([endpoint()], binary(), integer()) ->
-                   {ok, pid()} | {error, any()}.
-start_consumer(Hosts, Topic, Partition) ->
-  start_link_consumer(Hosts, Topic, Partition).
-
-%% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
--spec start_link_consumer([endpoint()], binary(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_consumer(Hosts, Topic, Partition) ->
-  start_link_consumer(Hosts, Topic, Partition, 1000).
-
-%% @doc Start consumer process
-%%      SleepTimeout: how much time to wait before sending next fetch
-%%      request when we got no messages in the last one
--spec start_link_consumer([endpoint()], binary(), integer(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
-  brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
-
-%% @doc Stop consumer process
--spec stop_consumer(pid()) -> ok.
-stop_consumer(Pid) ->
-  brod_consumer:stop(Pid).
-
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
@@ -307,30 +271,6 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
       {ok, Messages}
   end.
 
-console_consumer(Hosts, Topic, Partition, Offset) ->
-  simple_consumer(Hosts, Topic, Partition, Offset, user).
-
-file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
-  {ok, File} = file:open(Filename, [write, append]),
-  C = simple_consumer(Hosts, Topic, Partition, Offset, File),
-  MonitorFun = fun() ->
-                   Mref = erlang:monitor(process, C),
-                   receive
-                     {'DOWN', Mref, process, C, _} ->
-                       io:format("~nClosing ~s~n", [Filename]),
-                       file:close(File)
-                   end
-               end,
-  proc_lib:spawn(fun() -> MonitorFun() end),
-  C.
-
-simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
-  {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
-  Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
-  Callback = fun(MsgOffset, K, V) -> print_message(Io, MsgOffset, K, V) end,
-  ok = brod:consume(C, Callback, Offset),
-  Pid.
-
 %% escript entry point
 main([]) ->
   show_help();
@@ -372,12 +312,6 @@ show_help() ->
   io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime MinBytes MaxBytes\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
-  io:format(user, "Start a console consumer:\n", []),
-  io:format(user, "  ./brod console_consumer Hosts Topic Partition Offset\n", []),
-  io:format(user, "  ./brod console_consumer kafka-1 topic1 0 -1\n", []),
-  io:format(user, "Start a file consumer:\n", []),
-  io:format(user, "  ./brod file_consumer Hosts Topic Partition Offset Filepath\n", []),
-  io:format(user, "  ./brod file_consumer kafka-1 topic1 0 -1 /tmp/kafka-data\n", []),
   ok.
 
 call_api(get_metadata, [HostsStr]) ->
@@ -394,7 +328,7 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}]),
+  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}], []),
   {ok, ProducerPid} = brod:get_producer(Client, Topic, Partition),
   Res = brod:produce_sync(ProducerPid, Key, Value),
   brod:stop_client(Client),
@@ -424,28 +358,7 @@ call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr,
              list_to_integer(OffsetStr),
              list_to_integer(MaxWaitTimeStr),
              list_to_integer(MinBytesStr),
-             list_to_integer(MaxBytesStr));
-call_api(console_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Pid = brod:console_consumer(Hosts,
-                              list_to_binary(TopicStr),
-                              list_to_integer(PartitionStr),
-                              list_to_integer(OffsetStr)),
-  MRef = erlang:monitor(process, Pid),
-  receive
-    {'DOWN', MRef, process, Pid, _} -> ok
-  end;
-call_api(file_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr, Filename]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Pid = brod:file_consumer(Hosts,
-                           list_to_binary(TopicStr),
-                           list_to_integer(PartitionStr),
-                           list_to_integer(OffsetStr),
-                           Filename),
-  MRef = erlang:monitor(process, Pid),
-  receive
-    {'DOWN', MRef, process, Pid, _} -> ok
-  end.
+             list_to_integer(MaxBytesStr)).
 
 %%%_* Internal functions =======================================================
 
@@ -471,20 +384,6 @@ connect_leader(Hosts, Topic, Partition) ->
   Port = Broker#broker_metadata.port,
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
-
-print_message(Io, Offset, K, V) ->
-  io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
-
-simple_consumer_loop(C, Io) ->
-  receive
-    stop ->
-      brod:stop_consumer(C),
-      io:format(Io, "\Simple consumer ~p terminating\n", [self()]),
-      ok;
-    Other ->
-      io:format(Io, "\nStrange msg: ~p\n", [Other]),
-      simple_consumer_loop(C, Io)
-  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
