@@ -33,8 +33,8 @@
 %% Client API
 -export([ get_partitions/2
         , get_producer/3
-        , start_link_client/2
-        , start_link_client/4
+        , start_link_client/3
+        , start_link_client/5
         , stop_client/1
         ]).
 
@@ -90,11 +90,13 @@ stop(_State) -> ok.
 %% Deafult client ID and default configs are used.
 %% For more details: @see start_link_client/4
 %% @end
--spec start_link_client([endpoint()], [{topic(), producer_config()}]) ->
-        {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, Producers) ->
+-spec start_link_client( [endpoint()]
+                       , [{topic(), producer_config()}]
+                       , [{topic(), consumer_config()}]) ->
+                           {ok, pid()} | {error, any()}.
+start_link_client(Endpoints, Producers, Consumers) ->
   start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
-                    _Config = [], Producers).
+                    Producers, Consumers, _Config = []).
 
 %5 @doc Start a client.
 %% ClientId:
@@ -103,6 +105,12 @@ start_link_client(Endpoints, Producers) ->
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster
 %%   which does not necessarily have to be a leader of any partition,
 %%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% Producers:
+%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
+%%   proplist, @see brod_producers_sup:start_link/2 for more details
+%% Consumers:
+%%   A list of {Topic, ConsumerConfig} where ConsumerConfig is a
+%%   proplist, @see brod_consumers_sup:start_link/2 for more details
 %% Config:
 %%   Proplist, possible values:
 %%     get_metadata_timout_seconds(optional, default=5)
@@ -111,15 +119,15 @@ start_link_client(Endpoints, Producers) ->
 %%     reconnect_cool_down_seconds(optional, default=1)
 %%       Delay this configured number of seconds before retrying to
 %%       estabilish a new connection to the kafka partition leader.
-%% Producers:
-%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
-%%   proplist, @see brod_producers_sup:start_link/2 for more details
 % @end
--spec start_link_client(client_id(), [endpoint()], client_config(),
-                        [{topic(), producer_config()}]) ->
-        {ok, pid()} | {error, any()}.
-start_link_client(ClientId, Endpoints, Config, Producers) ->
-  brod_client:start_link(ClientId, Endpoints, Config, Producers).
+-spec start_link_client( client_id()
+                       , [endpoint()]
+                       , [{topic(), producer_config()}]
+                       , [{topic(), consumer_config()}]
+                       , client_config()) ->
+                           {ok, pid()} | {error, any()}.
+start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
+  brod_client:start_link(ClientId, Endpoints, Producers, Consumers, Config).
 
 %% @doc Stop a client.
 -spec stop_client(client_id()) -> ok.

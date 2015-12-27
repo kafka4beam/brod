@@ -54,11 +54,20 @@
                          | sleep_timeout.
 
 %% behaviour definition
--callback init_consumer(topic(), partition()) ->
-  {ok, [{consumer_option(), any()}]}.
--callback handle_messages(topic(), partition(), integer(), [#message{}]) -> ok.
+-callback init_consumer( Topic     :: topic()
+                       , Partition :: partition()
+                       , CbArgs    :: any()) ->
+  {ok, CbOptions :: [{consumer_option(), any()}], CbState :: any()}.
+
+-callback handle_messages( Topic        :: topic()
+                         , Partition    :: partition()
+                         , HighWmOffset :: integer()
+                         , Messages     :: [#message{}]
+                         , CbState      :: any()) ->
+  {ok, NewCbState :: any()}.
 
 -record(state, { cb_mod        :: atom()
+               , cb_state      :: any()
                , client_id     :: client_id()
                , config        :: consumer_config()
                , socket_pid    :: pid()
@@ -131,7 +140,8 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
   _ = erlang:monitor(process, SocketPid),
 
   %% 2. Get options from callback module and merge with Config
-  {ok, CbOptions} = CbMod:init_consumer(Topic, Partition),
+  CbArgs = proplists:get_value(cb_args, Config, []),
+  {ok, CbOptions, CbState} = CbMod:init_consumer(Topic, Partition, CbArgs),
   MinBytes0 = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MinBytes = proplists:get_value(min_bytes, CbOptions, MinBytes0),
   MaxBytes0 = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
@@ -152,7 +162,8 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
     {error, Error} ->
       {stop, {error, Error}, State0};
     {ok, Offset} ->
-      State = State0#state{ socket_pid    = SocketPid
+      State = State0#state{ cb_state      = CbState
+                          , socket_pid    = SocketPid
                           , offset        = Offset
                           , max_wait_time = MaxWaitTime
                           , min_bytes     = MinBytes
@@ -191,8 +202,10 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
           {noreply, State0};
         [_|_] ->
           CbMod = State0#state.cb_mod,
-          CbMod:handle_messages(Topic, Partition, HighWmOffset, Messages),
-          State = State0#state{offset = LastOffset + 1},
+          CbState0 = State0#state.cb_state,
+          {ok, CbState} = CbMod:handle_messages(Topic, Partition, HighWmOffset,
+                                                Messages, CbState0),
+          State = State0#state{cb_state = CbState, offset = LastOffset + 1},
           {ok, NewCorrId} = send_fetch_request(State),
           {noreply, State#state{corr_id = NewCorrId}}
         end

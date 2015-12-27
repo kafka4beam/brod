@@ -84,7 +84,8 @@ all() -> [F || {F, _A} <- module_info(exports),
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
   {ok, Pid} = brod:start_link_client(Client, [{"localhost", 8092} | ?HOSTS],
-                                     _Config = [], _Producers = []),
+                                     _Producers = [], _Consumers = [],
+                                     _Config = []),
   ?assert(is_pid(Pid)),
   _Res = brod_client:get_partitions(Pid, <<"some-unknown-topic">>),
   % auto.create.topics.enabled is 'true' in default spotify/kafka container
@@ -96,7 +97,8 @@ t_skip_unreachable_endpoint(Config) when is_list(Config) ->
 
 t_no_reachable_endpoint(Config) when is_list(Config) ->
   process_flag(trap_exit, true),
-  {ok, Pid} = brod:start_link_client([{"badhost", 9092}], _Producers = []),
+  {ok, Pid} =brod:start_link_client([{"badhost", 9092}],
+                                    _Producers = [], _Consumers = []),
   Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
   ?assertMatch({nxdomain, _Stacktrace}, Reason).
 
@@ -124,7 +126,7 @@ t_metadata_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
   {ok, ClientPid} =
     brod:start_link_client(t_metadata_socket_restart, ?HOSTS,
-                           _Config = [], _Producers = []),
+                           _Producers = [], _Consumers = [], _Config = []),
   SocketPid = ?WAIT({socket_started, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
   ?assert(is_process_alive(SocketPid)),
@@ -157,7 +159,7 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   Partition = 0,
   {ok, Client} =
     brod:start_link_client(t_payload_socket_restart, ?HOSTS,
-                           ClientConfig, [Producer]),
+                           [Producer], [], ClientConfig),
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
   ProduceFun =
     fun() -> brod:produce_sync(Client, ?TOPIC, Partition, <<"k">>, <<"v">>)
@@ -186,7 +188,7 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   ?WAIT({WriterPid, <<"i'm ready">>}, ok, 1000),
   %% kill the payload pid
   exit(PayloadSock, kill),
-  %% socket should be restarted after cooldown timeou
+  %% socket should be restarted after cooldown timeout
   %% and the restart is triggered by producer restart
   %% add 2 seconds more in wait timeout to avoid race
   Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
