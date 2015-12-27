@@ -24,11 +24,15 @@
 -module(brod_producer_SUITE).
 -compile(export_all).
 
+-behaviour(brod_consumer).
+
+-export([ init_consumer/3
+        , handle_messages/5
+        ]).
+
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("brod/src/brod_int.hrl").
-
--behaviour(brod_consumer).
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
