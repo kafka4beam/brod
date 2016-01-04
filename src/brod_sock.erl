@@ -35,6 +35,7 @@
         , start/5
         , start_link/5
         , stop/1
+        , debug/2
         ]).
 
 %% system calls support for worker process
@@ -113,6 +114,18 @@ stop(_) ->
 get_tcp_sock(Pid) ->
   call(Pid, get_tcp_sock).
 
+-spec debug(pid(), print | string() | none) -> ok.
+%% @doc Enable/disable debugging on the socket process.
+%%      debug(Pid, pring) prints debug info on stdout
+%%      debug(Pid, File) prints debug info into a File
+%%      debug(Pid, none) stops debugging
+debug(Pid, none) ->
+  system_call(Pid, {debug, no_debug});
+debug(Pid, print) ->
+  system_call(Pid, {debug, {trace, true}});
+debug(Pid, File) when is_list(File) ->
+  system_call(Pid, {debug, {log_to_file, File}}).
+
 %%%_* Internal functions =======================================================
 init(Parent, Host, Port, ClientId, Debug0) ->
   Debug = sys:debug_options(Debug0),
@@ -134,6 +147,18 @@ init(Parent, Host, Port, ClientId, Debug0) ->
       %% exit instead of {error, Reason}
       %% otherwise exit reason will be 'normal'
       exit(Reason)
+  end.
+
+system_call(Pid, Request) ->
+  Mref = erlang:monitor(process, Pid),
+  Ref = erlang:make_ref(),
+  erlang:send(Pid, {system, {self(), Ref}, Request}),
+  receive
+    {Ref, Reply} ->
+      erlang:demonitor(Mref, [flush]),
+      Reply;
+    {'DOWN', Mref, _, _, Reason} ->
+      {error, {sock_down, Reason}}
   end.
 
 call(Pid, Request) ->
@@ -200,7 +225,9 @@ handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
   gen_tcp:close(Sock),
   reply(From, ok),
   ok;
-handle_msg(_Msg, State, Debug) ->
+handle_msg(Msg, State, Debug) ->
+  error_logger:warning_msg("[~p] ~p got unrecognized message: ~p",
+                          [?MODULE, self(), Msg]),
   ?MODULE:loop(State, Debug).
 
 safe_send(Pid, Msg) ->
