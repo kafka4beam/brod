@@ -51,34 +51,39 @@
                          | min_bytes
                          | max_bytes
                          | max_wait_time
-                         | sleep_timeout.
+                         | sleep_timeout
+                         | prefetch_count.
 
 %% behaviour definition
 -callback init_consumer( Topic     :: topic()
                        , Partition :: partition()
                        , CbArgs    :: any()) ->
-  {ok, CbOptions :: [{consumer_option(), any()}], CbState :: any()}.
+  {ok, CbState :: any(), CbOptions :: [{consumer_option(), any()}]}.
 
 -callback handle_messages( Topic        :: topic()
                          , Partition    :: partition()
                          , HighWmOffset :: integer()
                          , Messages     :: [#message{}]
                          , CbState      :: any()) ->
-  {ok, NewCbState :: any()}.
+  {ok, NewCbState :: any()} |
+  {ok, NewCbState :: any(), NewCbOptions :: [{consumer_option(), any()}]}.
 
--record(state, { cb_mod        :: atom()
-               , cb_state      :: any()
-               , client_id     :: client_id()
-               , config        :: consumer_config()
-               , socket_pid    :: pid()
-               , topic         :: binary()
-               , partition     :: integer()
-               , offset        :: integer()
-               , max_wait_time :: integer()
-               , min_bytes     :: integer()
-               , max_bytes     :: integer()
-               , sleep_timeout :: integer()
-               , corr_id       :: corr_id()
+-record(state, { cb_mod         :: atom()
+               , cb_state       :: any()
+               , cb_pending     :: [reference()]
+               , cb_pending_cnt :: integer()
+               , client_id      :: client_id()
+               , config         :: consumer_config()
+               , socket_pid     :: pid()
+               , topic          :: binary()
+               , partition      :: integer()
+               , offset         :: integer()
+               , max_wait_time  :: integer()
+               , min_bytes      :: integer()
+               , max_bytes      :: integer()
+               , sleep_timeout  :: integer()
+               , prefetch_count :: integer()
+               , corr_id        :: corr_id()
                }).
 
 -define(DEFAULT_OFFSET, -1).
@@ -86,6 +91,7 @@
 -define(DEFAULT_MAX_BYTES, 1048576).  % 1 MB
 -define(DEFAULT_MAX_WAIT_TIME, 1000). % 1 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
+-define(DEFAULT_PREFETCH_COUNT, 1).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
@@ -121,11 +127,13 @@ debug(Pid, File) when is_list(File) ->
 
 init({CbMod, ClientId, Topic, Partition, Config}) ->
   self() ! init_socket,
-  {ok, #state{ cb_mod    = CbMod
-             , client_id = ClientId
-             , topic     = Topic
-             , partition = Partition
-             , config    = Config
+  {ok, #state{ cb_mod         = CbMod
+             , cb_pending     = []
+             , cb_pending_cnt = 0
+             , client_id      = ClientId
+             , topic          = Topic
+             , partition      = Partition
+             , config         = Config
              }}.
 
 handle_info(init_socket, #state{ cb_mod    = CbMod
@@ -141,7 +149,7 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
 
   %% 2. Get options from callback module and merge with Config
   CbArgs = proplists:get_value(cb_args, Config, []),
-  {ok, CbOptions, CbState} = CbMod:init_consumer(Topic, Partition, CbArgs),
+  {ok, CbState, CbOptions} = CbMod:init_consumer(Topic, Partition, CbArgs),
   MinBytes0 = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MinBytes = proplists:get_value(min_bytes, CbOptions, MinBytes0),
   MaxBytes0 = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
@@ -154,21 +162,26 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
     proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
   SleepTimeout =
     proplists:get_value(sleep_timeout, CbOptions, SleepTimeout0),
+  PrefetchCount0 =
+    proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
+  PrefetchCount =
+    proplists:get_value(prefetch_count, CbOptions, PrefetchCount0),
   Offset0 = proplists:get_value(offset, Config, ?DEFAULT_OFFSET),
   Offset1 = proplists:get_value(offset, CbOptions, Offset0),
 
-  %% 3. Retrive valid starting offset
+  %% 3. Retrieve valid starting offset
   case get_valid_offset(SocketPid, Offset1, Topic, Partition) of
     {error, Error} ->
       {stop, {error, Error}, State0};
     {ok, Offset} ->
-      State = State0#state{ cb_state      = CbState
-                          , socket_pid    = SocketPid
-                          , offset        = Offset
-                          , max_wait_time = MaxWaitTime
-                          , min_bytes     = MinBytes
-                          , max_bytes     = MaxBytes
-                          , sleep_timeout = SleepTimeout
+      State = State0#state{ cb_state       = CbState
+                          , socket_pid     = SocketPid
+                          , offset         = Offset
+                          , max_wait_time  = MaxWaitTime
+                          , min_bytes      = MinBytes
+                          , max_bytes      = MaxBytes
+                          , sleep_timeout  = SleepTimeout
+                          , prefetch_count = PrefetchCount
                           },
       %% 4. Start consuming
       {ok, CorrId} = send_fetch_request(State),
@@ -190,7 +203,7 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
       %% 2) call CbMod:handle_error for errors we can not handle
       %%    it can for example bump max_bytes option or skip a message
       %% 3) stop if CbMod:handle_error is not defined
-      {stop, {broker_error, ErrorCode}, State0};
+      {stop, {broker_error, brod_kafka_errors:desc(ErrorCode)}, State0};
     false ->
       SleepTimeout = State0#state.sleep_timeout,
       case Messages of
@@ -202,20 +215,80 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
           {noreply, State0};
         [_|_] ->
           CbMod = State0#state.cb_mod,
-          CbState0 = State0#state.cb_state,
-          {ok, CbState} = CbMod:handle_messages(Topic, Partition, HighWmOffset,
-                                                Messages, CbState0),
-          State = State0#state{cb_state = CbState, offset = LastOffset + 1},
-          {ok, NewCorrId} = send_fetch_request(State),
-          {noreply, State#state{corr_id = NewCorrId}}
+          CbState = State0#state.cb_state,
+          F = fun() ->
+                  Res = CbMod:handle_messages(Topic, Partition,HighWmOffset,
+                                              Messages, CbState),
+                  exit({shutdown, Res})
+              end,
+          {_, Ref} = erlang:spawn_monitor(F),
+          CbPending = [Ref | State0#state.cb_pending],
+          CbPendingCnt = State0#state.cb_pending_cnt + 1,
+          State1 = State0#state{ offset = LastOffset + 1
+                               , cb_pending = CbPending
+                               , cb_pending_cnt = CbPendingCnt},
+          {ok, State} = maybe_send_fetch_request(State1),
+          {noreply, State}
         end
   end;
+%% handle obsolete fetch responses in case we got new offset from callback
+handle_info({msg, Pid, CorrId1, _R},
+            #state{corr_id = CorrId2, socket_pid = Pid} = State)
+  when CorrId1 < CorrId2 ->
+  error_logger:info_msg("~p ~p Dropping obsolete fetch response with corr_id = ~p",
+                        [?MODULE, self(), CorrId1]),
+  {noreply, State};
 handle_info(?SEND_FETCH_REQUEST, State) ->
   {ok, CorrId} = send_fetch_request(State),
   {noreply, State#state{corr_id = CorrId}};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
+%% callback completed
+handle_info({'DOWN', MRef, process, Pid, Reason},
+            #state{cb_pending = CbPending0} = State0) ->
+  case lists:member(MRef, CbPending0) of
+    true ->
+      CbPending = lists:delete(MRef, CbPending0),
+      CbPendingCnt = State0#state.cb_pending_cnt - 1,
+      case Reason of
+        {shutdown, {ok, CbState}} ->
+          State = State0#state{ cb_pending = CbPending
+                              , cb_pending_cnt = CbPendingCnt
+                              , cb_state = CbState},
+          {noreply, State};
+        {shutdown, {ok, CbState, NewCbOptions}} ->
+          MinBytes = proplists:get_value(min_bytes,NewCbOptions,
+                                         State0#state.min_bytes),
+          MaxBytes = proplists:get_value(max_bytes, NewCbOptions,
+                                         State0#state.max_bytes),
+          MaxWaitTime = proplists:get_value(max_wait_time, NewCbOptions,
+                                            State0#state.max_wait_time),
+          SleepTimeout = proplists:get_value(sleep_timeout, NewCbOptions,
+                                             State0#state.sleep_timeout),
+          PrefetchCount = proplists:get_value(prefetch_count, NewCbOptions,
+                                              State0#state.prefetch_count),
+          Offset = proplists:get_value(offset, NewCbOptions,
+                                       State0#state.offset),
+          State = State0#state{ cb_pending = CbPending
+                              , cb_pending_cnt = CbPendingCnt
+                              , cb_state = CbState
+                              , offset = Offset
+                              , min_bytes = MinBytes
+                              , max_bytes = MaxBytes
+                              , max_wait_time = MaxWaitTime
+                              , sleep_timeout = SleepTimeout
+                              , prefetch_count = PrefetchCount},
+          %% TODO: call get_valid_offset? what to do if it fails?
+          {noreply, State};
+        Other ->
+          {stop, {callback_error, Other}, State0}
+      end;
+    false ->
+      error_logger:warning_msg("Unexpected 'DOWN' in ~p ~p from ~p, reason: ~p",
+                               [?MODULE, self(), Pid, Reason]),
+      {noreply, State0}
+  end;
 handle_info(Info, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
                           [?MODULE, self(), State#state.client_id, Info]),
@@ -251,6 +324,15 @@ get_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
   case Offsets of
     [Offset] -> {ok, Offset};
     []       -> {error, no_available_offsets}
+  end.
+
+maybe_send_fetch_request(State) ->
+  case State#state.cb_pending_cnt >= State#state.prefetch_count of
+    true ->
+      {ok, State};
+    false ->
+      {ok, CorrId} = send_fetch_request(State),
+      {ok, State#state{corr_id = CorrId}}
   end.
 
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
