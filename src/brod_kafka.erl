@@ -55,7 +55,7 @@ parse_stream(<<Size:32/?INT,
   Response = decode(ApiKey, Bin),
   parse_stream(Tail, [{CorrId, Response} | Acc], Requests);
 parse_stream(Bin, Acc, _Requests) ->
-  {Bin, Acc}.
+  {Bin, lists:reverse(Acc)}.
 
 encode(ClientId, CorrId, Request) ->
   Header = header(api_key(Request), ClientId, CorrId),
