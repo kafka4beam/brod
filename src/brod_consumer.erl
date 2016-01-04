@@ -216,8 +216,13 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
           {noreply, State0#state{cb_state = NewCbState}};
         {ok, NewCbState, NewCbOptions} ->
           {ok, State} = update_cb_options(NewCbOptions, State0),
+          OldOffset = State0#state.offset,
+          NewOffset0 = State#state.offset,
+          SocketPid = State#state.socket_pid,
+          {ok, NewOffset} = maybe_get_valid_offset(SocketPid, OldOffset,
+                                                   NewOffset0, Topic, Partition),
           erlang:send_after(?ERROR_COOLDOWN, self(), ?SEND_FETCH_REQUEST),
-          {noreply, State#state{cb_state = NewCbState}};
+          {noreply, State#state{cb_state = NewCbState, offset = NewOffset}};
         stop ->
           {stop, Error, State0};
         Other ->
@@ -276,9 +281,18 @@ handle_info({'DOWN', MRef, process, Pid, Reason},
           {noreply, State};
         {shutdown, {ok, CbState, NewCbOptions}} ->
           {ok, State1} = update_cb_options(NewCbOptions, State0),
+          OldOffset = State0#state.offset,
+          NewOffset0 = State1#state.offset,
+          SocketPid = State1#state.socket_pid,
+          Topic = State1#state.topic,
+          Partition = State1#state.partition,
+          {ok, NewOffset} = maybe_get_valid_offset(SocketPid, OldOffset,
+                                                   NewOffset0, Topic,
+                                                   Partition),
           State = State1#state{ cb_pending = CbPending
                               , cb_pending_cnt = CbPendingCnt
-                              , cb_state = CbState},
+                              , cb_state = CbState
+                              , offset = NewOffset},
           {noreply, State};
         Other ->
           {stop, {callback_error, Other}, State0}
@@ -310,6 +324,16 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%%_* Internal Functions =======================================================
+maybe_get_valid_offset(_SocketPid, Offset, Offset, _Topic, _Partition) ->
+  {ok, Offset};
+maybe_get_valid_offset(SocketPid, _OldOffset, NewOffset, Topic, Partition) ->
+  case get_valid_offset(SocketPid, NewOffset, Topic, Partition) of
+    {ok, Offset} ->
+      {ok, Offset};
+    {error, no_available_offsets} ->
+      %% use new offset in this case and let the client handle the issue later
+      {ok, NewOffset}
+  end.
 
 get_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
   Request = #offset_request{ topic = Topic
