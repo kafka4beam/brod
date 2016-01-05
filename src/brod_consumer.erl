@@ -267,17 +267,20 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
 %% callback completed
-handle_info({'DOWN', MRef, process, Pid, Reason},
-            #state{cb_pending = CbPending0} = State0) ->
+handle_info({'DOWN', MRef, process, Pid, Reason}, State0) ->
+  CbPending0 = State0#state.cb_pending,
+  CbPendingCnt0 = State0#state.cb_pending_cnt,
+  IsBlocked = CbPendingCnt0 > State0#state.prefetch_count,
   case lists:member(MRef, CbPending0) of
     true ->
       CbPending = lists:delete(MRef, CbPending0),
-      CbPendingCnt = State0#state.cb_pending_cnt - 1,
+      CbPendingCnt = CbPendingCnt0 - 1,
       case Reason of
         {shutdown, {ok, CbState}} ->
-          State = State0#state{ cb_pending = CbPending
-                              , cb_pending_cnt = CbPendingCnt
-                              , cb_state = CbState},
+          State1 = State0#state{ cb_pending = CbPending
+                               , cb_pending_cnt = CbPendingCnt
+                               , cb_state = CbState},
+          {ok, State} = maybe_unblock(IsBlocked, State1),
           {noreply, State};
         {shutdown, {ok, CbState, NewCbOptions}} ->
           {ok, State1} = update_cb_options(NewCbOptions, State0),
@@ -289,10 +292,11 @@ handle_info({'DOWN', MRef, process, Pid, Reason},
           {ok, NewOffset} = maybe_get_valid_offset(SocketPid, OldOffset,
                                                    NewOffset0, Topic,
                                                    Partition),
-          State = State1#state{ cb_pending = CbPending
-                              , cb_pending_cnt = CbPendingCnt
-                              , cb_state = CbState
-                              , offset = NewOffset},
+          State1 = State1#state{ cb_pending = CbPending
+                               , cb_pending_cnt = CbPendingCnt
+                               , cb_state = CbState
+                               , offset = NewOffset},
+          {ok, State} = maybe_unblock(IsBlocked, State1),
           {noreply, State};
         Other ->
           {stop, {callback_error, Other}, State0}
@@ -349,8 +353,13 @@ get_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
     []       -> {error, no_available_offsets}
   end.
 
+maybe_unblock(false, State) ->
+  {ok, State};
+maybe_unblock(true, State) ->
+  maybe_send_fetch_request(State).
+
 maybe_send_fetch_request(State) ->
-  case State#state.cb_pending_cnt >= State#state.prefetch_count of
+  case State#state.cb_pending_cnt > State#state.prefetch_count of
     true ->
       {ok, State};
     false ->

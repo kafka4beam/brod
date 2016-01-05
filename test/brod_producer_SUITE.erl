@@ -28,6 +28,7 @@
 
 -export([ init_consumer/3
         , handle_messages/5
+        , handle_error/4
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -56,7 +57,7 @@ init_per_testcase(Case, Config) ->
     Pid_   -> brod:stop_client(Pid_)
   end,
   {ok, Pid} = brod:start_link_client(Client, ?HOSTS, [Producer], [Consumer], []),
-  [{client_pid, Pid} | Config].
+  [{client, Client}, {client_pid, Pid} | Config].
 
 end_per_testcase(_Case, Config) ->
   Pid = ?config(client_pid),
@@ -85,7 +86,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 init_consumer(_Topic, _Partition, CTPid) ->
   Ref = make_ref(),
   CTPid ! {init_consumer, Ref},
-  {ok, [], #state{ref = Ref, ct_pid = CTPid}}.
+  {ok, #state{ref = Ref, ct_pid = CTPid}, [{offset, -1}]}.
 
 handle_messages(_Topic, _Partition, _HighWmOffset, Messages, State) ->
   Ref = State#state.ref,
@@ -95,15 +96,19 @@ handle_messages(_Topic, _Partition, _HighWmOffset, Messages, State) ->
                 end, Messages),
   {ok, State}.
 
+handle_error(Topic, Partition, Error, _State) ->
+  ct:fail({?MODULE, ?LINE, Topic, Partition, Error}).
+
 t_produce_sync(Config) when is_list(Config) ->
+  Client = ?config(client),
   Partition = 0,
   Ref = receive
           {init_consumer, Ref_} -> Ref_
         end,
   {K1, V1} = make_unique_kv(),
-  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, K1, V1),
   {K2, V2} = make_unique_kv(),
-  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K2, V2),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, K2, V2),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
@@ -118,12 +123,13 @@ t_produce_sync(Config) when is_list(Config) ->
   ReceiveFun(K2, V2).
 
 t_produce_async(Config) when is_list(Config) ->
+  Client = ?config(client),
   Partition = 0,
   Ref = receive
           {init_consumer, Ref_} -> Ref_
         end,
   {Key, Value} = make_unique_kv(),
-  {ok, CallRef} = brod:produce(t_produce_async, ?TOPIC, Partition, Key, Value),
+  {ok, CallRef} = brod:produce(Client, ?TOPIC, Partition, Key, Value),
   receive
     #brod_produce_reply{ call_ref = CallRef
                        , result   = brod_produce_req_acked
@@ -141,7 +147,7 @@ t_produce_async(Config) when is_list(Config) ->
   end.
 
 t_producer_topic_not_found(Config) when is_list(Config) ->
-  Client = t_producer_topic_not_found,
+  Client = ?config(client),
   ?assertEqual({error, {producer_not_found, <<"no-such-topic">>}},
                brod:produce(Client, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
 
