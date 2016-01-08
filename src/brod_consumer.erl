@@ -238,18 +238,17 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
           erlang:send_after(SleepTimeout, self(), ?SEND_FETCH_REQUEST),
           {noreply, State0};
         [_|_] ->
-          F = fun() ->
-                  Res = CbMod:handle_messages(Topic, Partition,HighWmOffset,
-                                              Messages, CbState),
-                  exit({shutdown, Res})
+          F = fun(CbStateIn) ->
+                  CbMod:handle_messages(Topic, Partition, HighWmOffset,
+                                        Messages, CbStateIn)
               end,
-          {_, Ref} = erlang:spawn_monitor(F),
-          CbPending = [Ref | State0#state.cb_pending],
+          CbPending = State0#state.cb_pending ++ [F],
           CbPendingCnt = State0#state.cb_pending_cnt + 1,
           State1 = State0#state{ offset = LastOffset + 1
                                , cb_pending = CbPending
                                , cb_pending_cnt = CbPendingCnt},
-          {ok, State} = maybe_send_fetch_request(State1),
+          State2 = maybe_spawn_handle_messages(State1),
+          {ok, State} = maybe_send_fetch_request(State2),
           {noreply, State}
         end
   end;
@@ -267,44 +266,17 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
 %% callback completed
-handle_info({'DOWN', MRef, process, Pid, Reason}, State0) ->
-  CbPending0 = State0#state.cb_pending,
-  CbPendingCnt0 = State0#state.cb_pending_cnt,
-  IsBlocked = CbPendingCnt0 > State0#state.prefetch_count,
-  case lists:member(MRef, CbPending0) of
-    true ->
-      CbPending = lists:delete(MRef, CbPending0),
-      CbPendingCnt = CbPendingCnt0 - 1,
-      case Reason of
-        {shutdown, {ok, CbState}} ->
-          State1 = State0#state{ cb_pending = CbPending
-                               , cb_pending_cnt = CbPendingCnt
-                               , cb_state = CbState},
-          {ok, State} = maybe_unblock(IsBlocked, State1),
-          {noreply, State};
-        {shutdown, {ok, CbState, NewCbOptions}} ->
-          {ok, State1} = update_cb_options(NewCbOptions, State0),
-          OldOffset = State0#state.offset,
-          NewOffset0 = State1#state.offset,
-          SocketPid = State1#state.socket_pid,
-          Topic = State1#state.topic,
-          Partition = State1#state.partition,
-          {ok, NewOffset} = maybe_fetch_valid_offset(SocketPid, OldOffset,
-                                                     NewOffset0, Topic,
-                                                     Partition),
-          State1 = State1#state{ cb_pending = CbPending
-                               , cb_pending_cnt = CbPendingCnt
-                               , cb_state = CbState
-                               , offset = NewOffset},
-          {ok, State} = maybe_unblock(IsBlocked, State1),
-          {noreply, State};
-        Other ->
-          {stop, {callback_error, Other}, State0}
-      end;
-    false ->
-      error_logger:warning_msg("Unexpected 'DOWN' in ~p ~p from ~p, reason: ~p",
-                               [?MODULE, self(), Pid, Reason]),
-      {noreply, State0}
+handle_info({handle_messages_result, Ref, Result}, State) ->
+  [Ref | Rest] = State#state.cb_pending, %% assert
+  CbPendingCnt = State#state.cb_pending_cnt - 1,
+  NewState = State#state{ cb_pending     = Rest
+                        , cb_pending_cnt = CbPendingCnt
+                        },
+  case Result of
+    {ok, HandleMessagesResult} ->
+      do_handle_messages_result(HandleMessagesResult, NewState);
+    {error, Reason} ->
+      {stop, {callback_crash, Reason}, NewState}
   end;
 handle_info(Info, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
@@ -328,6 +300,50 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %%%_* Internal Functions =======================================================
+
+do_handle_messages_result({ok, CbState}, State0) ->
+  State1 = State0#state{cb_state = CbState},
+  State2 = maybe_spawn_handle_messages(State1),
+  {ok, State} = maybe_send_fetch_request(State2),
+  {noreply, State};
+do_handle_messages_result({ok, CbState, CbOptions}, State0) ->
+  {ok, State1} = update_cb_options(CbOptions, State0),
+  OldOffset = State0#state.offset,
+  NewOffset0 = State1#state.offset,
+  SocketPid = State1#state.socket_pid,
+  Topic = State1#state.topic,
+  Partition = State1#state.partition,
+  {ok, NewOffset} = maybe_fetch_valid_offset(SocketPid, OldOffset,
+                                             NewOffset0, Topic,
+                                             Partition),
+  State2 = State1#state{ cb_state = CbState
+                       , offset   = NewOffset
+                       },
+  State3 = maybe_spawn_handle_messages(State2),
+  {ok, State} = maybe_send_fetch_request(State3),
+  {noreply, State};
+do_handle_messages_result({error, Reason}, State) ->
+  {stop, {callback_error, Reason}, State}.
+
+maybe_spawn_handle_messages(#state{ cb_pending = [F | Rest]
+                                  , cb_state = CbState
+                                  } = State) when is_function(F) ->
+  Ref = make_ref(),
+  Parent = self(),
+  spawn_link(
+    fun() ->
+      Result =
+        try
+          {ok, F(CbState)}
+        catch C : E ->
+          {error, {C, E, erlang:get_stacktrace()}}
+        end,
+      Parent ! {handle_messages_result, Ref, Result}
+    end),
+  State#state{cb_pending = [Ref | Rest]};
+maybe_spawn_handle_messages(State) ->
+  State.
+
 maybe_fetch_valid_offset(_SocketPid, Offset, Offset, _Topic, _Partition) ->
   {ok, Offset};
 maybe_fetch_valid_offset(SocketPid, _OldOffset, NewOffset, Topic, Partition) ->
@@ -353,18 +369,13 @@ fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
     []       -> {error, no_available_offsets}
   end.
 
-maybe_unblock(false, State) ->
-  {ok, State};
-maybe_unblock(true, State) ->
-  maybe_send_fetch_request(State).
-
 maybe_send_fetch_request(State) ->
-  case State#state.cb_pending_cnt > State#state.prefetch_count of
+  case State#state.cb_pending_cnt < State#state.prefetch_count of
     true ->
-      {ok, State};
-    false ->
       {ok, CorrId} = send_fetch_request(State),
-      {ok, State#state{corr_id = CorrId}}
+      {ok, State#state{corr_id = CorrId}};
+    false ->
+      {ok, State}
   end.
 
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
@@ -380,7 +391,7 @@ do_debug(Pid, Debug) ->
   {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
 
-update_cb_options(NewCbOptions, State) ->
+update_cb_options(NewCbOptions, #state{offset = OldOffset} = State) ->
   MinBytes = proplists:get_value(min_bytes,NewCbOptions,
                                  State#state.min_bytes),
   MaxBytes = proplists:get_value(max_bytes, NewCbOptions,
@@ -393,12 +404,25 @@ update_cb_options(NewCbOptions, State) ->
                                       State#state.prefetch_count),
   Offset = proplists:get_value(offset, NewCbOptions,
                                State#state.offset),
-  {ok, State#state{ offset = Offset
-                  , min_bytes = MinBytes
-                  , max_bytes = MaxBytes
-                  , max_wait_time = MaxWaitTime
-                  , sleep_timeout = SleepTimeout
-                  , prefetch_count = PrefetchCount}}.
+  State1 = State#state{ offset = Offset
+                      , min_bytes = MinBytes
+                      , max_bytes = MaxBytes
+                      , max_wait_time = MaxWaitTime
+                      , sleep_timeout = SleepTimeout
+                      , prefetch_count = PrefetchCount
+                      },
+  %% in case callback wants to fetch from a new offset, rest fetch buffer
+  NewState =
+    case OldOffset =/= Offset of
+      true  ->
+        State1;
+      false ->
+        State1#state{ cb_pending = []
+                    , cb_pending_cnt = 0
+                    , corr_id = undefined
+                    }
+    end,
+  {ok, NewState}.
 
 %%%_* Tests ====================================================================
 
