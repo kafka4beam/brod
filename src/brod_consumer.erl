@@ -76,6 +76,12 @@
   {ok, NewCbState :: any(), NewCbOptions :: [{consumer_option(), any()}]} |
   stop.
 
+-define(KAFKA_ERROR(Timestamp, ErrorCode, HandleErrorFun),
+        {Timestamp, ErrorCode, HandleErrorFun}).
+
+-type last_error() :: undefined
+                    | ?KAFKA_ERROR(erlang:timestamp(), error_code(), function()).
+
 -record(state, { cb_mod         :: atom()
                , cb_state       :: any()
                , cb_pending     :: [reference()]
@@ -92,6 +98,7 @@
                , sleep_timeout  :: integer()
                , prefetch_count :: integer()
                , corr_id        :: corr_id()
+               , last_error     :: last_error()
                }).
 
 -define(DEFAULT_OFFSET, -1).
@@ -100,9 +107,9 @@
 -define(DEFAULT_MAX_WAIT_TIME, 1000). % 1 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
+-define(ERROR_COOLDOWN, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
--define(ERROR_COOLDOWN, 1000).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientId, Topic, Partition, Config, [])
@@ -206,36 +213,19 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
                      , last_offset = LastOffset
                      , messages = Messages} = PM,
   CbMod = State0#state.cb_mod,
-  CbState = State0#state.cb_state,
   case brod_kafka:is_error(ErrorCode) of
     true ->
+      Now = os:timestamp(),
       Error = {ErrorCode, brod_kafka_errors:desc(ErrorCode)},
-      case CbMod:handle_error(Topic, Partition, Error, CbState) of
-        {ok, NewCbState} ->
-          erlang:send_after(?ERROR_COOLDOWN, self(), ?SEND_FETCH_REQUEST),
-          {noreply, State0#state{cb_state = NewCbState}};
-        {ok, NewCbState, NewCbOptions} ->
-          {ok, State} = update_cb_options(NewCbOptions, State0),
-          OldOffset = State0#state.offset,
-          NewOffset0 = State#state.offset,
-          SocketPid = State#state.socket_pid,
-          {ok, NewOffset} = maybe_fetch_valid_offset(SocketPid, OldOffset,
-                                                     NewOffset0, Topic, Partition),
-          erlang:send_after(?ERROR_COOLDOWN, self(), ?SEND_FETCH_REQUEST),
-          {noreply, State#state{cb_state = NewCbState, offset = NewOffset}};
-        stop ->
-          {stop, Error, State0};
-        Other ->
-          {stop, {callback_error, Other, Error}, State0}
-      end;
+      F = fun(CbStateIn) ->
+            CbMod:handle_error(Topic, Partition, Error, CbStateIn)
+          end,
+      State = State0#state{last_error = ?KAFKA_ERROR(Now, ErrorCode, F)},
+      maybe_handle_last_error(State);
     false ->
-      SleepTimeout = State0#state.sleep_timeout,
       case Messages of
-        [] when SleepTimeout =:= 0 ->
-          {ok, NewCorrId} = send_fetch_request(State0),
-          {noreply, State0#state{corr_id = NewCorrId}};
-        [] when SleepTimeout > 0 ->
-          erlang:send_after(SleepTimeout, self(), ?SEND_FETCH_REQUEST),
+        [] ->
+          maybe_delay_fetch_request(State0#state.sleep_timeout),
           {noreply, State0};
         [_|_] ->
           F = fun(CbStateIn) ->
@@ -266,17 +256,17 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
 %% callback completed
-handle_info({handle_messages_result, Ref, Result}, State) ->
-  [Ref | Rest] = State#state.cb_pending, %% assert
-  CbPendingCnt = State#state.cb_pending_cnt - 1,
-  NewState = State#state{ cb_pending     = Rest
-                        , cb_pending_cnt = CbPendingCnt
-                        },
-  case Result of
-    {ok, HandleMessagesResult} ->
-      do_handle_messages_result(HandleMessagesResult, NewState);
+handle_info({handle_messages_result, Ref, Result}, State0) ->
+  [Ref | Rest] = State0#state.cb_pending, %% assert
+  CbPendingCnt = State0#state.cb_pending_cnt - 1,
+  State1 = State0#state{ cb_pending     = Rest
+                       , cb_pending_cnt = CbPendingCnt
+                       },
+  case do_handle_messages_result(Result, State1) of
+    {ok, State} ->
+      maybe_handle_last_error(State);
     {error, Reason} ->
-      {stop, {callback_crash, Reason}, NewState}
+      {stop, Reason, State0}
   end;
 handle_info(Info, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
@@ -301,11 +291,50 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%%_* Internal Functions =======================================================
 
+maybe_delay_fetch_request(SleepTime) when SleepTime > 0 ->
+  erlang:send_after(SleepTime, self(), ?SEND_FETCH_REQUEST);
+maybe_delay_fetch_request(_SleepTime) ->
+  self() ! ?SEND_FETCH_REQUEST.
+
+%% @private Handle error only when there is no pending handle_messages
+maybe_handle_last_error(#state{ cb_pending = []
+                              , cb_state   = CbState
+                              , last_error = ?KAFKA_ERROR(Ts, ErrorCode, F)
+                              , topic      = Topic
+                              , partition  = Partition
+                              } = State0) ->
+  ErrorAge = timer:now_diff(os:timestamp(), Ts) div 1000,
+  NextFetchTime = max(?ERROR_COOLDOWN - ErrorAge, 0),
+  case F(CbState) of
+    {ok, NewCbState} ->
+      maybe_delay_fetch_request(NextFetchTime),
+      {noreply, State0#state{ cb_state   = NewCbState
+                            , last_error = undefined
+                            }};
+    {ok, NewCbState, NewCbOptions} ->
+      {ok, State} = update_cb_options(NewCbOptions, State0),
+      OldOffset = State0#state.offset,
+      NewOffset0 = State#state.offset,
+      SocketPid = State#state.socket_pid,
+      {ok, NewOffset} = maybe_fetch_valid_offset(SocketPid, OldOffset,
+                                                 NewOffset0, Topic, Partition),
+      maybe_delay_fetch_request(NextFetchTime),
+      {noreply, State#state{ cb_state   = NewCbState
+                           , offset     = NewOffset
+                           , last_error = undefined
+                           }};
+    stop ->
+      {stop, ErrorCode, State0};
+    Other ->
+      {stop, {callback_error, Other}, State0}
+  end;
+maybe_handle_last_error(#state{} = State) ->
+  {noreply, State}.
+
 do_handle_messages_result({ok, CbState}, State0) ->
   State1 = State0#state{cb_state = CbState},
   State2 = maybe_spawn_handle_messages(State1),
-  {ok, State} = maybe_send_fetch_request(State2),
-  {noreply, State};
+  maybe_send_fetch_request(State2);
 do_handle_messages_result({ok, CbState, CbOptions}, State0) ->
   {ok, State1} = update_cb_options(CbOptions, State0),
   OldOffset = State0#state.offset,
@@ -320,10 +349,9 @@ do_handle_messages_result({ok, CbState, CbOptions}, State0) ->
                        , offset   = NewOffset
                        },
   State3 = maybe_spawn_handle_messages(State2),
-  {ok, State} = maybe_send_fetch_request(State3),
-  {noreply, State};
-do_handle_messages_result({error, Reason}, State) ->
-  {stop, {callback_error, Reason}, State}.
+  maybe_send_fetch_request(State3);
+do_handle_messages_result({error, Reason}, _State) ->
+  {error, {callback_error, Reason}}.
 
 maybe_spawn_handle_messages(#state{ cb_pending = [F | Rest]
                                   , cb_state = CbState
@@ -332,12 +360,7 @@ maybe_spawn_handle_messages(#state{ cb_pending = [F | Rest]
   Parent = self(),
   spawn_link(
     fun() ->
-      Result =
-        try
-          {ok, F(CbState)}
-        catch C : E ->
-          {error, {C, E, erlang:get_stacktrace()}}
-        end,
+      Result = F(CbState),
       Parent ! {handle_messages_result, Ref, Result}
     end),
   State#state{cb_pending = [Ref | Rest]};
@@ -369,14 +392,17 @@ fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
     []       -> {error, no_available_offsets}
   end.
 
-maybe_send_fetch_request(State) ->
+%% @private Send new fetch request if no pending error.
+maybe_send_fetch_request(#state{last_error = undefined} = State) ->
   case State#state.cb_pending_cnt < State#state.prefetch_count of
     true ->
       {ok, CorrId} = send_fetch_request(State),
       {ok, State#state{corr_id = CorrId}};
     false ->
       {ok, State}
-  end.
+  end;
+maybe_send_fetch_request(#state{} = State) ->
+  {ok, State}.
 
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
   Request = #fetch_request{ topic = State#state.topic
