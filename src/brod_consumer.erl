@@ -97,7 +97,7 @@
                , max_bytes      :: integer()
                , sleep_timeout  :: integer()
                , prefetch_count :: integer()
-               , corr_id        :: corr_id()
+               , last_corr_id   :: corr_id()
                , last_error     :: last_error()
                }).
 
@@ -201,9 +201,9 @@ handle_info(init_socket, #state{ cb_mod    = CbMod
                           },
       %% 4. Start consuming
       {ok, CorrId} = send_fetch_request(State),
-      {noreply, State#state{corr_id = CorrId}}
+      {noreply, State#state{last_corr_id = CorrId}}
   end;
-handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
+handle_info({msg, _Pid, CorrId, R}, #state{last_corr_id = CorrId} = State0) ->
   #fetch_response{topics = [TopicFetchData]} = R,
   #topic_fetch_data{ topic = Topic
                    , partitions = [PM]} = TopicFetchData,
@@ -244,14 +244,15 @@ handle_info({msg, _Pid, CorrId, R}, #state{corr_id = CorrId} = State0) ->
   end;
 %% handle obsolete fetch responses in case we got new offset from callback
 handle_info({msg, Pid, CorrId1, _R},
-            #state{corr_id = CorrId2, socket_pid = Pid} = State)
+            #state{last_corr_id = CorrId2, socket_pid = Pid} = State)
   when CorrId1 < CorrId2 ->
-  error_logger:info_msg("~p ~p Dropping obsolete fetch response with corr_id = ~p",
-                        [?MODULE, self(), CorrId1]),
+  error_logger:info_msg("~p ~p Dropping obsolete fetch response "
+                       "with corr_id = ~p",
+                       [?MODULE, self(), CorrId1]),
   {noreply, State};
 handle_info(?SEND_FETCH_REQUEST, State) ->
   {ok, CorrId} = send_fetch_request(State),
-  {noreply, State#state{corr_id = CorrId}};
+  {noreply, State#state{last_corr_id = CorrId}};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
   {stop, {socket_down, Reason}, State};
@@ -397,7 +398,7 @@ maybe_send_fetch_request(#state{last_error = undefined} = State) ->
   case State#state.cb_pending_cnt < State#state.prefetch_count of
     true ->
       {ok, CorrId} = send_fetch_request(State),
-      {ok, State#state{corr_id = CorrId}};
+      {ok, State#state{last_corr_id = CorrId}};
     false ->
       {ok, State}
   end;
@@ -445,7 +446,7 @@ update_cb_options(NewCbOptions, #state{offset = OldOffset} = State) ->
       false ->
         State1#state{ cb_pending = []
                     , cb_pending_cnt = 0
-                    , corr_id = undefined
+                    , last_corr_id = undefined
                     }
     end,
   {ok, NewState}.
