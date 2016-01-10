@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -270,20 +270,22 @@ get_leader(Topic, Partition, State) ->
   end.
 
 connect(Topic, Partition, #state{client_id = ClientId, debug = Dbg} = State) ->
-  case fetch_leader_broker_metadata(Topic, Partition, State) of
-    {ok, #broker_metadata{host = H, port = P, node_id = LeaderId}} ->
-      {ok, Pid} = brod_sock:start_link(self(), H, P, ClientId, Dbg),
-      Socket = #socket{pid = Pid, host = H, port = P, node_id = LeaderId},
+  case fetch_metadata(Topic, Partition, State) of
+    {ok, Leader, LeaderPartitions} ->
+      #broker_metadata{host = Host, port = Port, node_id = LeaderId} = Leader,
+      {ok, Pid} = brod_sock:start_link(self(), Host, Port, ClientId, Dbg),
+      Socket = #socket{pid = Pid, host = Host, port = Port, node_id = LeaderId},
       Sockets = [Socket | State#state.sockets],
-      Leaders = [{{Topic, Partition}, Pid} | State#state.leaders],
+      NewLeader = lists:map(fun({T, P}) -> {{T, P}, Pid} end, LeaderPartitions),
+      Leaders = lists:append(NewLeader, State#state.leaders),
       {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}};
     {error, Reason} ->
       {error, Reason}
   end.
 
--spec fetch_leader_broker_metadata(topic(), partition(), #state{}) ->
+-spec fetch_metadata(topic(), partition(), #state{}) ->
         {ok, #broker_metadata{}} | {error, any()}.
-fetch_leader_broker_metadata(Topic, Partition, State) ->
+fetch_metadata(Topic, Partition, State) ->
   {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
   case lists:keyfind(Topic, #topic_metadata.name, Topics) of
@@ -294,8 +296,12 @@ fetch_leader_broker_metadata(Topic, Partition, State) ->
         false ->
           {error, {unknown_partition, Topic, Partition}};
         #partition_metadata{leader_id = LeaderId} ->
-          Broker = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-          {ok, #broker_metadata{} = Broker}
+          Leader = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+          LeaderPartitions =
+            [{T, P} || #topic_metadata{name = T, partitions = Ps} <- Topics,
+                       #partition_metadata{leader_id = Lid, id = P} <- Ps,
+                       Lid =:= LeaderId],
+          {ok, Leader, LeaderPartitions}
       end
   end.
 
