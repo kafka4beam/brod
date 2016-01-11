@@ -284,7 +284,7 @@ connect(Topic, Partition, #state{client_id = ClientId, debug = Dbg} = State) ->
   end.
 
 -spec fetch_metadata(topic(), partition(), #state{}) ->
-        {ok, #broker_metadata{}} | {error, any()}.
+        {ok, #broker_metadata{}, [{topic(), partition()}]} | {error, any()}.
 fetch_metadata(Topic, Partition, State) ->
   {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
   #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
