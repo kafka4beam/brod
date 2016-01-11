@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,13 +17,30 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--record(message, { offset     :: integer()
+-type topic()      :: binary().
+-type partition()  :: non_neg_integer().
+-type offset()     :: integer().
+-type error_code() :: atom() | integer().
+
+-record(message, { offset     :: offset()
                  , crc        :: integer()
                  , magic_byte :: integer()
                  , attributes :: integer()
                  , key        :: binary()
                  , value      :: binary()
                  }).
+
+-record(message_set, { topic          :: topic()
+                     , partition      :: partition()
+                     , high_wm_offset :: integer()
+                     , messages       :: [#message{}]
+                     }).
+
+-record(brod_fetch_error, { topic      :: topic()
+                          , partition  :: partition()
+                          , error_code :: error_code()
+                          , error_desc :: string()
+                          }).
 
 -type client_id() :: atom().
 

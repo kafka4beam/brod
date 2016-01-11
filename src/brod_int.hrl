@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -44,17 +44,12 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
--type error_code() :: atom() | integer().
-
 -type hostname()        :: string().
 -type portnum()         :: pos_integer().
 -type endpoint()        :: {hostname(), portnum()}.
 -type cluster_id()      :: atom().
 -type leader_id()       :: non_neg_integer().
--type topic()           :: binary().
--type partition()       :: non_neg_integer().
 -type corr_id()         :: 0..?MAX_CORR_ID.
--type offset()          :: integer().
 -type kafka_kv()        :: {binary(), binary()}.
 -type client_config()   :: brod_client_config().
 -type producer_config() :: brod_producer_config().
@@ -165,6 +160,8 @@
 -record(fetch_response, {topics = [#topic_fetch_data{}]}).
 
 -define(undef, undefined).
+
+-define(DEFAULT_CLIENT_ID, brod).
 
 -endif. % include brod_int.hrl
 

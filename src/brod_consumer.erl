@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -86,7 +86,7 @@
                , cb_state       :: any()
                , cb_pending     :: [reference()]
                , cb_pending_cnt :: integer()
-               , client_id      :: client_id()
+               , client_pid     :: pid()
                , config         :: consumer_config()
                , socket_pid     :: pid()
                , topic          :: binary()
@@ -112,16 +112,16 @@
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
 %%%_* APIs =====================================================================
-%% @equiv start_link(ClientId, Topic, Partition, Config, [])
--spec start_link(atom(), client_id(), topic(), partition(),
+%% @equiv start_link(ClientPid, Topic, Partition, Config, [])
+-spec start_link(atom(), pid(), topic(), partition(),
                  consumer_config()) -> {ok, pid()} | {error, any()}.
-start_link(CbMod, ClientId, Topic, Partition, Config) ->
-  start_link(CbMod, ClientId, Topic, Partition, Config, []).
+start_link(CbMod, ClientPid, Topic, Partition, Config) ->
+  start_link(CbMod, ClientPid, Topic, Partition, Config, []).
 
--spec start_link(atom(), client_id(), topic(), partition(),
+-spec start_link(atom(), pid(), topic(), partition(),
                  consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
-start_link(CbMod, ClientId, Topic, Partition, Config, Debug) ->
-  Args = {CbMod, ClientId, Topic, Partition, Config},
+start_link(CbMod, ClientPid, Topic, Partition, Config, Debug) ->
+  Args = {CbMod, ClientPid, Topic, Partition, Config},
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
@@ -141,26 +141,26 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({CbMod, ClientId, Topic, Partition, Config}) ->
+init({CbMod, ClientPid, Topic, Partition, Config}) ->
   self() ! init_socket,
   {ok, #state{ cb_mod         = CbMod
              , cb_pending     = []
              , cb_pending_cnt = 0
-             , client_id      = ClientId
+             , client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
              , config         = Config
              }}.
 
-handle_info(init_socket, #state{ cb_mod    = CbMod
-                               , client_id = ClientId
-                               , topic     = Topic
-                               , partition = Partition
-                               , config    = Config
+handle_info(init_socket, #state{ cb_mod     = CbMod
+                               , client_pid = ClientPid
+                               , topic      = Topic
+                               , partition  = Partition
+                               , config     = Config
                                } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
   {ok, SocketPid} =
-    brod_client:get_leader_connection(ClientId, Topic, Partition),
+    brod_client:get_leader_connection(ClientPid, Topic, Partition),
   _ = erlang:monitor(process, SocketPid),
 
   %% 2. Get options from callback module and merge with Config
@@ -270,8 +270,8 @@ handle_info({handle_messages_result, Ref, Result}, State0) ->
       {stop, Reason, State0}
   end;
 handle_info(Info, State) ->
-  error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
-                          [?MODULE, self(), State#state.client_id, Info]),
+  error_logger:warning_msg("~p [~p] got unexpected info: ~p",
+                          [?MODULE, self(), Info]),
   {noreply, State}.
 
 handle_call(stop, _From, State) ->
@@ -280,8 +280,8 @@ handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast(Cast, State) ->
-  error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",
-                          [?MODULE, self(), State#state.client_id, Cast]),
+  error_logger:warning_msg("~p [~p] got unexpected cast: ~p",
+                          [?MODULE, self(), Cast]),
   {noreply, State}.
 
 terminate(_Reason, _State) ->

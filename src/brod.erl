@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -46,6 +46,10 @@
         , produce_sync/3
         , produce_sync/5
         , sync_produce_request/1
+        ]).
+
+%% consumer api
+-export([ start_link_consumer/4
         ]).
 
 %% Management and testing API
@@ -206,6 +210,17 @@ sync_produce_request(CallRef) ->
                               , result   = brod_produce_req_acked
                               },
   brod_producer:sync_produce_request(Expect).
+
+-spec start_link_consumer( pid() | atom()
+                         , [endpoint()]
+                         , topic()
+                         , consumer_config()) ->
+                             {ok, pid()} | {error, any()}.
+start_link_consumer(Subscriber, Endpoints, Topic, Options0) ->
+  Options = [ {cb_mod, brod_consumer_impl}
+            , {cb_args, Subscriber} | Options0],
+  Consumer = {Topic, Options},
+  brod_client:start_link(Endpoints, [], [Consumer], []).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.

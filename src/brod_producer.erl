@@ -52,7 +52,7 @@
 -type config() :: producer_config().
 
 -record(state,
-        { client_id   :: client_id()
+        { client_pid  :: pid()
         , topic       :: topic()
         , partition   :: partition()
         , config      :: config()
@@ -96,10 +96,10 @@
 %%     congestion on wire), try to accumulate small requests into one kafka
 %%     message set as much as possible but not exceeding message_set_bytes_limit
 %% @end
--spec start_link(client_id(), topic(), partition(), producer_config()) ->
+-spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
-start_link(ClientId, Topic, Partition, Config) when is_atom(ClientId) ->
-  gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
+start_link(ClientPid, Topic, Partition, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
@@ -144,26 +144,26 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({ClientId, Topic, Partition, Config}) ->
+init({ClientPid, Topic, Partition, Config}) ->
   self() ! init_socket,
-  {ok, #state{ client_id = ClientId
-             , topic     = Topic
-             , partition = Partition
-             , config    = Config
+  {ok, #state{ client_pid = ClientPid
+             , topic      = Topic
+             , partition  = Partition
+             , config     = Config
              }}.
 
-handle_info(init_socket, #state{ client_id = ClientId
-                               , topic     = Topic
-                               , partition = Partition
-                               , config    = Config0
+handle_info(init_socket, #state{ client_pid = ClientPid
+                               , topic      = Topic
+                               , partition  = Partition
+                               , config     = Config0
                                } = State) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
   {ok, SockPid} =
-    brod_client:get_leader_connection(ClientId, Topic, Partition),
+    brod_client:get_leader_connection(ClientPid, Topic, Partition),
   _ = erlang:monitor(process, SockPid),
 
   %% 2. Register self() to client.
-  ok = brod_client:register_producer(ClientId, Topic, Partition),
+  ok = brod_client:register_producer(ClientPid, Topic, Partition),
 
   %% 3. Create the producing buffer
   {BufferLimit, Config1} = take_config(partition_buffer_limit,

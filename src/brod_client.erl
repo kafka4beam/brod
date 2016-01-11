@@ -31,6 +31,7 @@
         , get_partitions/2
         , get_producer/3
         , register_producer/3
+        , start_link/4
         , start_link/5
         , stop/1
         ]).
@@ -71,6 +72,7 @@
         , producers_sup :: pid() | undefined
         , consumers_sup :: pid() | undefined
         , config        :: client_config()
+        , producers_tab :: ets:tab()
         }).
 
 %%%_* APIs =====================================================================
@@ -85,6 +87,14 @@ start_link(ClientId, Endpoints, Producers, Consumers, Config)
   Args = {ClientId, Endpoints, Producers, Consumers, Config},
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
+-spec start_link( [endpoint()]
+                , [{topic(), producer_config()}]
+                , [{topic(), consumer_config()}]
+                , client_config()) -> {ok, pid()}.
+start_link(Endpoints, Producers, Consumers, Config) ->
+  Args = {Endpoints, Producers, Consumers, Config},
+  gen_server:start_link(?MODULE, Args, []).
+
 -spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
@@ -97,9 +107,9 @@ stop(Client) ->
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.
 %% @end
--spec get_leader_connection(client_id(), topic(), partition()) -> {ok, pid()}.
-get_leader_connection(ClientId, Topic, Partition) ->
-  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
+-spec get_leader_connection(client(), topic(), partition()) -> {ok, pid()}.
+get_leader_connection(Client, Topic, Partition) ->
+  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
   #metadata_response{ brokers = Brokers
                     , topics  = [TopicMetadata]
                     } = Metadata,
@@ -111,13 +121,13 @@ get_leader_connection(ClientId, Topic, Partition) ->
                      , leader_id  = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
   brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {ClientId, Topic, Partition}}),
+  LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
-  get_connection(ClientId, Host, Port).
+  get_connection(Client, Host, Port).
 
--spec get_metadata(client_id(), topic()) -> {ok, #metadata_response{}}.
+-spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
@@ -189,23 +199,23 @@ get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
     {error, client_down}
   end.
 
--spec find_producer(client_id(), topic(), partition()) ->
+-spec find_producer(client(), topic(), partition()) ->
                        {ok, pid()} | {error, Reason} when
         Reason :: {producer_not_found, topic()}
                 | {producer_not_found, topic(), partition()}
                 | {producer_down, noproc}
                 | client_down.
-find_producer(ClientId, Topic, Partition) ->
+find_producer(Client, Topic, Partition) ->
   try
-    SupPid = gen_server:call(ClientId, get_producers_sup_pid, infinity),
+    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
     brod_producers_sup:find_producer(SupPid, Topic, Partition)
   catch exit : {noproc, _} ->
     {error, client_down}
   end.
 
-find_consumer(ClientId, Topic, Partition) ->
+find_consumer(Client, Topic, Partition) ->
   try
-    SupPid = gen_server:call(ClientId, get_consumers_sup_pid, infinity),
+    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
     brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
   catch exit : {noproc, _} ->
     {error, client_down}
@@ -215,19 +225,30 @@ find_consumer(ClientId, Topic, Partition) ->
 
 init({ClientId, Endpoints, Producers, Consumers, Config}) ->
   erlang:process_flag(trap_exit, true),
-  ets:new(?ETS(ClientId), [named_table, protected, {read_concurrency, true}]),
+  Tab = ets:new(?ETS(ClientId),
+                [named_table, protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id = ClientId
-             , endpoints = Endpoints
-             , config    = Config
+  {ok, #state{ client_id     = ClientId
+             , endpoints     = Endpoints
+             , config        = Config
+             , producers_tab = Tab
+             }};
+init({Endpoints, Producers, Consumers, Config}) ->
+  erlang:process_flag(trap_exit, true),
+  Tab = ets:new(producers_tab, [protected, {read_concurrency, true}]),
+  self() ! {init, Producers, Consumers},
+  {ok, #state{ client_id     = ?DEFAULT_CLIENT_ID
+             , endpoints     = Endpoints
+             , config        = Config
+             , producers_tab = Tab
              }}.
 
 handle_info({init, Producers, Consumers}, State) ->
   ClientId = State#state.client_id,
   Endpoints = State#state.endpoints,
   Sock = start_metadata_socket(ClientId, Endpoints),
-  ProducersSupPid = maybe_start_producers_sup(ClientId, Producers),
-  ConsumersSupPid = maybe_start_consumers_sup(ClientId, Consumers),
+  {ok, ProducersSupPid} = maybe_start_producers_sup(Producers),
+  {ok, ConsumersSupPid} = maybe_start_consumers_sup(Consumers),
   {noreply, State#state{ meta_sock     = Sock
                        , producers_sup = ProducersSupPid
                        , consumers_sup = ConsumersSupPid
@@ -281,8 +302,7 @@ handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast({register_producer, Topic, Partition, ProducerPid},
-            #state{client_id = ClientId} = State) ->
-  Tab = ?ETS(ClientId),
+            #state{producers_tab = Tab} = State) ->
   ets:insert(Tab, ?PRODUCER(Topic, Partition, ProducerPid)),
   {noreply, State};
 handle_cast(Cast, State) ->
@@ -458,17 +478,15 @@ start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
     {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
   end.
 
-maybe_start_producers_sup(_ClientId, []) ->
-  undefined;
-maybe_start_producers_sup(ClientId, Producers) ->
-  {ok, Pid} = brod_producers_sup:start_link(ClientId, Producers),
-  Pid.
+maybe_start_producers_sup([]) ->
+  {ok, undefined};
+maybe_start_producers_sup(Producers) ->
+  brod_producers_sup:start_link(self(), Producers).
 
-maybe_start_consumers_sup(_ClientId, []) ->
-  undefined;
-maybe_start_consumers_sup(ClientId, Consumers) ->
-  {ok, Pid} = brod_consumers_sup:start_link(ClientId, Consumers),
-  Pid.
+maybe_start_consumers_sup([]) ->
+  {ok, undefined};
+maybe_start_consumers_sup(Consumers) ->
+  brod_consumers_sup:start_link(self(), Consumers).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
