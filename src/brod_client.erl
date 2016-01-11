@@ -81,7 +81,7 @@
                 , [endpoint()]
                 , [{topic(), producer_config()}]
                 , [{topic(), consumer_config()}]
-                , client_config()) -> {ok, pid()}.
+                , client_config()) -> {ok, pid()} | {error, any()}.
 start_link(ClientId, Endpoints, Producers, Consumers, Config)
   when is_atom(ClientId) ->
   Args = {ClientId, Endpoints, Producers, Consumers, Config},
@@ -90,7 +90,7 @@ start_link(ClientId, Endpoints, Producers, Consumers, Config)
 -spec start_link( [endpoint()]
                 , [{topic(), producer_config()}]
                 , [{topic(), consumer_config()}]
-                , client_config()) -> {ok, pid()}.
+                , client_config()) -> {ok, pid()} | {error, any()}.
 start_link(Endpoints, Producers, Consumers, Config) ->
   Args = {Endpoints, Producers, Consumers, Config},
   gen_server:start_link(?MODULE, Args, []).

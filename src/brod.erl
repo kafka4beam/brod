@@ -124,9 +124,9 @@ start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
   brod_client:start_link(ClientId, Endpoints, Producers, Consumers, Config).
 
 %% @doc Stop a client.
--spec stop_client(client_id()) -> ok.
-stop_client(ClientId) ->
-  brod_client:stop(ClientId).
+-spec stop_client(client()) -> ok.
+stop_client(Client) ->
+  brod_client:stop(Client).
 
 %% @doc Get all partition numbers of a given topic.
 %% The higher level producers may need the partition numbers to
@@ -151,7 +151,8 @@ get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
--spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
+-spec produce(pid(), binary()) ->
+                 {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
