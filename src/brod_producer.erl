@@ -202,15 +202,15 @@ format_status(_Opt, [_PDict, #state{ data_buffer    = DataBuffer
 %%%_* Internal functions -------------------------------------------------------
 
 %% @private Report only the size of the pending data buffer for each leader.
--spec fmt_data_buffer(data_buffer) ->
+-spec fmt_data_buffer(data_buffer()) ->
         [{leader(), [{topic(), {size, integer()}}]}].
 fmt_data_buffer(Buffer) ->
   [{Leader, [{Topic, {size, dict:size(Dict)}} || {Topic, Dict} <- Topics]}
    || {Leader, Topics} <- Buffer].
 
 %% @private Report only the number of the pending requests in sender's buffer.
--spec fmt_senders_buffer(data_buffer) ->
-        [{leader(), [{topic(), {requests, integer()}}]}].
+-spec fmt_senders_buffer(senders_buffer()) ->
+        [{leader(), {requests, integer()}}].
 fmt_senders_buffer(Dict) ->
   [{Leader, {requests, length(Reqs)}} || {Leader, Reqs} <- dict:to_list(Dict)].
 
