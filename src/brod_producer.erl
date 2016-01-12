@@ -43,7 +43,7 @@
 %% default number of messages sent on wire before block waiting for acks
 -define(DEFAULT_PARITION_ONWIRE_LIMIT, 128).
 %% by default, send 1 MB message-set
--define(DEFAULT_MESSAGE_SET_BYTES_LIMIT, 1048576).
+-define(DEFAULT_MAX_BATCH_SIZE, 1048576).
 %% by default, require acks from all ISR
 -define(DEFAULT_REQUIRED_ACKS, -1).
 %% by default, leader should wait 1 second for replicas to ack
@@ -85,16 +85,16 @@
 %%   partition_buffer_limit(optional, default = 256):
 %%     How many requests (per-partition) can be buffered without blocking the
 %%     caller. The callers are released (by receiving the
-%%     'brod_produce_req_buffered' reply) onece the request is taken into buffer
+%%     'brod_produce_req_buffered' reply) once the request is taken into buffer
 %%     or when the request has been put on wire, then the caller may expect
 %%     a reply 'brod_produce_req_acked' if the request is accepted by kafka
 %%   partition_onwire_limit(optional, default = 128):
 %%     How many requests (per-partition) can be sent to kafka broker
 %%     asynchronously before receiving ACKs from broker.
-%%   message_set_bytes_limit(optional, default = 1M):
+%%   max_batch_size (in bytes, optional, default = 1M):
 %%     In case callers are producing faster than brokers can handle (or
-%%     congestion on wire), try to accumulate small requests into one kafka
-%%     message set as much as possible but not exceeding message_set_bytes_limit
+%%     congestion on wire), try to accumulate small requests into batches
+%%     as much as possible but not exceeding max_batch_size
 %% @end
 -spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
@@ -172,8 +172,8 @@ handle_info(init_socket, #state{ client_pid = ClientPid
   {OnWireLimit, Config2} = take_config(partition_onwire_limit,
                                        ?DEFAULT_PARITION_ONWIRE_LIMIT,
                                        Config1),
-  {MsgSetBytes, Config}  = take_config(message_set_bytes_limit,
-                                       ?DEFAULT_MESSAGE_SET_BYTES_LIMIT,
+  {MaxBatchSize, Config} = take_config(max_batch_size,
+                                       ?DEFAULT_MAX_BATCH_SIZE,
                                        Config2),
   RequiredAcks = get_required_acks(Config),
   AckTimeout = get_ack_timeout(Config),
@@ -191,7 +191,7 @@ handle_info(init_socket, #state{ client_pid = ClientPid
       end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                    MsgSetBytes, SendFun),
+                                    MaxBatchSize, SendFun),
   %% 4. Update state.
   NewState = State#state{ sock_pid = SockPid
                         , buffer   = Buffer

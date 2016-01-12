@@ -37,23 +37,24 @@
 -type call() :: brod_call_ref().
 
 -record(req,
-        { call :: call()
-        , data :: data()
+        { call  :: call()
+        , data  :: data()
+        , bytes :: integer()
         }).
 
 -type send_fun() :: fun(([{binary(), binary()}]) -> {ok, corr_id()}).
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -record(buf,
-        { buffer_limit = 1        :: pos_integer()
-        , onwire_limit = 1        :: pos_integer()
-        , msgset_bytes = 1        :: pos_integer()
-        , send_fun     = ?ERR_FUN :: send_fun()
-        , buffer_count = 0        :: non_neg_integer()
-        , onwire_count = 0        :: non_neg_integer()
-        , pending      = []       :: [#req{}]
-        , buffer       = []       :: [#req{}]
-        , onwire       = []       :: [{corr_id(), [call()]}]
+        { buffer_limit   = 1        :: pos_integer()
+        , onwire_limit   = 1        :: pos_integer()
+        , max_batch_size = 1        :: pos_integer()
+        , send_fun       = ?ERR_FUN :: send_fun()
+        , buffer_count   = 0        :: non_neg_integer()
+        , onwire_count   = 0        :: non_neg_integer()
+        , pending        = []       :: [#req{}]
+        , buffer         = []       :: [#req{}]
+        , onwire         = []       :: [{corr_id(), [call()]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -64,14 +65,14 @@
 %% For more detail: @see brod_producer:start_link/4
 %% @end
 -spec new(pos_integer(), pos_integer(), pos_integer(), send_fun()) -> buf().
-new(BufferLimit, OnWireLimit, MsgSetBytes, SendFun) ->
+new(BufferLimit, OnWireLimit, MaxBatchSize, SendFun) ->
   true = (BufferLimit > 0), %% assert
   true = (OnWireLimit > 0), %% assert
-  true = (MsgSetBytes > 0), %% assert
-  #buf{ buffer_limit = BufferLimit
-      , onwire_limit = OnWireLimit
-      , msgset_bytes = MsgSetBytes
-      , send_fun     = SendFun
+  true = (MaxBatchSize > 0), %% assert
+  #buf{ buffer_limit   = BufferLimit
+      , onwire_limit   = OnWireLimit
+      , max_batch_size = MaxBatchSize
+      , send_fun       = SendFun
       }.
 
 %% @doc Append a new produce request to pending list.
@@ -80,8 +81,9 @@ new(BufferLimit, OnWireLimit, MsgSetBytes, SendFun) ->
 %% @end
 -spec maybe_send(buf(), call(), binary(), binary()) -> buf().
 maybe_send(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
-  Req = #req{ call = CallRef
-            , data = fun() -> {Key, Value} end
+  Req = #req{ call  = CallRef
+            , data  = fun() -> {Key, Value} end
+            , bytes = size(Key) + size(Value)
             },
   NewBuf = Buf#buf{pending = Pending ++ [Req]},
   do_maybe_send(maybe_buffer(NewBuf)).
@@ -143,19 +145,19 @@ take_reqs_to_send(#buf{ pending = []
 take_reqs_to_send(#buf{buffer = []} = Buf, Acc, AccLength, AccBytes) ->
   %% no more requests in buffer, take one from pending
   take_reqs_to_send(maybe_buffer(Buf), Acc, AccLength, AccBytes);
-take_reqs_to_send(#buf{ msgset_bytes = MsgSetBytes
+take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
                       , onwire_limit = OnWireLimit
                       } = Buf, Acc, AccLength, AccBytes)
- when AccLength >= OnWireLimit orelse AccBytes >= MsgSetBytes ->
+ when AccLength >= OnWireLimit orelse AccBytes >= MaxBatchSize ->
   %% reached max number of requests on wire
   %% or reached max bytes in one message set
   {lists:reverse(Acc), Buf};
-take_reqs_to_send(#buf{ msgset_bytes = MsgSetBytes
+take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
                       , buffer_count = BufferCount
                       , buffer       = [Req | Rest]
                       } = Buf, Acc, AccLength, AccBytes) ->
-  ReqBytes = req_bytes(Req),
-  case AccBytes =:= 0 orelse AccBytes + ReqBytes =< MsgSetBytes of
+  ReqBytes = Req#req.bytes,
+  case AccBytes =:= 0 orelse AccBytes + ReqBytes =< MaxBatchSize of
     true ->
       NewBuf = Buf#buf{ buffer_count = BufferCount - 1
                       , buffer       = Rest
@@ -164,10 +166,6 @@ take_reqs_to_send(#buf{ msgset_bytes = MsgSetBytes
     false ->
       {lists:reverse(Acc), Buf}
   end.
-
-req_bytes(#req{data = F}) ->
-  {Key, Value} = F(),
-  size(Key) + size(Value).
 
 %% @private Take pending requests into buffer and reply 'buffered' to caller.
 -spec maybe_buffer(buf()) -> buf().
