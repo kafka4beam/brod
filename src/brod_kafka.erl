@@ -55,7 +55,7 @@ parse_stream(<<Size:32/?INT,
   CorrIdDict = dict:erase(CorrId, CorrIdDict0),
   parse_stream(Tail, [{CorrId, Response} | Acc], CorrIdDict);
 parse_stream(Bin, Acc, CorrIdDict) ->
-  {Bin, Acc, CorrIdDict}.
+  {Bin, lists:reverse(Acc), CorrIdDict}.
 
 encode(ClientId, CorrId, Request) ->
   Header = header(api_key(Request), ClientId, CorrId),
