@@ -53,7 +53,7 @@
         , onwire_count   = 0        :: non_neg_integer()
         , pending        = []       :: [#req{}]
         , buffer         = []       :: [#req{}]
-        , onwire         = []       :: [{corr_id(), [brod_call_ref()]}]
+        , onwire         = []       :: [{corr_id(), [#req{}]}]
         }).
 
 -opaque buf() :: #buf{}.
