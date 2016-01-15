@@ -109,23 +109,27 @@ stop(Client) ->
 %% @end
 -spec get_leader_connection(client(), topic(), partition()) -> {ok, pid()}.
 get_leader_connection(Client, Topic, Partition) ->
-  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
-  #metadata_response{ brokers = Brokers
-                    , topics  = [TopicMetadata]
-                    } = Metadata,
-  #topic_metadata{ error_code = TopicErrorCode
-                 , partitions = Partitions
-                 } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-  #partition_metadata{ error_code = PartitionEC
-                     , leader_id  = LeaderId} =
-    lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
-  #broker_metadata{host = Host, port = Port} =
-    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+  case brod_client:get_metadata(Client, Topic) of
+    {ok, Metadata} ->
+      #metadata_response{ brokers = Brokers
+                        , topics  = [TopicMetadata]
+                        } = Metadata,
+      #topic_metadata{ error_code = TopicErrorCode
+                     , partitions = Partitions
+                     } = TopicMetadata,
+      brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
+      #partition_metadata{ error_code = PartitionEC
+                         , leader_id  = LeaderId} =
+        lists:keyfind(Partition, #partition_metadata.id, Partitions),
+      brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
+      LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
+      #broker_metadata{host = Host, port = Port} =
+        lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
 
-  get_connection(Client, Host, Port).
+      get_connection(Client, Host, Port);
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
