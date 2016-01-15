@@ -306,7 +306,7 @@ parse_message_set(Bin) ->
 parse_message_set(<<>>, []) ->
   {0, []};
 parse_message_set(<<>>, [Msg | _] = Acc) ->
-  {Msg#message.offset, lists:reverse(Acc)};
+  {Msg#kafka_message.offset, lists:reverse(Acc)};
 parse_message_set(<<Offset:64/?INT,
                     MessageSize:32/?INT,
                     MessageBin:MessageSize/binary,
@@ -319,16 +319,16 @@ parse_message_set(<<Offset:64/?INT,
   {Key, ValueBin} = parse_bytes(KeySize, KV),
   <<ValueSize:32/?INT, Value0/binary>> = ValueBin,
   {Value, <<>>} = parse_bytes(ValueSize, Value0),
-  Msg = #message{ offset     = Offset
-                , crc        = Crc
-                , magic_byte = MagicByte
-                , attributes = Attributes
-                , key        = Key
-                , value      = Value},
+  Msg = #kafka_message{ offset     = Offset
+                      , crc        = Crc
+                      , magic_byte = MagicByte
+                      , attributes = Attributes
+                      , key        = Key
+                      , value      = Value},
   parse_message_set(Bin, [Msg | Acc]);
 parse_message_set(_Bin, [Msg | _] = Acc) ->
   %% the last message in response was sent only partially, dropping
-  {Msg#message.offset, lists:reverse(Acc)};
+  {Msg#kafka_message.offset, lists:reverse(Acc)};
 parse_message_set(_Bin, []) ->
   %% The only case when I managed to get there is when max_bytes option
   %% is too small to for a whole message.

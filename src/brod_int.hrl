@@ -19,6 +19,12 @@
 
 -include("brod.hrl").
 
+-type topic()      :: kafka_topic().
+-type partition()  :: kafka_partition().
+-type offset()     :: kafka_offset().
+-type error_code() :: kafka_error_code().
+-type client_id()  :: brod_client_id().
+
 %% Error code macros, mirrored (including TODOs) from:
 %% https://github.com/apache/kafka/blob/0.8.2/clients/src/
 %%       main/java/org/apache/kafka/common/protocol/Errors.java
@@ -150,7 +156,7 @@
                             , error_code     :: error_code()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
-                            , messages       :: [#message{}]
+                            , messages       :: [#kafka_message{}]
                             }).
 
 -record(topic_fetch_data, { topic      :: topic()

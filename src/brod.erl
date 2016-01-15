@@ -256,7 +256,7 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, [#message{}]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
@@ -264,7 +264,7 @@ fetch(Hosts, Topic, Partition, Offset) ->
 -spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
-               {ok, [#message{}]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
