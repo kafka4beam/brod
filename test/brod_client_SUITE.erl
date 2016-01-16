@@ -33,7 +33,6 @@
 -define(HOSTS, [{?HOST, ?PORT}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
-
 -define(WAIT(PATTERN, RESULT, TIMEOUT),
         fun() ->
           receive
@@ -194,7 +193,7 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   ?WAIT({'DOWN', Mref, process, WriterPid, normal}, ok, 5000),
   {ok, SockPid_} = brod_client:get_connection(Client, ?HOST, ?PORT),
   ?assertEqual(SockPid, SockPid_),
-  {ok, ProducerPid} = brod_client:find_producer(Client, ?TOPIC, Partition),
+  {ok, ProducerPid} = brod_client:get_producer(Client, ?TOPIC, Partition),
   ?assert(is_process_alive(ProducerPid)),
   ok = ProduceFun().
 

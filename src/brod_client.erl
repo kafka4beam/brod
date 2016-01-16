@@ -68,6 +68,22 @@
 -define(CONSUMER(Topic, Partition, Pid),
         {?CONSUMER_KEY(Topic, Partition), Pid}).
 
+-type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
+                              | ?CONSUMER_KEY(topic(), partition()).
+
+-type get_producer_error() :: client_down
+                            | {producer_down, noproc}
+                            | {producer_not_found, topic()}
+                            | {producer_not_found, topic(), partition()}.
+
+-type get_consumer_error() :: client_down
+                            | {consumer_down, noproc}
+                            | {consumer_not_found, topic()}
+                            | {consumer_not_found, topic(), partition()}.
+
+-type get_worker_error() :: get_producer_error()
+                          | get_consumer_error().
+
 -record(sock,
         { endpoint :: endpoint()
         , sock_pid :: pid() | dead_socket()
@@ -81,7 +97,7 @@
         , producers_sup :: pid() | undefined
         , consumers_sup :: pid() | undefined
         , config        :: client_config()
-        , producers_tab :: ets:tab()
+        , workers_tab   :: ets:tab()
         }).
 
 %%%_* APIs =====================================================================
@@ -189,86 +205,15 @@ register_consumer(Client, Topic, Partition) ->
 
 %% @doc Get producer of the given topic-partition.
 -spec get_producer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, Reason}
-          when Reason :: client_down
-                       | {producer_down, noproc}
-                       | {producer_not_found, topic()}
-                       | {producer_not_found, topic(), partition()}.
+        {ok, pid()} | {error, get_producer_error()}.
 get_producer(Client, Topic, Partition) ->
   get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)).
 
 %% @doc Get consumer of the given topic-parition.
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
 get_consumer(Client, Topic, Partition) ->
   get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
-
-get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
-  case erlang:process_info(ClientPid, [registered_name]) of
-    [{registered_name, []}] ->
-      find_partition_worker(ClientPid, Key);
-    [{registered_name, ClientId}] ->
-      get_partition_worker(ClientId, Key)
-  end;
-get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
-  try
-    case ets:lookup(?ETS(ClientId), Key) of
-      [] ->
-        %% not yet registered, 2 possible reasons:
-        %% 1. caller is too fast, producers/consumers are starting up
-        %%    make a synced call all the way down the supervision tree
-        %%    to the partition producer sup should resolve the race
-        %% 2. bad argument, no such worker started, supervisors should know
-        find_partition_worker(ClientId, Key);
-      [?PRODUCER(_Topic, _Partition, Pid)] ->
-        {ok, Pid};
-      [?CONSUMER(_Topic, _Partition, Pid)] ->
-        {ok, Pid}
-    end
-  catch error:badarg ->
-    {error, client_down}
-  end.
-
--spec find_partition_worker(client(), Key) ->
-        {ok, pid()} | {error, Reason} when
-        Key :: {producer | consumer, topic(), partition()},
-        Reason :: client_down
-                | {consumer_down, noproc}
-                | {consumer_not_found, topic()}
-                | {consumer_not_found, topic(), partition()}
-                | {producer_down, noproc}
-                | {producer_not_found, topic()}
-                | {producer_not_found, topic(), partition()}.
-find_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) ->
-  find_producer(Client, Topic, Partition);
-find_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)) ->
-  find_consumer(Client, Topic, Partition).
-
--spec find_producer(client(), topic(), partition()) ->
-                       {ok, pid()} | {error, Reason} when
-        Reason :: {producer_not_found, topic()}
-                | {producer_not_found, topic(), partition()}
-                | {producer_down, noproc}
-                | client_down.
-find_producer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
-    brod_producers_sup:find_producer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
-  end.
-
--spec find_consumer(client(), topic(), partition()) ->
-                      {ok, pid()} | {error, Reason} when
-        Reason :: {consumer_not_found, topic()}
-                | {consumer_not_found, topic(), partition()}
-                | {consumer_down, noproc}
-                | client_down.
-find_consumer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
-    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
-  end.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -277,19 +222,19 @@ init({ClientId, Endpoints, Producers, Consumers, Config}) ->
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id     = ClientId
-             , endpoints     = Endpoints
-             , config        = Config
-             , producers_tab = Tab
+  {ok, #state{ client_id   = ClientId
+             , endpoints   = Endpoints
+             , config      = Config
+             , workers_tab = Tab
              }};
 init({Endpoints, Producers, Consumers, Config}) ->
   erlang:process_flag(trap_exit, true),
-  Tab = ets:new(producers_tab, [protected, {read_concurrency, true}]),
+  Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id     = ?DEFAULT_CLIENT_ID
-             , endpoints     = Endpoints
-             , config        = Config
-             , producers_tab = Tab
+  {ok, #state{ client_id   = ?DEFAULT_CLIENT_ID
+             , endpoints   = Endpoints
+             , config      = Config
+             , workers_tab = Tab
              }}.
 
 handle_info({init, Producers, Consumers}, State) ->
@@ -335,6 +280,8 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+handle_call(get_workers_table, _From, State) ->
+  {reply, State#state.workers_tab, State};
 handle_call(get_producers_sup_pid, _From, State) ->
   {reply, State#state.producers_sup, State};
 handle_call(get_consumers_sup_pid, _From, State) ->
@@ -350,7 +297,7 @@ handle_call(stop, _From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast({register, Key, Pid}, #state{producers_tab = Tab} = State) ->
+handle_cast({register, Key, Pid}, #state{workers_tab = Tab} = State) ->
   ets:insert(Tab, {Key, Pid}),
   {noreply, State};
 handle_cast(Cast, State) ->
@@ -383,6 +330,71 @@ terminate(Reason, #state{ client_id     = ClientId
     end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
+
+-spec get_partition_worker(client(), partition_worker_key()) ->
+        {ok, pid()} | {error, get_worker_error()}.
+get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
+  case erlang:process_info(ClientPid, [registered_name]) of
+    [{registered_name, []}] ->
+      %% This is a client process started without registered name
+      %% have to call the process to get the producer/consumer worker
+      %% process registration table.
+      Ets = gen_server:call(ClientPid, get_workers_table, infinity),
+      lookup_partition_worker(ClientPid, Ets, Key);
+    [{registered_name, ClientId}] ->
+      get_partition_worker(ClientId, Key)
+  end;
+get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
+  lookup_partition_worker(ClientId, ?ETS(ClientId), Key).
+
+-spec lookup_partition_worker(client(), ets:tab(), partition_worker_key()) ->
+        {ok, pid()} | { error, get_worker_error()}.
+lookup_partition_worker(Client, Ets, Key) ->
+  try
+    case ets:lookup(Ets, Key) of
+      [] ->
+        %% not yet registered, 2 possible reasons:
+        %% 1. caller is too fast, producers/consumers are starting up
+        %%    make a synced call all the way down the supervision tree
+        %%    to the partition producer sup should resolve the race
+        %% 2. bad argument, no such worker started, supervisors should know
+        find_partition_worker(Client, Key);
+      [?PRODUCER(_Topic, _Partition, Pid)] ->
+        {ok, Pid};
+      [?CONSUMER(_Topic, _Partition, Pid)] ->
+        {ok, Pid}
+    end
+  catch error:badarg ->
+    %% ets table no exist (or closed)
+    {error, client_down}
+  end.
+
+-spec find_partition_worker(client(), partition_worker_key()) ->
+        {ok, pid()} | {error, get_worker_error()}.
+find_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) ->
+  find_producer(Client, Topic, Partition);
+find_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)) ->
+  find_consumer(Client, Topic, Partition).
+
+-spec find_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_producer_error()}.
+find_producer(Client, Topic, Partition) ->
+  try
+    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
+    brod_producers_sup:find_producer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
+
+-spec find_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
+find_consumer(Client, Topic, Partition) ->
+  try
+    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
+    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
 
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
