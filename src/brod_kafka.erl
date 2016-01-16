@@ -463,8 +463,51 @@ parse_oc_response_partition(<<Partition:32/?INT,
                                                , error_code = ErrorCode},
   {Partition, Bin}.
 
-of_request_body(_) -> ok.
-of_response(_) -> ok.
+%%%_* offset fetch request -----------------------------------------------------
+of_request_body(#offset_fetch_request{} = R) ->
+  ConsumerGroup = R#offset_fetch_request.consumer_group,
+  ConsumerGroupSize = erlang:size(ConsumerGroup),
+  Topics = R#offset_fetch_request.topics,
+  TopicsCount = erlang:length(Topics),
+  Acc = <<ConsumerGroupSize:16/?INT,
+          ConsumerGroup/binary,
+          TopicsCount:32/?INT>>,
+  of_request_topics(Topics, Acc).
+
+of_request_topics([], Acc) ->
+  Acc;
+of_request_topics([T | Topics], Acc0) ->
+  Topic = T#offset_fetch_request_topic.topic,
+  Size = erlang:size(Topic),
+  Partitions = T#offset_fetch_request_topic.partitions,
+  PartitionsBin = lists:foldl(
+                    fun(P, Acc_) ->
+                        <<Acc_/binary, P:32/?INT>>
+                    end, <<>>, Partitions),
+  PartitionsCount = erlang:length(Partitions),
+  Acc = <<Acc0/binary, Size:16/?INT, Topic/binary,
+          PartitionsCount:32/?INT, PartitionsBin/binary>>,
+  of_request_topics(Topics, Acc).
+
+of_response(Bin) ->
+  {Topics, _} = parse_array(Bin, fun parse_of_response_topic/1),
+  #offset_fetch_response{topics = Topics}.
+
+parse_of_response_topic(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
+  {Partitions, Bin} = parse_array(Bin0, fun parse_of_response_partition/1),
+  {#offset_fetch_response_topic{ topic = binary:copy(Name)
+                               , partitions = Partitions}, Bin}.
+
+parse_of_response_partition(<<Partition:32/?INT,
+                              Offset:64/?INT,
+                              MetadataSize:16/?INT,
+                              Metadata:MetadataSize/binary,
+                              ErrorCode:16/?INT,
+                              Bin/binary>>) ->
+  {#offset_fetch_response_partition{ partition = Partition
+                                   , offset = Offset
+                                   , metadata = Metadata
+                                   , error_code = ErrorCode}, Bin}.
 
 %%%_* Tests ====================================================================
 
