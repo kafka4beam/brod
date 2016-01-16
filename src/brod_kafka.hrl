@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -29,8 +29,15 @@
 -define(API_KEY_METADATA,           3).
 -define(API_KEY_OFFSET_COMMIT,      8).
 -define(API_KEY_OFFSET_FETCH,       9).
+-define(API_KEY_GROUP_COORDINATOR, 10).
+-define(API_KEY_JOIN_GROUP,        11).
+-define(API_KEY_HEARTBEAT,         12).
+-define(API_KEY_LEAVE_GROUP,       13).
+-define(API_KEY_SYNC_GROUP,        14).
+-define(API_KEY_DESCRIBE_GROUPS,   15).
+-define(API_KEY_LIST_GROUPS,       16).
 
--type api_key() :: ?API_KEY_PRODUCE..?API_KEY_OFFSET_FETCH.
+-type api_key() :: ?API_KEY_PRODUCE..?API_KEY_LIST_GROUPS.
 
 %% Compression
 -define(COMPRESS_NONE, 0).

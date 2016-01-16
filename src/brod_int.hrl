@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 %% Error code macros, from:
 %% https://github.com/apache/kafka/blob/0.9.0/clients/src/
 %%       main/java/org/apache/kafka/common/protocol/Errors.java
--define(EC_UNKNOWN,                    'UnknownServer').                    % -1
+-define(EC_UNKNOWN,                    'UnknownError').                     % -1
 -define(EC_NONE,                       'no_error').                         %  0
 -define(EC_OFFSET_OUT_OF_RANGE,        'OffsetOutOfRange').                 %  1
 -define(EC_CORRUPT_MESSAGE,            'CorruptMessage').                   %  2
