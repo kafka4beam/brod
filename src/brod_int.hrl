@@ -50,18 +50,19 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
--type hostname()        :: string().
--type portnum()         :: pos_integer().
--type endpoint()        :: {hostname(), portnum()}.
--type cluster_id()      :: atom().
--type leader_id()       :: non_neg_integer().
--type corr_id()         :: 0..?MAX_CORR_ID.
--type kafka_kv()        :: {binary(), binary()}.
--type client_config()   :: brod_client_config().
--type producer_config() :: brod_producer_config().
--type consumer_config() :: brod_consumer_config().
--type client()          :: client_id() | pid().
--type required_acks()   :: -1..1.
+-type hostname()         :: string().
+-type portnum()          :: pos_integer().
+-type endpoint()         :: {hostname(), portnum()}.
+-type cluster_id()       :: atom().
+-type leader_id()        :: non_neg_integer().
+-type corr_id()          :: 0..?MAX_CORR_ID.
+-type kafka_kv()         :: {binary(), binary()}.
+-type client_config()    :: brod_client_config().
+-type producer_config()  :: brod_producer_config().
+-type consumer_config()  :: brod_consumer_config().
+-type consumer_options() :: brod_consumer_config().
+-type client()           :: client_id() | pid().
+-type required_acks()    :: -1..1.
 
 -record(socket, { pid     :: pid()
                 , host    :: string()

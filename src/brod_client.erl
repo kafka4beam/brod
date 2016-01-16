@@ -23,17 +23,22 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ find_producer/3
-        , find_consumer/3
-        , get_connection/3
+-export([ get_connection/3
+        , get_consumer/3
         , get_leader_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
+        , register_consumer/3
         , register_producer/3
         , start_link/4
         , start_link/5
         , stop/1
+        ]).
+
+%% Private export
+-export([ find_producer/3
+        , find_consumer/3
         ]).
 
 -export([ code_change/3
@@ -56,8 +61,12 @@
 -define(ETS(ClientId), ClientId).
 -define(PRODUCER_KEY(Topic, Partition),
         {producer, Topic, Partition}).
+-define(CONSUMER_KEY(Topic, Partition),
+        {consumer, Topic, Partition}).
 -define(PRODUCER(Topic, Partition, Pid),
         {?PRODUCER_KEY(Topic, Partition), Pid}).
+-define(CONSUMER(Topic, Partition, Pid),
+        {?CONSUMER_KEY(Topic, Partition), Pid}).
 
 -record(sock,
         { endpoint :: endpoint()
@@ -159,45 +168,79 @@ get_partitions(Client, Topic) ->
       {error, Reason}
   end.
 
-%% @doc Register self() as a partition producer the pid is registered in an ETS
+%% @doc Register self() as a partition producer. The pid is registered in an ETS
 %% table, then the callers may lookup a producer pid from the table and make
 %% produce requests to the producer process directly.
 %% @end
 -spec register_producer(client(), topic(), partition()) -> ok.
 register_producer(Client, Topic, Partition) ->
   Producer = self(),
-  gen_server:cast(Client, {register_producer, Topic, Partition, Producer}).
+  Key = ?PRODUCER_KEY(Topic, Partition),
+  gen_server:cast(Client, {register, Key, Producer}).
 
-%% @doc Get producer of a given topic-partition.
+%% @doc Register self() as a partition consumer. The pid is registered in an ETS
+%% table, then the callers may lookup a consumer pid from the table ane make
+%% subscribe calls to the process directly.
+%% @end
+register_consumer(Client, Topic, Partition) ->
+  Consumer = self(),
+  Key = ?CONSUMER_KEY(Topic, Partition),
+  gen_server:cast(Client, {register, Key, Consumer}).
+
+%% @doc Get producer of the given topic-partition.
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
                        | {producer_down, noproc}
                        | {producer_not_found, topic()}
                        | {producer_not_found, topic(), partition()}.
-get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
-  case erlang:process_info(ClientPid, registered_name) of
-    {registered_name, ClientId} ->
-      get_producer(ClientId, Topic, Partition);
-    Err when Err =:= [] orelse Err =:= ?undef ->
-      {error, client_down}
+get_producer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)).
+
+%% @doc Get consumer of the given topic-parition.
+get_consumer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
+
+get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
+  case erlang:process_info(ClientPid, [registered_name]) of
+    [{registered_name, []}] ->
+      find_partition_worker(ClientPid, Key);
+    [{registered_name, ClientId}] ->
+      get_partition_worker(ClientId, Key)
   end;
-get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
+get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
   try
-    case ets:lookup(?ETS(ClientId), ?PRODUCER_KEY(Topic, Partition)) of
+    case ets:lookup(?ETS(ClientId), Key) of
       [] ->
         %% not yet registered, 2 possible reasons:
-        %% 1. caller is too fast, producers are starting up
+        %% 1. caller is too fast, producers/consumers are starting up
         %%    make a synced call all the way down the supervision tree
         %%    to the partition producer sup should resolve the race
         %% 2. bad argument, no such worker started, supervisors should know
-        find_producer(ClientId, Topic, Partition);
-      [?PRODUCER(Topic, Partition, Pid)] ->
+        find_partition_worker(ClientId, Key);
+      [?PRODUCER(_Topic, _Partition, Pid)] ->
+        {ok, Pid};
+      [?CONSUMER(_Topic, _Partition, Pid)] ->
         {ok, Pid}
     end
   catch error:badarg ->
     {error, client_down}
   end.
+
+-spec find_partition_worker(client(), Key) ->
+        {ok, pid()} | {error, Reason} when
+        Key :: {producer | consumer, topic(), partition()},
+        Reason :: client_down
+                | {consumer_down, noproc}
+                | {consumer_not_found, topic()}
+                | {consumer_not_found, topic(), partition()}
+                | {producer_down, noproc}
+                | {producer_not_found, topic()}
+                | {producer_not_found, topic(), partition()}.
+find_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) ->
+  find_producer(Client, Topic, Partition);
+find_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)) ->
+  find_consumer(Client, Topic, Partition).
 
 -spec find_producer(client(), topic(), partition()) ->
                        {ok, pid()} | {error, Reason} when
@@ -213,6 +256,12 @@ find_producer(Client, Topic, Partition) ->
     {error, client_down}
   end.
 
+-spec find_consumer(client(), topic(), partition()) ->
+                      {ok, pid()} | {error, Reason} when
+        Reason :: {consumer_not_found, topic()}
+                | {consumer_not_found, topic(), partition()}
+                | {consumer_down, noproc}
+                | client_down.
 find_consumer(Client, Topic, Partition) ->
   try
     SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
@@ -301,9 +350,8 @@ handle_call(stop, _From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast({register_producer, Topic, Partition, ProducerPid},
-            #state{producers_tab = Tab} = State) ->
-  ets:insert(Tab, ?PRODUCER(Topic, Partition, ProducerPid)),
+handle_cast({register, Key, Pid}, #state{producers_tab = Tab} = State) ->
+  ets:insert(Tab, {Key, Pid}),
   {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",

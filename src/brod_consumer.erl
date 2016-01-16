@@ -26,7 +26,6 @@
 
 %% Server API
 -export([ ack/2
-        , link_subscribe/3
         , start_link/4
         , start_link/5
         , stop/1
@@ -105,11 +104,7 @@ stop(Pid) ->
 
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
-  gen_server:call(Pid, {subscribe, nolink, SubscriberPid, ConsumerOptions}).
-
--spec link_subscribe(pid(), pid(), options()) -> ok | {error, any()}.
-link_subscribe(Pid, SubscriberPid, ConsumerOptions) ->
-  gen_server:call(Pid, {subscribe, link, SubscriberPid, ConsumerOptions}).
+  gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
 %% @doc Ubsubscribe the current subscriber.
 -spec unsubscribe(pid()) -> ok.
@@ -199,16 +194,13 @@ handle_info(Info, State) ->
                           [?MODULE, self(), Info]),
   {noreply, State}.
 
-handle_call({subscribe, LinkOrNot, Pid, Options}, _From,
+handle_call({subscribe, Pid, Options}, _From,
             #state{subscriber = Subscriber} = State) ->
   case Subscriber =:= undefined orelse Subscriber =:= Pid of
     true ->
       case update_options(Options, State) of
         {ok, NewState} ->
-          Mref = case LinkOrNot of
-                   link   -> true = erlang:link(Pid), undefined;
-                   nolink -> erlang:monitor(process, Pid)
-                 end,
+          Mref = erlang:monitor(process, Pid),
           {reply, ok, NewState#state{ subscriber      = Pid
                                     , subscriber_mref = Mref
                                     }};
@@ -218,10 +210,7 @@ handle_call({subscribe, LinkOrNot, Pid, Options}, _From,
     false ->
       {reply, {error, {already_subscribed_by, Subscriber}}, State}
   end;
-handle_call(unsubscribe, _From, #state{ subscriber      = Subscriber
-                                      , subscriber_mref = Mref
-                                      } = State) ->
-  is_pid(Subscriber) andalso unlink(Subscriber),
+handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
   is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
   NewState = State#state{ subscriber      = undefined
                         , subscriber_mref = undefined

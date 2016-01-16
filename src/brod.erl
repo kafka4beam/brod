@@ -32,14 +32,14 @@
 
 %% Client API
 -export([ get_partitions/2
-        , get_producer/3
         , start_link_client/3
         , start_link_client/5
         , stop_client/1
         ]).
 
 %% Producer API
--export([ produce/2
+-export([ get_producer/3
+        , produce/2
         , produce/3
         , produce/5
         , produce_sync/2
@@ -48,8 +48,10 @@
         , sync_produce_request/1
         ]).
 
-%% consumer api
--export([ start_link_consumer/4
+%% Consumer API
+-export([ get_consumer/3
+        , subscribe/3
+        , subscribe/5
         ]).
 
 %% Management and testing API
@@ -140,6 +142,15 @@ stop_client(Client) ->
 get_partitions(Client, Topic) ->
   brod_client:get_partitions(Client, Topic).
 
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down
+                       | {consumer_down, noproc}
+                       | {consumer_not_found, topic()}
+                       | {consumer_not_found, topic(), partition()}.
+get_consumer(Client, Topic, Partition) ->
+  brod_client:get_consumer(Client, Topic, Partition).
+
 %% @equiv brod_client:get_producer/3
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
@@ -212,16 +223,26 @@ sync_produce_request(CallRef) ->
                               },
   brod_producer:sync_produce_request(Expect).
 
--spec start_link_consumer( pid() | atom()
-                         , [endpoint()]
-                         , topic()
-                         , consumer_config()) ->
-                             {ok, pid()} | {error, any()}.
-start_link_consumer(Subscriber, Endpoints, Topic, Options0) ->
-  Options = [ {cb_mod, brod_consumer_impl}
-            , {cb_args, Subscriber} | Options0],
-  Consumer = {Topic, Options},
-  brod_client:start_link(Endpoints, [], [Consumer], []).
+%% @doc Subscribe data stream from the given topic-partition.
+%% If {error, {producer_down, noproc} is returned, the caller should
+%% perhaps retry later.
+%% @end
+-spec subscribe(client(), pid(), topic(), partition(),
+                consumer_options()) -> {ok, pid()} | {error, any()}.
+subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} ->
+      case subscribe(ConsumerPid, SubscriberPid, Options) of
+        ok    -> {ok, ConsumerPid};
+        Error -> Error
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec subscribe(pid(), pid(), consumer_options()) -> ok | {error, any()}.
+subscribe(ConsumerPid, SubscriberPid, Options) ->
+  brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
