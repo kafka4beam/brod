@@ -103,13 +103,9 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   ?assertMatch({nxdomain, _Stacktrace}, Reason).
 
 t_not_a_brod_client(Config) when is_list(Config) ->
-  %% make some random pid
-  Pid = erlang:spawn(fun() -> ok end),
-  Res1 = brod:produce(Pid, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
-  ?assertEqual({error, client_down}, Res1),
   %% call a bad client ID
-  Res2 = brod:produce(?undef, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
-  ?assertEqual({error, client_down}, Res2).
+  Res = brod:produce(?undef, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
+  ?assertEqual({error, client_down}, Res).
 
 t_metadata_socket_restart({init, Config}) ->
   meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
