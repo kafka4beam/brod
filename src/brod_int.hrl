@@ -255,11 +255,11 @@
 
 -record(offset_fetch_response, {topics :: [#offset_fetch_response_topic{}]}).
 
-%%%_* consumer metadata request ------------------------------------------------
--record(consumer_metadata_request, {consumer_group :: binary()}).
+%%%_* group coordinator request ------------------------------------------------
+-record(group_coordinator_request, {group_id :: binary()}).
 
-%%%_* consumer metadata response -----------------------------------------------
--record(consumer_metadata_response, { error_code       :: integer()
+%%%_* group coordinator response -----------------------------------------------
+-record(group_coordinator_response, { error_code       :: integer()
                                     , coordinator_id   :: integer()
                                     , coordinator_host :: binary()
                                     , coordinator_port :: integer()

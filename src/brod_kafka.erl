@@ -69,14 +69,16 @@ api_key(#produce_request{})           -> ?API_KEY_PRODUCE;
 api_key(#offset_request{})            -> ?API_KEY_OFFSET;
 api_key(#fetch_request{})             -> ?API_KEY_FETCH;
 api_key(#offset_commit_request{})     -> ?API_KEY_OFFSET_COMMIT;
-api_key(#offset_fetch_request{})      -> ?API_KEY_OFFSET_FETCH.
+api_key(#offset_fetch_request{})      -> ?API_KEY_OFFSET_FETCH;
+api_key(#group_coordinator_request{}) -> ?API_KEY_GROUP_COORDINATOR.
 
-decode(?API_KEY_METADATA, Bin)      -> metadata_response(Bin);
-decode(?API_KEY_PRODUCE, Bin)       -> produce_response(Bin);
-decode(?API_KEY_OFFSET, Bin)        -> offset_response(Bin);
-decode(?API_KEY_FETCH, Bin)         -> fetch_response(Bin);
-decode(?API_KEY_OFFSET_COMMIT, Bin) -> oc_response(Bin);
-decode(?API_KEY_OFFSET_FETCH, Bin)  -> of_response(Bin).
+decode(?API_KEY_METADATA, Bin)          -> metadata_response(Bin);
+decode(?API_KEY_PRODUCE, Bin)           -> produce_response(Bin);
+decode(?API_KEY_OFFSET, Bin)            -> offset_response(Bin);
+decode(?API_KEY_FETCH, Bin)             -> fetch_response(Bin);
+decode(?API_KEY_OFFSET_COMMIT, Bin)     -> oc_response(Bin);
+decode(?API_KEY_OFFSET_FETCH, Bin)      -> of_response(Bin);
+decode(?API_KEY_GROUP_COORDINATOR, Bin) -> gc_response(Bin).
 
 is_error(X) -> brod_kafka_errors:is_error(X).
 
@@ -92,16 +94,18 @@ header(ApiKey, ClientId, CorrId) ->
 
 encode(#metadata_request{} = Request) ->
   metadata_request_body(Request);
-encode(#produce_request{} = Request)  ->
+encode(#produce_request{} = Request) ->
   produce_request_body(Request);
-encode(#offset_request{} = Request)  ->
+encode(#offset_request{} = Request) ->
   offset_request_body(Request);
-encode(#fetch_request{} = Request)  ->
+encode(#fetch_request{} = Request) ->
   fetch_request_body(Request);
-encode(#offset_commit_request{} = Request)  ->
+encode(#offset_commit_request{} = Request) ->
   oc_request_body(Request);
-encode(#offset_fetch_request{} = Request)  ->
-  of_request_body(Request).
+encode(#offset_fetch_request{} = Request) ->
+  of_request_body(Request);
+encode(#group_coordinator_request{} = Request) ->
+  gc_request_body(Request).
 
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
@@ -508,6 +512,23 @@ parse_of_response_partition(<<Partition:32/?INT,
                                    , offset = Offset
                                    , metadata = Metadata
                                    , error_code = ErrorCode}, Bin}.
+
+%%%_* group coordinator request ------------------------------------------------
+gc_request_body(#group_coordinator_request{} = R) ->
+  GroupId = R#group_coordinator_request.group_id,
+  GroupIdSize = erlang:size(GroupId),
+  <<GroupIdSize:16/?INT, GroupId/binary>>.
+
+gc_response(<<ErrorCode:16/?INT,
+              CoordinatorId:32/?INT,
+              CoordinatorHostSize:16/?INT,
+              CoordinatorHost:CoordinatorHostSize/binary,
+              CoordinatorPort:32/?INT,
+              Bin/binary>>) ->
+  {#group_coordinator_response{ error_code = ErrorCode
+                              , coordinator_id = CoordinatorId
+                              , coordinator_host = CoordinatorHost
+                              , coordinator_port = CoordinatorPort}, Bin}.
 
 %%%_* Tests ====================================================================
 
