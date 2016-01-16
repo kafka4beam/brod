@@ -164,6 +164,7 @@ handle_info(init_socket, #state{ client_pid = ClientPid
                       },
   case resolve_begin_offset(State) of
     {ok, NewState} ->
+      ok = brod_client:register_consumer(ClientPid, Topic, Partition),
       {noreply, NewState};
     {error, Reason} ->
       {stop, {error, Reason}, State}
