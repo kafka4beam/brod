@@ -50,6 +50,13 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
+-type consumer_option() :: begin_offset
+                         | min_bytes
+                         | max_bytes
+                         | max_wait_time
+                         | sleep_timeout
+                         | prefetch_count.
+
 -type hostname()         :: string().
 -type portnum()          :: pos_integer().
 -type endpoint()         :: {hostname(), portnum()}.
@@ -60,7 +67,7 @@
 -type client_config()    :: brod_client_config().
 -type producer_config()  :: brod_producer_config().
 -type consumer_config()  :: brod_consumer_config().
--type consumer_options() :: brod_consumer_config().
+-type consumer_options() :: [{consumer_option(), integer()}].
 -type client()           :: client_id() | pid().
 -type required_acks()    :: -1..1.
 

@@ -49,14 +49,7 @@
 -include("brod.hrl").
 -include("brod_int.hrl").
 
--type consumer_option() :: begin_offset
-                         | min_bytes
-                         | max_bytes
-                         | max_wait_time
-                         | sleep_timeout
-                         | prefetch_count.
-
--type options() :: [{consumer_option(), integer()}].
+-type options() :: consumer_options().
 
 -record(state, { client_pid        :: pid()
                , config            :: consumer_config()
