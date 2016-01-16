@@ -163,7 +163,9 @@
                           , partitions :: [#partition_messages{}]
                           }).
 
--record(fetch_response, {topics = [#topic_fetch_data{}]}).
+-record(fetch_response, { topics = [#topic_fetch_data{}]
+                        , error :: undefined | max_bytes_too_small
+                        }).
 
 -define(undef, undefined).
 
