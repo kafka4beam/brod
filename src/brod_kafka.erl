@@ -446,7 +446,22 @@ oc_request_partitions(Version, [P | Partitions], Acc0) ->
           Metadata/binary>>,
   oc_request_partitions(Version, Partitions, Acc).
 
-oc_response(_) -> ok.
+oc_response(Bin) ->
+  {Topics, _} = parse_array(Bin, fun parse_oc_response_topic/1),
+  #offset_commit_response{topics = Topics}.
+
+parse_oc_response_topic(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
+  {Partitions, Bin} = parse_array(Bin0, fun parse_oc_response_partition/1),
+  Topic = #offset_commit_response_topic{ topic = binary:copy(Name)
+                                       , partitions = Partitions},
+  {Topic, Bin}.
+
+parse_oc_response_partition(<<Partition:32/?INT,
+                              ErrorCode:16/?INT,
+                              Bin/binary>>) ->
+  Partition = #offset_commit_response_partition{ partition = Partition
+                                               , error_code = ErrorCode},
+  {Partition, Bin}.
 
 of_request_body(_) -> ok.
 of_response(_) -> ok.
