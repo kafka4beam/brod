@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 %%% @doc A kafka protocol implementation.
 %%%      [https://cwiki.apache.org/confluence/display/KAFKA/
 %%%       A+Guide+To+The+Kafka+Protocol].
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -70,7 +70,8 @@ api_key(#offset_request{})            -> ?API_KEY_OFFSET;
 api_key(#fetch_request{})             -> ?API_KEY_FETCH;
 api_key(#offset_commit_request{})     -> ?API_KEY_OFFSET_COMMIT;
 api_key(#offset_fetch_request{})      -> ?API_KEY_OFFSET_FETCH;
-api_key(#group_coordinator_request{}) -> ?API_KEY_GROUP_COORDINATOR.
+api_key(#group_coordinator_request{}) -> ?API_KEY_GROUP_COORDINATOR;
+api_key(#describe_groups_request{})   -> ?API_KEY_DESCRIBE_GROUPS.
 
 decode(?API_KEY_METADATA, Bin)          -> metadata_response(Bin);
 decode(?API_KEY_PRODUCE, Bin)           -> produce_response(Bin);
@@ -78,7 +79,8 @@ decode(?API_KEY_OFFSET, Bin)            -> offset_response(Bin);
 decode(?API_KEY_FETCH, Bin)             -> fetch_response(Bin);
 decode(?API_KEY_OFFSET_COMMIT, Bin)     -> oc_response(Bin);
 decode(?API_KEY_OFFSET_FETCH, Bin)      -> of_response(Bin);
-decode(?API_KEY_GROUP_COORDINATOR, Bin) -> gc_response(Bin).
+decode(?API_KEY_GROUP_COORDINATOR, Bin) -> gc_response(Bin);
+decode(?API_KEY_DESCRIBE_GROUPS, Bin)   -> dg_response(Bin).
 
 is_error(X) -> brod_kafka_errors:is_error(X).
 
@@ -105,7 +107,9 @@ encode(#offset_commit_request{} = Request) ->
 encode(#offset_fetch_request{} = Request) ->
   of_request_body(Request);
 encode(#group_coordinator_request{} = Request) ->
-  gc_request_body(Request).
+  gc_request_body(Request);
+encode(#describe_groups_request{} = Request) ->
+  dg_request_body(Request).
 
 %%%_* metadata -----------------------------------------------------------------
 metadata_request_body(#metadata_request{topics = []}) ->
@@ -529,6 +533,57 @@ gc_response(<<ErrorCode:16/?INT,
                               , coordinator_id = CoordinatorId
                               , coordinator_host = CoordinatorHost
                               , coordinator_port = CoordinatorPort}, Bin}.
+
+%%%_* describe groups request --------------------------------------------------
+dg_request_body(#describe_groups_request{groups = Groups}) ->
+  GroupsCount = length(Groups),
+  Acc = <<GroupsCount:32/?INT>>,
+  dg_request_groups(Groups, Acc).
+
+dg_request_groups([], Acc) ->
+  Acc;
+dg_request_groups([G | Groups], Acc) ->
+  Size = erlang:size(G),
+  dg_request_groups(Groups, <<Acc/binary, Size:16/?INT, G/binary>>).
+
+dg_response(Bin) ->
+  {Groups, _} = parse_array(Bin, fun parse_dg_response_group/1),
+  #describe_groups_response{groups = Groups}.
+
+parse_dg_response_group(<<ErrorCode:16/?INT,
+                          GroupIdSize:16/?INT,
+                          GroupId:GroupIdSize/binary,
+                          StateSize:16/?INT,
+                          State:StateSize/binary,
+                          ProtocolTypeSize:16/?INT,
+                          ProtocolType:ProtocolTypeSize/binary,
+                          ProtocolSize:16/?INT,
+                          Protocol:ProtocolSize/binary,
+                          Bin0/binary>>) ->
+  {Members, Bin} = parse_array(Bin0, fun parse_group_member/1),
+  {#describe_group_response{ error_code = ErrorCode
+                           , group_id = binary:copy(GroupId)
+                           , state = binary:copy(State)
+                           , protocol_type = binary:copy(ProtocolType)
+                           , protocol = binary:copy(Protocol)
+                           , members = Members}, Bin}.
+
+parse_group_member(<<MemberIdSize:16/?INT,
+                     MemberId:MemberIdSize/binary,
+                     ClientIdSize:16/?INT,
+                     ClientId:ClientIdSize/binary,
+                     ClientHostSize:16/?INT,
+                     ClientHost:ClientHostSize/binary,
+                     MemberMetadataSize:16/?INT,
+                     MemberMetadata:MemberMetadataSize/binary,
+                     MemberAssignmentSize:16/?INT,
+                     MemberAssignment:MemberAssignmentSize/binary,
+                     Bin/binary>>) ->
+  {#group_member{ member_id = MemberId
+                , client_id = ClientId
+                , client_host = ClientHost
+                , member_metadata = MemberMetadata
+                , member_assignment = MemberAssignment}, Bin}.
 
 %%%_* Tests ====================================================================
 

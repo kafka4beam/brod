@@ -265,6 +265,27 @@
                                     , coordinator_port :: integer()
                                     }).
 
+%%%_* describe groups request --------------------------------------------------
+-record(describe_groups_request, {groups :: [binary()]}).
+
+%%%_* describe groups response -------------------------------------------------
+-record(group_member, { member_id         :: binary()
+                      , client_id         :: binary()
+                      , client_host       :: binary()
+                      , member_metadata   :: binary()
+                      , member_assignment :: binary()
+                      }).
+
+-record(describe_group_response, { error_code    :: integer()
+                                 , group_id      :: binary()
+                                 , state         :: binary()
+                                 , protocol_type :: binary()
+                                 , protocol      :: binary()
+                                 , members       :: [#group_member{}]
+                                 }).
+
+-record(describe_groups_response, {groups = [#describe_group_response{}]}).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================
