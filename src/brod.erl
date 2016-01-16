@@ -49,7 +49,9 @@
         ]).
 
 %% Consumer API
--export([ get_consumer/3
+-export([ consume_ack/2
+        , consume_ack/4
+        , get_consumer/3
         , subscribe/3
         , subscribe/5
         ]).
@@ -244,6 +246,17 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
+-spec consume_ack(client(), topic(), partition(), offset()) -> ok.
+consume_ack(Client, Topic, Partition, Offset) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> consume_ack(ConsumerPid, Offset);
+    _                 -> ok
+  end.
+
+-spec consume_ack(pid(), offset()) -> ok.
+consume_ack(ConsumerPid, Offset) ->
+  brod_consumer:ack(ConsumerPid, Offset).
+
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
 get_metadata(Hosts) ->
@@ -294,7 +307,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , max_wait_time = MaxWaitTime
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  {ok, Response} = brod_sock:send_sync(Pid, Request, 10000),
   #fetch_response{topics = [TopicFetchData]} = Response,
   #topic_fetch_data{ topic = Topic
                    , partitions = [PM]} = TopicFetchData,

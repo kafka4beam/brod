@@ -23,7 +23,7 @@
 -type kafka_error_code() :: atom() | integer().
 
 -record(kafka_message,
-        { offset     :: offset()
+        { offset     :: kafka_offset()
         , crc        :: integer()
         , magic_byte :: integer()
         , attributes :: integer()

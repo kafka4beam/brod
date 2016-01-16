@@ -171,7 +171,7 @@ handle_info(init_socket, #state{ client_pid = ClientPid
 handle_info({msg, _Pid, CorrId, R}, State) ->
   handle_fetch_response(R, CorrId, State);
 handle_info(?SEND_FETCH_REQUEST, State0) ->
-  {ok, State} = maybe_send_fetch_request(State0),
+  State = maybe_send_fetch_request(State0),
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{subscriber = Pid} = State) ->
@@ -194,6 +194,7 @@ handle_call({subscribe, Pid, Options}, _From,
       case update_options(Options, State) of
         {ok, NewState} ->
           Mref = erlang:monitor(process, Pid),
+          self() ! ?SEND_FETCH_REQUEST,
           {reply, ok, NewState#state{ subscriber      = Pid
                                     , subscriber_mref = Mref
                                     }};
@@ -258,7 +259,6 @@ handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
   #partition_messages{ partition = Partition
                      , error_code = ErrorCode
                      , high_wm_offset = HighWmOffset
-                     , last_offset = LastOffset
                      , messages = Messages} = PM,
   case brod_kafka:is_error(ErrorCode) of
     true ->
@@ -274,29 +274,25 @@ handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
                                  , high_wm_offset = HighWmOffset
                                  , messages       = Messages
                                  },
-      handle_message_set(MsgSet, LastOffset, State)
+      handle_message_set(MsgSet, State)
   end.
 
+handle_message_set(#kafka_message_set{messages = []}, State) ->
+  ok = maybe_delay_fetch_request(State),
+  {noreply, State};
 handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
-                   LastOffset,
                    #state{ subscriber    = Subscriber
                          , pending_acks  = PendingAcks
-                         , sleep_timeout = SleepTimeout
                          } = State0) ->
   ok = cast(Subscriber, MsgSet),
   MapFun = fun(#kafka_message{offset = Offset}) -> Offset end,
   Offsets = lists:map(MapFun, Messages),
+  LastOffset = lists:last(Offsets),
   State = State0#state{ pending_acks = PendingAcks ++ Offsets
                       , begin_offset = LastOffset + 1
                       },
-  case Messages =:= [] andalso SleepTimeout > 0 of
-    true ->
-      _ = erlang:send_after(SleepTimeout, self(), ?SEND_FETCH_REQUEST),
-      {noreply, State};
-    false ->
-      NewState = maybe_send_fetch_request(State),
-      {noreply, NewState}
-  end.
+  NewState = maybe_send_fetch_request(State),
+  {noreply, NewState}.
 
 err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
 err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
@@ -335,6 +331,14 @@ cast(Pid, Msg) ->
   catch _ : _ ->
     ok
   end.
+
+-spec maybe_delay_fetch_request(#state{}) -> ok.
+maybe_delay_fetch_request(#state{sleep_timeout = T}) when T > 0 ->
+  _ = erlang:send_after(T, self(), ?SEND_FETCH_REQUEST),
+  ok;
+maybe_delay_fetch_request(_State) ->
+  self() ! ?SEND_FETCH_REQUEST,
+  ok.
 
 %% @private Send new fetch request if no pending error.
 maybe_send_fetch_request(#state{ subscriber     = Subscriber
