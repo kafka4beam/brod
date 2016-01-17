@@ -246,14 +246,15 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
--spec consume_ack(client(), topic(), partition(), offset()) -> ok.
+-spec consume_ack(client(), topic(), partition(), offset()) ->
+        ok | {error, any()}.
 consume_ack(Client, Topic, Partition, Offset) ->
   case brod_client:get_consumer(Client, Topic, Partition) of
     {ok, ConsumerPid} -> consume_ack(ConsumerPid, Offset);
-    _                 -> ok
+    {error, Reason}   -> {error, Reason}
   end.
 
--spec consume_ack(pid(), offset()) -> ok.
+-spec consume_ack(pid(), offset()) -> ok | {error, any()}.
 consume_ack(ConsumerPid, Offset) ->
   brod_consumer:ack(ConsumerPid, Offset).
 

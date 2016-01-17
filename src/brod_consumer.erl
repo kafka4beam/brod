@@ -109,7 +109,7 @@ unsubscribe(Pid) ->
 %% @end
 -spec ack(pid(), offset()) -> ok.
 ack(Pid, Offset) ->
-  gen_server:cast(Pid, {ack, Offset}).
+  gen_server:call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
@@ -211,16 +211,17 @@ handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
                         , subscriber_mref = undefined
                         },
   {reply, ok, reset_buffer(NewState)};
+handle_call({ack, Offset}, _From,
+            #state{pending_acks = PendingAcks} = State0) ->
+  NewPendingAcks = handle_ack(PendingAcks, Offset),
+  State1 = State0#state{pending_acks = NewPendingAcks},
+  State = maybe_send_fetch_request(State1),
+  {reply, ok, State};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast({ack, Offset}, #state{pending_acks = PendingAcks} = State0) ->
-  NewPendingAcks = handle_ack(PendingAcks, Offset),
-  State1 = State0#state{pending_acks = NewPendingAcks},
-  State = maybe_send_fetch_request(State1),
-  {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:warning_msg("~p ~p got unexpected cast: ~p",
                           [?MODULE, self(), Cast]),
