@@ -443,7 +443,7 @@ maybe_connect(#state{client_id = ClientId} = State,
     true ->
       connect(State, Host, Port);
     false ->
-      error_logger:error_msg("~p (re)connect to ~p:~p~n aborted, "
+      error_logger:error_msg("~p (re)connect to ~s:~p aborted, "
                              "last failure reason:~p",
                              [ClientId, Host, Port, Reason]),
      {State, {error, Reason}}

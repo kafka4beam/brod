@@ -147,7 +147,7 @@ t_payload_socket_restart({'end', Config}) ->
   Config;
 t_payload_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
-  CooldownSecs = 5,
+  CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
   Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
@@ -181,12 +181,12 @@ t_payload_socket_restart(Config) when is_list(Config) ->
                   WriterLoopFun(WriterLoopFun)
                 end),
   ?WAIT({WriterPid, <<"i'm ready">>}, ok, 1000),
-  %% kill the payload pid
+  %% kill the payload socket
   exit(PayloadSock, kill),
   %% socket should be restarted after cooldown timeout
   %% and the restart is triggered by producer restart
   %% add 2 seconds more in wait timeout to avoid race
-  Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
+  Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 3),
   SockPid = ?WAIT({socket_started, Ref, Pid_}, Pid_, Timeout),
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
