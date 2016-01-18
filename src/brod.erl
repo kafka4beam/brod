@@ -232,7 +232,7 @@ sync_produce_request(CallRef) ->
 %%
 %% If subscribed successfully, the subscriber process should expect
 %% #kafka_message_set{} %% and #kafka_fetch_error{},
-%% `-include_lib(brod/include/brod.hrl)` to access the records.
+%% -include_lib(brod/include/brod.hrl) to access the records.
 %% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
 %% itself to resume the data stream.
 %% @end
