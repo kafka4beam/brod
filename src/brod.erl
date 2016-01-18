@@ -226,8 +226,15 @@ sync_produce_request(CallRef) ->
   brod_producer:sync_produce_request(Expect).
 
 %% @doc Subscribe data stream from the given topic-partition.
-%% If {error, {producer_down, noproc} is returned, the caller should
-%% perhaps retry later.
+%% If {error, Reason} is returned, the caller should perhaps retry later.
+%% {ok, ConsumerPid} is returned if success, the caller may want to monitor
+%% the consumer pid to trigger a re-subscribe in case it crashes.
+%%
+%% If subscribed successfully, the subscriber process should expect
+%% #kafka_message_set{} %% and #kafka_fetch_error{},
+%% `-include_lib(brod/include/brod.hrl)` to access the records.
+%% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
+%% itself to resume the data stream.
 %% @end
 -spec subscribe(client(), pid(), topic(), partition(),
                 consumer_options()) -> {ok, pid()} | {error, any()}.
