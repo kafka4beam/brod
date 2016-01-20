@@ -23,11 +23,11 @@
 %% @private
 -module(brod_producer_buffer).
 
--export([ new/5
+-export([ new/4
         , add/4
         , ack/2
         , nack/2
-        , maybe_send/4
+        , maybe_send/2
         ]).
 
 -export_type([buf/0]).
@@ -43,12 +43,14 @@
         , bytes    :: non_neg_integer()
         }).
 
+-type send_fun() :: fun((pid(), [{binary(), binary()}]) -> {ok, corr_id()}).
+-define(ERR_FUN, fun() -> erlang:error(bad_init) end).
+
 -record(buf,
         { buffer_limit   = 1        :: pos_integer()
         , onwire_limit   = 1        :: pos_integer()
         , max_batch_size = 1        :: pos_integer()
-        , required_acks  = -1       :: required_acks()
-        , ack_timeout    = 1000     :: pos_integer()
+        , send_fun       = ?ERR_FUN :: send_fun()
         , buffer_count   = 0        :: non_neg_integer()
         , onwire_count   = 0        :: non_neg_integer()
         , pending        = []       :: [#req{}]
@@ -63,21 +65,15 @@
 %% @doc Create a new buffer
 %% For more details: @see brod_producer:start_link/4
 %% @end
--spec new(pos_integer(), pos_integer(), pos_integer(),
-          required_acks(), pos_integer()) -> buf().
-new(BufferLimit, OnWireLimit, MaxBatchSize, RequiredAcks, AckTimeout) ->
+-spec new(pos_integer(), pos_integer(), pos_integer(), send_fun()) -> buf().
+new(BufferLimit, OnWireLimit, MaxBatchSize, SendFun) ->
   true = (BufferLimit > 0), %% assert
   true = (OnWireLimit > 0), %% assert
   true = (MaxBatchSize > 0), %% assert
-  true = (RequiredAcks =:= -1 orelse
-         RequiredAcks =:= 0 orelse
-         RequiredAcks =:= 1), %% assert
-  true = (AckTimeout > 0), %% assert
   #buf{ buffer_limit   = BufferLimit
       , onwire_limit   = OnWireLimit
       , max_batch_size = MaxBatchSize
-      , required_acks  = RequiredAcks
-      , ack_timeout    = AckTimeout
+      , send_fun       = SendFun
       }.
 
 %% @doc Buffer a produce request.
@@ -91,24 +87,19 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
             },
   maybe_buffer(Buf#buf{pending = Pending ++ [Req]}).
 
--spec maybe_send(buf(), pid(), topic(), partition()) ->
-                    {ok, buf()} | {error, any()}.
+-spec maybe_send(buf(), pid()) -> {ok, buf()} | {error, any()}.
 maybe_send(#buf{ onwire_limit = OnWireLimit
                , onwire_count = OnWireCount
                , onwire       = OnWire
-               } = Buf, SockPid, Topic, Partition)
+               , send_fun     = SendFun
+               } = Buf, SockPid)
   when OnWireCount < OnWireLimit ->
   case take_reqs_to_send(Buf) of
     {[], NewBuf} ->
       {ok, NewBuf};
     {Reqs, NewBuf} ->
       MessageSet = lists:map(fun(#req{data = F}) -> F() end, Reqs),
-      Data = [{Topic, [{Partition, MessageSet}]}],
-      KafkaReq = #produce_request{ acks    = Buf#buf.required_acks
-                                 , timeout = Buf#buf.ack_timeout
-                                 , data    = Data
-                                 },
-      case brod_sock:send(SockPid, KafkaReq) of
+      case SendFun(SockPid, MessageSet) of
         ok ->
           %% fire and forget
           ok = lists:foreach(fun reply_acked/1, Reqs),
@@ -121,7 +112,7 @@ maybe_send(#buf{ onwire_limit = OnWireLimit
           {error, Reason}
       end
   end;
-maybe_send(Buf, _SockPid, _Topic, _Partition) ->
+maybe_send(Buf, _SockPid) ->
   {ok, Buf}.
 
 %% @doc Reply 'acked' to callers.

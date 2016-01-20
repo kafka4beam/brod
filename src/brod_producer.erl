@@ -170,8 +170,21 @@ init({ClientPid, Topic, Partition, Config}) ->
   RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
   AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
 
-  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
-                                    RequiredAcks, AckTimeout),
+  SendFun =
+    fun(SockPid, KafkaKvList) ->
+        Data = [{Topic, [{Partition, KafkaKvList}]}],
+        KafkaReq = #produce_request{ acks    = RequiredAcks
+                                   , timeout = AckTimeout
+                                   , data    = Data
+                                   },
+        case brod_sock:send(SockPid, KafkaReq) of
+          ok              -> ok;
+          {ok, CorrId}    -> {ok, CorrId};
+          {error, Reason} -> exit(Reason)
+        end
+    end,
+  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
+                                    MaxBatchSize, SendFun),
 
   MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
   RetryTimeout = ?config(retry_timeout, ?DEFAULT_RETRY_TIMEOUT),
@@ -234,10 +247,10 @@ handle_info({msg, Pid, CorrId, #produce_response{} = R},
         [Topic, Partition, Offset, ErrorCode]),
       Error = {produce_response_error, Topic, Partition, Offset, ErrorCode},
       {ok, NewState} = schedule_retry(State, Error),
-      NewBuffer = brod_producer_buffer:nack(Buffer, CorrId),
+      {ok, NewBuffer} = brod_producer_buffer:nack(Buffer, CorrId),
       {noreply, NewState#state{buffer = NewBuffer}};
     false ->
-      NewBuffer = brod_producer_buffer:ack(Buffer, CorrId),
+      {ok, NewBuffer} = brod_producer_buffer:ack(Buffer, CorrId),
       {noreply, State#state{buffer = NewBuffer}}
   end;
 handle_info({?RETRY_MSG, Msg}, State) ->
@@ -260,9 +273,7 @@ handle_call(_Call, _From, State) ->
 handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer0} = State) ->
   {ok, Buffer1} = brod_producer_buffer:add(Buffer0, CallRef, Key, Value),
   SockPid = State#state.sock_pid,
-  Topic = State#state.topic,
-  Partition = State#state.partition,
-  case brod_producer_buffer:maybe_send(Buffer1, SockPid, Topic, Partition) of
+  case brod_producer_buffer:maybe_send(Buffer1, SockPid) of
     {ok, Buffer} ->
       {noreply, State#state{buffer = Buffer}};
     {error, Reason} ->
@@ -294,9 +305,7 @@ maybe_retry(#state{retries = Retries, max_retries = MaxRetries} = State0) when
   State = State0#state{retry_tref = undefined, retries = Retries + 1},
   Buffer = State#state.buffer,
   SockPid = State#state.sock_pid,
-  Topic = State#state.topic,
-  Partition = State#state.partition,
-  case brod_producer_buffer:maybe_send(Buffer, SockPid, Topic, Partition) of
+  case brod_producer_buffer:maybe_send(Buffer, SockPid) of
     {ok, Buffer} ->
       {ok, State#state{buffer = Buffer}};
     {error, Reason} ->
