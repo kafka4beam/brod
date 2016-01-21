@@ -48,19 +48,14 @@
 -define(DEFAULT_REQUIRED_ACKS, -1).
 %% by default, leader should wait 1 second for replicas to ack
 -define(DEFAULT_ACK_TIMEOUT, 1000).
-%% by default, brod_producer will sleep for 1 second before trying to send
+%% by default, brod_producer will sleep for 0.5 second before trying to send
 %% buffered messages again upon receiving a error from kafka
--define(DEFAULT_RETRY_TIMEOUT, 1000).
+-define(DEFAULT_RETRY_BACKOFF_MS, 500).
 %% by default, brod_producer will try to re-send buffered messages
 %% max 3 times upon receiving error from kafka
 %% -1 means 'retry indefinitely'
 -define(DEFAULT_MAX_RETRIES, 3).
-%% by default, brod_producer will wait 1 second before trying to
-%% accuire a new connection to kafka broker from brod_client
-%% when an old connection crashed
--define(DEFAULT_RECONNECT_TIMEOUT, 1000).
 
--define(INIT_SOCKET_MSG, init_socket).
 -define(RETRY_MSG, retry).
 
 -define(config(Key, Default), proplists:get_value(Key, Config, Default)).
@@ -70,10 +65,11 @@
         , topic             :: topic()
         , partition         :: partition()
         , sock_pid          :: pid()
+        , sock_mref         :: reference()
         , buffer            :: brod_producer_buffer:buf()
         , retries = 0       :: integer()
         , max_retries       :: integer()
-        , retry_timeout     :: non_neg_integer()
+        , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: timer:tref()
         , reconnect_timeout :: non_neg_integer()
         }).
@@ -187,43 +183,44 @@ init({ClientPid, Topic, Partition, Config}) ->
                                     MaxBatchSize, SendFun),
 
   MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
-  RetryTimeout = ?config(retry_timeout, ?DEFAULT_RETRY_TIMEOUT),
-  ReconnectTimeout = ?config(reconnect_timeout, ?DEFAULT_RECONNECT_TIMEOUT),
+  RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
 
-  self() ! ?INIT_SOCKET_MSG,
+  State0 = #state{ client_pid       = ClientPid
+                 , topic            = Topic
+                 , partition        = Partition
+                 , buffer           = Buffer
+                 , max_retries      = MaxRetries
+                 , retry_backoff_ms = RetryBackoffMs
+                 },
 
-  {ok, #state{ client_pid        = ClientPid
-             , topic             = Topic
-             , partition         = Partition
-             , buffer            = Buffer
-             , max_retries       = MaxRetries
-             , retry_timeout     = RetryTimeout
-             , reconnect_timeout = ReconnectTimeout
-             }}.
+  State = case init_socket(State0) of
+            {ok, NewState} ->
+              NewState;
+            {error, Error} ->
+              {ok, NewState} = schedule_retry(State0, Error),
+              NewState
+          end,
+  {ok, State}.
 
-handle_info(?INIT_SOCKET_MSG, #state{ client_pid = ClientPid
-                                    , topic      = Topic
-                                    , partition  = Partition
-                                    } = State) ->
-  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
-    {ok, SockPid} ->
-      _ = erlang:monitor(process, SockPid),
-      %% 2. Register self() to client.
-      ok = brod_client:register_producer(ClientPid, Topic, Partition),
-
-      %% 3. Update state.
-      {noreply, State#state{sock_pid = SockPid}};
-    {error, _} ->
-      ReconnectTimeout = State#state.reconnect_timeout,
-      erlang:send_after(ReconnectTimeout, self(), ?INIT_SOCKET_MSG),
+handle_info({?RETRY_MSG, Msg}, State0) ->
+  case init_socket(State0) of
+    {ok, State1} ->
+      case maybe_retry(State1) of
+        {ok, State} ->
+          {noreply, State};
+        false ->
+          Error = io_lib:format("brod_producer ~p failed to recover after ~p retries: ~p",
+                                [self(), State1#state.retries, Msg]),
+          {stop, iolist_to_binary(Error), State1}
+      end;
+    {error, Error} ->
+      {ok, State} = schedule_retry(State0, Error),
       {noreply, State}
   end;
-handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
+handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
-  ReconnectTimeout = State#state.reconnect_timeout,
-  erlang:send_after(ReconnectTimeout, self(), ?INIT_SOCKET_MSG),
-  {noreply, State#state{sock_pid = undefined}};
+  {ok, NewState} = schedule_retry(State, Reason),
+  {noreply, NewState#state{sock_pid = undefined}};
 handle_info({msg, Pid, CorrId, #produce_response{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -238,29 +235,26 @@ handle_info({msg, Pid, CorrId, #produce_response{} = R},
   Partition = State#state.partition, %% assert
   case brod_kafka:is_error(ErrorCode) of
     true ->
+      ErrorDesc = brod_kafka_error:desc(ErrorCode),
       error_logger:error_msg(
         "Error in produce response\n"
         "Topic: ~s\n"
         "Partition: ~B\n"
         "Offset: ~B\n"
-        "Error code: ~p",
-        [Topic, Partition, Offset, ErrorCode]),
-      Error = {produce_response_error, Topic, Partition, Offset, ErrorCode},
-      {ok, NewState} = schedule_retry(State, Error),
-      {ok, NewBuffer} = brod_producer_buffer:nack(Buffer, CorrId),
-      {noreply, NewState#state{buffer = NewBuffer}};
+        "Error: ~s",
+        [Topic, Partition, Offset, ErrorDesc]),
+      Error = {produce_response_error, Topic, Partition, Offset, ErrorCode, ErrorDesc},
+      case is_retriable(ErrorCode) of
+        true ->
+          {ok, NewState} = schedule_retry(State, Error),
+          {ok, NewBuffer} = brod_producer_buffer:nack(Buffer, CorrId),
+          {noreply, NewState#state{buffer = NewBuffer}};
+        false ->
+          {stop, Error, State}
+      end;
     false ->
       {ok, NewBuffer} = brod_producer_buffer:ack(Buffer, CorrId),
       {noreply, State#state{buffer = NewBuffer}}
-  end;
-handle_info({?RETRY_MSG, Msg}, State) ->
-  case maybe_retry(State) of
-    {ok, NewState} ->
-      {noreply, NewState};
-    false ->
-      Error = io_lib:format("brod_producer ~p failed to recover after ~p retries: ~p",
-                            [self(), State#state.retries, Msg]),
-      {stop, iolist_to_binary(Error), State}
   end;
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -277,7 +271,7 @@ handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer0} = State) ->
     {ok, Buffer} ->
       {noreply, State#state{buffer = Buffer}};
     {error, Reason} ->
-      {ok, NewState} = schedule_retry(State, {error, Reason}),
+      {ok, NewState} = schedule_retry(State, Reason),
       {noreply, NewState}
   end;
 handle_cast(_Cast, State) ->
@@ -290,9 +284,33 @@ terminate(_Reason, _State) ->
   ok.
 
 %%%_* Internal Functions =======================================================
+init_socket(#state{ client_pid = ClientPid
+                  , sock_mref  = OldSockMref
+                  , topic      = Topic
+                  , partition  = Partition
+                  } = State) ->
+  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, SockPid} ->
+      ok = maybe_demonitor(OldSockMref),
+      SockMref = erlang:monitor(process, SockPid),
+      %% 2. Register self() to client.
+      ok = brod_client:register_producer(ClientPid, Topic, Partition),
+
+      %% 3. Update state.
+      {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
+    {error, Error} ->
+      {error, Error}
+  end.
+
+maybe_demonitor(undefined) ->
+  ok;
+maybe_demonitor(Mref) ->
+  true = erlang:demonitor(Mref, [flush]),
+  ok.
 
 schedule_retry(#state{retry_tref = undefined} = State, Msg) ->
-  {ok, TRef} = timer:send_after(State#state.retry_timeout, {?RETRY_MSG, Msg}),
+  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, {?RETRY_MSG, Msg}),
   {ok, State#state{retry_tref = TRef}};
 schedule_retry(State, _Msg) ->
   %% retry timer has been already activated
@@ -309,9 +327,21 @@ maybe_retry(#state{retries = Retries, max_retries = MaxRetries} = State0) when
     {ok, Buffer} ->
       {ok, State#state{buffer = Buffer}};
     {error, Reason} ->
-      schedule_retry(State, {error, Reason})
+      schedule_retry(State, Reason)
   end;
 maybe_retry(_State) ->
+  false.
+
+is_retriable(ErrorCode) when ErrorCode =:= ?EC_CORRUPT_MESSAGE;
+                             ErrorCode =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
+                             ErrorCode =:= ?EC_LEADER_NOT_AVAILABLE;
+                             ErrorCode =:= ?EC_NOT_LEADER_FOR_PARTITION;
+                             ErrorCode =:= ?EC_REQUEST_TIMED_OUT;
+                             ErrorCode =:= ?EC_NOT_ENOUGH_REPLICAS;
+                             ErrorCode =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND
+                             ->
+  true;
+is_retriable(_) ->
   false.
 
 %%%_* Emacs ====================================================================
