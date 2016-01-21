@@ -107,7 +107,8 @@ stop(Client) ->
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.
 %% @end
--spec get_leader_connection(client(), topic(), partition()) -> {ok, pid()}.
+-spec get_leader_connection(client(), topic(), partition()) ->
+                               {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
   case brod_client:get_metadata(Client, Topic) of
     {ok, Metadata} ->
