@@ -35,13 +35,10 @@
 
 subscriber_loop(Client, TesterPid) ->
   receive
-    #kafka_message_set{ topic     = Topic
-                      , partition = Partition
-                      , messages  = Messages
-                      } ->
+    {ConsumerPid, #kafka_message_set{messages = Messages}} ->
       lists:foreach(fun(#kafka_message{offset = Offset, key = K, value = V}) ->
                       TesterPid ! {K, V},
-                      ok = brod:consume_ack(Client, Topic, Partition, Offset)
+                      ok = brod:consume_ack(ConsumerPid, Offset)
                     end, Messages),
       subscriber_loop(Client, TesterPid);
     Msg ->

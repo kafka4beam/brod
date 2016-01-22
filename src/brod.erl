@@ -230,8 +230,10 @@ sync_produce_request(CallRef) ->
 %% {ok, ConsumerPid} is returned if success, the caller may want to monitor
 %% the consumer pid to trigger a re-subscribe in case it crashes.
 %%
-%% If subscribed successfully, the subscriber process should expect
-%% #kafka_message_set{} %% and #kafka_fetch_error{},
+%% If subscribed successfully, the subscriber process should expect messages
+%% of pattern:
+%% {ConsumerPid, #kafka_message_set{}} and
+%% {ConsumerPid, #kafka_fetch_error{}},
 %% -include_lib(brod/include/brod.hrl) to access the records.
 %% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
 %% itself to resume the data stream.

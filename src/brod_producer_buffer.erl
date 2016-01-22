@@ -190,16 +190,16 @@ reply_buffered(#brod_call_ref{caller = Pid} = CallRef) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
                              , result   = brod_produce_req_buffered
                              },
-  safe_send(Pid, Reply).
+  cast(Pid, Reply).
 
 -spec reply_acked(brod_call_ref()) -> ok.
 reply_acked(#brod_call_ref{caller = Pid} = CallRef) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
                              , result   = brod_produce_req_acked
                              },
-  safe_send(Pid, Reply).
+  cast(Pid, Reply).
 
-safe_send(Pid, Msg) ->
+cast(Pid, Msg) ->
   try
     Pid ! Msg,
     ok
@@ -213,12 +213,12 @@ safe_send(Pid, Msg) ->
 
 -ifdef(TEST).
 
-safe_send_test() ->
+cast_test() ->
   Ref = make_ref(),
-  ok = safe_send(self(), Ref),
+  ok = cast(self(), Ref),
   receive Ref -> ok
   end,
-  ok = safe_send(?undef, Ref).
+  ok = cast(?undef, Ref).
 
 -endif. % TEST
 

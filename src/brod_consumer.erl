@@ -286,7 +286,7 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                    #state{ subscriber    = Subscriber
                          , pending_acks  = PendingAcks
                          } = State0) ->
-  ok = cast(Subscriber, MsgSet),
+  ok = cast_to_subscriber(Subscriber, MsgSet),
   MapFun = fun(#kafka_message{offset = Offset}) -> Offset end,
   Offsets = lists:map(MapFun, Messages),
   LastOffset = lists:last(Offsets),
@@ -310,12 +310,12 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
     retry ->
       {noreply, maybe_send_fetch_request(State)};
     stop ->
-      ok = cast(Subscriber, Error),
+      ok = cast_to_subscriber(Subscriber, Error),
       error_logger:error_msg("consumer of topic ~p partition ~p shutdown, "
                              "reason: ~p", [Topic, Partition, ErrorCode]),
       {stop, normal, State};
     restart ->
-      ok = cast(Subscriber, Error),
+      ok = cast_to_subscriber(Subscriber, Error),
       {stop, {restart, ErrorCode}, State}
   end.
 
@@ -326,9 +326,9 @@ handle_ack([H | Offsets], Offset) ->
     false -> [H | Offsets]
   end.
 
-cast(Pid, Msg) ->
+cast_to_subscriber(Pid, Msg) ->
   try
-    Pid ! Msg,
+    Pid ! {self(), Msg},
     ok
   catch _ : _ ->
     ok
