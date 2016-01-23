@@ -261,9 +261,15 @@ handle_fetch_response(_Response, CorrId1,
   {noreply, State};
 handle_fetch_response(#fetch_response{ topics = []
                                      , error = max_bytes_too_small
-                                     }, _CorrId, State) ->
-  %% TODO try with a larger max_bytes
-  {noreply, State};
+                                     }, _CorrId,
+                      #state{max_bytes = MaxBytes} = State) ->
+  NewMaxBytes = MaxBytes * 2,
+  error_logger:warning_msg("~p ~p max_bytes ~p is not large enough, "
+                           "trying with a larger value ~p",
+                           [?MODULE, self(), MaxBytes, NewMaxBytes]),
+  NewState = State#state{max_bytes = NewMaxBytes},
+  self() ! ?SEND_FETCH_REQUEST,
+  {noreply, NewState};
 handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
                                      , error  = undefined
                                      }, CorrId, State) ->
