@@ -52,7 +52,6 @@
 -type options() :: consumer_options().
 
 -record(state, { client_pid        :: pid()
-               , config            :: consumer_config()
                , socket_pid        :: pid()
                , topic             :: binary()
                , partition         :: integer()
@@ -75,6 +74,7 @@
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
 -define(ERROR_COOLDOWN, 1000).
+-define(SOCKET_RETRY_DELAY_MS, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 
@@ -126,23 +126,6 @@ debug(Pid, File) when is_list(File) ->
 
 init({ClientPid, Topic, Partition, Config}) ->
   self() ! init_socket,
-  {ok, #state{ client_pid     = ClientPid
-             , topic          = Topic
-             , partition      = Partition
-             , config         = Config
-             }}.
-
-handle_info(init_socket, #state{ client_pid = ClientPid
-                               , topic      = Topic
-                               , partition  = Partition
-                               , config     = Config
-                               } = State0) ->
-  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SocketPid} =
-    brod_client:get_leader_connection(ClientPid, Topic, Partition),
-  _ = erlang:monitor(process, SocketPid),
-
-  %% 2. Get options from consumer config
   MinBytes = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MaxBytes = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
   MaxWaitTime =
@@ -152,19 +135,39 @@ handle_info(init_socket, #state{ client_pid = ClientPid
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
   Offset = proplists:get_value(offset, Config, ?DEFAULT_BEGIN_OFFSET),
+  {ok, #state{ client_pid     = ClientPid
+             , topic          = Topic
+             , partition      = Partition
+             , begin_offset   = Offset
+             , max_wait_time  = MaxWaitTime
+             , min_bytes      = MinBytes
+             , max_bytes      = MaxBytes
+             , sleep_timeout  = SleepTimeout
+             , prefetch_count = PrefetchCount
+             , socket_pid     = undefined
+             }}.
 
-  %% 3. Retrieve valid starting offset
-  State = State0#state{ socket_pid     = SocketPid
-                      , begin_offset   = Offset
-                      , max_wait_time  = MaxWaitTime
-                      , min_bytes      = MinBytes
-                      , max_bytes      = MaxBytes
-                      , sleep_timeout  = SleepTimeout
-                      , prefetch_count = PrefetchCount
-                      },
+handle_info(init_socket, #state{ client_pid = ClientPid
+                               , topic      = Topic
+                               , partition  = Partition
+                               , socket_pid = undefined
+                               , subscriber = Subscriber
+                               } = State0) ->
+  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  {ok, SocketPid} =
+    brod_client:get_leader_connection(ClientPid, Topic, Partition),
+  _ = erlang:monitor(process, SocketPid),
+
+  %% 2. Retrieve valid starting offset
+  State = State0#state{socket_pid = SocketPid},
   case resolve_begin_offset(State) of
     {ok, NewState} ->
       ok = brod_client:register_consumer(ClientPid, Topic, Partition),
+      %% 3. Start fetching messages if subscriber is present
+      case is_pid(Subscriber) of
+        true  -> self() ! ?SEND_FETCH_REQUEST;
+        false -> ok
+      end,
       {noreply, NewState};
     {error, Reason} ->
       {stop, {error, Reason}, State}
@@ -178,11 +181,20 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{subscriber = Pid} = State) ->
   error_logger:info_msg("~p ~p subscriber ~p is down",
                         [?MODULE, self(), Pid]),
-  NewState = reset_buffer(State#state{subscriber = undefined}),
+  NewState = reset_buffer(State#state{ subscriber      = undefined
+                                     , subscriber_mref = undefined
+                                     }),
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{socket_pid = Pid} = State) ->
-  {stop, {socket_down, Reason}, State};
+  Timeout = ?SOCKET_RETRY_DELAY_MS,
+  error_logger:info_msg("~p ~p socket ~p is down, reason: ~p, "
+                        "retrying in ~p ms",
+                        [?MODULE, self(), Pid, Reason, Timeout]),
+  erlang:send_after(Timeout, self(), init_socket),
+  State1 = State#state{socket_pid = undefined},
+  NewState = reset_buffer(State1),
+  {noreply, NewState};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p ~p got unexpected info: ~p",
                           [?MODULE, self(), Info]),
@@ -346,11 +358,20 @@ maybe_delay_fetch_request(_State) ->
 maybe_send_fetch_request(#state{ subscriber     = Subscriber
                                , pending_acks   = PendingAcks
                                , prefetch_count = PrefetchCount
+                               , socket_pid     = SocketPid
                                } = State) ->
-  case is_pid(Subscriber) andalso length(PendingAcks) < PrefetchCount of
+  case is_pid(SocketPid) andalso
+       is_pid(Subscriber) andalso
+       length(PendingAcks) < PrefetchCount of
     true ->
-      {ok, CorrId} = send_fetch_request(State),
-      State#state{last_corr_id = CorrId};
+      case send_fetch_request(State) of
+        {ok, CorrId} ->
+          State#state{last_corr_id = CorrId};
+        {error, {sock_down, _Reason}} ->
+          %% ignore error here, the socket pid 'DOWN' message
+          %% should trigger the socket re-init loop
+          State
+      end;
     false ->
       State
   end.
