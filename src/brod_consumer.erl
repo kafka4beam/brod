@@ -193,23 +193,26 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({subscribe, Pid, Options}, _From,
-            #state{subscriber = Subscriber} = State) ->
+            #state{subscriber = Subscriber} = State0) ->
   case Subscriber =:= undefined orelse
       not is_process_alive(Subscriber) orelse
       Subscriber =:= Pid of
     true ->
-      case update_options(Options, State) of
-        {ok, NewState} ->
+      case update_options(Options, State0) of
+        {ok, State1} ->
           Mref = erlang:monitor(process, Pid),
-          self() ! ?SEND_FETCH_REQUEST,
-          {reply, ok, NewState#state{ subscriber      = Pid
-                                    , subscriber_mref = Mref
-                                    }};
+          State2 = State1#state{ subscriber      = Pid
+                               , subscriber_mref = Mref
+                               },
+          %% always reset buffer to fetch again
+          State3 = reset_buffer(State2),
+          State = maybe_send_fetch_request(State3),
+          {reply, ok, State};
         {error, Reason} ->
-          {reply, {error, Reason}, State}
+          {reply, {error, Reason}, State0}
       end;
     false ->
-      {reply, {error, {already_subscribed_by, Subscriber}}, State}
+      {reply, {error, {already_subscribed_by, Subscriber}}, State0}
   end;
 handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
   is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
