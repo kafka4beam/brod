@@ -169,6 +169,54 @@ t_consumer_socket_restart(Config) ->
     ct:fail("timed out waiting for seqno subscriber to exit")
   end.
 
+%% @doc Data stream should resume after re-subscribe starting from the
+%% the last acked offset
+%% @end
+t_consumer_resubscribe(Config) when is_list(Config) ->
+  Client = ?config(client_pid),
+  Topic = ?TOPIC,
+  Partition = 0,
+  ProduceFun =
+    fun(I) ->
+      Key = list_to_binary(integer_to_list(I)),
+      Value = Key,
+      brod:produce_sync(Client, Topic, Partition, Key, Value)
+    end,
+  ReceiveFun =
+    fun(ExpectedSeqNo, Line) ->
+      receive
+        {_ConsumerPid, #kafka_message_set{messages = Messages}} ->
+          #kafka_message{ offset = Offset
+                        , key    = SeqNoBin
+                        , value  = SeqNoBin
+                        } = hd(Messages),
+          SeqNo = list_to_integer(binary_to_list(SeqNoBin)),
+          case SeqNo =:= ExpectedSeqNo of
+            true  -> Offset;
+            false -> ct:fail("unexpected message at line ~p, "
+                             "key=value=~p, offset=~p",
+                             [Line, SeqNo, Offset])
+          end
+      after 2000 ->
+        ct:fail("timed out receiving kafka message set at line ~p", [Line])
+      end
+    end,
+  {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
+  ok = ProduceFun(0),
+  ok = ProduceFun(1),
+  Offset0 = ReceiveFun(0, ?LINE),
+  brod:consume_ack(ConsumerPid, Offset0),
+  %% unsubscribe after ack 0
+  ok = brod:unsubscribe(Client, Topic, Partition),
+  {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
+  Offset1 = ReceiveFun(1, ?LINE),
+  %% unsubscribe before ack 1
+  ok = brod:unsubscribe(Client, Topic, Partition),
+  {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
+  %% message 1 should be redelivered
+  Offset1 = ReceiveFun(1, ?LINE),
+  ok.
+
 %%%_* Help functions ===========================================================
 
 %% @private Expecting sequence numbers delivered from kafka
@@ -196,7 +244,8 @@ seqno_consumer_loop(ExpectedSeqNo, ExitSeqNo) ->
   end.
 
 %% @private Verify if a received sequence number list is as expected
-%% sequence numbers are allowed to get redelivered, but should not be re-ordered.
+%% sequence numbers are allowed to get redelivered,
+%% but should not be re-ordered.
 %% @end
 verify_seqno(SeqNo, []) ->
   SeqNo + 1;

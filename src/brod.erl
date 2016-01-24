@@ -54,6 +54,8 @@
         , get_consumer/3
         , subscribe/3
         , subscribe/5
+        , unsubscribe/1
+        , unsubscribe/3
         ]).
 
 %% Management and testing API
@@ -254,6 +256,19 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
 -spec subscribe(pid(), pid(), consumer_options()) -> ok | {error, any()}.
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(client(), topic(), partition()) -> ok | {error, any()}.
+unsubscribe(Client, Topic, Partition) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> unsubscribe(ConsumerPid);
+    Error             -> Error
+  end.
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(pid()) -> ok.
+unsubscribe(ConsumerPid) ->
+  brod_consumer:unsubscribe(ConsumerPid).
 
 -spec consume_ack(client(), topic(), partition(), offset()) ->
         ok | {error, any()}.
