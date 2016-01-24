@@ -244,6 +244,10 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%%_* Internal Functions =======================================================
 
+do_debug(Pid, Debug) ->
+  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
+  ok.
+
 handle_fetch_response(_Response, _CorrId,
                       #state{subscriber = undefined} = State) ->
   %% discard fetch response when there is no (dead?) subscriber
@@ -388,10 +392,6 @@ send_fetch_request(#state{socket_pid = SocketPid} = State) ->
                           , min_bytes = State#state.min_bytes
                           , max_bytes = State#state.max_bytes},
   brod_sock:send(SocketPid, Request).
-
-do_debug(Pid, Debug) ->
-  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
-  ok.
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->

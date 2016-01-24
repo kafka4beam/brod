@@ -160,12 +160,12 @@ t_consumer_socket_restart(Config) ->
     end,
   Mref = erlang:monitor(process, SubscriberPid),
   %% tell subscriber to stop at ExitSeqNo because producer stopped before
-  %% that bumber.
+  %% that number.
   SubscriberPid ! {exit_seqno, ExitSeqNo},
   receive
     {'DOWN', Mref, process, SubscriberPid, Reason} ->
       ?assertEqual(normal, Reason)
-  after 5000 ->
+  after 6000 ->
     ct:fail("timed out waiting for seqno subscriber to exit")
   end.
 
@@ -266,6 +266,26 @@ t_subscriber_restart(Config) when is_list(Config) ->
   receive {subscribed, Subscriber1} -> ok end,
   ok = ReceiveFun(Subscriber1, 1),
   ok.
+
+t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
+  Client = ?config(client_pid),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key = make_unique_key(),
+  %% produce some random data just to make sure the partition is not empty
+  ok = brod:produce_sync(Client, Topic, Partition, Key, Key),
+  Options1 = [{begin_offset, 10000000000}],
+  Options2 = [{sleep_ms, 0}, {begin_offset, -2}],
+  Result = brod:subscribe(Client, self(), Topic, Partition, Options1),
+  ?assertEqual({error, no_available_offsets}, Result),
+  {ok, ConsumerPid} =
+    brod:subscribe(Client, self(), Topic, Partition, Options2),
+  receive
+    {ConsumerPid, #kafka_message_set{}} ->
+      ok
+  after 1000 ->
+    ct:fail("timed out receiving kafka message set", [])
+  end.
 
 %%%_* Help functions ===========================================================
 
