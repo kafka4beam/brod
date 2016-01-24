@@ -205,7 +205,7 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   ok = ProduceFun(0),
   ok = ProduceFun(1),
   Offset0 = ReceiveFun(0, ?LINE),
-  brod:consume_ack(ConsumerPid, Offset0),
+  ok = brod:consume_ack(ConsumerPid, Offset0),
   %% unsubscribe after ack 0
   ok = brod:unsubscribe(Client, Topic, Partition),
   {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
@@ -215,6 +215,56 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
   %% message 1 should be redelivered
   Offset1 = ReceiveFun(1, ?LINE),
+  ok.
+
+t_subscriber_restart(Config) when is_list(Config) ->
+  Client = ?config(client_pid),
+  Topic = ?TOPIC,
+  Partition = 0,
+  ProduceFun =
+    fun(I) ->
+      Key = list_to_binary(integer_to_list(I)),
+      Value = Key,
+      brod:produce_sync(Client, Topic, Partition, Key, Value)
+    end,
+  Parent = self(),
+  %% fuction to consume one message then exit(normal)
+  SubscriberFun =
+    fun() ->
+      {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
+      Parent ! {subscribed, self()},
+      receive
+        {ConsumerPid, #kafka_message_set{messages = Messages}} ->
+          #kafka_message{ offset = Offset
+                        , key    = SeqNoBin
+                        , value  = SeqNoBin
+                        } = hd(Messages),
+          SeqNo = list_to_integer(binary_to_list(SeqNoBin)),
+          Parent ! {self(), SeqNo},
+          ok = brod:consume_ack(ConsumerPid, Offset),
+          exit(normal)
+      after 2000 ->
+        ct:pal("timed out receiving kafka message set", []),
+        exit(timeout)
+      end
+    end,
+  Subscriber0 = erlang:spawn_link(SubscriberFun),
+  receive {subscribed, Subscriber0} -> ok end,
+  ReceiveFun =
+    fun(Subscriber, ExpectedSeqNo) ->
+      receive
+        {Subscriber, ExpectedSeqNo} ->
+          ok
+      after 3000 ->
+        ct:fail("timed out receiving seqno ~p", [ExpectedSeqNo])
+      end
+    end,
+  ok = ProduceFun(0),
+  ok = ProduceFun(1),
+  ok = ReceiveFun(Subscriber0, 0),
+  Subscriber1 = erlang:spawn_link(SubscriberFun),
+  receive {subscribed, Subscriber1} -> ok end,
+  ok = ReceiveFun(Subscriber1, 1),
   ok.
 
 %%%_* Help functions ===========================================================

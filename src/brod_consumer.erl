@@ -172,10 +172,10 @@ handle_info({msg, _Pid, CorrId, R}, State) ->
 handle_info(?SEND_FETCH_REQUEST, State0) ->
   State = maybe_send_fetch_request(State0),
   {noreply, State};
-handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
+handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{subscriber = Pid} = State) ->
-  error_logger:info_msg("~p ~p subscriber ~p is down",
-                        [?MODULE, self(), Pid]),
+  error_logger:info_msg("~p ~p subscriber ~p is down, reason: ~p",
+                        [?MODULE, self(), Pid, Reason]),
   NewState = reset_buffer(State#state{ subscriber      = undefined
                                      , subscriber_mref = undefined
                                      }),
@@ -194,7 +194,9 @@ handle_info(Info, State) ->
 
 handle_call({subscribe, Pid, Options}, _From,
             #state{subscriber = Subscriber} = State) ->
-  case Subscriber =:= undefined orelse Subscriber =:= Pid of
+  case Subscriber =:= undefined orelse
+      not is_process_alive(Subscriber) orelse
+      Subscriber =:= Pid of
     true ->
       case update_options(Options, State) of
         {ok, NewState} ->
