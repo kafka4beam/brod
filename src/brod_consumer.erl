@@ -77,7 +77,7 @@
 -define(SOCKET_RETRY_DELAY_MS, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
--define(INIT_SOCKET(IsRetry), {init_socket, IsRetry}).
+-define(INIT_SOCKET, init_socket).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -126,7 +126,7 @@ debug(Pid, File) when is_list(File) ->
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
-  self() ! ?INIT_SOCKET(_IsRetry = false),
+  self() ! ?INIT_SOCKET,
   MinBytes = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MaxBytes = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
   MaxWaitTime =
@@ -135,7 +135,7 @@ init({ClientPid, Topic, Partition, Config}) ->
     proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
-  Offset = proplists:get_value(offset, Config, ?DEFAULT_BEGIN_OFFSET),
+  Offset = proplists:get_value(offset, Config, undefined),
   {ok, #state{ client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
@@ -148,7 +148,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , socket_pid     = undefined
              }}.
 
-handle_info(?INIT_SOCKET(IsRetry),
+handle_info(?INIT_SOCKET,
             #state{ client_pid = ClientPid
                   , topic      = Topic
                   , partition  = Partition
@@ -156,27 +156,15 @@ handle_info(?INIT_SOCKET(IsRetry),
                   } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
-    {ok, SocketPid} when IsRetry ->
-      _ = erlang:monitor(process, SocketPid),
-      State1 = State0#state{socket_pid = SocketPid},
-      State = maybe_send_fetch_request(State1),
-      {noreply, State};
     {ok, SocketPid} ->
       _ = erlang:monitor(process, SocketPid),
       State1 = State0#state{socket_pid = SocketPid},
-      %% 2. Retrieve valid starting offset
-      case resolve_begin_offset(State1) of
-        {ok, State2} ->
-          ok = brod_client:register_consumer(ClientPid, Topic, Partition),
-          %% 3. Start fetching messages if subscriber is present
-          State = maybe_send_fetch_request(State2),
-          {noreply, State};
-        {error, Reason} ->
-          {stop, {error, Reason}, State1}
-      end;
+      ok = brod_client:register_consumer(ClientPid, Topic, Partition),
+      State = maybe_send_fetch_request(State1),
+      {noreply, State};
     {error, _Reason} ->
       Timeout = ?SOCKET_RETRY_DELAY_MS,
-      erlang:send_after(Timeout, self(), ?INIT_SOCKET(IsRetry)),
+      erlang:send_after(Timeout, self(), ?INIT_SOCKET),
       {noreply, State0}
   end;
 handle_info({msg, _Pid, CorrId, R}, State) ->
@@ -195,7 +183,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   Timeout = ?SOCKET_RETRY_DELAY_MS,
-  erlang:send_after(Timeout, self(), ?INIT_SOCKET(_IsRetry = true)),
+  erlang:send_after(Timeout, self(), ?INIT_SOCKET),
   State1 = State#state{socket_pid = undefined},
   NewState = reset_buffer(State1),
   {noreply, NewState};
@@ -386,6 +374,8 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
   end.
 
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
+  true = (is_integer(State#state.begin_offset) andalso
+          State#state.begin_offset >= 0), %% assert
   Request = #fetch_request{ topic = State#state.topic
                           , partition = State#state.partition
                           , offset = State#state.begin_offset
@@ -401,21 +391,26 @@ do_debug(Pid, Debug) ->
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
+  DefaultBeginOffset = case OldBeginOffset =:= undefined of
+                         true  -> ?DEFAULT_BEGIN_OFFSET;
+                         false -> OldBeginOffset
+                       end,
+  NewBeginOffset = F(begin_offset, DefaultBeginOffset),
   NewState =
-    State#state{ begin_offset   = F(begin_offset, State#state.begin_offset)
+    State#state{ begin_offset   = NewBeginOffset
                , min_bytes      = F(min_bytes, State#state.min_bytes)
                , max_bytes      = F(max_bytes, State#state.max_bytes)
                , max_wait_time  = F(max_wait_time, State#state.max_wait_time)
                , sleep_timeout  = F(sleep_timeout, State#state.sleep_timeout)
                , prefetch_count = F(prefetch_count, State#state.prefetch_count)
                },
-  case NewState#state.begin_offset =:= OldBeginOffset of
-    true  ->
-      {ok, NewState};
-    false ->
+  case NewBeginOffset =/= OldBeginOffset of
+    true ->
       %% reset buffer in case subscriber wants to fetch from a new offset
       NewState1 = NewState#state{pending_acks = []},
-      resolve_begin_offset(NewState1)
+      resolve_begin_offset(NewState1);
+    false ->
+      {ok, NewState}
   end.
 
 -spec resolve_begin_offset(#state{}) -> {ok, #state{}} | {error, any()}.
