@@ -77,6 +77,7 @@
 -define(SOCKET_RETRY_DELAY_MS, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
+-define(INIT_SOCKET(IsRetry), {init_socket, IsRetry}).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -125,7 +126,7 @@ debug(Pid, File) when is_list(File) ->
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
-  self() ! init_socket,
+  self() ! ?INIT_SOCKET(_IsRetry = false),
   MinBytes = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MaxBytes = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
   MaxWaitTime =
@@ -147,30 +148,36 @@ init({ClientPid, Topic, Partition, Config}) ->
              , socket_pid     = undefined
              }}.
 
-handle_info(init_socket, #state{ client_pid = ClientPid
-                               , topic      = Topic
-                               , partition  = Partition
-                               , socket_pid = undefined
-                               , subscriber = Subscriber
-                               } = State0) ->
+handle_info(?INIT_SOCKET(IsRetry),
+            #state{ client_pid = ClientPid
+                  , topic      = Topic
+                  , partition  = Partition
+                  , socket_pid = undefined
+                  } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  {ok, SocketPid} =
-    brod_client:get_leader_connection(ClientPid, Topic, Partition),
-  _ = erlang:monitor(process, SocketPid),
-
-  %% 2. Retrieve valid starting offset
-  State = State0#state{socket_pid = SocketPid},
-  case resolve_begin_offset(State) of
-    {ok, NewState} ->
-      ok = brod_client:register_consumer(ClientPid, Topic, Partition),
-      %% 3. Start fetching messages if subscriber is present
-      case is_pid(Subscriber) of
-        true  -> self() ! ?SEND_FETCH_REQUEST;
-        false -> ok
-      end,
-      {noreply, NewState};
-    {error, Reason} ->
-      {stop, {error, Reason}, State}
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, SocketPid} when IsRetry ->
+      _ = erlang:monitor(process, SocketPid),
+      State1 = State0#state{socket_pid = SocketPid},
+      State = maybe_send_fetch_request(State1),
+      {noreply, State};
+    {ok, SocketPid} ->
+      _ = erlang:monitor(process, SocketPid),
+      State1 = State0#state{socket_pid = SocketPid},
+      %% 2. Retrieve valid starting offset
+      case resolve_begin_offset(State1) of
+        {ok, State2} ->
+          ok = brod_client:register_consumer(ClientPid, Topic, Partition),
+          %% 3. Start fetching messages if subscriber is present
+          State = maybe_send_fetch_request(State2),
+          {noreply, State};
+        {error, Reason} ->
+          {stop, {error, Reason}, State1}
+      end;
+    {error, _Reason} ->
+      Timeout = ?SOCKET_RETRY_DELAY_MS,
+      erlang:send_after(Timeout, self(), ?INIT_SOCKET(IsRetry)),
+      {noreply, State0}
   end;
 handle_info({msg, _Pid, CorrId, R}, State) ->
   handle_fetch_response(R, CorrId, State);
@@ -185,13 +192,10 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
                                      , subscriber_mref = undefined
                                      }),
   {noreply, NewState};
-handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
+handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   Timeout = ?SOCKET_RETRY_DELAY_MS,
-  error_logger:info_msg("~p ~p socket ~p is down, reason: ~p, "
-                        "retrying in ~p ms",
-                        [?MODULE, self(), Pid, Reason, Timeout]),
-  erlang:send_after(Timeout, self(), init_socket),
+  erlang:send_after(Timeout, self(), ?INIT_SOCKET(_IsRetry = true)),
   State1 = State#state{socket_pid = undefined},
   NewState = reset_buffer(State1),
   {noreply, NewState};
@@ -262,14 +266,14 @@ handle_fetch_response(_Response, CorrId1,
 handle_fetch_response(#fetch_response{ topics = []
                                      , error = max_bytes_too_small
                                      }, _CorrId,
-                      #state{max_bytes = MaxBytes} = State) ->
+                      #state{max_bytes = MaxBytes} = State0) ->
   NewMaxBytes = MaxBytes * 2,
   error_logger:warning_msg("~p ~p max_bytes ~p is not large enough, "
                            "trying with a larger value ~p",
                            [?MODULE, self(), MaxBytes, NewMaxBytes]),
-  NewState = State#state{max_bytes = NewMaxBytes},
-  self() ! ?SEND_FETCH_REQUEST,
-  {noreply, NewState};
+  State1 = State0#state{max_bytes = NewMaxBytes},
+  State = maybe_send_fetch_request(State1),
+  {noreply, State};
 handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
                                      , error  = undefined
                                      }, CorrId, State) ->
@@ -297,8 +301,8 @@ handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
       handle_message_set(MsgSet, State)
   end.
 
-handle_message_set(#kafka_message_set{messages = []}, State) ->
-  ok = maybe_delay_fetch_request(State),
+handle_message_set(#kafka_message_set{messages = []}, State0) ->
+  State = maybe_delay_fetch_request(State0),
   {noreply, State};
 handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                    #state{ subscriber    = Subscriber
@@ -353,12 +357,11 @@ cast_to_subscriber(Pid, Msg) ->
   end.
 
 -spec maybe_delay_fetch_request(#state{}) -> ok.
-maybe_delay_fetch_request(#state{sleep_timeout = T}) when T > 0 ->
+maybe_delay_fetch_request(#state{sleep_timeout = T} = State) when T > 0 ->
   _ = erlang:send_after(T, self(), ?SEND_FETCH_REQUEST),
-  ok;
-maybe_delay_fetch_request(_State) ->
-  self() ! ?SEND_FETCH_REQUEST,
-  ok.
+  State;
+maybe_delay_fetch_request(State) ->
+  maybe_send_fetch_request(State).
 
 %% @private Send new fetch request if no pending error.
 maybe_send_fetch_request(#state{ subscriber     = Subscriber
