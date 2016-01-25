@@ -96,11 +96,12 @@ start_link(ClientPid, Topic, Partition, Config, Debug) ->
 stop(Pid) ->
   gen_server:call(Pid, stop, infinity).
 
+%% @doc Subscribe on messages from a partition
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
-%% @doc Ubsubscribe the current subscriber.
+%% @doc Unsubscribe the current subscriber.
 -spec unsubscribe(pid()) -> ok.
 unsubscribe(Pid) ->
   gen_server:call(Pid, unsubscribe).
@@ -193,13 +194,16 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({subscribe, Pid, Options}, _From,
-            #state{subscriber = Subscriber} = State0) ->
+            #state{ subscriber = Subscriber
+                  , subscriber_mref = OldMref} = State0) ->
   case Subscriber =:= undefined orelse
       not is_process_alive(Subscriber) orelse
       Subscriber =:= Pid of
     true ->
       case update_options(Options, State0) of
         {ok, State1} ->
+          %% demonitor in case the same process tries to subscribe again
+          is_reference(OldMref) andalso erlang:demonitor(OldMref, [flush]),
           Mref = erlang:monitor(process, Pid),
           State2 = State1#state{ subscriber      = Pid
                                , subscriber_mref = Mref
@@ -445,7 +449,7 @@ fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
     []       -> {error, no_available_offsets}
   end.
 
-%% @private Rest fetch buffer, use the last unacked offset as the next begin
+%% @private Reset fetch buffer, use the last unacked offset as the next begin
 %% offset to fetch data from.
 %% @end
 -spec reset_buffer(#state{}) -> #state{}.
