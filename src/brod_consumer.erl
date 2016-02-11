@@ -388,7 +388,7 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
 
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
   true = (is_integer(State#state.begin_offset) andalso
-          State#state.begin_offset > 0), %% assert
+          State#state.begin_offset >= 0), %% assert
   Request = #fetch_request{ topic = State#state.topic
                           , partition = State#state.partition
                           , offset = State#state.begin_offset
