@@ -176,7 +176,7 @@ init({ClientPid, Topic, Partition, Config}) ->
         case brod_sock:send(SockPid, KafkaReq) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
-          {error, Reason} -> exit(Reason)
+          {error, Reason} -> {error, Reason}
         end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
