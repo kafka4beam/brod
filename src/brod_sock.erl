@@ -197,7 +197,7 @@ handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
     lists:foldl(
       fun({CorrId, Response}, Reqs) ->
         Caller = brod_kafka_requests:get_caller(Reqs, CorrId),
-        safe_send(Caller, {msg, self(), CorrId, Response}),
+        cast(Caller, {msg, self(), CorrId, Response}),
         brod_kafka_requests:del(Reqs, CorrId)
       end, Requests, Responses),
   ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
@@ -230,7 +230,7 @@ handle_msg(Msg, State, Debug) ->
                           [?MODULE, self(), Msg]),
   ?MODULE:loop(State, Debug).
 
-safe_send(Pid, Msg) ->
+cast(Pid, Msg) ->
   try
     Pid ! Msg,
     ok

@@ -19,6 +19,12 @@
 
 -include("brod.hrl").
 
+-type topic()      :: kafka_topic().
+-type partition()  :: kafka_partition().
+-type offset()     :: kafka_offset().
+-type error_code() :: kafka_error_code().
+-type client_id()  :: brod_client_id().
+
 %% Error code macros, mirrored (including TODOs) from:
 %% https://github.com/apache/kafka/blob/0.8.2/clients/src/
 %%       main/java/org/apache/kafka/common/protocol/Errors.java
@@ -44,18 +50,26 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
--type hostname()        :: string().
--type portnum()         :: pos_integer().
--type endpoint()        :: {hostname(), portnum()}.
--type cluster_id()      :: atom().
--type leader_id()       :: non_neg_integer().
--type corr_id()         :: 0..?MAX_CORR_ID.
--type kafka_kv()        :: {binary(), binary()}.
--type client_config()   :: brod_client_config().
--type producer_config() :: brod_producer_config().
--type consumer_config() :: brod_consumer_config().
--type client()          :: client_id() | pid().
--type required_acks()   :: -1..1.
+-type consumer_option() :: begin_offset
+                         | min_bytes
+                         | max_bytes
+                         | max_wait_time
+                         | sleep_timeout
+                         | prefetch_count.
+
+-type hostname()         :: string().
+-type portnum()          :: pos_integer().
+-type endpoint()         :: {hostname(), portnum()}.
+-type cluster_id()       :: atom().
+-type leader_id()        :: non_neg_integer().
+-type corr_id()          :: 0..?MAX_CORR_ID.
+-type kafka_kv()         :: {binary(), binary()}.
+-type client_config()    :: brod_client_config().
+-type producer_config()  :: brod_producer_config().
+-type consumer_config()  :: brod_consumer_config().
+-type consumer_options() :: [{consumer_option(), integer()}].
+-type client()           :: client_id() | pid().
+-type required_acks()    :: -1..1.
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
@@ -150,14 +164,16 @@
                             , error_code     :: error_code()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
-                            , messages       :: [#message{}]
+                            , messages       :: [#kafka_message{}]
                             }).
 
 -record(topic_fetch_data, { topic      :: topic()
                           , partitions :: [#partition_messages{}]
                           }).
 
--record(fetch_response, {topics = [#topic_fetch_data{}]}).
+-record(fetch_response, { topics = [#topic_fetch_data{}]
+                        , error :: undefined | max_bytes_too_small
+                        }).
 
 -define(undef, undefined).
 

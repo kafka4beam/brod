@@ -6,6 +6,7 @@ env:
   BROD_CLI_PRODUCE_TEST_TOPIC: brod-cli-produce-test
   BROD_CLIENT_SUITE_TOPIC: brod-client-SUITE-topic
   BROD_PRODUCER_SUITE_TOPIC: brod_producer_SUITE
+  BROD_CONSUMER_SUITE_TOPIC: brod_consumer_SUITE
 
 before_install:
   - sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 36A1D7869245C8950F966E92D8576A8BA88D21E9
@@ -20,6 +21,7 @@ before_install:
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLI_PRODUCE_TEST_TOPIC"
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CLIENT_SUITE_TOPIC"
   - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_PRODUCER_SUITE_TOPIC"
+  - sudo docker exec kafka bash -c "/opt/kafka*/bin/kafka-topics.sh --zookeeper localhost --create --partitions 1 --replication-factor 1 --topic $BROD_CONSUMER_SUITE_TOPIC"
 
 notifications:
   email: false

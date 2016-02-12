@@ -390,7 +390,7 @@ t_decode_fetch(Config) when is_list(Config) ->
 
   Bin3 = <<?i32(1), ?i16((size(Topic))), Topic/binary, ?i32(1),
            ?i32(0), ?i16(0), ?i64(0), ?i32(13), ?i64(0), ?i32(16), "x">>,
-  ?assertThrow("max_bytes option is too small",
+  ?assertMatch(#fetch_response{topics = [], error = max_bytes_too_small},
                brod_kafka:decode(?API_KEY_FETCH, Bin3)),
 
   Topic1 = <<"t1">>,
@@ -409,30 +409,30 @@ t_decode_fetch(Config) when is_list(Config) ->
   V2 = random_bytes(),
   %% K2 = <<"a">>,
   %% V2 = <<"b">>,
-  Message1 = #message{ offset = 0
-                     , magic_byte = ?MAGIC_BYTE
-                     , attributes = 0
-                     , crc = msgcrc(<<"1">>, <<"2">>)
-                     , key = <<"1">>
-                     , value = <<"2">>},
-  Message2 = #message{ offset = -1
-                     , magic_byte = ?MAGIC_BYTE
-                     , attributes = 0
-                     , crc = msgcrc(K2, V2)
-                     , key = K2
-                     , value = V2},
-  Message3 = #message{ offset = 0
-                     , magic_byte = ?MAGIC_BYTE
-                     , attributes = 0
-                     , crc = msgcrc(<<>>, <<"0">>)
-                     , key = <<>>
-                     , value = <<"0">>},
-  Message4 = #message{ offset = 0
-                     , magic_byte = ?MAGIC_BYTE
-                     , attributes = 0
-                     , crc = msgcrc(<<>>, <<>>)
-                     , key = <<>>
-                     , value = <<>>},
+  Message1 = #kafka_message{ offset = 0
+                           , magic_byte = ?MAGIC_BYTE
+                           , attributes = 0
+                           , crc = msgcrc(<<"1">>, <<"2">>)
+                           , key = <<"1">>
+                           , value = <<"2">>},
+  Message2 = #kafka_message{ offset = -1
+                           , magic_byte = ?MAGIC_BYTE
+                           , attributes = 0
+                           , crc = msgcrc(K2, V2)
+                           , key = K2
+                           , value = V2},
+  Message3 = #kafka_message{ offset = 0
+                           , magic_byte = ?MAGIC_BYTE
+                           , attributes = 0
+                           , crc = msgcrc(<<>>, <<"0">>)
+                           , key = <<>>
+                           , value = <<"0">>},
+  Message4 = #kafka_message{ offset = 0
+                           , magic_byte = ?MAGIC_BYTE
+                           , attributes = 0
+                           , crc = msgcrc(<<>>, <<>>)
+                           , key = <<>>
+                           , value = <<>>},
   Partitions1 = [ #partition_messages{ partition = Partition2
                                      , error_code = ErrorCodeDecoded2
                                      , high_wm_offset = HighWmOffset2
