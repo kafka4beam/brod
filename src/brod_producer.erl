@@ -203,18 +203,19 @@ init({ClientPid, Topic, Partition, Config}) ->
   {ok, State}.
 
 handle_info({?RETRY_MSG, Msg}, State0) ->
-  case init_socket(State0) of
-    {ok, State1} ->
-      case maybe_retry(State1) of
+  State1 = State0#state{retry_tref = undefined},
+  case init_socket(State1) of
+    {ok, State2} ->
+      case maybe_retry(State2) of
         {ok, State} ->
           {noreply, State};
         false ->
           Error = io_lib:format("brod_producer ~p failed to recover after ~p retries: ~p",
-                                [self(), State1#state.retries, Msg]),
-          {stop, iolist_to_binary(Error), State1}
+                                [self(), State2#state.retries, Msg]),
+          {stop, iolist_to_binary(Error), State2}
       end;
     {error, Error} ->
-      {ok, State} = schedule_retry(State0, Error),
+      {ok, State} = schedule_retry(State1, Error),
       {noreply, State}
   end;
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
