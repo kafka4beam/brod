@@ -1,0 +1,21 @@
+version: '2'
+
+services:
+  zookeeper:
+    extends:
+      file: docker-compose-basic.yml
+      service: zookeeper
+  kafka_1:
+    image: docker_kafka
+    container_name: kafka_1
+    ports:
+      - "9092:9092"
+  kafka_2:
+    image: docker_kafka
+    container_name: kafka_2
+    ports:
+      - "9093:9093"
+    environment:
+      BROKER_ID: 1
+      ADVERTISED_PORT: 9093
+
