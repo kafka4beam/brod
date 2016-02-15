@@ -141,15 +141,12 @@ get_leader_connection(Client, Topic, Partition) ->
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = Partitions
                  } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-  #partition_metadata{ error_code = PartitionEC
-                     , leader_id  = LeaderId} =
+  brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
+  #partition_metadata{leader_id = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
+  LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-
   get_connection(Client, Host, Port).
 
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
@@ -401,14 +398,8 @@ do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
   brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw(TopicErrorCode),
-  lists:map(
-    fun(#partition_metadata{ error_code = PartitionErrorCode
-                           , id         = Partition
-                           }) ->
-      brod_kafka:is_error(PartitionErrorCode) andalso
-        erlang:throw(PartitionErrorCode),
-      Partition
-    end, Partitions).
+  lists:map(fun(#partition_metadata{id = Partition}) -> Partition end,
+            Partitions).
 
 -spec do_get_metadata(topic(), #state{}) ->
         {ok, #metadata_response{}} | {error, any()}.
