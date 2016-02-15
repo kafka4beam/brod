@@ -17,5 +17,5 @@ services:
       - "9093:9093"
     environment:
       BROKER_ID: 1
-      ADVERTISED_PORT: 9093
+      KAFKA_PORT: 9093
 

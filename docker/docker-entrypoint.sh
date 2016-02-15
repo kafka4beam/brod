@@ -25,9 +25,9 @@ if [ ! -z "$BROKER_ID" ]; then
   sed -r -i "s/^(broker.id)=(.*)/\1=$BROKER_ID/g" $prop_file
 fi
 
-if [ ! -z "$ADVERTISED_PORT" ]; then
-  echo "advertised port: $ADVERTISED_PORT"
-  sed -r -i "s/^(advertised.port)=(.*)/\1=$ADVERTISED_PORT/g" $prop_file
+if [ ! -z "$KAFKA_PORT" ]; then
+  echo "port: $KAFKA_PORT"
+  sed -r -i "s/^(listeners)=(.*)/\1=PLAINTEXT:\/\/:$KAFKA_PORT/g" $prop_file
 fi
 
 /opt/kafka/bin/kafka-server-start.sh $prop_file
