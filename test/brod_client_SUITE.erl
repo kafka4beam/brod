@@ -183,14 +183,12 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   %% and the restart is triggered by producer restart
   %% add 2 seconds more in wait timeout to avoid race
   Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
-  SockPid = ?WAIT({socket_started, Ref, Pid_}, Pid_, 2000),
+  ?WAIT({socket_started, Ref, Pid_}, Pid_, 2000),
   ?WAIT({WriterPid, {produce_result, ok}}, ok, Timeout),
   %% stop the temp writer
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
   ?WAIT({'DOWN', Mref, process, WriterPid, normal}, ok, 5000),
-  {ok, SockPid_} = brod_client:get_connection(Client, ?HOST, ?PORT),
-  ?assertEqual(SockPid, SockPid_),
   ok.
 
 %%%_* Help functions ===========================================================

@@ -23,8 +23,7 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ get_connection/3
-        , get_consumer/3
+-export([ get_consumer/3
         , get_leader_connection/3
         , get_metadata/2
         , get_partitions/2
@@ -141,32 +140,17 @@ get_leader_connection(Client, Topic, Partition) ->
   #topic_metadata{ error_code = TopicErrorCode
                  , partitions = Partitions
                  } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-  #partition_metadata{ error_code = PartitionEC
-                     , leader_id  = LeaderId} =
+  brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
+  #partition_metadata{leader_id = LeaderId} =
     lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
+  LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
   #broker_metadata{host = Host, port = Port} =
     lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-
   get_connection(Client, Host, Port).
 
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
-
-%% @doc Get the connection to kafka broker at Host:Port.
-%% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another producer
-%% the same socket is returned.
-%% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
-%% @end
--spec get_connection(client(), hostname(), portnum()) ->
-                        {ok, pid()} | {error, any()}.
-get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
@@ -331,6 +315,18 @@ terminate(Reason, #state{ client_id     = ClientId
 
 %%%_* Internal Functions =======================================================
 
+%% @private Get the connection to kafka broker at Host:Port.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another producer
+%% the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+%% @end
+-spec get_connection(client(), hostname(), portnum()) ->
+                        {ok, pid()} | {error, any()}.
+get_connection(Client, Host, Port) ->
+  gen_server:call(Client, {get_connection, Host, Port}, infinity).
+
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
@@ -401,14 +397,8 @@ do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
   brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw(TopicErrorCode),
-  lists:map(
-    fun(#partition_metadata{ error_code = PartitionErrorCode
-                           , id         = Partition
-                           }) ->
-      brod_kafka:is_error(PartitionErrorCode) andalso
-        erlang:throw(PartitionErrorCode),
-      Partition
-    end, Partitions).
+  lists:map(fun(#partition_metadata{id = Partition}) -> Partition end,
+            Partitions).
 
 -spec do_get_metadata(topic(), #state{}) ->
         {ok, #metadata_response{}} | {error, any()}.
