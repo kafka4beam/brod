@@ -23,8 +23,7 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ get_connection/3
-        , get_consumer/3
+-export([ get_consumer/3
         , get_leader_connection/3
         , get_metadata/2
         , get_partitions/2
@@ -152,18 +151,6 @@ get_leader_connection(Client, Topic, Partition) ->
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
-
-%% @doc Get the connection to kafka broker at Host:Port.
-%% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another producer
-%% the same socket is returned.
-%% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
-%% @end
--spec get_connection(client(), hostname(), portnum()) ->
-                        {ok, pid()} | {error, any()}.
-get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
@@ -327,6 +314,18 @@ terminate(Reason, #state{ client_id     = ClientId
     end, [MetaSock | Sockets]).
 
 %%%_* Internal Functions =======================================================
+
+%% @private Get the connection to kafka broker at Host:Port.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another producer
+%% the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+%% @end
+-spec get_connection(client(), hostname(), portnum()) ->
+                        {ok, pid()} | {error, any()}.
+get_connection(Client, Host, Port) ->
+  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
