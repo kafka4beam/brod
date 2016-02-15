@@ -25,21 +25,26 @@
 %%%     |    +-- producers_sup level 1
 %%%     |    |     |
 %%%     |    |     +-- producers_sup level 2 for topic 1
-%%%     |    |     |   |
-%%%     |    |     |   +-- partition_0_worker
-%%%     |    |     |   |
-%%%     |    |     |   +-- partition_1_worker
-%%%     |    |     |   |...
+%%%     |    |     |     |
+%%%     |    |     |     +-- partition_0_worker
+%%%     |    |     |     |
+%%%     |    |     |     +-- partition_1_worker
+%%%     |    |     |     |...
 %%%     |    |     |
 %%%     |    |     +-- producers_sup level 2 for topic 2
-%%%     |    |     |   |...
+%%%     |    |     |     |...
 %%%     |    |     |...
 %%%     |    |
-%%%     |    +-- consumers_sup (one_for_one)
+%%%     |    +-- consumers_sup level 1
 %%%     |          |
-%%%     |          +-- topic_1_worker
+%%%     |          +-- consumer_sup level 2 for topic 1
 %%%     |          |     |
-%%%     |          |     +-- consumer_sup (one for one)
+%%%     |          |     +-- partition_0_worker
+%%%     |          |     |
+%%%     |          |     +-- partition_1_worker
+%%%     |          |     |...
+%%%     |          |
+%%%     |          +-- consumer_sup level 2 for topic 1
 %%%     |          |     |...
 %%%     |          |...
 %%%     |
@@ -77,7 +82,7 @@
 %%        , [ { endpoints, [{"localhost", 9092}]}
 %%          , { config
 %%            , [ {restart_delay_seconds, 10}
-%%                %% @see brod:start_link_client/4 for more client configs
+%%                %% @see brod:start_link_client/5 for more client configs
 %%              ]
 %%            }
 %%          , { producers
@@ -85,26 +90,21 @@
 %%                , [ {topic_restart_delay_seconds, 2}
 %%                  , {partition_restart_delay_seconds, 2}
 %%                  , {required_acks, -1}
-%%                  %% @see brod:start_link_client/4 for more producer configs
+%%                  %% @see brod:start_link_client/5 for more producer configs
 %%                  ]
 %%                }
 %%              ]
 %%            }
-%%          ]
-%%        }
-%%      , {client_2 %% unique client ID
-%%        , [ { endpoints, [{"localhost", 9092}]}
-%%          , { config
-%%            , [ {restart_delay_seconds, 10}
-%%                %% @see brod:start_link_client/4 for more client configs
-%%              ]
-%%            }
 %%          , { consumers
 %%            , [ { <<"test-topic">> %% topic name
-%%                , [] %% equiv all partitions
+%%                , [ {min_bytes, 0}
+%%                  , {max_bytes, 1048576}
+%%                  %% see brod_consumer:start_link/4 for more configs
+%%                  ]
 %%                }
-%%              , { <<"test-topic-2">> %% topic name
-%%                , [ {partitions, [1,2,3]}
+%%                %% TODO: add consumer group
+%%              , { {group, <<"consumer-groupd-id">>}
+%%                  [ {min_bytes, 0}
 %%                  ]
 %%                }
 %%              ]
@@ -159,7 +159,7 @@ verify_config([], _Producers, _Consumers) ->
   exit("No endpoints found in brod client config.");
 verify_config(_Endpoints, [], []) ->
   exit("At least one non-empty list of {producers, _} or {consumers, _}"
-      " required in brod client config.");
+       " required in brod client config.");
 verify_config(_Endpoints, _Producers, _Consumers) ->
   ok.
 

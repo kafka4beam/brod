@@ -23,17 +23,21 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ find_producer/3
-        , find_consumer/3
-        , get_connection/3
+-export([ get_consumer/3
         , get_leader_connection/3
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
+        , register_consumer/3
         , register_producer/3
         , start_link/4
         , start_link/5
         , stop/1
+        ]).
+
+%% Private export
+-export([ find_producer/3
+        , find_consumer/3
         ]).
 
 -export([ code_change/3
@@ -56,8 +60,28 @@
 -define(ETS(ClientId), ClientId).
 -define(PRODUCER_KEY(Topic, Partition),
         {producer, Topic, Partition}).
+-define(CONSUMER_KEY(Topic, Partition),
+        {consumer, Topic, Partition}).
 -define(PRODUCER(Topic, Partition, Pid),
         {?PRODUCER_KEY(Topic, Partition), Pid}).
+-define(CONSUMER(Topic, Partition, Pid),
+        {?CONSUMER_KEY(Topic, Partition), Pid}).
+
+-type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
+                              | ?CONSUMER_KEY(topic(), partition()).
+
+-type get_producer_error() :: client_down
+                            | {producer_down, noproc}
+                            | {producer_not_found, topic()}
+                            | {producer_not_found, topic(), partition()}.
+
+-type get_consumer_error() :: client_down
+                            | {consumer_down, noproc}
+                            | {consumer_not_found, topic()}
+                            | {consumer_not_found, topic(), partition()}.
+
+-type get_worker_error() :: get_producer_error()
+                          | get_consumer_error().
 
 -record(sock,
         { endpoint :: endpoint()
@@ -72,7 +96,7 @@
         , producers_sup :: pid() | undefined
         , consumers_sup :: pid() | undefined
         , config        :: client_config()
-        , producers_tab :: ets:tab()
+        , workers_tab   :: ets:tab()
         }).
 
 %%%_* APIs =====================================================================
@@ -118,15 +142,12 @@ get_leader_connection(Client, Topic, Partition) ->
       #topic_metadata{ error_code = TopicErrorCode
                      , partitions = Partitions
                      } = TopicMetadata,
-      brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-      #partition_metadata{ error_code = PartitionEC
-                         , leader_id  = LeaderId} =
+      brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
+      #partition_metadata{leader_id = LeaderId} =
         lists:keyfind(Partition, #partition_metadata.id, Partitions),
-      brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-      LeaderId >= 0 orelse erlang:throw({no_leader, {Client, Topic, Partition}}),
+      LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
       #broker_metadata{host = Host, port = Port} =
         lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-
       get_connection(Client, Host, Port);
     {error, Reason} ->
       {error, Reason}
@@ -135,18 +156,6 @@ get_leader_connection(Client, Topic, Partition) ->
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
-
-%% @doc Get the connection to kafka broker at Host:Port.
-%% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another producer
-%% the same socket is returned.
-%% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
-%% @end
--spec get_connection(client(), hostname(), portnum()) ->
-                        {ok, pid()} | {error, any()}.
-get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
@@ -164,67 +173,36 @@ get_partitions(Client, Topic) ->
       {error, Reason}
   end.
 
-%% @doc Register self() as a partition producer the pid is registered in an ETS
+%% @doc Register self() as a partition producer. The pid is registered in an ETS
 %% table, then the callers may lookup a producer pid from the table and make
 %% produce requests to the producer process directly.
 %% @end
 -spec register_producer(client(), topic(), partition()) -> ok.
 register_producer(Client, Topic, Partition) ->
   Producer = self(),
-  gen_server:cast(Client, {register_producer, Topic, Partition, Producer}).
+  Key = ?PRODUCER_KEY(Topic, Partition),
+  gen_server:cast(Client, {register, Key, Producer}).
 
-%% @doc Get producer of a given topic-partition.
+%% @doc Register self() as a partition consumer. The pid is registered in an ETS
+%% table, then the callers may lookup a consumer pid from the table ane make
+%% subscribe calls to the process directly.
+%% @end
+register_consumer(Client, Topic, Partition) ->
+  Consumer = self(),
+  Key = ?CONSUMER_KEY(Topic, Partition),
+  gen_server:cast(Client, {register, Key, Consumer}).
+
+%% @doc Get producer of the given topic-partition.
 -spec get_producer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, Reason}
-          when Reason :: client_down
-                       | {producer_down, noproc}
-                       | {producer_not_found, topic()}
-                       | {producer_not_found, topic(), partition()}.
-get_producer(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
-  case erlang:process_info(ClientPid, registered_name) of
-    {registered_name, ClientId} ->
-      get_producer(ClientId, Topic, Partition);
-    Err when Err =:= [] orelse Err =:= ?undef ->
-      {error, client_down}
-  end;
-get_producer(ClientId, Topic, Partition) when is_atom(ClientId) ->
-  try
-    case ets:lookup(?ETS(ClientId), ?PRODUCER_KEY(Topic, Partition)) of
-      [] ->
-        %% not yet registered, 2 possible reasons:
-        %% 1. caller is too fast, producers are starting up
-        %%    make a synced call all the way down the supervision tree
-        %%    to the partition producer sup should resolve the race
-        %% 2. bad argument, no such worker started, supervisors should know
-        find_producer(ClientId, Topic, Partition);
-      [?PRODUCER(Topic, Partition, Pid)] ->
-        {ok, Pid}
-    end
-  catch error:badarg ->
-    {error, client_down}
-  end.
+        {ok, pid()} | {error, get_producer_error()}.
+get_producer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)).
 
--spec find_producer(client(), topic(), partition()) ->
-                       {ok, pid()} | {error, Reason} when
-        Reason :: {producer_not_found, topic()}
-                | {producer_not_found, topic(), partition()}
-                | {producer_down, noproc}
-                | client_down.
-find_producer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
-    brod_producers_sup:find_producer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
-  end.
-
-find_consumer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
-    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
-  end.
+%% @doc Get consumer of the given topic-parition.
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
+get_consumer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -233,19 +211,19 @@ init({ClientId, Endpoints, Producers, Consumers, Config}) ->
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id     = ClientId
-             , endpoints     = Endpoints
-             , config        = Config
-             , producers_tab = Tab
+  {ok, #state{ client_id   = ClientId
+             , endpoints   = Endpoints
+             , config      = Config
+             , workers_tab = Tab
              }};
 init({Endpoints, Producers, Consumers, Config}) ->
   erlang:process_flag(trap_exit, true),
-  Tab = ets:new(producers_tab, [protected, {read_concurrency, true}]),
+  Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id     = ?DEFAULT_CLIENT_ID
-             , endpoints     = Endpoints
-             , config        = Config
-             , producers_tab = Tab
+  {ok, #state{ client_id   = ?DEFAULT_CLIENT_ID
+             , endpoints   = Endpoints
+             , config      = Config
+             , workers_tab = Tab
              }}.
 
 handle_info({init, Producers, Consumers}, State) ->
@@ -291,6 +269,8 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+handle_call(get_workers_table, _From, State) ->
+  {reply, State#state.workers_tab, State};
 handle_call(get_producers_sup_pid, _From, State) ->
   {reply, State#state.producers_sup, State};
 handle_call(get_consumers_sup_pid, _From, State) ->
@@ -306,9 +286,8 @@ handle_call(stop, _From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast({register_producer, Topic, Partition, ProducerPid},
-            #state{producers_tab = Tab} = State) ->
-  ets:insert(Tab, ?PRODUCER(Topic, Partition, ProducerPid)),
+handle_cast({register, Key, Pid}, #state{workers_tab = Tab} = State) ->
+  ets:insert(Tab, {Key, Pid}),
   {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",
@@ -341,19 +320,90 @@ terminate(Reason, #state{ client_id     = ClientId
 
 %%%_* Internal Functions =======================================================
 
+%% @private Get the connection to kafka broker at Host:Port.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another producer
+%% the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+%% @end
+-spec get_connection(client(), hostname(), portnum()) ->
+                        {ok, pid()} | {error, any()}.
+get_connection(Client, Host, Port) ->
+  gen_server:call(Client, {get_connection, Host, Port}, infinity).
+
+-spec get_partition_worker(client(), partition_worker_key()) ->
+        {ok, pid()} | {error, get_worker_error()}.
+get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
+  case erlang:process_info(ClientPid, [registered_name]) of
+    [{registered_name, []}] ->
+      %% This is a client process started without registered name
+      %% have to call the process to get the producer/consumer worker
+      %% process registration table.
+      Ets = gen_server:call(ClientPid, get_workers_table, infinity),
+      lookup_partition_worker(ClientPid, Ets, Key);
+    [{registered_name, ClientId}] ->
+      get_partition_worker(ClientId, Key)
+  end;
+get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
+  lookup_partition_worker(ClientId, ?ETS(ClientId), Key).
+
+-spec lookup_partition_worker(client(), ets:tab(), partition_worker_key()) ->
+        {ok, pid()} | { error, get_worker_error()}.
+lookup_partition_worker(Client, Ets, Key) ->
+  try
+    case ets:lookup(Ets, Key) of
+      [] ->
+        %% not yet registered, 2 possible reasons:
+        %% 1. caller is too fast, producers/consumers are starting up
+        %%    make a synced call all the way down the supervision tree
+        %%    to the partition producer sup should resolve the race
+        %% 2. bad argument, no such worker started, supervisors should know
+        find_partition_worker(Client, Key);
+      [?PRODUCER(_Topic, _Partition, Pid)] ->
+        {ok, Pid};
+      [?CONSUMER(_Topic, _Partition, Pid)] ->
+        {ok, Pid}
+    end
+  catch error:badarg ->
+    %% ets table no exist (or closed)
+    {error, client_down}
+  end.
+
+-spec find_partition_worker(client(), partition_worker_key()) ->
+        {ok, pid()} | {error, get_worker_error()}.
+find_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) ->
+  find_producer(Client, Topic, Partition);
+find_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)) ->
+  find_consumer(Client, Topic, Partition).
+
+-spec find_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_producer_error()}.
+find_producer(Client, Topic, Partition) ->
+  try
+    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
+    brod_producers_sup:find_producer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
+
+-spec find_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
+find_consumer(Client, Topic, Partition) ->
+  try
+    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
+    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
+  catch exit : {noproc, _} ->
+    {error, client_down}
+  end.
+
 -spec do_get_partitions(#topic_metadata{}) -> [partition()].
 do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
                                  , partitions = Partitions}) ->
   brod_kafka:is_error(TopicErrorCode) andalso
     erlang:throw(TopicErrorCode),
-  lists:map(
-    fun(#partition_metadata{ error_code = PartitionErrorCode
-                           , id         = Partition
-                           }) ->
-      brod_kafka:is_error(PartitionErrorCode) andalso
-        erlang:throw(PartitionErrorCode),
-      Partition
-    end, Partitions).
+  lists:map(fun(#partition_metadata{id = Partition}) -> Partition end,
+            Partitions).
 
 -spec do_get_metadata(topic(), #state{}) ->
         {ok, #metadata_response{}} | {error, any()}.
@@ -388,7 +438,7 @@ maybe_connect(#state{client_id = ClientId} = State,
     true ->
       connect(State, Host, Port);
     false ->
-      error_logger:error_msg("~p (re)connect to ~p:~p~n aborted, "
+      error_logger:error_msg("~p (re)connect to ~s:~p aborted, "
                              "last failure reason:~p",
                              [ClientId, Host, Port, Reason]),
      {State, {error, Reason}}

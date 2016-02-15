@@ -71,9 +71,9 @@ find_latest_coverdata(Dir) ->
 analyse_module(Module) ->
   {ok, Lines} = cover:analyse(Module, coverage, line),
   lists:foldr(
-    fun({{_Mod, 0}, _}, Acc)         -> Acc;
-       ({{_Mod, Line}, {1, 0}}, Acc) -> Acc;
-       ({{_Mod, Line}, {0, 1}}, Acc) -> [Line | Acc]
+    fun({{_Mod, 0}, _}, Acc)          -> Acc;
+       ({{_Mod, _Line}, {1, 0}}, Acc) -> Acc;
+       ({{_Mod, Line}, {0, 1}}, Acc)  -> [Line | Acc]
     end, [], Lines).
 
 print_mod_summary(_Module, []) -> ok;
@@ -86,7 +86,7 @@ print_mod_summary(Module, NotCoveredLines) ->
       erlang:error({erl_file_not_found, Module})
   end.
 
-print_lines(Filename, []) ->
+print_lines(_Filename, []) ->
   ok;
 print_lines(Filename, Lines) ->
   {ok, Fd} = file:open(Filename, [read]),

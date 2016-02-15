@@ -32,14 +32,14 @@
 
 %% Client API
 -export([ get_partitions/2
-        , get_producer/3
         , start_link_client/3
         , start_link_client/5
         , stop_client/1
         ]).
 
 %% Producer API
--export([ produce/2
+-export([ get_producer/3
+        , produce/2
         , produce/3
         , produce/5
         , produce_sync/2
@@ -48,8 +48,14 @@
         , sync_produce_request/1
         ]).
 
-%% consumer api
--export([ start_link_consumer/4
+%% Consumer API
+-export([ consume_ack/2
+        , consume_ack/4
+        , get_consumer/3
+        , subscribe/3
+        , subscribe/5
+        , unsubscribe/1
+        , unsubscribe/3
         ]).
 
 %% Management and testing API
@@ -140,6 +146,15 @@ stop_client(Client) ->
 get_partitions(Client, Topic) ->
   brod_client:get_partitions(Client, Topic).
 
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down
+                       | {consumer_down, noproc}
+                       | {consumer_not_found, topic()}
+                       | {consumer_not_found, topic(), partition()}.
+get_consumer(Client, Topic, Partition) ->
+  brod_client:get_consumer(Client, Topic, Partition).
+
 %% @equiv brod_client:get_producer/3
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
@@ -212,16 +227,60 @@ sync_produce_request(CallRef) ->
                               },
   brod_producer:sync_produce_request(Expect).
 
--spec start_link_consumer( pid() | atom()
-                         , [endpoint()]
-                         , topic()
-                         , consumer_config()) ->
-                             {ok, pid()} | {error, any()}.
-start_link_consumer(Subscriber, Endpoints, Topic, Options0) ->
-  Options = [ {cb_mod, brod_consumer_impl}
-            , {cb_args, Subscriber} | Options0],
-  Consumer = {Topic, Options},
-  brod_client:start_link(Endpoints, [], [Consumer], []).
+%% @doc Subscribe data stream from the given topic-partition.
+%% If {error, Reason} is returned, the caller should perhaps retry later.
+%% {ok, ConsumerPid} is returned if success, the caller may want to monitor
+%% the consumer pid to trigger a re-subscribe in case it crashes.
+%%
+%% If subscribed successfully, the subscriber process should expect messages
+%% of pattern:
+%% {ConsumerPid, #kafka_message_set{}} and
+%% {ConsumerPid, #kafka_fetch_error{}},
+%% -include_lib(brod/include/brod.hrl) to access the records.
+%% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
+%% itself to resume the data stream.
+%% @end
+-spec subscribe(client(), pid(), topic(), partition(),
+                consumer_options()) -> {ok, pid()} | {error, any()}.
+subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} ->
+      case subscribe(ConsumerPid, SubscriberPid, Options) of
+        ok    -> {ok, ConsumerPid};
+        Error -> Error
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec subscribe(pid(), pid(), consumer_options()) -> ok | {error, any()}.
+subscribe(ConsumerPid, SubscriberPid, Options) ->
+  brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(client(), topic(), partition()) -> ok | {error, any()}.
+unsubscribe(Client, Topic, Partition) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> unsubscribe(ConsumerPid);
+    Error             -> Error
+  end.
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(pid()) -> ok.
+unsubscribe(ConsumerPid) ->
+  brod_consumer:unsubscribe(ConsumerPid).
+
+-spec consume_ack(client(), topic(), partition(), offset()) ->
+        ok | {error, any()}.
+consume_ack(Client, Topic, Partition, Offset) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> consume_ack(ConsumerPid, Offset);
+    {error, Reason}   -> {error, Reason}
+  end.
+
+-spec consume_ack(pid(), offset()) -> ok | {error, any()}.
+consume_ack(ConsumerPid, Offset) ->
+  brod_consumer:ack(ConsumerPid, Offset).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
@@ -256,7 +315,7 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, [#message{}]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
@@ -264,7 +323,7 @@ fetch(Hosts, Topic, Partition, Offset) ->
 -spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
-               {ok, [#message{}]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
@@ -273,7 +332,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , max_wait_time = MaxWaitTime
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  {ok, Response} = brod_sock:send_sync(Pid, Request, 10000),
   #fetch_response{topics = [TopicFetchData]} = Response,
   #topic_fetch_data{ topic = Topic
                    , partitions = [PM]} = TopicFetchData,

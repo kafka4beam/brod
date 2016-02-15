@@ -33,7 +33,6 @@
 -define(HOSTS, [{?HOST, ?PORT}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
-
 -define(WAIT(PATTERN, RESULT, TIMEOUT),
         fun() ->
           receive
@@ -103,13 +102,9 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   ?assertMatch({nxdomain, _Stacktrace}, Reason).
 
 t_not_a_brod_client(Config) when is_list(Config) ->
-  %% make some random pid
-  Pid = erlang:spawn(fun() -> ok end),
-  Res1 = brod:produce(Pid, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
-  ?assertEqual({error, client_down}, Res1),
   %% call a bad client ID
-  Res2 = brod:produce(?undef, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
-  ?assertEqual({error, client_down}, Res2).
+  Res = brod:produce(?undef, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
+  ?assertEqual({error, client_down}, Res).
 
 t_metadata_socket_restart({init, Config}) ->
   meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
@@ -152,7 +147,7 @@ t_payload_socket_restart({'end', Config}) ->
   Config;
 t_payload_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
-  CooldownSecs = 5,
+  CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
   Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
@@ -168,41 +163,55 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   ok = ProduceFun(),
   %% the socket pid should have already delivered to self() mail box
   PayloadSock = ?WAIT({socket_started, Ref, Pid}, Pid, 0),
-  %% spawn a data writer to keep retrying in case of error
-  WriterLoopFun =
-    fun(LoopFun) ->
-      case ProduceFun() of
-        ok              -> ok;
-        {error, Reason} -> ?assertMatch({producer_down, _}, Reason)
-      end,
-      receive stop -> exit(normal)
-      after 500    -> LoopFun(LoopFun)
-      end
-    end,
+
+  %% spawn a writer which keeps retrying to produce data to partition 0
+  %% and report the produce_sync return value changes
   Parent = self(),
   WriterPid = erlang:spawn_link(
                 fun() ->
-                  Parent ! {self(), <<"i'm ready">>},
-                  WriterLoopFun(WriterLoopFun)
+                  retry_writer_loop(Parent, ProduceFun, undefined)
                 end),
-  ?WAIT({WriterPid, <<"i'm ready">>}, ok, 1000),
-  %% kill the payload pid
+  %% wait until the writer succeeded producing data
+  ?WAIT({WriterPid, {produce_result, ok}}, ok, 1000),
+  %% kill the payload socket
   exit(PayloadSock, kill),
+  %% now the writer should have {error, _} returned from produce API
+  ?WAIT({WriterPid, {produce_result, {error, _}}}, ok, 1000),
+  %% then wait for the producer to get restarted by supervisor
+  %% and the writer process should continue working normally again.
   %% socket should be restarted after cooldown timeout
   %% and the restart is triggered by producer restart
   %% add 2 seconds more in wait timeout to avoid race
   Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
-  SockPid = ?WAIT({socket_started, Ref, Pid_}, Pid_, Timeout),
+  ?WAIT({socket_started, Ref, Pid_}, Pid_, 2000),
+  ?WAIT({WriterPid, {produce_result, ok}}, ok, Timeout),
+  %% stop the temp writer
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
   ?WAIT({'DOWN', Mref, process, WriterPid, normal}, ok, 5000),
-  {ok, SockPid_} = brod_client:get_connection(Client, ?HOST, ?PORT),
-  ?assertEqual(SockPid, SockPid_),
-  {ok, ProducerPid} = brod_client:find_producer(Client, ?TOPIC, Partition),
-  ?assert(is_process_alive(ProducerPid)),
-  ok = ProduceFun().
+  ok.
 
 %%%_* Help functions ===========================================================
+
+retry_writer_loop(Parent, ProduceFun, LastResult) ->
+  Result = ProduceFun(),
+  %% assert result patterns
+  case Result of
+    ok              -> ok;
+    {error, Reason} -> ?assertMatch({producer_down, _}, Reason)
+  end,
+  %% tell parent about produce return value changes
+  case Result =/= LastResult of
+    true  -> Parent ! {self(), {produce_result, Result}};
+    false -> ok
+  end,
+  %% continue if not told to stop
+  receive
+    stop ->
+      exit(normal)
+  after 100 ->
+    retry_writer_loop(Parent, ProduceFun, Result)
+  end.
 
 %% tap the call to brod_sock:start_link/5,
 %% intercept the returned socket pid

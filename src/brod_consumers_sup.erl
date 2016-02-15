@@ -62,20 +62,16 @@ find_consumer(SupPid, Topic, Partition) ->
       %% check sys.config or brod:start_link_client args
       {error, {not_found, Topic}};
     [Sup2Pid] ->
-      case brod_utils:is_pid_alive(Sup2Pid) of
-        true ->
-          case supervisor3:find_child(Sup2Pid, Partition) of
-            [] ->
-              %% no such partition?
-              {error, {not_found, Topic, Partition}};
-            [Pid] ->
-              case brod_utils:is_pid_alive(Pid) of
-                true  -> {ok, Pid};
-                false -> {error, restarting}
-              end
-          end;
-        false ->
-          {error, restarting}
+      try
+        case supervisor3:find_child(Sup2Pid, Partition) of
+          [] ->
+            %% no such partition?
+            {error, {consumer_not_found, Topic, Partition}};
+          [Pid] ->
+            {ok, Pid}
+        end
+      catch exit : {noproc, _} ->
+        {error, {consumer_down, noproc}}
       end
   end.
 
@@ -122,12 +118,11 @@ consumers_sup_spec(ClientPid, TopicName, Config0) ->
 consumer_spec(ClientPid, Topic, Partition, Config0) ->
   DelaySecs = proplists:get_value(partition_restart_delay_seconds, Config0,
                                   ?DEFAULT_CONSUMER_RESTART_DELAY),
-  Config1 = proplists:delete(partition_restart_delay_seconds, Config0),
-  {value, {_, CbMod}, Config} = lists:keytake(cb_mod, 1, Config1),
-  Args = [CbMod, ClientPid, Topic, Partition, Config],
+  Config = proplists:delete(partition_restart_delay_seconds, Config0),
+  Args = [ClientPid, Topic, Partition, Config],
   { _Id       = Partition
   , _Start    = {brod_consumer, start_link, Args}
-  , _Restart  = {permanent, DelaySecs}
+  , _Restart  = {transient, DelaySecs} %% restart only when not normal exit
   , _Shutdown = 5000
   , _Type     = worker
   , _Module   = [brod_consumer]

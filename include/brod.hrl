@@ -17,32 +17,35 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type topic()      :: binary().
--type partition()  :: non_neg_integer().
--type offset()     :: integer().
--type error_code() :: atom() | integer().
+-type kafka_topic()      :: binary().
+-type kafka_partition()  :: non_neg_integer().
+-type kafka_offset()     :: integer().
+-type kafka_error_code() :: atom() | integer().
 
--record(message, { offset     :: offset()
-                 , crc        :: integer()
-                 , magic_byte :: integer()
-                 , attributes :: integer()
-                 , key        :: binary()
-                 , value      :: binary()
-                 }).
+-record(kafka_message,
+        { offset     :: kafka_offset()
+        , crc        :: integer()
+        , magic_byte :: integer()
+        , attributes :: integer()
+        , key        :: binary()
+        , value      :: binary()
+        }).
 
--record(message_set, { topic          :: topic()
-                     , partition      :: partition()
-                     , high_wm_offset :: integer()
-                     , messages       :: [#message{}]
-                     }).
+-record(kafka_message_set,
+        { topic          :: topic()
+        , partition      :: partition()
+        , high_wm_offset :: integer() %% max offset of the partition
+        , messages       :: [#kafka_message{}]
+        }).
 
--record(brod_fetch_error, { topic      :: topic()
-                          , partition  :: partition()
-                          , error_code :: error_code()
-                          , error_desc :: string()
-                          }).
+-record(kafka_fetch_error,
+        { topic      :: topic()
+        , partition  :: partition()
+        , error_code :: error_code()
+        , error_desc :: string()
+        }).
 
--type client_id() :: atom().
+-type brod_client_id() :: atom().
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
