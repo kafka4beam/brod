@@ -8,9 +8,9 @@
 
 ### start one-node cluster:
 
-    docker-compose -f docker-compose-kafka-1.yml up -d`
+    docker-compose -f docker-compose-kafka-1.yml up -d
 
 ### start two-node cluster:
 
-    docker-compose -f docker-compose-kafka-2.yml up -d`
+    docker-compose -f docker-compose-kafka-2.yml up -d
 
