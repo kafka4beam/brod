@@ -73,7 +73,7 @@ prop_value_with_processing_latency_list() ->
   proper_types:list({prop_latency_ms(), proper_types:binary()}).
 
 prop_no_ack_run() ->
-  SendFun = fun(_KvList) -> ok end,
+  SendFun = fun(_SockPid, _KvList) -> ok end,
   ?FORALL(
     {BufferLimit, OnWireLimit, MsgSetBytes, ValueList},
     {prop_buffer_limit(), prop_onwire_limit(),
@@ -82,7 +82,8 @@ prop_no_ack_run() ->
       KeyList = lists:seq(1, length(ValueList)),
       KvList = lists:zip(KeyList, ValueList),
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                     MsgSetBytes, SendFun),
+                                     MsgSetBytes, _MaxRetries = 0,
+                                     SendFun),
       no_ack_produce(Buf, KvList)
     end).
 
@@ -106,9 +107,10 @@ prop_random_latency_ack_run() ->
       KeyList = lists:seq(1, length(ValueList)),
       KvList = lists:zip(KeyList, ValueList),
       FakeKafka = spawn_fake_kafka(),
-      SendFun = fun(KvList_) -> SendFun0(FakeKafka, KvList_) end,
+      SendFun = fun(_SockPid, KvList_) -> SendFun0(FakeKafka, KvList_) end,
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                     MsgSetBytes, SendFun),
+                                     MsgSetBytes, _MaxRetries = 0,
+                                     SendFun),
       random_latency_ack_produce(FakeKafka, Buf, KvList)
     end).
 
@@ -121,7 +123,9 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
                           , ref    = Key
                           },
   BinKey = list_to_binary(integer_to_list(Key)),
-  NewBuf = brod_producer_buffer:maybe_send(Buf, CallRef, BinKey, Value),
+  {ok, Buf1} = brod_producer_buffer:add(Buf, CallRef, BinKey, Value),
+  FakeSockPid = self(),
+  {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
   %% in case of no ack required, expect 'buffered' immediately
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
@@ -166,8 +170,10 @@ produce_loop(FakeKafka, Buf0, [{Key, Value} | Rest], Buffered, Acked) ->
                           , ref    = Key
                           },
   BinKey = list_to_binary(integer_to_list(Key)),
-  Buf1 = brod_producer_buffer:maybe_send(Buf0, CallRef, BinKey, Value),
-  {NewBuffered, NewAcked, Buf} = collect_replies(Buffered, Acked, Buf1, 0),
+  FakeSockPid = self(),
+  {ok, Buf1} = brod_producer_buffer:add(Buf0, CallRef, BinKey, Value),
+  {ok, Buf2} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
+  {NewBuffered, NewAcked, Buf} = collect_replies(Buffered, Acked, Buf2, 0),
   produce_loop(FakeKafka, Buf, Rest, NewBuffered, NewAcked).
 
 collect_replies(Buffered, Acked, Buf0, Timeout) ->
@@ -177,7 +183,9 @@ collect_replies(Buffered, Acked, Buf0, Timeout) ->
                        } ->
       collect_replies([Key | Buffered], Acked, Buf0, Timeout);
     {ack_from_kafka, CorrId} ->
-      Buf = brod_producer_buffer:ack(Buf0, CorrId),
+      FakeSockPid = self(), %% any pid should work
+      {ok, Buf1} = brod_producer_buffer:ack(Buf0, CorrId),
+      {ok, Buf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
       collect_replies(Buffered, Acked, Buf, Timeout);
     #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
                        , result   = brod_produce_req_acked

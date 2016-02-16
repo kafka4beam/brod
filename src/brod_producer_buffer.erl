@@ -23,11 +23,15 @@
 %% @private
 -module(brod_producer_buffer).
 
--export([ new/4
+-export([ new/5
         , add/4
         , ack/2
-        , nack/2
+        , nack/3
+        , nack_all/2
         , maybe_send/2
+        ]).
+
+-export([ is_empty/1
         ]).
 
 -export_type([buf/0]).
@@ -41,6 +45,7 @@
         { call_ref :: brod_call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
+        , failures :: non_neg_integer() %% the number of failed attempts
         }).
 
 -type send_fun() :: fun((pid(), [{binary(), binary()}]) -> {ok, corr_id()}).
@@ -50,6 +55,7 @@
         { buffer_limit   = 1        :: pos_integer()
         , onwire_limit   = 1        :: pos_integer()
         , max_batch_size = 1        :: pos_integer()
+        , max_retries    = 0        :: integer()
         , send_fun       = ?ERR_FUN :: send_fun()
         , buffer_count   = 0        :: non_neg_integer()
         , onwire_count   = 0        :: non_neg_integer()
@@ -65,14 +71,16 @@
 %% @doc Create a new buffer
 %% For more details: @see brod_producer:start_link/4
 %% @end
--spec new(pos_integer(), pos_integer(), pos_integer(), send_fun()) -> buf().
-new(BufferLimit, OnWireLimit, MaxBatchSize, SendFun) ->
+-spec new(pos_integer(), pos_integer(),
+          pos_integer(), integer(), send_fun()) -> buf().
+new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry, SendFun) ->
   true = (BufferLimit > 0), %% assert
   true = (OnWireLimit > 0), %% assert
   true = (MaxBatchSize > 0), %% assert
   #buf{ buffer_limit   = BufferLimit
       , onwire_limit   = OnWireLimit
       , max_batch_size = MaxBatchSize
+      , max_retries    = MaxRetry
       , send_fun       = SendFun
       }.
 
@@ -84,63 +92,89 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
             , bytes    = size(Key) + size(Value)
+            , failures = 0
             },
   maybe_buffer(Buf#buf{pending = Pending ++ [Req]}).
 
--spec maybe_send(buf(), pid()) -> {ok, buf()} | {error, any()}.
-maybe_send(#buf{ onwire_limit = OnWireLimit
-               , onwire_count = OnWireCount
-               , onwire       = OnWire
-               , send_fun     = SendFun
-               } = Buf, SockPid)
-  when OnWireCount < OnWireLimit ->
+%% @doc Maybe (if there is any produce requests buffered) send the produce
+%% request to kafka. In case a request has been tried for more than limited
+%% times, and 'exit' exception is raised.
+%% @end
+-spec maybe_send(buf(), pid()) ->
+        {ok, buf()} | {retry, buf()} | no_return().
+maybe_send(#buf{} = Buf, SockPid) ->
   case take_reqs_to_send(Buf) of
-    {[], NewBuf} ->
-      {ok, NewBuf};
-    {Reqs, NewBuf} ->
-      MessageSet = lists:map(fun(#req{data = F}) -> F() end, Reqs),
-      case SendFun(SockPid, MessageSet) of
-        ok ->
-          %% fire and forget
-          ok = lists:foreach(fun reply_acked/1, Reqs),
-          NewBuf;
-        {ok, CorrId} ->
-          {ok, NewBuf#buf{ onwire_count = OnWireCount + length(Reqs)
-                         , onwire       = OnWire ++ [{CorrId, Reqs}]
-                         }};
-        {error, Reason} ->
-          {error, Reason}
-      end
-  end;
-maybe_send(Buf, _SockPid) ->
-  {ok, Buf}.
+    {[], NewBuf}   -> {ok, NewBuf};
+    {Reqs, NewBuf} -> do_send(Reqs, NewBuf, SockPid)
+  end.
 
 %% @doc Reply 'acked' to callers.
+-spec ack(buf(), corr_id()) -> {ok, buf()} | {error, ignored}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
-        } = Buf, CorrIdReceived) ->
-  CorrId = CorrIdReceived, %% assert
+        } = Buf, CorrId) ->
   ok = lists:foreach(fun reply_acked/1, Reqs),
   {ok, Buf#buf{ onwire_count = OnWireCount - length(Reqs)
               , onwire       = Rest
-              }}.
+              }};
+ack(_Buf, _CorrIdReceived) ->
+  %% unkonwn corr-id, ignore
+  {error, ignored}.
 
-%% @doc 'Negative' ack, put 'onwire' requests back to the head of buffer
-nack(#buf{ onwire_count = OnWireCount
-         , onwire       = [{CorrId, Reqs} | Rest]
-         , buffer       = Buffer
-         } = Buf, CorrIdReceived) ->
-  CorrId = CorrIdReceived, %% assert
-  {ok, Buf#buf{ onwire_count = OnWireCount - length(Reqs)
-              , onwire       = Rest
-              , buffer       = Reqs ++ Buffer
-              }}.
+%% @doc 'Negative' ack, put all sent requests back to the head of buffer.
+%% An 'exit' exception is raised if any of the negative-acked requests
+%% reached maximum retry limit.
+%% Unknown corr-id:s are ignored.
+%% @end
+-spec nack(buf(), corr_id(), any()) -> {ok, buf()} | {error, ignored}.
+nack(#buf{onwire = [{CorrId, _Reqs} | _]} = Buf, CorrId, Reason) ->
+  nack_all(Buf, Reason);
+nack(_Buf, _CorrId, _Reason) ->
+  %% unknown corr-id, ignore.
+  {error, ignored}.
+
+%% @doc 'Negative' ack, put all sent requests back to the head of buffer.
+%% An 'exit' exception is raised if any of the negative-acked requests
+%% reached maximum retry limit.
+%% @end
+-spec nack_all(buf(), any()) -> {ok, buf()}.
+nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
+  AllOnWireReqs = lists:map(fun({_CorrId, Reqs}) -> Reqs end, OnWire),
+  NewBuf = Buf#buf{ onwire_count = 0
+                  , onwire       = []
+                  },
+  {ok, rebuffer_or_crash(lists:append(AllOnWireReqs), NewBuf, Reason)}.
+
+%% @hidden Return true if there is no message pending,
+%% buffered or waiting for ack. Used in test only so far.
+%% @end
+is_empty(#buf{ pending = []
+             , buffer  = []
+             , onwire  = []
+             }) -> true;
+is_empty(#buf{}) -> false.
 
 %%%_* Internal functions =======================================================
+
+-spec take_reqs_to_send(buf()) -> {[#req{}], buf()}.
+take_reqs_to_send(#buf{ buffer       = [#req{failures = F} = Req | Reqs]
+                      , buffer_count = BufferCount
+                      , onwire_count = OnWireCount
+                      } = Buf) when F > 0 ->
+  case OnWireCount > 0 of
+    true ->
+      %% do not retry if there is one on wire
+      {[], Buf};
+    false ->
+      %% always retry only one message at a time, i.e. no batch
+      NewBuf = Buf#buf{ buffer       = Reqs
+                      , buffer_count = BufferCount - 1
+                      },
+      {[Req], NewBuf}
+  end;
 take_reqs_to_send(Buf) ->
   take_reqs_to_send(Buf, _Acc = [], _AccLength = 0, _AccBytes = 0).
 
-%% @private
 take_reqs_to_send(#buf{ pending = []
                       , buffer  = []
                       } = Buf, Acc, _AccLength, _AccBytes) ->
@@ -151,18 +185,21 @@ take_reqs_to_send(#buf{buffer = []} = Buf, Acc, AccLength, AccBytes) ->
   {ok, NewBuf} = maybe_buffer(Buf),
   take_reqs_to_send(NewBuf, Acc, AccLength, AccBytes);
 take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
-                      , onwire_limit = OnWireLimit
+                      , onwire_count   = OnWireCount
+                      , onwire_limit   = OnWireLimit
                       } = Buf, Acc, AccLength, AccBytes)
- when AccLength >= OnWireLimit orelse AccBytes >= MaxBatchSize ->
+ when OnWireCount + AccLength >= OnWireLimit orelse
+      AccBytes >= MaxBatchSize ->
   %% reached max number of requests on wire
   %% or reached max bytes in one message set
   {lists:reverse(Acc), Buf};
 take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
-                      , buffer_count = BufferCount
-                      , buffer       = [Req | Rest]
+                      , buffer_count   = BufferCount
+                      , buffer         = [Req | Rest]
                       } = Buf, Acc, AccLength, AccBytes) ->
   ReqBytes = Req#req.bytes,
-  case AccBytes =:= 0 orelse AccBytes + ReqBytes =< MaxBatchSize of
+  case AccBytes =:= 0 orelse %% send at least one message regardless of size
+       AccBytes + ReqBytes =< MaxBatchSize of %% otherwise check batch size
     true ->
       NewBuf = Buf#buf{ buffer_count = BufferCount - 1
                       , buffer       = Rest
@@ -171,6 +208,47 @@ take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
     false ->
       {lists:reverse(Acc), Buf}
   end.
+
+%% @private Send produce request to kafka.
+-spec do_send([#req{}], buf(), pid()) ->
+        {ok, buf()} | {retry, buf()} | no_return().
+do_send(Reqs, #buf{ onwire_count = OnWireCount
+                  , onwire       = OnWire
+                  , send_fun     = SendFun
+                  } = Buf, SockPid) ->
+  MessageSet = lists:map(fun(#req{data = F}) -> F() end, Reqs),
+  case SendFun(SockPid, MessageSet) of
+    ok ->
+      %% fire and forget
+      ok = lists:foreach(fun reply_acked/1, Reqs),
+      {ok, Buf};
+    {ok, CorrId} ->
+      {ok, Buf#buf{ onwire_count = OnWireCount + length(Reqs)
+                  , onwire       = OnWire ++ [{CorrId, Reqs}]
+                  }};
+    {error, Reason} ->
+      NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
+      {retry, NewBuf}
+  end.
+
+%% @private Put the produce requests back to buffer.
+%% raise an 'exit' exception if the first request to send has reached
+%% retry limit
+%% @end
+-spec rebuffer_or_crash([#req{}], buf(), any()) -> buf() | no_return().
+rebuffer_or_crash([#req{failures = Failures} | _],
+                  #buf{max_retries = MaxRetries}, Reason)
+  when MaxRetries >= 0 andalso Failures >= MaxRetries ->
+  exit({reached_max_retries, Reason});
+rebuffer_or_crash(Reqs0, #buf{ buffer       = Buffer
+                             , buffer_count = BufferCount
+                             } = Buf, _Reason) ->
+  Reqs = lists:map(fun(#req{failures = Failures} = Req) ->
+                        Req#req{failures = Failures + 1}
+                   end, Reqs0),
+  Buf#buf{ buffer       = Reqs ++ Buffer
+         , buffer_count = length(Reqs) + BufferCount
+         }.
 
 %% @private Take pending requests into buffer and reply 'buffered' to caller.
 -spec maybe_buffer(buf()) -> {ok, buf()}.

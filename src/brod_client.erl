@@ -335,15 +335,15 @@ get_connection(Client, Host, Port) ->
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
-  case erlang:process_info(ClientPid, [registered_name]) of
-    [{registered_name, []}] ->
+  case erlang:process_info(ClientPid, registered_name) of
+    {registered_name, ClientId} ->
+      get_partition_worker(ClientId, Key);
+    _ ->
       %% This is a client process started without registered name
       %% have to call the process to get the producer/consumer worker
       %% process registration table.
       Ets = gen_server:call(ClientPid, get_workers_table, infinity),
-      lookup_partition_worker(ClientPid, Ets, Key);
-    [{registered_name, ClientId}] ->
-      get_partition_worker(ClientId, Key)
+      lookup_partition_worker(ClientPid, Ets, Key)
   end;
 get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
   lookup_partition_worker(ClientId, ?ETS(ClientId), Key).

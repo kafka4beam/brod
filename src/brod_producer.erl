@@ -51,10 +51,8 @@
 %% by default, brod_producer will sleep for 0.5 second before trying to send
 %% buffered messages again upon receiving a error from kafka
 -define(DEFAULT_RETRY_BACKOFF_MS, 500).
-%% by default, brod_producer will try to re-send buffered messages
-%% max 3 times upon receiving error from kafka
-%% -1 means 'retry indefinitely'
--define(DEFAULT_MAX_RETRIES, 3).
+%% by default, brod_producer will not try to re-send any messages.
+-define(DEFAULT_MAX_RETRIES, 0).
 
 -define(RETRY_MSG, retry).
 
@@ -67,8 +65,6 @@
         , sock_pid          :: pid()
         , sock_mref         :: reference()
         , buffer            :: brod_producer_buffer:buf()
-        , retries = 0       :: integer()
-        , max_retries       :: integer()
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: timer:tref()
         , reconnect_timeout :: non_neg_integer()
@@ -109,6 +105,13 @@
 %%     In case callers are producing faster than brokers can handle (or
 %%     congestion on wire), try to accumulate small requests into batches
 %%     as much as possible but not exceeding max_batch_size
+%%   max_retries (optional, default = 0):
+%%     If {max_retries, N} is given, the producer will make N produce attempts
+%%     before crashing itself in case of failures like socket being shut down
+%%     or exceptions received in produce response from kafka.
+%%     The special value N = -1 means 'retry indefinitely'
+%%   retry_backoff_ms (optional, default = 500)
+%%     Time in milli-seconds to sleep before retry the failed produce request.
 %% @end
 -spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
@@ -165,6 +168,8 @@ init({ClientPid, Topic, Partition, Config}) ->
   MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
   RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
   AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
+  MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
+  RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
 
   SendFun =
     fun(SockPid, KafkaKvList) ->
@@ -173,23 +178,19 @@ init({ClientPid, Topic, Partition, Config}) ->
                                    , timeout = AckTimeout
                                    , data    = Data
                                    },
-        case brod_sock:send(SockPid, KafkaReq) of
+        case sock_send(SockPid, KafkaReq) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
           {error, Reason} -> {error, Reason}
         end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                    MaxBatchSize, SendFun),
-
-  MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
-  RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
+                                    MaxBatchSize, MaxRetries, SendFun),
 
   State0 = #state{ client_pid       = ClientPid
                  , topic            = Topic
                  , partition        = Partition
                  , buffer           = Buffer
-                 , max_retries      = MaxRetries
                  , retry_backoff_ms = RetryBackoffMs
                  },
 
@@ -202,22 +203,14 @@ init({ClientPid, Topic, Partition, Config}) ->
           end,
   {ok, State}.
 
-handle_info({?RETRY_MSG, Msg}, State0) ->
+handle_info(?RETRY_MSG, State0) ->
   State1 = State0#state{retry_tref = undefined},
-  case init_socket(State1) of
-    {ok, State2} ->
-      case maybe_retry(State2) of
-        {ok, State} ->
-          {noreply, State};
-        false ->
-          Error = io_lib:format("brod_producer ~p failed to recover after ~p retries: ~p",
-                                [self(), State2#state.retries, Msg]),
-          {stop, iolist_to_binary(Error), State2}
-      end;
-    {error, Error} ->
-      {ok, State} = schedule_retry(State1, Error),
-      {noreply, State}
-  end;
+  {ok, State} =
+    case init_socket(State1) of
+      {ok, State2}   -> maybe_produce(State2);
+      {error, Error} -> schedule_retry(State1, Error)
+    end,
+  {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {ok, NewState} = schedule_retry(State, Reason),
@@ -234,29 +227,31 @@ handle_info({msg, Pid, CorrId, #produce_response{} = R},
                  } = ProduceOffset,
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
-  case brod_kafka:is_error(ErrorCode) of
-    true ->
-      ErrorDesc = brod_kafka_error:desc(ErrorCode),
-      error_logger:error_msg(
-        "Error in produce response\n"
-        "Topic: ~s\n"
-        "Partition: ~B\n"
-        "Offset: ~B\n"
-        "Error: ~s",
-        [Topic, Partition, Offset, ErrorDesc]),
-      Error = {produce_response_error, Topic, Partition, Offset, ErrorCode, ErrorDesc},
-      case is_retriable(ErrorCode) of
-        true ->
-          {ok, NewState} = schedule_retry(State, Error),
-          {ok, NewBuffer} = brod_producer_buffer:nack(Buffer, CorrId),
-          {noreply, NewState#state{buffer = NewBuffer}};
-        false ->
-          {stop, Error, State}
-      end;
-    false ->
-      {ok, NewBuffer} = brod_producer_buffer:ack(Buffer, CorrId),
-      {noreply, State#state{buffer = NewBuffer}}
-  end;
+  {ok, NewState} =
+    case brod_kafka:is_error(ErrorCode) of
+      true ->
+        ErrorDesc = brod_kafka_errors:desc(ErrorCode),
+        error_logger:error_msg(
+          "Error in produce response\n"
+          "Topic: ~s\n"
+          "Partition: ~B\n"
+          "Offset: ~B\n"
+          "Error: ~s",
+          [Topic, Partition, Offset, ErrorDesc]),
+        Error = {produce_response_error, Topic, Partition,
+                 Offset, ErrorCode, ErrorDesc},
+        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
+        case brod_producer_buffer:nack(Buffer, CorrId, Error) of
+          {ok, NewBuffer}  -> schedule_retry(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end;
+      false ->
+        case brod_producer_buffer:ack(Buffer, CorrId) of
+          {ok, NewBuffer}  -> maybe_produce(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end
+    end,
+  {noreply, NewState};
 handle_info(_Info, State) ->
   {noreply, State}.
 
@@ -265,16 +260,11 @@ handle_call(stop, _From, State) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer0} = State) ->
-  {ok, Buffer1} = brod_producer_buffer:add(Buffer0, CallRef, Key, Value),
-  SockPid = State#state.sock_pid,
-  case brod_producer_buffer:maybe_send(Buffer1, SockPid) of
-    {ok, Buffer} ->
-      {noreply, State#state{buffer = Buffer}};
-    {error, Reason} ->
-      {ok, NewState} = schedule_retry(State, Reason),
-      {noreply, NewState}
-  end;
+handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
+  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  State1 = State#state{buffer = NewBuffer},
+  {ok, NewState} = maybe_produce(State1),
+  {noreply, NewState};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -285,6 +275,7 @@ terminate(_Reason, _State) ->
   ok.
 
 %%%_* Internal Functions =======================================================
+
 init_socket(#state{ client_pid = ClientPid
                   , sock_mref  = OldSockMref
                   , topic      = Topic
@@ -297,11 +288,16 @@ init_socket(#state{ client_pid = ClientPid
       SockMref = erlang:monitor(process, SockPid),
       %% 2. Register self() to client.
       ok = brod_client:register_producer(ClientPid, Topic, Partition),
-
       %% 3. Update state.
       {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
     {error, Error} ->
       {error, Error}
+  end.
+
+maybe_produce(#state{buffer = Buffer0, sock_pid = SockPid} = State) ->
+  case brod_producer_buffer:maybe_send(Buffer0, SockPid) of
+    {ok, Buffer}    -> {ok, State#state{buffer = Buffer}};
+    {retry, Buffer} -> schedule_retry(State#state{buffer = Buffer})
   end.
 
 maybe_demonitor(undefined) ->
@@ -310,40 +306,30 @@ maybe_demonitor(Mref) ->
   true = erlang:demonitor(Mref, [flush]),
   ok.
 
-schedule_retry(#state{retry_tref = undefined} = State, Msg) ->
-  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, {?RETRY_MSG, Msg}),
+schedule_retry(#state{buffer = Buffer} = State, Reason) ->
+  {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
+  schedule_retry(State#state{buffer = NewBuffer}).
+
+schedule_retry(#state{retry_tref = undefined} = State) ->
+  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, ?RETRY_MSG),
   {ok, State#state{retry_tref = TRef}};
-schedule_retry(State, _Msg) ->
+schedule_retry(State) ->
   %% retry timer has been already activated
   {ok, State}.
 
-maybe_retry(#state{retries = Retries, max_retries = MaxRetries} = State0) when
-    MaxRetries =:= -1 orelse
-    Retries < MaxRetries ->
-  %% try to re-send buffered data
-  State = State0#state{retry_tref = undefined, retries = Retries + 1},
-  Buffer = State#state.buffer,
-  SockPid = State#state.sock_pid,
-  case brod_producer_buffer:maybe_send(Buffer, SockPid) of
-    {ok, Buffer} ->
-      {ok, State#state{buffer = Buffer}};
-    {error, Reason} ->
-      schedule_retry(State, Reason)
-  end;
-maybe_retry(_State) ->
-  false.
-
-is_retriable(ErrorCode) when ErrorCode =:= ?EC_CORRUPT_MESSAGE;
-                             ErrorCode =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
-                             ErrorCode =:= ?EC_LEADER_NOT_AVAILABLE;
-                             ErrorCode =:= ?EC_NOT_LEADER_FOR_PARTITION;
-                             ErrorCode =:= ?EC_REQUEST_TIMED_OUT;
-                             ErrorCode =:= ?EC_NOT_ENOUGH_REPLICAS;
-                             ErrorCode =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND
-                             ->
+is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
+                      EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
+                      EC =:= ?EC_LEADER_NOT_AVAILABLE;
+                      EC =:= ?EC_NOT_LEADER_FOR_PARTITION;
+                      EC =:= ?EC_REQUEST_TIMED_OUT;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND ->
   true;
 is_retriable(_) ->
   false.
+
+sock_send(?undef, _KafkaReq) -> {error, sock_down};
+sock_send(SockPid, KafkaReq) -> brod_sock:send(SockPid, KafkaReq).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

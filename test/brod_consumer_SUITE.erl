@@ -48,7 +48,9 @@ init_per_testcase(Case, Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {Topic, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
+  Producer = {Topic, [ {partition_restart_delay_seconds, ProducerRestartDelay}
+                     , {max_retries, 0}
+                     ]},
   Consumer = {Topic, []},
   case whereis(Client) of
     ?undef -> ok;
