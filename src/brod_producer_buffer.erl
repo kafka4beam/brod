@@ -167,7 +167,20 @@ is_empty(#buf{}) -> false.
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
   true;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
-  CorrId >= CorrIdReceived orelse exit({bad_order, CorrId, CorrIdReceived}).
+  not is_later_corr_id(CorrId, CorrIdReceived) orelse
+    exit({bad_order, CorrId, CorrIdReceived}).
+
+%% @private Compare two corr-ids, return true if ID-2 is considered a 'later'
+%% one comparing to ID1.
+%% Assuming that no clients would send more than 2^16 messages asynchronously.
+%% @end
+-spec is_later_corr_id(corr_id(), corr_id()) -> '<' | '=' | '>'.
+is_later_corr_id(Id1, Id2) ->
+  Diff = abs(Id1 - Id2),
+  case Diff < (?MAX_CORR_ID div 2) of
+    true  -> Id1 < Id2;
+    false -> Id1 > Id2
+  end.
 
 -spec take_reqs_to_send(buf()) -> {[#req{}], buf()}.
 take_reqs_to_send(#buf{ buffer       = [#req{failures = F} = Req | Reqs]
@@ -319,7 +332,11 @@ assert_corr_id_test() ->
   {error, ignored} = nack(#buf{}, 0, ignored),
   {error, ignored} = ack(#buf{onwire = [{1, req}]}, 0),
   {error, ignored} = nack(#buf{onwire = [{1, req}]}, 0, ignored),
-  ?assertException(exit, {bad_order, 0, 1}, ack(#buf{onwire = [{0, req}]}, 1)),
+  {error, ignored} = ack(#buf{onwire = [{1, req}]}, ?MAX_CORR_ID),
+  ?assertException(exit, {bad_order, 0, 1},
+                   ack(#buf{onwire = [{0, req}]}, 1)),
+  ?assertException(exit, {bad_order, ?MAX_CORR_ID, 0},
+                   ack(#buf{onwire = [{?MAX_CORR_ID, req}]}, 0)),
   ok.
 
 -endif. % TEST
