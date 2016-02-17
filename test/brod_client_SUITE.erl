@@ -39,7 +39,7 @@
             PATTERN ->
               RESULT
           after TIMEOUT ->
-            ct:pal("~p ~p ~p", [?MODULE, ?LINE, TIMEOUT]),
+            ct:pal("timeout ~p ~p ~p", [?MODULE, ?LINE, TIMEOUT]),
             ct:fail(timeout)
           end
         end()).
@@ -150,7 +150,9 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
+  Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay},
+                       {max_retries, 0}
+                      ]},
   Partition = 0,
   {ok, Client} =
     brod:start_link_client(t_payload_socket_restart, ?HOSTS,
@@ -177,13 +179,13 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   exit(PayloadSock, kill),
   %% now the writer should have {error, _} returned from produce API
   ?WAIT({WriterPid, {produce_result, {error, _}}}, ok, 1000),
+  ?WAIT({socket_started, Ref, Pid_}, Pid_, 4000),
   %% then wait for the producer to get restarted by supervisor
   %% and the writer process should continue working normally again.
   %% socket should be restarted after cooldown timeout
   %% and the restart is triggered by producer restart
   %% add 2 seconds more in wait timeout to avoid race
   Timeout = timer:seconds(CooldownSecs + ProducerRestartDelay + 2),
-  ?WAIT({socket_started, Ref, Pid_}, Pid_, 2000),
   ?WAIT({WriterPid, {produce_result, ok}}, ok, Timeout),
   %% stop the temp writer
   Mref = erlang:monitor(process, WriterPid),

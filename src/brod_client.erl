@@ -131,22 +131,27 @@ stop(Client) ->
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.
 %% @end
--spec get_leader_connection(client(), topic(), partition()) -> {ok, pid()}.
+-spec get_leader_connection(client(), topic(), partition()) ->
+                               {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
-  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
-  #metadata_response{ brokers = Brokers
-                    , topics  = [TopicMetadata]
-                    } = Metadata,
-  #topic_metadata{ error_code = TopicErrorCode
-                 , partitions = Partitions
-                 } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
-  #partition_metadata{leader_id = LeaderId} =
-    lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
-  #broker_metadata{host = Host, port = Port} =
-    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-  get_connection(Client, Host, Port).
+  case brod_client:get_metadata(Client, Topic) of
+    {ok, Metadata} ->
+      #metadata_response{ brokers = Brokers
+                        , topics  = [TopicMetadata]
+                        } = Metadata,
+      #topic_metadata{ error_code = TopicErrorCode
+                     , partitions = Partitions
+                     } = TopicMetadata,
+      brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
+      #partition_metadata{leader_id = LeaderId} =
+        lists:keyfind(Partition, #partition_metadata.id, Partitions),
+      LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
+      #broker_metadata{host = Host, port = Port} =
+        lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+      get_connection(Client, Host, Port);
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 -spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
 get_metadata(Client, Topic) ->
@@ -330,15 +335,15 @@ get_connection(Client, Host, Port) ->
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
-  case erlang:process_info(ClientPid, [registered_name]) of
-    [{registered_name, []}] ->
+  case erlang:process_info(ClientPid, registered_name) of
+    {registered_name, ClientId} when is_atom(ClientId) ->
+      get_partition_worker(ClientId, Key);
+    _ ->
       %% This is a client process started without registered name
       %% have to call the process to get the producer/consumer worker
       %% process registration table.
       Ets = gen_server:call(ClientPid, get_workers_table, infinity),
-      lookup_partition_worker(ClientPid, Ets, Key);
-    [{registered_name, ClientId}] ->
-      get_partition_worker(ClientId, Key)
+      lookup_partition_worker(ClientPid, Ets, Key)
   end;
 get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
   lookup_partition_worker(ClientId, ?ETS(ClientId), Key).

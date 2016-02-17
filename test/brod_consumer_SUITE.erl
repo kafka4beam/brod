@@ -48,7 +48,9 @@ init_per_testcase(Case, Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {Topic, [{partition_restart_delay_seconds, ProducerRestartDelay}]},
+  Producer = {Topic, [ {partition_restart_delay_seconds, ProducerRestartDelay}
+                     , {max_retries, 0}
+                     ]},
   Consumer = {Topic, []},
   case whereis(Client) of
     ?undef -> ok;
@@ -59,7 +61,8 @@ init_per_testcase(Case, Config) ->
                            [Producer], [Consumer], ClientConfig),
   [{client, Client}, {client_pid, ClientPid} | Config].
 
-end_per_testcase(_Case, Config) ->
+end_per_testcase(Case, Config) ->
+  ct:pal("=== ~p end ===", [Case]),
   Pid = ?config(client_pid),
   try
     Ref = erlang:monitor(process, Pid),
