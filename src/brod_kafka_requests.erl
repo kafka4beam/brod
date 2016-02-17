@@ -101,9 +101,9 @@ get_corr_id(#requests{ corr_id = CorrId }) ->
 next_corr_id(?MAX_CORR_ID) -> 0;
 next_corr_id(CorrId)       -> CorrId + 1.
 
--include_lib("eunit/include/eunit.hrl").
-
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 next_corr_id_test() ->
   CorrId = (1 bsl 31) - 1,

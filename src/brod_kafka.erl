@@ -363,9 +363,9 @@ parse_bytes(Size, Bin0) ->
 
 %%%_* Tests ====================================================================
 
--include_lib("eunit/include/eunit.hrl").
-
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 parse_array_test() ->
   F = fun(<<Size:32/?INT, X:Size/binary, Bin/binary>>) ->

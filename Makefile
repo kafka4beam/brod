@@ -1,49 +1,16 @@
-.PHONY:	all compile docs check test clean plt dialyze
+PROJECT = brod
+PROJECT_VERSION = 2.0-dev
 
-REBAR ?= $(shell which rebar 2> /dev/null || which ./rebar)
-DIALYZER_PLT = ./brod.plt
-DIALYZER_OPTS = --fullpath --no_native -Werror_handling -Wrace_conditions -Wunderspecs -Wno_opaque -Wno_return -Wno_match -Wno_unused --plt $(DIALYZER_PLT)
-PLT_APPS = erts kernel stdlib
+DEPS = supervisor3
+TEST_DEPS = meck proper
 
-all: compile
+COVER = 1
 
-compile:
-	@$(REBAR) compile
+EUNIT_OPTS = verbose
+ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard
+CT_OPTS = -ct_use_short_names true
 
-docs:
-	@$(REBAR) skip_deps=true doc
+include erlang.mk
 
-check: compile plt dialyze
+ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 
-get-deps:
-	$(REBAR) get-deps
-
-test: REBAR := BROD_TEST=1 $(REBAR)
-test:
-	$(REBAR) get-deps
-	$(REBAR) compile
-	$(REBAR) eunit -v apps=brod
-	$(REBAR) skip_deps=true ct
-	./scripts/cover-summary.escript ./.eunit ./logs
-
-clean:
-	@$(RM) -rf deps
-	@$(REBAR) clean
-	@$(RM) doc/*
-	@$(RM) -f $(DIALYZER_PLT)
-
-plt: $(DIALYZER_PLT)
-
-$(DIALYZER_PLT):
-	dialyzer --build_plt --apps $(PLT_APPS) ebin deps/supervisor3/ebin --output_plt $(DIALYZER_PLT)
-
-dialyze: $(DIALYZER_PLT)
-	dialyzer -r ebin deps/supervisor3/ebin $(DIALYZER_OPTS)
-
-xref: compile
-	$(REBAR) xref
-
-escriptize: compile
-	@$(REBAR) escriptize
-
-# eof
