@@ -336,7 +336,7 @@ get_connection(Client, Host, Port) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
   case erlang:process_info(ClientPid, registered_name) of
-    {registered_name, ClientId} ->
+    {registered_name, ClientId} when is_atom(ClientId) ->
       get_partition_worker(ClientId, Key);
     _ ->
       %% This is a client process started without registered name
