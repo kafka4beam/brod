@@ -4,7 +4,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Building and testing
     make
-    make clean test
+    make tests
 
 # Quick start
 
@@ -181,5 +181,5 @@ await response and then close the connection.
 ## Self-contained binary (needs erlang runtime)
 This will build a self-contained binary with brod application
 
-    make escriptize
+    make escript
     ./brod help

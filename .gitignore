@@ -13,3 +13,4 @@ scripts/brod
 eunit.coverdata
 sys.config
 xrefr
+/brod
