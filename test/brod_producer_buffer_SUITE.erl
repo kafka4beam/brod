@@ -56,6 +56,105 @@ t_no_ack(Config) when is_list(Config) ->
 t_random_latency_ack(Config) when is_list(Config) ->
   ?assert(proper:quickcheck(prop_random_latency_ack_run(), 500)).
 
+t_nack(Config) when is_list(Config) ->
+  SendFun =
+    fun(SockPid, KvList) ->
+      CorrId = make_ref(),
+      NumList = lists:map(fun({Bin, Bin}) ->
+                            list_to_integer(binary_to_list(Bin))
+                          end, KvList),
+      SockPid ! {produce, CorrId, NumList},
+      {ok, CorrId}
+    end,
+  Buf0 = brod_producer_buffer:new(_BufferLimit = 2,
+                                  _OnWireLimit = 2,
+                                  _MaxBatchSize = 4, %% 4 bytes, 2 messages
+                                  _MaxRetry = 1,
+                                  SendFun),
+  AddFun =
+    fun(BufIn, Num) ->
+      CallRef = #brod_call_ref{ caller = self()
+                              , callee = ignore
+                              , ref    = Num
+                              },
+      Bin = list_to_binary(integer_to_list(Num)),
+      {ok, BufOut} = brod_producer_buffer:add(BufIn, CallRef, Bin, Bin),
+      BufOut
+    end,
+  MaybeSend =
+    fun(BufIn) ->
+      {ok, BufOut} = brod_producer_buffer:maybe_send(BufIn, self()),
+      BufOut
+    end,
+  AckFun =
+    fun(BufIn, CorrId) ->
+      {ok, BufOut} = brod_producer_buffer:ack(BufIn, CorrId),
+      BufOut
+    end,
+  NackFun =
+    fun(BufIn, CorrId) ->
+      {ok, BufOut} = brod_producer_buffer:nack(BufIn, CorrId, test),
+      BufOut
+    end,
+  ReceiveFun =
+    fun(ExpectedNums) ->
+      receive
+        {produce, CorrId_, NumList} ->
+          ExpectedNums =:= NumList orelse
+            erlang:error({ExpectedNums, NumList}),
+          CorrId_
+      after 1000 ->
+        erlang:error("timed out receiving produce message")
+      end
+    end,
+  Buf1 = AddFun(Buf0, 0),
+  Buf2 = AddFun(Buf1, 1),
+  Buf3 = AddFun(AddFun(Buf2, 2), 3),
+  Buf4 = MaybeSend(Buf3),
+  CorrId1 = ReceiveFun([0, 1]),
+  Buf5 = NackFun(Buf4, CorrId1),
+  Buf6 = MaybeSend(Buf5),
+  CoorId2 = ReceiveFun([0]),
+  ?assertEqual(Buf6, MaybeSend(Buf6)), %% no new request before last is acked
+  Buf7 = AckFun(Buf6, CoorId2),
+  Buf8 = MaybeSend(Buf7),
+  Buf9 = MaybeSend(Buf8), %% allow sending another one now
+  CorrId3 = ReceiveFun([1]),
+  CorrId4 = ReceiveFun([2, 3]),
+  BufA = AckFun(Buf9, CorrId3),
+  BufB = AckFun(BufA, CorrId4),
+  ?assert(brod_producer_buffer:is_empty(BufB)).
+
+t_send_fun_error(Config) when is_list(Config) ->
+  SendFun =
+    fun(_SockPid, _KvList) ->
+      {error, "the reason"}
+    end,
+  Buf0 = brod_producer_buffer:new(_BufferLimit = 1,
+                                  _OnWireLimit = 1,
+                                  _MaxBatchSize = 10000,
+                                  _MaxRetry = 1,
+                                  SendFun),
+  AddFun =
+    fun(BufIn, Num) ->
+      CallRef = #brod_call_ref{ caller = self()
+                              , callee = ignore
+                              , ref    = Num
+                              },
+      Bin = list_to_binary(integer_to_list(Num)),
+      {ok, BufOut} = brod_producer_buffer:add(BufIn, CallRef, Bin, Bin),
+      BufOut
+    end,
+  MaybeSend =
+    fun(BufIn) ->
+      {retry, BufOut} = brod_producer_buffer:maybe_send(BufIn, self()),
+      BufOut
+    end,
+  Buf1 = AddFun(AddFun(Buf0, 0), 1),
+  Buf2 = MaybeSend(Buf1),
+  ?assertException(exit, {reached_max_retries, "the reason"},
+                   MaybeSend(Buf2)).
+
 %%%_* Help functions ===========================================================
 
 -define(MAX_DELAY, 3).

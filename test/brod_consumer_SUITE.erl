@@ -61,7 +61,8 @@ init_per_testcase(Case, Config) ->
                            [Producer], [Consumer], ClientConfig),
   [{client, Client}, {client_pid, ClientPid} | Config].
 
-end_per_testcase(_Case, Config) ->
+end_per_testcase(Case, Config) ->
+  ct:pal("=== ~p end ===", [Case]),
   Pid = ?config(client_pid),
   try
     Ref = erlang:monitor(process, Pid),

@@ -40,8 +40,8 @@
 
 %% default number of messages in buffer before block callers
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
-%% default number of messages sent on wire before block waiting for acks
--define(DEFAULT_PARITION_ONWIRE_LIMIT, 128).
+%% default number of message sets sent on wire before block waiting for acks
+-define(DEFAULT_PARITION_ONWIRE_LIMIT, 1).
 %% by default, send max 1 MB of data in one batch (message set)
 -define(DEFAULT_MAX_BATCH_SIZE, 1048576).
 %% by default, require acks from all ISR
@@ -51,8 +51,8 @@
 %% by default, brod_producer will sleep for 0.5 second before trying to send
 %% buffered messages again upon receiving a error from kafka
 -define(DEFAULT_RETRY_BACKOFF_MS, 500).
-%% by default, brod_producer will not try to re-send any messages.
--define(DEFAULT_MAX_RETRIES, 0).
+%% by default, brod_producer will try to retry 3 times before crashing
+-define(DEFAULT_MAX_RETRIES, 3).
 
 -define(RETRY_MSG, retry).
 
@@ -98,16 +98,18 @@
 %%     'brod_produce_req_buffered' reply) once the request is taken into buffer
 %%     or when the request has been put on wire, then the caller may expect
 %%     a reply 'brod_produce_req_acked' if the request is accepted by kafka
-%%   partition_onwire_limit(optional, default = 128):
-%%     How many requests (per-partition) can be sent to kafka broker
+%%   partition_onwire_limit(optional, default = 1):
+%%     How many message sets (per-partition) can be sent to kafka broker
 %%     asynchronously before receiving ACKs from broker.
+%%     NOTE: setting a number greater than 1 may cause messages being persisted
+%%           in an order different from the order they were produced.
 %%   max_batch_size (in bytes, optional, default = 1M):
 %%     In case callers are producing faster than brokers can handle (or
 %%     congestion on wire), try to accumulate small requests into batches
 %%     as much as possible but not exceeding max_batch_size
-%%   max_retries (optional, default = 0):
-%%     If {max_retries, N} is given, the producer will make N produce attempts
-%%     before crashing itself in case of failures like socket being shut down
+%%   max_retries (optional, default = 3):
+%%     If {max_retries, N} is given, the producer retry produce request for
+%%     N times before crashing in case of failures like socket being shut down
 %%     or exceptions received in produce response from kafka.
 %%     The special value N = -1 means 'retry indefinitely'
 %%   retry_backoff_ms (optional, default = 500)

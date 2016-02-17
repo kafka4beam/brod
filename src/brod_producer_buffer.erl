@@ -114,11 +114,12 @@ ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
         } = Buf, CorrId) ->
   ok = lists:foreach(fun reply_acked/1, Reqs),
-  {ok, Buf#buf{ onwire_count = OnWireCount - length(Reqs)
+  {ok, Buf#buf{ onwire_count = OnWireCount - 1
               , onwire       = Rest
               }};
-ack(_Buf, _CorrIdReceived) ->
+ack(#buf{onwire = OnWire}, CorrIdReceived) ->
   %% unkonwn corr-id, ignore
+  true = assert_corr_id(OnWire, CorrIdReceived),
   {error, ignored}.
 
 %% @doc 'Negative' ack, put all sent requests back to the head of buffer.
@@ -129,7 +130,8 @@ ack(_Buf, _CorrIdReceived) ->
 -spec nack(buf(), corr_id(), any()) -> {ok, buf()} | {error, ignored}.
 nack(#buf{onwire = [{CorrId, _Reqs} | _]} = Buf, CorrId, Reason) ->
   nack_all(Buf, Reason);
-nack(_Buf, _CorrId, _Reason) ->
+nack(#buf{onwire = OnWire}, CorrIdReceived, _Reason) ->
+  true = assert_corr_id(OnWire, CorrIdReceived),
   %% unknown corr-id, ignore.
   {error, ignored}.
 
@@ -156,6 +158,17 @@ is_empty(#buf{}) -> false.
 
 %%%_* Internal functions =======================================================
 
+%% @private This is a validation on the received correlation IDs for produce
+%% responses, the assumption made in brod implementation is that kafka broker
+%% guarantees that the produce responses are sent in the order the
+%% the corresponding produce requests were sent.
+%% @end
+-spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true | no_return().
+assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
+  true;
+assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
+  CorrId >= CorrIdReceived orelse exit({bad_order, CorrId, CorrIdReceived}).
+
 -spec take_reqs_to_send(buf()) -> {[#req{}], buf()}.
 take_reqs_to_send(#buf{ buffer       = [#req{failures = F} = Req | Reqs]
                       , buffer_count = BufferCount
@@ -172,42 +185,42 @@ take_reqs_to_send(#buf{ buffer       = [#req{failures = F} = Req | Reqs]
                       },
       {[Req], NewBuf}
   end;
+take_reqs_to_send(#buf{ onwire_count = OnWireCount
+                      , onwire_limit = OnWireLimit
+                      } = Buf) when OnWireCount >= OnWireLimit ->
+  {[], Buf};
 take_reqs_to_send(Buf) ->
-  take_reqs_to_send(Buf, _Acc = [], _AccLength = 0, _AccBytes = 0).
+  take_reqs_to_send(Buf, _Acc = [], _AccBytes = 0).
 
+-spec take_reqs_to_send(buf(), [#req{}], integer()) -> {[#req{}], buf()}.
 take_reqs_to_send(#buf{ pending = []
                       , buffer  = []
-                      } = Buf, Acc, _AccLength, _AccBytes) ->
+                      } = Buf, Acc, _AccBytes) ->
   %% no more requests in buffer&pending
   {lists:reverse(Acc), Buf};
-take_reqs_to_send(#buf{buffer = []} = Buf, Acc, AccLength, AccBytes) ->
-  %% no more requests in buffer, take one from pending
+take_reqs_to_send(#buf{buffer = []} = Buf, Acc, AccBytes) ->
+  %% no more requests in buffer, take more from pending
   {ok, NewBuf} = maybe_buffer(Buf),
-  take_reqs_to_send(NewBuf, Acc, AccLength, AccBytes);
-take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
-                      , onwire_count   = OnWireCount
-                      , onwire_limit   = OnWireLimit
-                      } = Buf, Acc, AccLength, AccBytes)
- when OnWireCount + AccLength >= OnWireLimit orelse
-      AccBytes >= MaxBatchSize ->
-  %% reached max number of requests on wire
-  %% or reached max bytes in one message set
+  take_reqs_to_send(NewBuf, Acc, AccBytes);
+take_reqs_to_send(#buf{max_batch_size = MaxBatchSize} = Buf, Acc, AccBytes)
+  when AccBytes >= MaxBatchSize ->
+  %% reached max bytes in one message set
   {lists:reverse(Acc), Buf};
-take_reqs_to_send(#buf{ max_batch_size = MaxBatchSize
-                      , buffer_count   = BufferCount
-                      , buffer         = [Req | Rest]
-                      } = Buf, Acc, AccLength, AccBytes) ->
-  ReqBytes = Req#req.bytes,
-  case AccBytes =:= 0 orelse %% send at least one message regardless of size
-       AccBytes + ReqBytes =< MaxBatchSize of %% otherwise check batch size
-    true ->
-      NewBuf = Buf#buf{ buffer_count = BufferCount - 1
-                      , buffer       = Rest
-                      },
-      take_reqs_to_send(NewBuf, [Req | Acc], AccLength+1, AccBytes+ReqBytes);
-    false ->
-      {lists:reverse(Acc), Buf}
-  end.
+take_reqs_to_send(#buf{ buffer_count = BufferCount
+                      , buffer       = [Req | Rest]
+                      } = Buf, _Acc = [], _AccBytes = 0) ->
+  %% always send at least one message one time regardless of size
+  NewBuf = Buf#buf{ buffer_count = BufferCount - 1
+                  , buffer       = Rest
+                  },
+  take_reqs_to_send(NewBuf, [Req], Req#req.bytes);
+take_reqs_to_send(#buf{ buffer_count = BufferCount
+                      , buffer       = [Req | Rest]
+                      } = Buf, Acc, AccBytes) ->
+  NewBuf = Buf#buf{ buffer_count = BufferCount - 1
+                  , buffer       = Rest
+                  },
+  take_reqs_to_send(NewBuf, [Req | Acc], AccBytes + Req#req.bytes).
 
 %% @private Send produce request to kafka.
 -spec do_send([#req{}], buf(), pid()) ->
@@ -223,7 +236,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       ok = lists:foreach(fun reply_acked/1, Reqs),
       {ok, Buf};
     {ok, CorrId} ->
-      {ok, Buf#buf{ onwire_count = OnWireCount + length(Reqs)
+      {ok, Buf#buf{ onwire_count = OnWireCount + 1
                   , onwire       = OnWire ++ [{CorrId, Reqs}]
                   }};
     {error, Reason} ->
@@ -300,6 +313,14 @@ cast_test() ->
   receive Ref -> ok
   end,
   ok = cast(?undef, Ref).
+
+assert_corr_id_test() ->
+  {error, ignored} = ack(#buf{}, 0),
+  {error, ignored} = nack(#buf{}, 0, ignored),
+  {error, ignored} = ack(#buf{onwire = [{1, req}]}, 0),
+  {error, ignored} = nack(#buf{onwire = [{1, req}]}, 0, ignored),
+  ?assertException(exit, {bad_order, 0, 1}, ack(#buf{onwire = [{0, req}]}, 1)),
+  ok.
 
 -endif. % TEST
 
