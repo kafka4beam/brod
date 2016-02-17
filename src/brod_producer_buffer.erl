@@ -160,8 +160,8 @@ is_empty(#buf{}) -> false.
 
 %% @private This is a validation on the received correlation IDs for produce
 %% responses, the assumption made in brod implementation is that kafka broker
-%% guarantees that the produce responses are sent in the order the
-%% the corresponding produce requests were sent.
+%% guarantees the produce responses are replied in the order the corresponding
+%% produce requests were received from clients.
 %% @end
 -spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true | no_return().
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
