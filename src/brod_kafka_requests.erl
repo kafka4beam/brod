@@ -85,7 +85,7 @@ get_api_key(#requests{sent = Sent}, CorrId) ->
 %% @doc Get caller of a request having the given correlation ID.
 %% Crash if the request is not found.
 %% @end
--spec get_caller(requests(), corr_id()) -> api_key().
+-spec get_caller(requests(), corr_id()) -> pid().
 get_caller(#requests{sent = Sent}, CorrId) ->
   {Caller, _ApiKey} = gb_trees:get(CorrId, Sent),
   Caller.

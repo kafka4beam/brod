@@ -7,3 +7,4 @@ logs/
 ebin/
 *.beam
 scripts/brod
+/brod.plt

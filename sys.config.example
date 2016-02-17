@@ -15,6 +15,22 @@
                  }
                ]
              }
+           , { consumers
+             , [ { <<"brod-test-topic-1">>
+                   , [ {topic_restart_delay_seconds, 10}
+                     , {partition_restart_delay_seconds, 2}
+                     %% no 'partitions' means 'all partitions'
+                     % , {partitions, [1,2,3]}
+                     , {cb_mod, brod_consumer_impl}
+                     , {offset, -1}
+                     , {min_bytes, 0}
+                     , {max_bytes, 1048576}
+                     , {max_wait_time, 1000}
+                     , {sleep_timeout, 1000}
+                     ]
+                 }
+               ]
+             }
            ]
          }
        ]

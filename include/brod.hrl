@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,25 +17,35 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--record(message, { offset     :: integer()
-                 , crc        :: integer()
-                 , magic_byte :: integer()
-                 , attributes :: integer()
-                 , key        :: binary()
-                 , value      :: binary()
-                 }).
+-type kafka_topic()      :: binary().
+-type kafka_partition()  :: non_neg_integer().
+-type kafka_offset()     :: integer().
+-type kafka_error_code() :: atom() | integer().
 
-%% delivered to subsriber by brod_consumer
--record(message_set, { topic          :: binary()
-                     , partition      :: integer()
-                     , high_wm_offset :: integer()
-                     , messages       :: [#message{}]
-                     }).
+-record(kafka_message,
+        { offset     :: kafka_offset()
+        , crc        :: integer()
+        , magic_byte :: integer()
+        , attributes :: integer()
+        , key        :: binary()
+        , value      :: binary()
+        }).
 
--type callback_fun() :: fun((#message_set{}) -> any()) |
-                        fun((Offset :: integer(), Key :: binary(), Value :: binary()) -> any()).
+-record(kafka_message_set,
+        { topic          :: topic()
+        , partition      :: partition()
+        , high_wm_offset :: integer() %% max offset of the partition
+        , messages       :: [#kafka_message{}]
+        }).
 
--type client_id() :: atom().
+-record(kafka_fetch_error,
+        { topic      :: topic()
+        , partition  :: partition()
+        , error_code :: error_code()
+        , error_desc :: string()
+        }).
+
+-type brod_client_id() :: atom().
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 

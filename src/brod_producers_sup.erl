@@ -51,9 +51,9 @@
 %%      The config is passed down to the producers.
 %% For more details: @see brod_producer:start_link/4
 %% @end
--spec start_link(client_id(), [{topic(), producer_config()}]) -> {ok, pid()}.
-start_link(ClientId, Producers) ->
-  supervisor3:start_link(?MODULE, {?SUP, ClientId, Producers}).
+-spec start_link(pid(), [{topic(), producer_config()}]) -> {ok, pid()}.
+start_link(ClientPid, Producers) ->
+  supervisor3:start_link(?MODULE, {?SUP, ClientPid, Producers}).
 
 %% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->
@@ -82,16 +82,16 @@ find_producer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init({?SUP, ClientId, Producers}) ->
-  Children = [ producers_sup_spec(ClientId, TopicName, Config)
+init({?SUP, ClientPid, Producers}) ->
+  Children = [ producers_sup_spec(ClientPid, TopicName, Config)
              || {TopicName, Config} <- Producers ],
   {ok, {{one_for_one, 0, 1}, Children}};
-init({?SUP2, _ClientId, _Topic, _Config}) ->
+init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 
-post_init({?SUP2, ClientId, Topic, Config}) ->
-  {ok, Partitions} = brod_client:get_partitions(ClientId, Topic),
-  Children = [ producer_spec(ClientId, Topic, Partition, Config)
+post_init({?SUP2, ClientPid, Topic, Config}) ->
+  {ok, Partitions} = brod_client:get_partitions(ClientPid, Topic),
+  Children = [ producer_spec(ClientPid, Topic, Partition, Config)
              || Partition <- Partitions ],
   %% Producer may crash in case of exception in case of network failure,
   %% or error code received in produce response (e.g. leader transition)
@@ -100,11 +100,11 @@ post_init({?SUP2, ClientId, Topic, Config}) ->
   %% before supervisor tries to restart it.
   {ok, {{one_for_one, 0, 1}, Children}}.
 
-producers_sup_spec(ClientId, TopicName, Config0) ->
+producers_sup_spec(ClientPid, TopicName, Config0) ->
   {Config, DelaySecs} =
     take_delay_secs(Config0, topic_restart_delay_seconds,
                     ?DEFAULT_SUP2_RESTART_DELAY),
-  Args = [?MODULE, {?SUP2, ClientId, TopicName, Config}],
+  Args = [?MODULE, {?SUP2, ClientPid, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
@@ -113,11 +113,11 @@ producers_sup_spec(ClientId, TopicName, Config0) ->
   , _Module   = [?MODULE]
   }.
 
-producer_spec(ClientId, Topic, Partition, Config0) ->
+producer_spec(ClientPid, Topic, Partition, Config0) ->
   {Config, DelaySecs} =
     take_delay_secs(Config0, partition_restart_delay_seconds,
                     ?DEFAULT_PRODUCER_RESTART_DELAY),
-  Args      = [ClientId, Topic, Partition, Config],
+  Args      = [ClientPid, Topic, Partition, Config],
   { _Id       = Partition
   , _Start    = {brod_producer, start_link, Args}
   , _Restart  = {permanent, DelaySecs}

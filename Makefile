@@ -35,10 +35,10 @@ clean:
 plt: $(DIALYZER_PLT)
 
 $(DIALYZER_PLT):
-	dialyzer --build_plt --apps $(PLT_APPS) ebin --output_plt $(DIALYZER_PLT)
+	dialyzer --build_plt --apps $(PLT_APPS) ebin deps/supervisor3/ebin --output_plt $(DIALYZER_PLT)
 
 dialyze: $(DIALYZER_PLT)
-	dialyzer -r ebin $(DIALYZER_OPTS)
+	dialyzer -r ebin deps/supervisor3/ebin $(DIALYZER_OPTS)
 
 xref: compile
 	$(REBAR) xref

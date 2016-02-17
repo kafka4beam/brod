@@ -55,7 +55,7 @@ parse_stream(<<Size:32/?INT,
   Response = decode(ApiKey, Bin),
   parse_stream(Tail, [{CorrId, Response} | Acc], Requests);
 parse_stream(Bin, Acc, _Requests) ->
-  {Bin, Acc}.
+  {Bin, lists:reverse(Acc)}.
 
 encode(ClientId, CorrId, Request) ->
   Header = header(api_key(Request), ClientId, CorrId),
@@ -279,8 +279,12 @@ fetch_request_body(#fetch_request{} = Fetch) ->
     MaxBytes:32/?INT>>.
 
 fetch_response(Bin) ->
-  {Topics, _} = parse_array(Bin, fun parse_topic_fetch_data/1),
-  #fetch_response{topics = Topics}.
+  try
+    {Topics, _} = parse_array(Bin, fun parse_topic_fetch_data/1),
+    #fetch_response{topics = Topics}
+  catch throw : max_bytes_too_small ->
+    #fetch_response{topics = [], error = max_bytes_too_small}
+  end.
 
 parse_topic_fetch_data(<<Size:16/?INT, Name:Size/binary, Bin0/binary>>) ->
   {Partitions, Bin} = parse_array(Bin0, fun parse_partition_messages/1),
@@ -306,7 +310,7 @@ parse_message_set(Bin) ->
 parse_message_set(<<>>, []) ->
   {0, []};
 parse_message_set(<<>>, [Msg | _] = Acc) ->
-  {Msg#message.offset, lists:reverse(Acc)};
+  {Msg#kafka_message.offset, lists:reverse(Acc)};
 parse_message_set(<<Offset:64/?INT,
                     MessageSize:32/?INT,
                     MessageBin:MessageSize/binary,
@@ -319,21 +323,21 @@ parse_message_set(<<Offset:64/?INT,
   {Key, ValueBin} = parse_bytes(KeySize, KV),
   <<ValueSize:32/?INT, Value0/binary>> = ValueBin,
   {Value, <<>>} = parse_bytes(ValueSize, Value0),
-  Msg = #message{ offset     = Offset
-                , crc        = Crc
-                , magic_byte = MagicByte
-                , attributes = Attributes
-                , key        = Key
-                , value      = Value},
+  Msg = #kafka_message{ offset     = Offset
+                      , crc        = Crc
+                      , magic_byte = MagicByte
+                      , attributes = Attributes
+                      , key        = Key
+                      , value      = Value},
   parse_message_set(Bin, [Msg | Acc]);
 parse_message_set(_Bin, [Msg | _] = Acc) ->
   %% the last message in response was sent only partially, dropping
-  {Msg#message.offset, lists:reverse(Acc)};
+  {Msg#kafka_message.offset, lists:reverse(Acc)};
 parse_message_set(_Bin, []) ->
   %% The only case when I managed to get there is when max_bytes option
   %% is too small to for a whole message.
   %% For some reason kafka does not report error.
-  throw("max_bytes option is too small").
+  throw(max_bytes_too_small).
 
 parse_array(<<Length:32/?INT, Bin/binary>>, Fun) ->
   parse_array(Length, Bin, [], Fun).
