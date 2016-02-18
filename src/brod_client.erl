@@ -145,7 +145,8 @@ get_leader_connection(Client, Topic, Partition) ->
       brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
       #partition_metadata{leader_id = LeaderId} =
         lists:keyfind(Partition, #partition_metadata.id, Partitions),
-      LeaderId >= 0 orelse erlang:error({no_leader, {Client, Topic, Partition}}),
+      LeaderId >= 0 orelse erlang:error({no_leader,
+                                         {Client, Topic, Partition}}),
       #broker_metadata{host = Host, port = Port} =
         lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
       get_connection(Client, Host, Port);

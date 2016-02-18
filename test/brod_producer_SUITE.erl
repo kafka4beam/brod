@@ -64,10 +64,12 @@ init_per_testcase(Case, Config) ->
     Pid_   -> brod:stop_client(Pid_)
   end,
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS, [Producer], [Consumer], []),
+  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS,
+                                           [Producer], [Consumer], []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
   {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
-  [{client, Client}, {client_pid, ClientPid}, {subscriber, Subscriber} | Config].
+  [{client, Client}, {client_pid, ClientPid},
+   {subscriber, Subscriber} | Config].
 
 end_per_testcase(_Case, Config) ->
   Subscriber = ?config(subscriber),

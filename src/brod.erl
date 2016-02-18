@@ -353,8 +353,10 @@ main(["help"]) ->
   show_help();
 main(Args) ->
   case length(Args) < 2 of
-    true  -> erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
-    false -> ok
+    true ->
+      erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
+    false ->
+      ok
   end,
   [F | Tail] = Args,
   io:format("~p~n", [call_api(list_to_atom(F), Tail)]).
@@ -362,14 +364,18 @@ main(Args) ->
 show_help() ->
   io:format(user, "Command line interface for brod.\n", []),
   io:format(user, "General patterns:\n", []),
-  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> <function name> <function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host:port pair> <function name> <function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host name (9092 is used by default)> <function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> "
+           "<function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host:port pair> <function name> "
+           "<function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host name (9092 is used by default)> "
+           "<function name> <function arguments>\n", []),
   io:format(user, "\n", []),
   io:format(user, "Examples:\n", []),
   io:format(user, "Get metadata:\n", []),
   io:format(user, "  ./brod get_metadata Hosts Topic1[,Topic2]\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,kafka-3:9092\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,"
+           "kafka-3:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092  topic1,topic2\n", []),
   io:format(user, "  ./brod get_metadata kafka-1 topic1\n", []),
@@ -377,14 +383,17 @@ show_help() ->
   io:format(user, "  ./brod produce Hosts Topic Partition Key:Value\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 key:value\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 :value\n", []),
-  io:format(user, "This one can be used to generate a delete marker for compacted topic:\n", []),
+  io:format(user, "This one can be used to generate a delete marker "
+           "for compacted topic:\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 key:\n", []),
   io:format(user, "Get offsets:\n", []),
-  io:format(user, "  ./brod get_offsets Hosts Topic Partition Time MaxNOffsets\n", []),
+  io:format(user, "  ./brod get_offsets Hosts Topic Partition "
+           "Time MaxNOffsets\n", []),
   io:format(user, "  ./brod get_offsets kafka-1 topic1 0 -1 1\n", []),
   io:format(user, "Fetch:\n", []),
   io:format(user, "  ./brod fetch Hosts Topic Partition Offset\n", []),
-  io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime MinBytes MaxBytes\n", []),
+  io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime "
+           "MinBytes MaxBytes\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
   ok.
@@ -410,8 +419,10 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
   Hosts = parse_hosts_str(HostsStr),
-  brod:get_offsets(Hosts, list_to_binary(TopicStr), list_to_integer(PartitionStr));
-call_api(get_offsets, [HostsStr, TopicStr, PartitionStr, TimeStr, MaxOffsetStr]) ->
+  brod:get_offsets(Hosts, list_to_binary(TopicStr),
+                   list_to_integer(PartitionStr));
+call_api(get_offsets, [HostsStr, TopicStr, PartitionStr,
+                       TimeStr, MaxOffsetStr]) ->
   Hosts = parse_hosts_str(HostsStr),
   brod:get_offsets(Hosts,
                    list_to_binary(TopicStr),
