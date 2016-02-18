@@ -23,7 +23,7 @@ otp_release:
 script:
   - scripts/setup-1-node-test-env.sh
   - make t
-  - make xref
+  - ERLVSN="$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt().')"; if [[ $ERLVSN = R* ]]; then echo 'skipping xref'; else make xref; fi
   - make edoc
   - make escript
   - scripts/cli-produce-test.sh
