@@ -5,7 +5,7 @@ THIS_DIR="$(dirname $(readlink -f $0))"
 cd $THIS_DIR/../docker
 
 sudo docker-compose -f docker-compose-basic.yml build
-sudo docker-compose -f docker-compose-kafka-1.yml up -d
+sudo docker-compose -f docker-compose-kafka-2.yml up -d
 
 n=0
 while [ "$(sudo docker exec kafka_1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --list')" != '' ]; do
