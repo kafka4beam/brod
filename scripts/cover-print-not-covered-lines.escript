@@ -3,7 +3,7 @@
 %%! -smp enable -sname notcoveredlinessummary -pa ebin -pa ../ebin
 
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2015-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -20,16 +20,14 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2015 Klarna AB
+%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
 -mode(compile).
 
-main([UtCoverDataDir, CtCoverDataDir]) ->
-  {ok, UtCoverDataFile} = find_latest_coverdata(UtCoverDataDir),
+main([UtCoverDataFile, CtCoverDataFile]) ->
   io:format("using coverdata file: ~s\n", [UtCoverDataFile]),
-  {ok, CtCoverDataFile} = find_latest_coverdata(CtCoverDataDir),
   io:format("using coverdata file: ~s\n", [CtCoverDataFile]),
   Parent = self(),
   Ref = make_ref(),
@@ -63,17 +61,12 @@ get_imported_modules() ->
       end, All),
   lists:sort(Filtered).
 
-find_latest_coverdata(Dir) ->
-  Files = filelib:fold_files(Dir, ".*.coverdata", true,
-                             fun(N, Acc) -> [N | Acc] end, []),
-  {ok, lists:last(lists:sort(Files))}.
-
 analyse_module(Module) ->
   {ok, Lines} = cover:analyse(Module, coverage, line),
   lists:foldr(
-    fun({{_Mod, 0}, _}, Acc)         -> Acc;
-       ({{_Mod, Line}, {1, 0}}, Acc) -> Acc;
-       ({{_Mod, Line}, {0, 1}}, Acc) -> [Line | Acc]
+    fun({{_Mod, 0}, _}, Acc)          -> Acc;
+       ({{_Mod, _Line}, {1, 0}}, Acc) -> Acc;
+       ({{_Mod, Line}, {0, 1}}, Acc)  -> [Line | Acc]
     end, [], Lines).
 
 print_mod_summary(_Module, []) -> ok;
@@ -86,7 +79,7 @@ print_mod_summary(Module, NotCoveredLines) ->
       erlang:error({erl_file_not_found, Module})
   end.
 
-print_lines(Filename, []) ->
+print_lines(_Filename, []) ->
   ok;
 print_lines(Filename, Lines) ->
   {ok, Fd} = file:open(Filename, [read]),

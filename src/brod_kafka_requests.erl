@@ -85,7 +85,7 @@ get_api_key(#requests{sent = Sent}, CorrId) ->
 %% @doc Get caller of a request having the given correlation ID.
 %% Crash if the request is not found.
 %% @end
--spec get_caller(requests(), corr_id()) -> api_key().
+-spec get_caller(requests(), corr_id()) -> pid().
 get_caller(#requests{sent = Sent}, CorrId) ->
   {Caller, _ApiKey} = gb_trees:get(CorrId, Sent),
   Caller.
@@ -101,9 +101,9 @@ get_corr_id(#requests{ corr_id = CorrId }) ->
 next_corr_id(?MAX_CORR_ID) -> 0;
 next_corr_id(CorrId)       -> CorrId + 1.
 
--include_lib("eunit/include/eunit.hrl").
-
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 next_corr_id_test() ->
   CorrId = (1 bsl 31) - 1,

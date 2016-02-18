@@ -19,9 +19,16 @@
 
 -include("brod.hrl").
 
+-type topic()      :: kafka_topic().
+-type partition()  :: kafka_partition().
+-type offset()     :: kafka_offset().
+-type error_code() :: kafka_error_code().
+-type client_id()  :: brod_client_id().
+
 %% Error code macros, from:
 %% https://github.com/apache/kafka/blob/0.9.0/clients/src/
 %%       main/java/org/apache/kafka/common/protocol/Errors.java
+
 -define(EC_UNKNOWN,                    'UnknownError').                     % -1
 -define(EC_NONE,                       'no_error').                         %  0
 -define(EC_OFFSET_OUT_OF_RANGE,        'OffsetOutOfRange').                 %  1
@@ -60,23 +67,26 @@
 
 -define(MAX_CORR_ID, 2147483647). % 2^31 - 1
 
--type error_code() :: atom() | integer().
+-type consumer_option() :: begin_offset
+                         | min_bytes
+                         | max_bytes
+                         | max_wait_time
+                         | sleep_timeout
+                         | prefetch_count.
 
--type hostname()        :: string().
--type portnum()         :: pos_integer().
--type endpoint()        :: {hostname(), portnum()}.
--type cluster_id()      :: atom().
--type leader_id()       :: non_neg_integer().
--type topic()           :: binary().
--type partition()       :: non_neg_integer().
--type corr_id()         :: 0..?MAX_CORR_ID.
--type offset()          :: integer().
--type kafka_kv()        :: {binary(), binary()}.
--type client_config()   :: brod_client_config().
--type producer_config() :: brod_producer_config().
--type consumer_config() :: brod_consumer_config().
--type client()          :: client_id() | pid().
--type required_acks()   :: -1..1.
+-type hostname()         :: string().
+-type portnum()          :: pos_integer().
+-type endpoint()         :: {hostname(), portnum()}.
+-type cluster_id()       :: atom().
+-type leader_id()        :: non_neg_integer().
+-type corr_id()          :: 0..?MAX_CORR_ID.
+-type kafka_kv()         :: {binary(), binary()}.
+-type client_config()    :: brod_client_config().
+-type producer_config()  :: brod_producer_config().
+-type consumer_config()  :: brod_consumer_config().
+-type consumer_options() :: [{consumer_option(), integer()}].
+-type client()           :: client_id() | pid().
+-type required_acks()    :: -1..1.
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
@@ -173,14 +183,16 @@
                             , error_code     :: error_code()
                             , high_wm_offset :: integer()
                             , last_offset    :: integer()
-                            , messages       :: [#message{}]
+                            , messages       :: [#kafka_message{}]
                             }).
 
 -record(topic_fetch_data, { topic      :: topic()
                           , partitions :: [#partition_messages{}]
                           }).
 
--record(fetch_response, {topics = [#topic_fetch_data{}]}).
+-record(fetch_response, { topics = [#topic_fetch_data{}]
+                        , error :: undefined | max_bytes_too_small
+                        }).
 
 %%%_* offset commit request ----------------------------------------------------
 %% Offset commit api version description from kafka protocol docs:
@@ -285,6 +297,8 @@
                                  }).
 
 -record(describe_groups_response, {groups = [#describe_group_response{}]}).
+
+-define(DEFAULT_CLIENT_ID, brod).
 
 -endif. % include brod_int.hrl
 

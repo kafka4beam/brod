@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -32,14 +32,14 @@
 
 %% Client API
 -export([ get_partitions/2
-        , get_producer/3
-        , start_link_client/2
-        , start_link_client/4
+        , start_link_client/3
+        , start_link_client/5
         , stop_client/1
         ]).
 
 %% Producer API
--export([ produce/2
+-export([ get_producer/3
+        , produce/2
         , produce/3
         , produce/5
         , produce_sync/2
@@ -49,13 +49,13 @@
         ]).
 
 %% Consumer API
--export([ start_link_consumer/3
-        , start_link_consumer/4
-        , start_consumer/3
-        , stop_consumer/1
-        , consume/2
-        , consume/3
-        , consume/6
+-export([ consume_ack/2
+        , consume_ack/4
+        , get_consumer/3
+        , subscribe/3
+        , subscribe/5
+        , unsubscribe/1
+        , unsubscribe/3
         ]).
 
 %% Management and testing API
@@ -65,9 +65,6 @@
         , get_offsets/5
         , fetch/4
         , fetch/7
-        , console_consumer/4
-        , file_consumer/5
-        , simple_consumer/5
         ]).
 
 %% escript
@@ -93,11 +90,13 @@ stop(_State) -> ok.
 %% Deafult client ID and default configs are used.
 %% For more details: @see start_link_client/4
 %% @end
--spec start_link_client([endpoint()], [{topic(), producer_config()}]) ->
-        {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, Producers) ->
+-spec start_link_client( [endpoint()]
+                       , [{topic(), producer_config()}]
+                       , [{topic(), consumer_config()}]) ->
+                           {ok, pid()} | {error, any()}.
+start_link_client(Endpoints, Producers, Consumers) ->
   start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
-                    _Config = [], Producers).
+                    Producers, Consumers, _Config = []).
 
 %5 @doc Start a client.
 %% ClientId:
@@ -106,6 +105,12 @@ start_link_client(Endpoints, Producers) ->
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster
 %%   which does not necessarily have to be a leader of any partition,
 %%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% Producers:
+%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
+%%   proplist, @see brod_producers_sup:start_link/2 for more details
+%% Consumers:
+%%   A list of {Topic, ConsumerConfig} where ConsumerConfig is a
+%%   proplist, @see brod_consumers_sup:start_link/2 for more details
 %% Config:
 %%   Proplist, possible values:
 %%     get_metadata_timout_seconds(optional, default=5)
@@ -114,20 +119,20 @@ start_link_client(Endpoints, Producers) ->
 %%     reconnect_cool_down_seconds(optional, default=1)
 %%       Delay this configured number of seconds before retrying to
 %%       estabilish a new connection to the kafka partition leader.
-%% Producers:
-%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
-%%   proplist, @see brod_producers_sup:start_link/2 for more details
 % @end
--spec start_link_client(client_id(), [endpoint()], client_config(),
-                        [{topic(), producer_config()}]) ->
-        {ok, pid()} | {error, any()}.
-start_link_client(ClientId, Endpoints, Config, Producers) ->
-  brod_client:start_link(ClientId, Endpoints, Config, Producers).
+-spec start_link_client( client_id()
+                       , [endpoint()]
+                       , [{topic(), producer_config()}]
+                       , [{topic(), consumer_config()}]
+                       , client_config()) ->
+                           {ok, pid()} | {error, any()}.
+start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
+  brod_client:start_link(ClientId, Endpoints, Producers, Consumers, Config).
 
 %% @doc Stop a client.
--spec stop_client(client_id()) -> ok.
-stop_client(ClientId) ->
-  brod_client:stop(ClientId).
+-spec stop_client(client()) -> ok.
+stop_client(Client) ->
+  brod_client:stop(Client).
 
 %% @doc Get all partition numbers of a given topic.
 %% The higher level producers may need the partition numbers to
@@ -141,6 +146,15 @@ stop_client(ClientId) ->
 get_partitions(Client, Topic) ->
   brod_client:get_partitions(Client, Topic).
 
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, Reason}
+          when Reason :: client_down
+                       | {consumer_down, noproc}
+                       | {consumer_not_found, topic()}
+                       | {consumer_not_found, topic(), partition()}.
+get_consumer(Client, Topic, Partition) ->
+  brod_client:get_consumer(Client, Topic, Partition).
+
 %% @equiv brod_client:get_producer/3
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
@@ -152,7 +166,8 @@ get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
--spec produce(pid(), binary()) -> {ok, reference()} | {error, any()}.
+-spec produce(pid(), binary()) ->
+                 {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
@@ -212,81 +227,60 @@ sync_produce_request(CallRef) ->
                               },
   brod_producer:sync_produce_request(Expect).
 
-%% @deprecated
-%% @equiv start_link_consumer(Hosts, Topic, Partition)
--spec start_consumer([endpoint()], binary(), integer()) ->
-                   {ok, pid()} | {error, any()}.
-start_consumer(Hosts, Topic, Partition) ->
-  start_link_consumer(Hosts, Topic, Partition).
-
-%% @equiv start_link_consumer(Hosts, Topic, Partition, 1000)
--spec start_link_consumer([endpoint()], binary(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_consumer(Hosts, Topic, Partition) ->
-  start_link_consumer(Hosts, Topic, Partition, 1000).
-
-%% @doc Start consumer process
-%%      SleepTimeout: how much time to wait before sending next fetch
-%%      request when we got no messages in the last one
--spec start_link_consumer([endpoint()], binary(), integer(), integer()) ->
-                        {ok, pid()} | {error, any()}.
-start_link_consumer(Hosts, Topic, Partition, SleepTimeout) ->
-  brod_consumer:start_link(Hosts, Topic, Partition, SleepTimeout).
-
-%% @doc Stop consumer process
--spec stop_consumer(pid()) -> ok.
-stop_consumer(Pid) ->
-  brod_consumer:stop(Pid).
-
--spec consume(pid(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, fun(M) -> self() ! M end, Offset)
-%% @doc A simple alternative for consume/6 with predefined defaults.
-%%      Calling process will receive messages from consumer process.
-consume(Pid, Offset) ->
-  Self = self(),
-  Callback = fun(MsgSet) -> Self ! MsgSet end,
-  consume(Pid, Callback, Offset).
-
--spec consume(pid(), callback_fun(), integer()) -> ok | {error, any()}.
-%% @equiv consume(Pid, Callback, Offset, 1000, 0, 100000)
-%% @doc A simple alternative for consume/6 with predefined defaults.
-%%      Callback() will be called to handle incoming messages.
-consume(Pid, Callback, Offset) ->
-  consume(Pid, Callback, Offset, 1000, 0, 100000).
-
-%% @doc Start consuming data from a partition.
-%%      Messages are delivered as #message_set{}.
-%% Pid: brod consumer pid, @see start_link_consumer/3
-%% Callback: a function which will be called by brod_consumer to
-%%           handle incoming messages
-%% Offset: Where to start to fetch data from.
-%%                  -1: start from the latest available offset
-%%                  -2: start from the earliest available offset
-%%               N > 0: valid offset for the given partition
-%% MaxWaitTime: The max wait time is the maximum amount of time in
-%%              milliseconds to block waiting if insufficient data is
-%%              available at the time the request is issued.
-%% MinBytes: This is the minimum number of bytes of messages that must
-%%           be available to give a response. If the client sets this
-%%           to 0, the server will always respond immediately. If
-%%           there is no new data since their last request, clients
-%%           will get back empty message sets. If this is set to 1,
-%%           the server will respond as soon as at least one partition
-%%           has at least 1 byte of data or the specified timeout
-%%           occurs. By setting higher values in combination with the
-%%           timeout the consumer can tune for throughput and trade a
-%%           little additional latency for reading only large chunks
-%%           of data (e.g. setting MaxWaitTime to 100 ms and setting
-%%           MinBytes to 64k would allow the server to wait up to
-%%           100ms to try to accumulate 64k of data before
-%%           responding).
-%% MaxBytes: The maximum bytes to include in the message set for this
-%%           partition. This helps bound the size of the response.
+%% @doc Subscribe data stream from the given topic-partition.
+%% If {error, Reason} is returned, the caller should perhaps retry later.
+%% {ok, ConsumerPid} is returned if success, the caller may want to monitor
+%% the consumer pid to trigger a re-subscribe in case it crashes.
+%%
+%% If subscribed successfully, the subscriber process should expect messages
+%% of pattern:
+%% {ConsumerPid, #kafka_message_set{}} and
+%% {ConsumerPid, #kafka_fetch_error{}},
+%% -include_lib(brod/include/brod.hrl) to access the records.
+%% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
+%% itself to resume the data stream.
 %% @end
--spec consume(pid(), callback_fun(), integer(),
-             integer(), integer(), integer()) -> ok | {error, any()}.
-consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
-  brod_consumer:consume(Pid, Callback, Offset, MaxWaitTime, MinBytes, MaxBytes).
+-spec subscribe(client(), pid(), topic(), partition(),
+                consumer_options()) -> {ok, pid()} | {error, any()}.
+subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} ->
+      case subscribe(ConsumerPid, SubscriberPid, Options) of
+        ok    -> {ok, ConsumerPid};
+        Error -> Error
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec subscribe(pid(), pid(), consumer_options()) -> ok | {error, any()}.
+subscribe(ConsumerPid, SubscriberPid, Options) ->
+  brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(client(), topic(), partition()) -> ok | {error, any()}.
+unsubscribe(Client, Topic, Partition) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> unsubscribe(ConsumerPid);
+    Error             -> Error
+  end.
+
+%% @doc Ubsubscribe the current subscriber.
+-spec unsubscribe(pid()) -> ok.
+unsubscribe(ConsumerPid) ->
+  brod_consumer:unsubscribe(ConsumerPid).
+
+-spec consume_ack(client(), topic(), partition(), offset()) ->
+        ok | {error, any()}.
+consume_ack(Client, Topic, Partition, Offset) ->
+  case brod_client:get_consumer(Client, Topic, Partition) of
+    {ok, ConsumerPid} -> consume_ack(ConsumerPid, Offset);
+    {error, Reason}   -> {error, Reason}
+  end.
+
+-spec consume_ack(pid(), offset()) -> ok | {error, any()}.
+consume_ack(ConsumerPid, Offset) ->
+  brod_consumer:ack(ConsumerPid, Offset).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
@@ -321,7 +315,7 @@ get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, #message_set{}} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
@@ -329,7 +323,7 @@ fetch(Hosts, Topic, Partition, Offset) ->
 -spec fetch([endpoint()], binary(), non_neg_integer(),
             integer(), non_neg_integer(), non_neg_integer(),
             pos_integer()) ->
-               {ok, #message_set{}} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = #fetch_request{ topic = Topic
@@ -338,38 +332,19 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                           , max_wait_time = MaxWaitTime
                           , min_bytes = MinBytes
                           , max_bytes = MaxBytes},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  {ok, Response} = brod_sock:send_sync(Pid, Request, 10000),
+  #fetch_response{topics = [TopicFetchData]} = Response,
+  #topic_fetch_data{ topic = Topic
+                   , partitions = [PM]} = TopicFetchData,
+  #partition_messages{ error_code = ErrorCode
+                     , messages = Messages} = PM,
   ok = brod_sock:stop(Pid),
-  case Response of
-    {ok, FetchResponse} ->
-      {ok, brod_utils:fetch_response_to_message_set(FetchResponse)};
-    _ ->
-      Response
+  case brod_kafka:is_error(ErrorCode) of
+    true ->
+      {error, brod_kafka_errors:desc(ErrorCode)};
+    false ->
+      {ok, Messages}
   end.
-
-console_consumer(Hosts, Topic, Partition, Offset) ->
-  simple_consumer(Hosts, Topic, Partition, Offset, user).
-
-file_consumer(Hosts, Topic, Partition, Offset, Filename) ->
-  {ok, File} = file:open(Filename, [write, append]),
-  C = simple_consumer(Hosts, Topic, Partition, Offset, File),
-  MonitorFun = fun() ->
-                   Mref = erlang:monitor(process, C),
-                   receive
-                     {'DOWN', Mref, process, C, _} ->
-                       io:format("~nClosing ~s~n", [Filename]),
-                       file:close(File)
-                   end
-               end,
-  proc_lib:spawn(fun() -> MonitorFun() end),
-  C.
-
-simple_consumer(Hosts, Topic, Partition, Offset, Io) ->
-  {ok, C} = brod:start_link_consumer(Hosts, Topic, Partition),
-  Pid = proc_lib:spawn_link(fun() -> simple_consumer_loop(C, Io) end),
-  Callback = fun(MsgOffset, K, V) -> print_message(Io, MsgOffset, K, V) end,
-  ok = brod:consume(C, Callback, Offset),
-  Pid.
 
 %% escript entry point
 main([]) ->
@@ -378,8 +353,10 @@ main(["help"]) ->
   show_help();
 main(Args) ->
   case length(Args) < 2 of
-    true  -> erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
-    false -> ok
+    true ->
+      erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
+    false ->
+      ok
   end,
   [F | Tail] = Args,
   io:format("~p~n", [call_api(list_to_atom(F), Tail)]).
@@ -387,14 +364,18 @@ main(Args) ->
 show_help() ->
   io:format(user, "Command line interface for brod.\n", []),
   io:format(user, "General patterns:\n", []),
-  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> <function name> <function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host:port pair> <function name> <function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host name (9092 is used by default)> <function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> "
+           "<function name> <function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host:port pair> <function name> "
+           "<function arguments>\n", []),
+  io:format(user, "  ./brod <kafka host name (9092 is used by default)> "
+           "<function name> <function arguments>\n", []),
   io:format(user, "\n", []),
   io:format(user, "Examples:\n", []),
   io:format(user, "Get metadata:\n", []),
   io:format(user, "  ./brod get_metadata Hosts Topic1[,Topic2]\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,kafka-3:9092\n", []),
+  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,"
+           "kafka-3:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092\n", []),
   io:format(user, "  ./brod get_metadata kafka-1:9092  topic1,topic2\n", []),
   io:format(user, "  ./brod get_metadata kafka-1 topic1\n", []),
@@ -402,22 +383,19 @@ show_help() ->
   io:format(user, "  ./brod produce Hosts Topic Partition Key:Value\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 key:value\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 :value\n", []),
-  io:format(user, "This one can be used to generate a delete marker for compacted topic:\n", []),
+  io:format(user, "This one can be used to generate a delete marker "
+           "for compacted topic:\n", []),
   io:format(user, "  ./brod produce kafka-1 topic1 0 key:\n", []),
   io:format(user, "Get offsets:\n", []),
-  io:format(user, "  ./brod get_offsets Hosts Topic Partition Time MaxNOffsets\n", []),
+  io:format(user, "  ./brod get_offsets Hosts Topic Partition "
+           "Time MaxNOffsets\n", []),
   io:format(user, "  ./brod get_offsets kafka-1 topic1 0 -1 1\n", []),
   io:format(user, "Fetch:\n", []),
   io:format(user, "  ./brod fetch Hosts Topic Partition Offset\n", []),
-  io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime MinBytes MaxBytes\n", []),
+  io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime "
+           "MinBytes MaxBytes\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
   io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
-  io:format(user, "Start a console consumer:\n", []),
-  io:format(user, "  ./brod console_consumer Hosts Topic Partition Offset\n", []),
-  io:format(user, "  ./brod console_consumer kafka-1 topic1 0 -1\n", []),
-  io:format(user, "Start a file consumer:\n", []),
-  io:format(user, "  ./brod file_consumer Hosts Topic Partition Offset Filepath\n", []),
-  io:format(user, "  ./brod file_consumer kafka-1 topic1 0 -1 /tmp/kafka-data\n", []),
   ok.
 
 call_api(get_metadata, [HostsStr]) ->
@@ -434,15 +412,17 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}]),
+  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}], []),
   {ok, ProducerPid} = brod:get_producer(Client, Topic, Partition),
   Res = brod:produce_sync(ProducerPid, Key, Value),
   brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
   Hosts = parse_hosts_str(HostsStr),
-  brod:get_offsets(Hosts, list_to_binary(TopicStr), list_to_integer(PartitionStr));
-call_api(get_offsets, [HostsStr, TopicStr, PartitionStr, TimeStr, MaxOffsetStr]) ->
+  brod:get_offsets(Hosts, list_to_binary(TopicStr),
+                   list_to_integer(PartitionStr));
+call_api(get_offsets, [HostsStr, TopicStr, PartitionStr,
+                       TimeStr, MaxOffsetStr]) ->
   Hosts = parse_hosts_str(HostsStr),
   brod:get_offsets(Hosts,
                    list_to_binary(TopicStr),
@@ -464,28 +444,7 @@ call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr,
              list_to_integer(OffsetStr),
              list_to_integer(MaxWaitTimeStr),
              list_to_integer(MinBytesStr),
-             list_to_integer(MaxBytesStr));
-call_api(console_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Pid = brod:console_consumer(Hosts,
-                              list_to_binary(TopicStr),
-                              list_to_integer(PartitionStr),
-                              list_to_integer(OffsetStr)),
-  MRef = erlang:monitor(process, Pid),
-  receive
-    {'DOWN', MRef, process, Pid, _} -> ok
-  end;
-call_api(file_consumer, [HostsStr, TopicStr, PartitionStr, OffsetStr, Filename]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Pid = brod:file_consumer(Hosts,
-                           list_to_binary(TopicStr),
-                           list_to_integer(PartitionStr),
-                           list_to_integer(OffsetStr),
-                           Filename),
-  MRef = erlang:monitor(process, Pid),
-  receive
-    {'DOWN', MRef, process, Pid, _} -> ok
-  end.
+             list_to_integer(MaxBytesStr)).
 
 %%%_* Internal functions =======================================================
 
@@ -511,20 +470,6 @@ connect_leader(Hosts, Topic, Partition) ->
   Port = Broker#broker_metadata.port,
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
-
-print_message(Io, Offset, K, V) ->
-  io:format(Io, "[~p] ~s:~s\n", [Offset, K, V]).
-
-simple_consumer_loop(C, Io) ->
-  receive
-    stop ->
-      brod:stop_consumer(C),
-      io:format(Io, "\Simple consumer ~p terminating\n", [self()]),
-      ok;
-    Other ->
-      io:format(Io, "\nStrange msg: ~p\n", [Other]),
-      simple_consumer_loop(C, Io)
-  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

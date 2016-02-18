@@ -25,21 +25,26 @@
 %%%     |    +-- producers_sup level 1
 %%%     |    |     |
 %%%     |    |     +-- producers_sup level 2 for topic 1
-%%%     |    |     |   |
-%%%     |    |     |   +-- partition_0_worker
-%%%     |    |     |   |
-%%%     |    |     |   +-- partition_1_worker
-%%%     |    |     |   |...
+%%%     |    |     |     |
+%%%     |    |     |     +-- partition_0_worker
+%%%     |    |     |     |
+%%%     |    |     |     +-- partition_1_worker
+%%%     |    |     |     |...
 %%%     |    |     |
 %%%     |    |     +-- producers_sup level 2 for topic 2
-%%%     |    |     |   |...
+%%%     |    |     |     |...
 %%%     |    |     |...
 %%%     |    |
-%%%     |    +-- consumers_sup (one_for_one)
+%%%     |    +-- consumers_sup level 1
 %%%     |          |
-%%%     |          +-- topic_1_worker
+%%%     |          +-- consumer_sup level 2 for topic 1
 %%%     |          |     |
-%%%     |          |     +-- consumer_sup (one for one)
+%%%     |          |     +-- partition_0_worker
+%%%     |          |     |
+%%%     |          |     +-- partition_1_worker
+%%%     |          |     |...
+%%%     |          |
+%%%     |          +-- consumer_sup level 2 for topic 1
 %%%     |          |     |...
 %%%     |          |...
 %%%     |
@@ -77,22 +82,35 @@
 %%        , [ { endpoints, [{"localhost", 9092}]}
 %%          , { config
 %%            , [ {restart_delay_seconds, 10}
-%%                %% @see brod:start_link_client/4 for more client configs
+%%                %% @see brod:start_link_client/5 for more client configs
 %%              ]
 %%            }
 %%          , { producers
 %%            , [ { <<"test-topic">> %% topic name
-%%                , [ {restart_delay_seconds, 10}
-%%                  , {producer_restart_delay_seconds, 2}
+%%                , [ {topic_restart_delay_seconds, 2}
+%%                  , {partition_restart_delay_seconds, 2}
 %%                  , {required_acks, -1}
-%%                  %% @see brod:start_link_client/4 for more producer configs
+%%                  %% @see brod:start_link_client/5 for more producer configs
+%%                  ]
+%%                }
+%%              ]
+%%            }
+%%          , { consumers
+%%            , [ { <<"test-topic">> %% topic name
+%%                , [ {min_bytes, 0}
+%%                  , {max_bytes, 1048576}
+%%                  %% see brod_consumer:start_link/4 for more configs
+%%                  ]
+%%                }
+%%                %% TODO: add consumer group
+%%              , { {group, <<"consumer-groupd-id">>}
+%%                  [ {min_bytes, 0}
 %%                  ]
 %%                }
 %%              ]
 %%            }
 %%          ]
 %%        }
-%%      , {client_2, ...}
 %%      ]
 %%    }
 %%  ].
@@ -114,18 +132,21 @@ init(clients_sup) ->
   %% before supervisor tries to restart it.
   {ok, {{one_for_one, 0, 1}, ClientSpecs}}.
 
+%% @doc supervisor3 callback.
 post_init(_) ->
   ignore.
 
+%%%_* Internal functions =======================================================
 client_spec(ClientId, Args) ->
-  Endpoints = proplists:get_value(endpoints, Args),
-  Producers = proplists:get_value(producers, Args),
+  Endpoints = proplists:get_value(endpoints, Args, []),
+  Producers = proplists:get_value(producers, Args, []),
+  Consumers = proplists:get_value(consumers, Args, []),
+  ok = verify_config(Endpoints, Producers, Consumers),
   Config0   = proplists:get_value(config, Args, []),
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_CLIENT_RESTART_DELAY),
   Config    = proplists:delete(restart_delay_seconds, Config0),
-  [_|_]     = Endpoints, %% assert
-  StartArgs = [ClientId, Endpoints, Config, Producers],
+  StartArgs = [ClientId, Endpoints, Producers, Consumers, Config],
   { _Id       = ClientId
   , _Start    = {brod_client, start_link, StartArgs}
   , _Restart  = {permanent, DelaySecs}
@@ -133,6 +154,14 @@ client_spec(ClientId, Args) ->
   , _Type     = worker
   , _Module   = [brod_client]
   }.
+
+verify_config([], _Producers, _Consumers) ->
+  exit("No endpoints found in brod client config.");
+verify_config(_Endpoints, [], []) ->
+  exit("At least one non-empty list of {producers, _} or {consumers, _}"
+       " required in brod client config.");
+verify_config(_Endpoints, _Producers, _Consumers) ->
+  ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

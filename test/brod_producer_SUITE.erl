@@ -22,7 +22,22 @@
 
 %% @private
 -module(brod_producer_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_produce_sync/1
+        , t_produce_async/1
+        , t_producer_topic_not_found/1
+        , t_producer_partition_not_found/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -32,6 +47,18 @@
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
 
 -define(config(Name), proplists:get_value(Name, Config)).
+
+subscriber_loop(Client, TesterPid) ->
+  receive
+    {ConsumerPid, #kafka_message_set{messages = Messages}} ->
+      lists:foreach(fun(#kafka_message{offset = Offset, key = K, value = V}) ->
+                      TesterPid ! {K, V},
+                      ok = brod:consume_ack(ConsumerPid, Offset)
+                    end, Messages),
+      subscriber_loop(Client, TesterPid);
+    Msg ->
+      ct:fail("unexpected message received by test subscriber.\n~p", [Msg])
+  end.
 
 %%%_* ct callbacks =============================================================
 
@@ -43,36 +70,30 @@ end_per_suite(_Config) -> ok.
 
 init_per_testcase(Case, Config) ->
   Client = Case,
-  Producer = {?TOPIC, []},
-  case whereis(?MODULE) of
+  Topic = ?TOPIC,
+  Partition = 0,
+  Producer = {Topic, []},
+  Consumer = {Topic, []},
+  case whereis(Client) of
     ?undef -> ok;
     Pid_   -> brod:stop_client(Pid_)
   end,
-  Parent = self(),
-  Ref = make_ref(),
-  Pid =
-    erlang:spawn(
-      fun() ->
-        brod:start_link_client(Client, ?HOSTS, _Config = [], [Producer]),
-        Parent ! {Ref, started},
-        receive stop ->
-          ok = brod:stop_client(Client),
-          exit(normal)
-        end
-      end),
-  receive
-    {Ref, started} ->
-      ok
-  after 2000 ->
-    ct:fail({?MODULE, ?LINE, timeout})
-  end,
-  [{producer, Pid} | Config].
+  TesterPid = self(),
+  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS,
+                                           [Producer], [Consumer], []),
+  Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
+  {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
+  [{client, Client}, {client_pid, ClientPid},
+   {subscriber, Subscriber} | Config].
 
 end_per_testcase(_Case, Config) ->
-  Pid = ?config(producer),
+  Subscriber = ?config(subscriber),
+  unlink(Subscriber),
+  exit(Subscriber, kill),
+  Pid = ?config(client_pid),
   try
     Ref = erlang:monitor(process, Pid),
-    Pid ! stop,
+    brod:stop_client(Pid),
     receive
       {'DOWN', Ref, process, Pid, _} -> ok
     end
@@ -91,22 +112,16 @@ all() -> [F || {F, _A} <- module_info(exports),
 %%%_* Test functions ===========================================================
 
 t_produce_sync(Config) when is_list(Config) ->
+  Client = ?config(client),
   Partition = 0,
-  {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
-  Tester = self(),
-  Ref = make_ref(),
-  Callback = fun(_Offset, K, V) ->
-               Tester ! {Ref, K, V}
-             end,
-  ok = brod:consume(ConsumerPid, Callback, -1),
   {K1, V1} = make_unique_kv(),
-  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, K1, V1),
   {K2, V2} = make_unique_kv(),
-  ok = brod:produce_sync(t_produce_sync, ?TOPIC, Partition, K2, V2),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, K2, V2),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
-        {Ref, K, V} ->
+        {K, V} ->
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
         after 5000 ->
@@ -114,20 +129,13 @@ t_produce_sync(Config) when is_list(Config) ->
       end
     end,
   ReceiveFun(K1, V1),
-  ReceiveFun(K2, V2),
-  ok = brod:stop_consumer(ConsumerPid).
+  ReceiveFun(K2, V2).
 
 t_produce_async(Config) when is_list(Config) ->
+  Client = ?config(client),
   Partition = 0,
   {Key, Value} = make_unique_kv(),
-  {ok, ConsumerPid} = brod:start_link_consumer(?HOSTS, ?TOPIC, Partition),
-  Tester = self(),
-  Ref = make_ref(),
-  Callback = fun(_Offset, K, V) ->
-               Tester ! {Ref, K, V}
-             end,
-  ok = brod:consume(ConsumerPid, Callback, -1),
-  {ok, CallRef} = brod:produce(t_produce_async, ?TOPIC, Partition, Key, Value),
+  {ok, CallRef} = brod:produce(Client, ?TOPIC, Partition, Key, Value),
   receive
     #brod_produce_reply{ call_ref = CallRef
                        , result   = brod_produce_req_acked
@@ -137,17 +145,15 @@ t_produce_async(Config) when is_list(Config) ->
     ct:fail({?MODULE, ?LINE, timeout})
   end,
   receive
-    {Ref, K, V} ->
-      ok = brod:stop_consumer(ConsumerPid),
+    {K, V} ->
       ?assertEqual(Key, K),
       ?assertEqual(Value, V)
   after 5000 ->
     ct:fail({?MODULE, ?LINE, timeout})
   end.
 
-
 t_producer_topic_not_found(Config) when is_list(Config) ->
-  Client = t_producer_topic_not_found,
+  Client = ?config(client),
   ?assertEqual({error, {producer_not_found, <<"no-such-topic">>}},
                brod:produce(Client, <<"no-such-topic">>, 0, <<"k">>, <<"v">>)).
 

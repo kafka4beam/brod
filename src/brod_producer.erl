@@ -40,24 +40,34 @@
 
 %% default number of messages in buffer before block callers
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
-%% default number of messages sent on wire before block waiting for acks
--define(DEFAULT_PARITION_ONWIRE_LIMIT, 128).
-%% by default, send 1 MB message-set
--define(DEFAULT_MESSAGE_SET_BYTES_LIMIT, 1048576).
+%% default number of message sets sent on wire before block waiting for acks
+-define(DEFAULT_PARITION_ONWIRE_LIMIT, 1).
+%% by default, send max 1 MB of data in one batch (message set)
+-define(DEFAULT_MAX_BATCH_SIZE, 1048576).
 %% by default, require acks from all ISR
 -define(DEFAULT_REQUIRED_ACKS, -1).
 %% by default, leader should wait 1 second for replicas to ack
 -define(DEFAULT_ACK_TIMEOUT, 1000).
+%% by default, brod_producer will sleep for 0.5 second before trying to send
+%% buffered messages again upon receiving a error from kafka
+-define(DEFAULT_RETRY_BACKOFF_MS, 500).
+%% by default, brod_producer will try to retry 3 times before crashing
+-define(DEFAULT_MAX_RETRIES, 3).
 
--type config() :: producer_config().
+-define(RETRY_MSG, retry).
+
+-define(config(Key, Default), proplists:get_value(Key, Config, Default)).
 
 -record(state,
-        { client_id   :: client_id()
-        , topic       :: topic()
-        , partition   :: partition()
-        , config      :: config()
-        , sock_pid    :: pid()
-        , buffer      :: brod_producer_buffer:buf()
+        { client_pid        :: pid()
+        , topic             :: topic()
+        , partition         :: partition()
+        , sock_pid          :: pid()
+        , sock_mref         :: reference()
+        , buffer            :: brod_producer_buffer:buf()
+        , retry_backoff_ms  :: non_neg_integer()
+        , retry_tref        :: timer:tref()
+        , reconnect_timeout :: non_neg_integer()
         }).
 
 %%%_* APIs =====================================================================
@@ -85,21 +95,30 @@
 %%   partition_buffer_limit(optional, default = 256):
 %%     How many requests (per-partition) can be buffered without blocking the
 %%     caller. The callers are released (by receiving the
-%%     'brod_produce_req_buffered' reply) onece the request is taken into buffer
+%%     'brod_produce_req_buffered' reply) once the request is taken into buffer
 %%     or when the request has been put on wire, then the caller may expect
 %%     a reply 'brod_produce_req_acked' if the request is accepted by kafka
-%%   partition_onwire_limit(optional, default = 128):
-%%     How many requests (per-partition) can be sent to kafka broker
+%%   partition_onwire_limit(optional, default = 1):
+%%     How many message sets (per-partition) can be sent to kafka broker
 %%     asynchronously before receiving ACKs from broker.
-%%   message_set_bytes_limit(optional, default = 1M):
+%%     NOTE: setting a number greater than 1 may cause messages being persisted
+%%           in an order different from the order they were produced.
+%%   max_batch_size (in bytes, optional, default = 1M):
 %%     In case callers are producing faster than brokers can handle (or
-%%     congestion on wire), try to accumulate small requests into one kafka
-%%     message set as much as possible but not exceeding message_set_bytes_limit
+%%     congestion on wire), try to accumulate small requests into batches
+%%     as much as possible but not exceeding max_batch_size
+%%   max_retries (optional, default = 3):
+%%     If {max_retries, N} is given, the producer retry produce request for
+%%     N times before crashing in case of failures like socket being shut down
+%%     or exceptions received in produce response from kafka.
+%%     The special value N = -1 means 'retry indefinitely'
+%%   retry_backoff_ms (optional, default = 500)
+%%     Time in milli-seconds to sleep before retry the failed produce request.
 %% @end
--spec start_link(client_id(), topic(), partition(), producer_config()) ->
+-spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
-start_link(ClientId, Topic, Partition, Config) when is_atom(ClientId) ->
-  gen_server:start_link(?MODULE, {ClientId, Topic, Partition, Config}, []).
+start_link(ClientPid, Topic, Partition, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
@@ -125,17 +144,18 @@ produce(Pid, Key, Value) ->
     {error, Reason} -> {error, Reason}
   end.
 
-%% @doc Block sync the produce requests. The caller pid of this function
-%% Must be the caller of produce/3 in which the call reference was created
+%% @doc Block calling process until it receives ExpectedReply.
+%%      The caller pid of this function must be the caller of produce/3
+%%      in which the call reference was created.
 %% @end
-sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
+sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
                 } = CallRef,
   Caller = self(), %% assert
   Mref = erlang:monitor(process, Callee),
   receive
-    Reply ->
+    ExpectedReply ->
       erlang:demonitor(Mref, [flush]),
       ok;
     {'DOWN', Mref, process, _Pid, Reason} ->
@@ -144,82 +164,59 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = Reply) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({ClientId, Topic, Partition, Config}) ->
-  self() ! init_socket,
-  {ok, #state{ client_id = ClientId
-             , topic     = Topic
-             , partition = Partition
-             , config    = Config
-             }}.
+init({ClientPid, Topic, Partition, Config}) ->
+  BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
+  OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
+  MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
+  RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
+  AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
+  MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
+  RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
 
-handle_info(init_socket, #state{ client_id = ClientId
-                               , topic     = Topic
-                               , partition = Partition
-                               , config    = Config0
-                               } = State) ->
-  %% 1. Fetch and validate metadata
-  {ok, Metadata} = brod_client:get_metadata(ClientId, Topic),
-  #metadata_response{ brokers = Brokers
-                    , topics  = [TopicMetadata]
-                    } = Metadata,
-  #topic_metadata{ error_code = TopicErrorCode
-                 , partitions = Partitions
-                 } = TopicMetadata,
-  brod_kafka:is_error(TopicErrorCode) andalso erlang:throw(TopicErrorCode),
-  #partition_metadata{ error_code = PartitionEC
-                     , leader_id  = LeaderId} =
-    lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  brod_kafka:is_error(PartitionEC) andalso erlang:throw(PartitionEC),
-  LeaderId >= 0 orelse erlang:throw({no_leader, {ClientId, Topic, Partition}}),
-  #broker_metadata{host = Host, port = Port} =
-    lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-
-  %% 2. Lookup, or maybe (re-)establish a connection to partition leader
-  SockPid =
-    case brod_client:get_connection(ClientId, Host, Port) of
-      {ok, Pid}           -> Pid;
-      {error, SocketDown} -> exit({no_connection, SocketDown})
-    end,
-  _ = erlang:monitor(process, SockPid),
-
-  %% 3. Register self() to client.
-  ok = brod_client:register_producer(ClientId, Topic, Partition),
-
-  %% 4. Create the producing buffer
-  {BufferLimit, Config1} = take_config(partition_buffer_limit,
-                                       ?DEFAULT_PARITION_BUFFER_LIMIT,
-                                       Config0),
-  {OnWireLimit, Config2} = take_config(partition_onwire_limit,
-                                       ?DEFAULT_PARITION_ONWIRE_LIMIT,
-                                       Config1),
-  {MsgSetBytes, Config}  = take_config(message_set_bytes_limit,
-                                       ?DEFAULT_MESSAGE_SET_BYTES_LIMIT,
-                                       Config2),
-  RequiredAcks = get_required_acks(Config),
-  AckTimeout = get_ack_timeout(Config),
   SendFun =
-    fun(KafkaKvList) ->
-      Data = [{Topic, [{Partition, KafkaKvList}]}],
-      KafkaReq = #produce_request{ acks    = RequiredAcks
-                                 , timeout = AckTimeout
-                                 , data    = Data
-                                 },
-      case brod_sock:send(SockPid, KafkaReq) of
-        ok              -> ok;
-        {ok, CorrId}    -> {ok, CorrId};
-        {error, Reason} -> exit(Reason)
-      end
+    fun(SockPid, KafkaKvList) ->
+        Data = [{Topic, [{Partition, KafkaKvList}]}],
+        KafkaReq = #produce_request{ acks    = RequiredAcks
+                                   , timeout = AckTimeout
+                                   , data    = Data
+                                   },
+        case sock_send(SockPid, KafkaReq) of
+          ok              -> ok;
+          {ok, CorrId}    -> {ok, CorrId};
+          {error, Reason} -> {error, Reason}
+        end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                    MsgSetBytes, SendFun),
-  %% 5. Update state.
-  NewState = State#state{ sock_pid = SockPid
-                        , buffer   = Buffer
-                        },
-  {noreply, NewState};
+                                    MaxBatchSize, MaxRetries, SendFun),
+
+  State0 = #state{ client_pid       = ClientPid
+                 , topic            = Topic
+                 , partition        = Partition
+                 , buffer           = Buffer
+                 , retry_backoff_ms = RetryBackoffMs
+                 },
+
+  State = case init_socket(State0) of
+            {ok, NewState} ->
+              NewState;
+            {error, Error} ->
+              {ok, NewState} = schedule_retry(State0, Error),
+              NewState
+          end,
+  {ok, State}.
+
+handle_info(?RETRY_MSG, State0) ->
+  State1 = State0#state{retry_tref = undefined},
+  {ok, State} =
+    case init_socket(State1) of
+      {ok, State2}   -> maybe_produce(State2);
+      {error, Error} -> schedule_retry(State1, Error)
+    end,
+  {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
-  {stop, {socket_down, Reason}, State};
+  {ok, NewState} = schedule_retry(State, Reason),
+  {noreply, NewState#state{sock_pid = undefined}};
 handle_info({msg, Pid, CorrId, #produce_response{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -232,20 +229,31 @@ handle_info({msg, Pid, CorrId, #produce_response{} = R},
                  } = ProduceOffset,
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
-  case brod_kafka:is_error(ErrorCode) of
-    true ->
-      error_logger:error_msg(
-        "Error in produce response\n"
-        "Topic: ~s\n"
-        "Partition: ~B\n"
-        "Offset: ~B\n"
-        "Error code: ~p",
-        [Topic, Partition, Offset, ErrorCode]),
-      {stop, {produce_error, {Topic, Partition, Offset, ErrorCode}}, State};
-    false ->
-      NewBuffer = brod_producer_buffer:ack(Buffer, CorrId),
-      {noreply, State#state{buffer = NewBuffer}}
-  end;
+  {ok, NewState} =
+    case brod_kafka:is_error(ErrorCode) of
+      true ->
+        ErrorDesc = brod_kafka_errors:desc(ErrorCode),
+        error_logger:error_msg(
+          "Error in produce response\n"
+          "Topic: ~s\n"
+          "Partition: ~B\n"
+          "Offset: ~B\n"
+          "Error: ~s",
+          [Topic, Partition, Offset, ErrorDesc]),
+        Error = {produce_response_error, Topic, Partition,
+                 Offset, ErrorCode, ErrorDesc},
+        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
+        case brod_producer_buffer:nack(Buffer, CorrId, Error) of
+          {ok, NewBuffer}  -> schedule_retry(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end;
+      false ->
+        case brod_producer_buffer:ack(Buffer, CorrId) of
+          {ok, NewBuffer}  -> maybe_produce(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end
+    end,
+  {noreply, NewState};
 handle_info(_Info, State) ->
   {noreply, State}.
 
@@ -255,8 +263,10 @@ handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
 handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
-  NewBuffer = brod_producer_buffer:maybe_send(Buffer, CallRef, Key, Value),
-  {noreply, State#state{buffer = NewBuffer}};
+  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  State1 = State#state{buffer = NewBuffer},
+  {ok, NewState} = maybe_produce(State1),
+  {noreply, NewState};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -268,30 +278,60 @@ terminate(_Reason, _State) ->
 
 %%%_* Internal Functions =======================================================
 
--spec take_config(atom(), any(), config()) -> {any(), config()}.
-take_config(Key, Default, Config) when is_list(Config) ->
-  case proplists:get_value(Key, Config) of
-    ?undef -> {Default, Config};
-    Value  -> {Value, proplists:delete(Key, Config)}
+init_socket(#state{ client_pid = ClientPid
+                  , sock_mref  = OldSockMref
+                  , topic      = Topic
+                  , partition  = Partition
+                  } = State) ->
+  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, SockPid} ->
+      ok = maybe_demonitor(OldSockMref),
+      SockMref = erlang:monitor(process, SockPid),
+      %% 2. Register self() to client.
+      ok = brod_client:register_producer(ClientPid, Topic, Partition),
+      %% 3. Update state.
+      {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
+    {error, Error} ->
+      {error, Error}
   end.
 
--spec get_required_acks(config()) -> required_acks().
-get_required_acks(Config) when is_list(Config) ->
-  case proplists:get_value(required_acks, Config) of
-    ?undef ->
-      ?DEFAULT_REQUIRED_ACKS;
-    N when is_integer(N) ->
-      N
+maybe_produce(#state{buffer = Buffer0, sock_pid = SockPid} = State) ->
+  case brod_producer_buffer:maybe_send(Buffer0, SockPid) of
+    {ok, Buffer}    -> {ok, State#state{buffer = Buffer}};
+    {retry, Buffer} -> schedule_retry(State#state{buffer = Buffer})
   end.
 
--spec get_ack_timeout(config()) -> pos_integer().
-get_ack_timeout(Config) when is_list(Config) ->
-  case proplists:get_value(ack_timeout, Config) of
-    ?undef ->
-      ?DEFAULT_ACK_TIMEOUT;
-    N when is_integer(N) andalso N > 0 ->
-      N
-  end.
+maybe_demonitor(undefined) ->
+  ok;
+maybe_demonitor(Mref) ->
+  true = erlang:demonitor(Mref, [flush]),
+  ok.
+
+schedule_retry(#state{buffer = Buffer} = State, Reason) ->
+  {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
+  schedule_retry(State#state{buffer = NewBuffer}).
+
+schedule_retry(#state{retry_tref = undefined} = State) ->
+  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, ?RETRY_MSG),
+  {ok, State#state{retry_tref = TRef}};
+schedule_retry(State) ->
+  %% retry timer has been already activated
+  {ok, State}.
+
+is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
+                      EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
+                      EC =:= ?EC_LEADER_NOT_AVAILABLE;
+                      EC =:= ?EC_NOT_LEADER_FOR_PARTITION;
+                      EC =:= ?EC_REQUEST_TIMED_OUT;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND ->
+  true;
+is_retriable(_) ->
+  false.
+
+sock_send(?undef, _KafkaReq) -> {error, sock_down};
+sock_send(SockPid, KafkaReq) -> brod_sock:send(SockPid, KafkaReq).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
