@@ -316,9 +316,9 @@ cast(Pid, Msg) ->
 
 %%%_* Tests ====================================================================
 
--include_lib("eunit/include/eunit.hrl").
-
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 cast_test() ->
   Ref = make_ref(),

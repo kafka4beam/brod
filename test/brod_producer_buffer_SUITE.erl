@@ -22,7 +22,22 @@
 
 %% @private
 -module(brod_producer_buffer_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_no_ack/1
+        , t_random_latency_ack/1
+        , t_nack/1
+        , t_send_fun_error/1
+        ]).
 
 -include_lib("proper/include/proper.hrl").
 -include_lib("common_test/include/ct.hrl").

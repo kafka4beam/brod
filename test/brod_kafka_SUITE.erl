@@ -22,7 +22,28 @@
 
 %% @private
 -module(brod_kafka_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_api_key/1
+        , t_parse_stream/1
+        , t_encode_metadata/1
+        , t_decode_metadata/1
+        , t_encode_produce/1
+        , t_decode_produce/1
+        , t_encode_offset/1
+        , t_decode_offset/1
+        , t_encode_fetch/1
+        , t_decode_fetch/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").

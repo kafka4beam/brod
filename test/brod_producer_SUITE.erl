@@ -22,7 +22,22 @@
 
 %% @private
 -module(brod_producer_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_produce_sync/1
+        , t_produce_async/1
+        , t_producer_topic_not_found/1
+        , t_producer_partition_not_found/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -64,10 +79,12 @@ init_per_testcase(Case, Config) ->
     Pid_   -> brod:stop_client(Pid_)
   end,
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS, [Producer], [Consumer], []),
+  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS,
+                                           [Producer], [Consumer], []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
   {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
-  [{client, Client}, {client_pid, ClientPid}, {subscriber, Subscriber} | Config].
+  [{client, Client}, {client_pid, ClientPid},
+   {subscriber, Subscriber} | Config].
 
 end_per_testcase(_Case, Config) ->
   Subscriber = ?config(subscriber),
