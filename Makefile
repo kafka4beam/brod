@@ -18,5 +18,5 @@ ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
-ESCRIPT_NAME = scripts/$(PROJECT)
+ESCRIPT_FILE = scripts/$(PROJECT)
 
