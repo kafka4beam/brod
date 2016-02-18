@@ -22,7 +22,23 @@
 
 %% @private
 -module(brod_client_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_skip_unreachable_endpoint/1
+        , t_no_reachable_endpoint/1
+        , t_not_a_brod_client/1
+        , t_metadata_socket_restart/1
+        , t_payload_socket_restart/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").

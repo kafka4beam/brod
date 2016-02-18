@@ -22,7 +22,22 @@
 
 %% @private
 -module(brod_producer_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_produce_sync/1
+        , t_produce_async/1
+        , t_producer_topic_not_found/1
+        , t_producer_partition_not_found/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").

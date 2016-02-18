@@ -22,7 +22,24 @@
 
 %% @private
 -module(brod_consumer_SUITE).
--compile(export_all).
+
+%% Test framework
+-export([ init_per_suite/1
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
+        ]).
+
+%% Test cases
+-export([ t_consumer_max_bytes_too_small/1
+        , t_consumer_socket_restart/1
+        , t_consumer_resubscribe/1
+        , t_subscriber_restart/1
+        , t_subscribe_with_unknown_offset/1
+        ]).
+
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
