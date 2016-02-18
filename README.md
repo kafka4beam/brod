@@ -1,8 +1,29 @@
-# Kafka client library in Erlang
-Supports v0.8+.  
+# Brod - Apache Kafka Erlang client library
+
+Brod is an erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
+
+[![Build Status](https://travis-ci.org/klarna/brod.svg?branch=master)](https://travis-ci.org/klarna/brod)
+
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 
+# Features
+
+* Supports Apache Kafka v0.8.\*, 0.9.\*
+* Robust producer implementation supporing in-flight requests and asynchronous acknowledgements
+* Both consumer and producer handle leader re-election and other cluster disturbances internally
+* Opens max 1 tcp connection to a broker per "brod_client", one can create more cleints if needed
+* Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
+* Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
+* Consumer: has a configurable "prefetch count" - it will send this many "fetch" requests to kafka while waiting for acknowledgement from a "subscriber" process on previously delivered messages
+
+# Missing features
+
+* New (0.9) API for consumer groups (work in progress)
+* Compression
+* Auto-partitioning
+
 # Building and testing
+
     make
     make tests
 
