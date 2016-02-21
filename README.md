@@ -25,15 +25,20 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Building and testing
 
     make
-    make tests
+    make t
 
 # Quick start
 
-## Start producers
+"client" in brod is a process responsible for establishing and maintaining
+connections to kafka cluster. It also manages producer and consumer processes.
 
-### Permanent producers
+You can use brod:start_link_client/3 or brod:start_link_client/5 to start
+a client on demand, or include its configuration in sys.config.
 
-In sys.config
+A required parameter for client is kafka endpoint(s). Optional parameters
+are producers config and/or consumers config.
+
+Example of configuration (for sys.config):
 
 ```
 [{brod,
@@ -52,34 +57,43 @@ In sys.config
                  }
                ]
              }
-           %% other producers in client_1 will share the same set of connections
-           %% to the the kafka cluster at endpoints specified above for client_1
+           , { consumers
+             , [ { <<"brod-test-topic-1">>
+                   , [ {topic_restart_delay_seconds, 10} %% topic error
+                     , {partition_restart_delay_seconds, 2} %% partition error
+                     , {begin_offset, -1}
+                     ]
+                 }
+               ]
+             }
+           %% other producers and consumers in client_1 will share the same
+           %% set of connections to the the kafka cluster at endpoints
+           %%  specified above for client_1
            ]
          }
        ]
      }
-     %% start another client if producing to another kafka cluster
+     %% start another client if producing to / consuming from another kafka cluster
      %% or if you think it's necessary to start another set of tcp connections
    ]
 }]
 ```
 
-### Start producers linked to caller process
+## Start brod client on demand
 
-Start a client
-
-    % Producer will be linked to the calling process
     {ok, ClientPid} =
       brod:start_link_client(_ClientId  = brod_client_1
                              _Endpoints = [{"localhost", 9092}],
                              _Config    = [] %% use default client configs
                              _Producers = [{<<"brod-test-topic-1">>,
                                              []} %% use default producer configs
+                             _Consumers = [{<<"brod-test-topic-1">>,
+                                             []} %% use default consumer configs
                              ]),
 
-### Produce messages
+## Producer
 
-#### Assertively produce to a known topic-partition:
+### Produce to a known topic-partition:
 
     {ok, CallRef} =
       brod:produce(_Client    = brod_client_1, %% may also be the pid
@@ -88,7 +102,37 @@ Start a client
                    _Key       = <<"some-key">>
                    _Value     = <<"some-value">>),
 
-#### Use your own partionner (e.g. random):
+    %% just to illustrate what message to expect
+    receive
+      #brod_produce_reply{ call_ref = CallRef
+                         , result   = brod_produce_req_acked
+                         } ->
+        ok
+    after 5000 ->
+      erlang:exit(timeout)
+    end.
+
+### Synchronized produce request
+
+Block calling process until Kafka confirmed the message:
+
+    {ok, CallRef} =
+      brod:produce(_Client    = brod_client_1, %% may also be the pid
+                   _Topic     = <<"brod-test-topic-1">>,
+                   _Partition = 0
+                   _Key       = <<"some-key">>
+                   _Value     = <<"some-value">>),
+    brod:sync_produce_request(CallRef).
+
+or the same in one call:
+
+    brod:produce_sync(_Client    = brod_client_1, %% may also be the pid
+                      _Topic     = <<"brod-test-topic-1">>,
+                      _Partition = 0
+                      _Key       = <<"some-key">>
+                      _Value     = <<"some-value">>).
+
+### Using your own partionner (e.g. random):
 
     Client = brod_client_1, %% may also be the pid
     Topic  = <<"brod-test-topic-1">>,
@@ -99,16 +143,16 @@ Start a client
                   end,
     case ProduceFun(<<"some-key">>, <<"some-value">>) of
       {ok, CallRef} ->
-        %% maybe keep the reference ?
+        %% keep the reference to match on acknowledgment
       {error, {producer_down, _} ->
-        %% maybe retry ?
+        %% maybe retry?
     end,
 
 ### Handle acks from kafka
 
 Unless brod:produce_sync was called, callers of brod:produce should 
 expect a message of below pattern for each produce call. 
-Add `-include_libi("brod/include/brod.hrl").` to use the record.
+Add `-include_lib("brod/include/brod.hrl").` to use the record.
 
     #brod_produce_reply{ call_ref = CallRef %% returned from brod:produce
                        , result   = brod_produce_req_acked
@@ -124,68 +168,13 @@ looping state and match the replies against them when received.
 Otherwise brod:sync_produce_request/1 can be used to block-wait for acks.
 
 NOTE: The replies are only strictly ordered per-partition. 
-i.e. If the caller is producing to two or more partitions, 
+i.e. if the caller is producing to two or more partitions, 
 it may receive replies ordered differently than in which order 
 bord:produce API was called.
 
-## Consumer as a part of an application
+## Consumer
 
-Include brod.hrl:
-
-    -include_lib("brod/include/brod.hrl").
-
-In gen_server's init/1:
-
-    % Consumer will be linked to the calling process
-    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
-    Self = self(),
-    Callback = fun(#message_set{} = MsgSet) -> gen_server:call(Self, MsgSet) end,
-    ok = brod:consume(Consumer, Callback, Offset),
-    {ok, #state{ consumer = Consumer }}.
-
-Handler:
-
-    handle_call(#message_set{messages = Msgs}, _From, State) ->
-      lists:foreach(
-        fun(#message{offset = Offset, key = K, value = V}) ->
-            io:format(user, "[~p] ~s:~s\n", [Offset, K, V]),
-        end, Msgs),
-      {reply, ok, State};
-
-## More simple consumer callback (no need to include brod.hrl)
-
-In gen_server's init/1:
-
-    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition),
-    Self = self(),
-    Callback = fun(Offset, Key, Value) -> gen_server:call(Self, {msg, Offset, Key, Value}) end,
-    ok = brod:consume(Consumer, Callback, Offset),
-    {ok, #state{ consumer = Consumer }}.
-
-Handler:
-
-    handle_call({msg, Offset, Key, Value}, _From, State) ->
-      io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]),
-      {reply, ok, State};
-
-## In erlang shell
-    rr(brod).
-    Hosts = [{"localhost", 9092}].
-    Topic = <<"t">>.
-    Partition = 0.
-    {ok, Producer} = brod:start_link_producer(Hosts).
-    {ok, Consumer} = brod:start_link_consumer(Hosts, Topic, Partition).
-    Callback = fun(Offset, Key, Value) -> io:format(user, "[~p] ~s:~s\n", [Offset, Key, Value]) end.
-    ok = brod:consume(Consumer, Callback, -1).
-    brod:produce_sync(Producer, Topic, Partition, <<"k">>, <<"v">>).
-
-## Simple consumers
-    f(C), C = brod:console_consumer(Hosts, Topic, Partition, -1).
-    % this will print messages from the Topic on your stdout
-    C ! stop.
-    f(C), C = brod:file_consumer(Hosts, Topic, Partition, -1, "/tmp/kafka.log").
-    % this will write messages to /tmp/kafka.log
-    C ! stop.
+TODO
 
 ## Other API to play with/inspect kafka
 These functions open a connetion to kafka cluster, send a request,
