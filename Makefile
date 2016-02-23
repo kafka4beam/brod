@@ -2,8 +2,10 @@ PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
 PROJECT_VERSION = 2.0-dev
 
-DEPS = supervisor3
+DEPS = supervisor3 kpro
 TEST_DEPS = meck proper
+
+dep_kpro = git ssh://git@stash.int.klarna.net:7999/syn/kpro.git dev
 
 COVER = 1
 
