@@ -32,6 +32,7 @@
 
 %% Client API
 -export([ get_partitions/2
+        , start_link_client/1
         , start_link_client/3
         , start_link_client/5
         , stop_client/1
@@ -45,6 +46,7 @@
         , produce_sync/2
         , produce_sync/3
         , produce_sync/5
+        , start_producer/3
         , sync_produce_request/1
         ]).
 
@@ -85,6 +87,14 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 
 %% @doc Application behaviour callback
 stop(_State) -> ok.
+
+%% @doc The simplest version of start_link_client/4.
+%% Does not start any producer or consumer.
+%% For more details: @see start_link_client/4
+%% @end
+-spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
+start_link_client(Endpoints) ->
+  start_link_client(Endpoints, _Producers = [], _Consumers = []).
 
 %% @doc Simple version of start_link_client/4.
 %% Deafult client ID and default configs are used.
@@ -133,6 +143,12 @@ start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
 -spec stop_client(client()) -> ok.
 stop_client(Client) ->
   brod_client:stop(Client).
+
+%% @doc Dynamically start a per-topic producer
+-spec start_producer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_producer(Client, TopicName, ProducerConfig) ->
+  brod_client:start_producer(Client, TopicName, ProducerConfig).
 
 %% @doc Get all partition numbers of a given topic.
 %% The higher level producers may need the partition numbers to

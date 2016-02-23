@@ -28,6 +28,7 @@
         , post_init/1
         , start_link/2
         , find_producer/3
+        , start_producer/4
         ]).
 
 -include("brod_int.hrl").
@@ -54,6 +55,13 @@
 -spec start_link(pid(), [{topic(), producer_config()}]) -> {ok, pid()}.
 start_link(ClientPid, Producers) ->
   supervisor3:start_link(?MODULE, {?SUP, ClientPid, Producers}).
+
+%% @doc Dynamically start a per-topic supervisor
+-spec start_producer(pid(), pid(), topic(), producer_config()) ->
+                        {ok, pid()} | {error, any()}.
+start_producer(SupPid, ClientPid, TopicName, Config) ->
+  Spec = producers_sup_spec(ClientPid, TopicName, Config),
+  supervisor3:start_child(SupPid, Spec).
 
 %% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->

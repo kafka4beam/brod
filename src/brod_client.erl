@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 Klarna AB
+%%%   Copyright (c) 2015-2016 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2015 Klarna AB
+%%% @copyright 2015-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -32,6 +32,7 @@
         , register_producer/3
         , start_link/4
         , start_link/5
+        , start_producer/3
         , stop/1
         ]).
 
@@ -122,6 +123,12 @@ start_link(Endpoints, Producers, Consumers, Config) ->
 -spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
+
+%% @doc Dynamically start a per-topic producer
+-spec start_producer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_producer(Client, TopicName, ProducerConfig) ->
+  gen_server:call(Client, {start_producer, TopicName, ProducerConfig}).
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -270,6 +277,22 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
+  case State#state.producers_sup of
+    undefined ->
+      Producers = [{TopicName, ProducerConfig}],
+      {ok, Pid_} = brod_producers_sup:start_link(self(), Producers),
+      {reply, ok, State#state{producers_sup = Pid_}};
+    SupPid ->
+      Res = brod_producers_sup:start_producer(
+              SupPid, self(), TopicName, ProducerConfig),
+      case  Res of
+        {ok, _} ->
+          {reply, ok, State};
+        {error, _} = Error ->
+          {reply, Error, State}
+      end
+  end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
 handle_call(get_producers_sup_pid, _From, State) ->
