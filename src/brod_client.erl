@@ -94,8 +94,8 @@
         , endpoints     :: [endpoint()]
         , meta_sock     :: pid()
         , sockets = []  :: [#sock{}]
-        , producers_sup :: pid() | undefined
-        , consumers_sup :: pid() | undefined
+        , producers_sup :: pid()
+        , consumers_sup :: pid()
         , config        :: client_config()
         , workers_tab   :: ets:tab()
         }).
@@ -238,8 +238,8 @@ handle_info({init, Producers, Consumers}, State) ->
   ClientId = State#state.client_id,
   Endpoints = State#state.endpoints,
   Sock = start_metadata_socket(ClientId, Endpoints),
-  {ok, ProducersSupPid} = maybe_start_producers_sup(Producers),
-  {ok, ConsumersSupPid} = maybe_start_consumers_sup(Consumers),
+  {ok, ProducersSupPid} = brod_producers_sup:start_link(self(), Producers),
+  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(self(), Consumers),
   {noreply, State#state{ meta_sock     = Sock
                        , producers_sup = ProducersSupPid
                        , consumers_sup = ConsumersSupPid
@@ -250,14 +250,13 @@ handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          } = State) ->
   error_logger:error_msg("client ~p producers supervisor down~nReason: ~p",
                          [ClientId, Pid, Reason]),
-  %% shutdown all producers?
-  {noreply, State#state{producers_sup = ?undef}};
+  {stop, {producers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , consumers_sup = Pid
                                          } = State) ->
   error_logger:error_msg("client ~p consumers supervisor down~nReason: ~p",
                          [ClientId, Pid, Reason]),
-  {noreply, State#state{consumers_sup = ?undef}};
+  {stop, {consumers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason},
             #state{ client_id = ClientId
                   , meta_sock = #sock{ sock_pid = Pid
@@ -278,20 +277,13 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  case State#state.producers_sup of
-    undefined ->
-      Producers = [{TopicName, ProducerConfig}],
-      {ok, Pid_} = brod_producers_sup:start_link(self(), Producers),
-      {reply, ok, State#state{producers_sup = Pid_}};
-    SupPid ->
-      Res = brod_producers_sup:start_producer(
-              SupPid, self(), TopicName, ProducerConfig),
-      case  Res of
-        {ok, _} ->
-          {reply, ok, State};
-        {error, _} = Error ->
-          {reply, Error, State}
-      end
+  Res = brod_producers_sup:start_producer(
+          State#state.producers_sup, self(), TopicName, ProducerConfig),
+  case Res of
+    {ok, _} ->
+      {reply, ok, State};
+    {error, _} = Error ->
+      {reply, Error, State}
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
@@ -556,16 +548,6 @@ start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
                             };
     {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
   end.
-
-maybe_start_producers_sup([]) ->
-  {ok, undefined};
-maybe_start_producers_sup(Producers) ->
-  brod_producers_sup:start_link(self(), Producers).
-
-maybe_start_consumers_sup([]) ->
-  {ok, undefined};
-maybe_start_consumers_sup(Consumers) ->
-  brod_consumers_sup:start_link(self(), Consumers).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
