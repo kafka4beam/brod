@@ -98,9 +98,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
-  {ok, Pid} = brod:start_link_client(Client, [{"localhost", 8092} | ?HOSTS],
-                                     _Producers = [], _Consumers = [],
-                                     _Config = []),
+  {ok, Pid} = brod:start_link_client([{"localhost", 8092} | ?HOSTS], Client),
   ?assert(is_pid(Pid)),
   _Res = brod_client:get_partitions(Pid, <<"some-unknown-topic">>),
   % auto.create.topics.enabled is 'true' in default spotify/kafka container
@@ -112,8 +110,7 @@ t_skip_unreachable_endpoint(Config) when is_list(Config) ->
 
 t_no_reachable_endpoint(Config) when is_list(Config) ->
   process_flag(trap_exit, true),
-  {ok, Pid} =brod:start_link_client([{"badhost", 9092}],
-                                    _Producers = [], _Consumers = []),
+  {ok, Pid} = brod:start_link_client([{"badhost", 9092}]),
   Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
   ?assertMatch({nxdomain, _Stacktrace}, Reason).
 
@@ -136,8 +133,7 @@ t_metadata_socket_restart({'end', Config}) ->
 t_metadata_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
   {ok, ClientPid} =
-    brod:start_link_client(t_metadata_socket_restart, ?HOSTS,
-                           _Producers = [], _Consumers = [], _Config = []),
+    brod:start_link_client(?HOSTS, t_metadata_socket_restart),
   SocketPid = ?WAIT({socket_started, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
   ?assert(is_process_alive(SocketPid)),
@@ -166,14 +162,13 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {?TOPIC, [{partition_restart_delay_seconds, ProducerRestartDelay},
-                       {max_retries, 0}
-                      ]},
-  Partition = 0,
   {ok, Client} =
-    brod:start_link_client(t_payload_socket_restart, ?HOSTS,
-                           [Producer], [], ClientConfig),
+    brod:start_link_client(?HOSTS, t_payload_socket_restart, ClientConfig),
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
+  ProducerConfig = [{partition_restart_delay_seconds, ProducerRestartDelay},
+                    {max_retries, 0}],
+  ok = brod:start_producer(Client, ?TOPIC, ProducerConfig),
+  Partition = 0,
   ProduceFun =
     fun() -> brod:produce_sync(Client, ?TOPIC, Partition, <<"k">>, <<"v">>)
     end,

@@ -65,17 +65,15 @@ init_per_testcase(Case, Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  Producer = {Topic, [ {partition_restart_delay_seconds, ProducerRestartDelay}
-                     , {max_retries, 0}
-                     ]},
-  Consumer = {Topic, []},
+  ProducerConfig = [ {partition_restart_delay_seconds, ProducerRestartDelay}
+                   , {max_retries, 0}],
   case whereis(Client) of
     ?undef -> ok;
     Pid_   -> brod:stop_client(Pid_)
   end,
-  {ok, ClientPid} =
-    brod:start_link_client(Client, ?HOSTS,
-                           [Producer], [Consumer], ClientConfig),
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_producer(Client, Topic, ProducerConfig),
+  ok = brod:start_consumer(Client, Topic, []),
   [{client, Client}, {client_pid, ClientPid} | Config].
 
 end_per_testcase(Case, Config) ->

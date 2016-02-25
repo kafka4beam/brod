@@ -146,7 +146,7 @@ client_spec(ClientId, Args) ->
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_CLIENT_RESTART_DELAY),
   Config    = proplists:delete(restart_delay_seconds, Config0),
-  StartArgs = [ClientId, Endpoints, Producers, Consumers, Config],
+  StartArgs = [Endpoints, ClientId, Config, Producers, Consumers],
   { _Id       = ClientId
   , _Start    = {brod_client, start_link, StartArgs}
   , _Restart  = {permanent, DelaySecs}
@@ -157,9 +157,6 @@ client_spec(ClientId, Args) ->
 
 verify_config([], _Producers, _Consumers) ->
   exit("No endpoints found in brod client config.");
-verify_config(_Endpoints, [], []) ->
-  exit("At least one non-empty list of {producers, _} or {consumers, _}"
-       " required in brod client config.");
 verify_config(_Endpoints, _Producers, _Consumers) ->
   ok.
 

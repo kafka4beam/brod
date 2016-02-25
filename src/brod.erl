@@ -33,8 +33,10 @@
 %% Client API
 -export([ get_partitions/2
         , start_link_client/1
+        , start_link_client/2
         , start_link_client/3
-        , start_link_client/5
+        , start_consumer/3
+        , start_producer/3
         , stop_client/1
         ]).
 
@@ -46,7 +48,6 @@
         , produce_sync/2
         , produce_sync/3
         , produce_sync/5
-        , start_producer/3
         , sync_produce_request/1
         ]).
 
@@ -88,39 +89,24 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
-%% @doc The simplest version of start_link_client/4.
-%% Does not start any producer or consumer.
-%% For more details: @see start_link_client/4
-%% @end
+%% @equiv stat_link_client(Endpoints, brod_default_client)
 -spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
 start_link_client(Endpoints) ->
-  start_link_client(Endpoints, _Producers = [], _Consumers = []).
+  start_link_client(Endpoints, ?BROD_DEFAULT_CLIENT_ID).
 
-%% @doc Simple version of start_link_client/4.
-%% Deafult client ID and default configs are used.
-%% For more details: @see start_link_client/4
-%% @end
--spec start_link_client( [endpoint()]
-                       , [{topic(), producer_config()}]
-                       , [{topic(), consumer_config()}]) ->
+%% @equiv stat_link_client(Endpoints, ClientId, [])
+-spec start_link_client([endpoint()], client_id()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, Producers, Consumers) ->
-  start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
-                    Producers, Consumers, _Config = []).
+start_link_client(Endpoints, ClientId) ->
+  start_link_client(Endpoints, ClientId, []).
 
 %5 @doc Start a client.
-%% ClientId:
-%%   Atom to identify the client process
 %% Endpoints:
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster
 %%   which does not necessarily have to be a leader of any partition,
 %%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
-%% Producers:
-%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
-%%   proplist, @see brod_producers_sup:start_link/2 for more details
-%% Consumers:
-%%   A list of {Topic, ConsumerConfig} where ConsumerConfig is a
-%%   proplist, @see brod_consumers_sup:start_link/2 for more details
+%% ClientId:
+%%   Atom to identify the client process
 %% Config:
 %%   Proplist, possible values:
 %%     get_metadata_timout_seconds(optional, default=5)
@@ -130,14 +116,10 @@ start_link_client(Endpoints, Producers, Consumers) ->
 %%       Delay this configured number of seconds before retrying to
 %%       estabilish a new connection to the kafka partition leader.
 % @end
--spec start_link_client( client_id()
-                       , [endpoint()]
-                       , [{topic(), producer_config()}]
-                       , [{topic(), consumer_config()}]
-                       , client_config()) ->
+-spec start_link_client([endpoint()], client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
-  brod_client:start_link(ClientId, Endpoints, Producers, Consumers, Config).
+start_link_client(Endpoints, ClientId, Config) ->
+  brod_client:start_link(Endpoints, ClientId, Config).
 
 %% @doc Stop a client.
 -spec stop_client(client()) -> ok.
@@ -149,6 +131,12 @@ stop_client(Client) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   brod_client:start_producer(Client, TopicName, ProducerConfig).
+
+%% @doc Dynamically start a topic consumer
+-spec start_consumer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_consumer(Client, TopicName, ProducerConfig) ->
+  brod_client:start_consumer(Client, TopicName, ProducerConfig).
 
 %% @doc Get all partition numbers of a given topic.
 %% The higher level producers may need the partition numbers to

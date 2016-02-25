@@ -30,9 +30,11 @@
         , get_producer/3
         , register_consumer/3
         , register_producer/3
-        , start_link/4
+        , start_link/2
+        , start_link/3
         , start_link/5
         , start_producer/3
+        , start_consumer/3
         , stop/1
         ]).
 
@@ -102,23 +104,28 @@
 
 %%%_* APIs =====================================================================
 
--spec start_link( client_id()
-                , [endpoint()]
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]
+-spec start_link( [endpoint()]
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(ClientId, Endpoints, Producers, Consumers, Config)
-  when is_atom(ClientId) ->
-  Args = {ClientId, Endpoints, Producers, Consumers, Config},
-  gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
+start_link(Endpoints, Config) ->
+  Args = {Endpoints, Config, [], []},
+  gen_server:start_link(?MODULE, Args, []).
 
 -spec start_link( [endpoint()]
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]
+                , client_id()
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(Endpoints, Producers, Consumers, Config) ->
-  Args = {Endpoints, Producers, Consumers, Config},
-  gen_server:start_link(?MODULE, Args, []).
+start_link(Endpoints, ClientId, Config) ->
+  start_link(Endpoints, ClientId, Config, [], []).
+
+-spec start_link( [endpoint()]
+                , client_id()
+                , client_config()
+                , [{topic(), producer_config()}]
+                , [{topic(), consumer_config()}]) ->
+                    {ok, pid()} | {error, any()}.
+start_link(Endpoints, ClientId, Config, Producers, Consumers)
+  when is_atom(ClientId) ->
+  Args = {Endpoints, ClientId, Config, Producers, Consumers},
+  gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
 stop(Client) ->
@@ -129,6 +136,12 @@ stop(Client) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   gen_server:call(Client, {start_producer, TopicName, ProducerConfig}).
+
+%% @doc Dynamically start a per-topic consumer
+-spec start_consumer(client(), topic(), consumer_config()) ->
+                        ok | {error, any()}.
+start_consumer(Client, TopicName, ConsumerConfig) ->
+  gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig}).
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -214,7 +227,7 @@ get_consumer(Client, Topic, Partition) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({ClientId, Endpoints, Producers, Consumers, Config}) ->
+init({Endpoints, ClientId, Config, Producers, Consumers}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
@@ -224,7 +237,7 @@ init({ClientId, Endpoints, Producers, Consumers, Config}) ->
              , config      = Config
              , workers_tab = Tab
              }};
-init({Endpoints, Producers, Consumers, Config}) ->
+init({Endpoints, Config, Producers, Consumers}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
@@ -277,9 +290,16 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  Res = brod_producers_sup:start_producer(
-          State#state.producers_sup, self(), TopicName, ProducerConfig),
-  case Res of
+  case brod_producers_sup:start_producer(
+         State#state.producers_sup, self(), TopicName, ProducerConfig) of
+    {ok, _} ->
+      {reply, ok, State};
+    {error, _} = Error ->
+      {reply, Error, State}
+  end;
+handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
+  case brod_consumers_sup:start_consumer(
+         State#state.consumers_sup, self(), TopicName, ConsumerConfig) of
     {ok, _} ->
       {reply, ok, State};
     {error, _} = Error ->
