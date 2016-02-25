@@ -30,9 +30,8 @@
 
 %% API
 -export([ new/0
-        , add/3
+        , add/2
         , del/2
-        , get_api_key/2
         , get_caller/2
         , get_corr_id/1
         ]).
@@ -57,11 +56,11 @@ new() -> #requests{}.
 %% @doc Add a new request to sent collection.
 %% Return the last corrlation ID and the new opaque.
 %% @end
--spec add(requests(), pid(), api_key()) -> {corr_id(), requests()}.
+-spec add(requests(), pid()) -> {corr_id(), requests()}.
 add(#requests{ corr_id = CorrId
              , sent    = Sent
-             } = Requests, Caller, ApiKey) ->
-  NewSent = gb_trees:insert(CorrId, {Caller, ApiKey}, Sent),
+             } = Requests, Caller) ->
+  NewSent = gb_trees:insert(CorrId, Caller, Sent),
   NewRequests = Requests#requests{ corr_id = next_corr_id(CorrId)
                                  , sent    = NewSent
                                  },
@@ -74,22 +73,12 @@ add(#requests{ corr_id = CorrId
 del(#requests{sent = Sent} = Requests, CorrId) ->
   Requests#requests{sent = gb_trees:delete(CorrId, Sent)}.
 
-%% @doc Get api_key() a request having the given correlation ID.
-%% Crash if the request is not found.
-%% @end
--spec get_api_key(requests(), corr_id()) -> api_key().
-get_api_key(#requests{sent = Sent}, CorrId) ->
-  {_Caller, ApiKey} = gb_trees:get(CorrId, Sent),
-  ApiKey.
-
 %% @doc Get caller of a request having the given correlation ID.
 %% Crash if the request is not found.
 %% @end
 -spec get_caller(requests(), corr_id()) -> pid().
 get_caller(#requests{sent = Sent}, CorrId) ->
-  {Caller, _ApiKey} = gb_trees:get(CorrId, Sent),
-  Caller.
-
+  gb_trees:get(CorrId, Sent).
 
 %% @doc Get the correction to be sent for the next request.
 -spec get_corr_id(requests()) -> corr_id().
@@ -106,9 +95,9 @@ next_corr_id(CorrId)       -> CorrId + 1.
 -include_lib("eunit/include/eunit.hrl").
 
 next_corr_id_test() ->
-  CorrId = (1 bsl 31) - 1,
+  CorrId = (1 bsl 27) - 1,
   Req = #requests{corr_id = CorrId},
-  {CorrId, NewReq} = add(Req, self(), api_key),
+  {CorrId, NewReq} = add(Req, self()),
   ?assertEqual(0, get_corr_id(NewReq)).
 
 -endif. % TEST

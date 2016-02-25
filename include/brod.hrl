@@ -24,7 +24,6 @@
 
 -record(kafka_message,
         { offset     :: kafka_offset()
-        , crc        :: integer()
         , magic_byte :: integer()
         , attributes :: integer()
         , key        :: binary()

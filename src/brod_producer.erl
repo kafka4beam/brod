@@ -37,6 +37,7 @@
         ]).
 
 -include("brod_int.hrl").
+-include("brod_kafka.hrl").
 
 %% default number of messages in buffer before block callers
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
@@ -175,11 +176,27 @@ init({ClientPid, Topic, Partition, Config}) ->
 
   SendFun =
     fun(SockPid, KafkaKvList) ->
-        Data = [{Topic, [{Partition, KafkaKvList}]}],
-        KafkaReq = #produce_request{ acks    = RequiredAcks
-                                   , timeout = AckTimeout
-                                   , data    = Data
+        Messages =
+          lists:map(fun({K, V}) ->
+                      #kpro_Message{ magicByte  = ?MAGIC_BYTE
+                                   , attributes = ?COMPRESS_NONE
+                                   , key        = K
+                                   , value      = V
+                                   }
+                    end, KafkaKvList),
+        PartitionMsgSet =
+          #kpro_PartitionMessageSet{ partition = Partition
+                                   , message_L = Messages
                                    },
+        TopicMessageSet =
+          #kpro_TopicMessageSet{ topicName             = Topic
+                               , partitionMessageSet_L = [PartitionMsgSet]
+                               },
+        KafkaReq =
+          #kpro_ProduceRequest{ requiredAcks      = RequiredAcks
+                              , timeout           = AckTimeout
+                              , topicMessageSet_L = [TopicMessageSet]
+                              },
         case sock_send(SockPid, KafkaReq) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
@@ -217,16 +234,18 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {ok, NewState} = schedule_retry(State, Reason),
   {noreply, NewState#state{sock_pid = undefined}};
-handle_info({msg, Pid, CorrId, #produce_response{} = R},
+handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
                   } = State) ->
-  #produce_response{topics = [ProduceTopic]} = R,
-  #produce_topic{topic = Topic, offsets = [ProduceOffset]} = ProduceTopic,
-  #produce_offset{ partition  = Partition
-                 , error_code = ErrorCode
-                 , offset     = Offset
-                 } = ProduceOffset,
+  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
+  #kpro_ProduceResponseTopic{ topicName                  = Topic
+                            , produceResponsePartition_L = [ProduceOffset]
+                            } = ProduceTopic,
+  #kpro_ProduceResponsePartition{ partition  = Partition
+                                , errorCode = ErrorCode
+                                , offset     = Offset
+                                } = ProduceOffset,
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
   {ok, NewState} =

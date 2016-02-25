@@ -23,7 +23,8 @@
 -module(brod_utils).
 
 %% Exports
--export([ get_metadata/1
+-export([ find_leader_in_metadata/4
+        , get_metadata/1
         , get_metadata/2
         , try_connect/1
         , is_normal_reason/1
@@ -41,7 +42,7 @@ get_metadata(Hosts) ->
 
 get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
-  Request = #metadata_request{topics = Topics},
+  Request = #kpro_MetadataRequest{topicName_L = Topics},
   Response = brod_sock:send_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
@@ -74,6 +75,32 @@ shutdown_pid(Pid) ->
     true  -> exit(Pid, shutdown);
     false -> ok
   end.
+
+%% @doc Find leader broker ID for the given topic-partiton in
+%% the metadata response received from socket.
+%% The first argument is used for debugging, can be anything to
+%% help identify the socket connection context, e.g. client ID
+%% or broker endpoint from where the metata response was received.
+%% @end
+-spec find_leader_in_metadata(any(), kpro_MetadataResponse(),
+                              topic(), partition()) ->
+        endpoint() | no_return().
+find_leader_in_metadata(ConCtx, Metadata, Topic, Partition) ->
+  #kpro_MetadataResponse{ broker_L        = Brokers
+                        , topicMetadata_L = [TopicMetadata]
+                        } = Metadata,
+  #kpro_TopicMetadata{ errorCode           = TopicEC
+                     , partitionMetadata_L = Partitions
+                     } = TopicMetadata,
+  brod_kafka:is_error(TopicEC) andalso
+    erlang:error({TopicEC, brod_kafka_errors:desc(TopicEC), ConCtx}),
+  #kpro_PartitionMetadata{leader = Id} =
+    lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
+  Id >= 0 orelse erlang:error({no_leader, {Topic, Partition, ConCtx}}),
+  Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
+  Host = Broker#kpro_Broker.host,
+  Port = Broker#kpro_Broker.port,
+  {binary_to_list(Host), Port}.
 
 %%%_* Internal Functions =======================================================
 

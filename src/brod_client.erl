@@ -134,27 +134,16 @@ stop(Client) ->
 -spec get_leader_connection(client(), topic(), partition()) ->
                                {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
-  case brod_client:get_metadata(Client, Topic) of
+  case get_metadata(Client, Topic) of
     {ok, Metadata} ->
-      #metadata_response{ brokers = Brokers
-                        , topics  = [TopicMetadata]
-                        } = Metadata,
-      #topic_metadata{ error_code = TopicErrorCode
-                     , partitions = Partitions
-                     } = TopicMetadata,
-      brod_kafka:is_error(TopicErrorCode) andalso erlang:error(TopicErrorCode),
-      #partition_metadata{leader_id = LeaderId} =
-        lists:keyfind(Partition, #partition_metadata.id, Partitions),
-      LeaderId >= 0 orelse erlang:error({no_leader,
-                                         {Client, Topic, Partition}}),
-      #broker_metadata{host = Host, port = Port} =
-        lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
+      {Host, Port} =
+        brod_utils:find_leader_in_metadata(Client, Metadata, Topic, Partition),
       get_connection(Client, Host, Port);
     {error, Reason} ->
       {error, Reason}
   end.
 
--spec get_metadata(client(), topic()) -> {ok, #metadata_response{}}.
+-spec get_metadata(client(), topic()) -> {ok, kpro_MetadataResponse()}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
@@ -162,7 +151,7 @@ get_metadata(Client, Topic) ->
 -spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
 get_partitions(Client, Topic) ->
   case get_metadata(Client, Topic) of
-    {ok, #metadata_response{topics = TopicsMetadata}} ->
+    {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
       [TopicMetadata] = TopicsMetadata,
       try
         {ok, do_get_partitions(TopicMetadata)}
@@ -308,7 +297,7 @@ terminate(Reason, #state{ client_id     = ClientId
     true ->
       ok;
     false ->
-      error_logger:warning_msg("~p [~p] ~p is terminating, reason: ~p~n",
+      error_logger:warning_msg("~p [~p] ~p is terminating\nreason: ~p~n",
                                [?MODULE, self(), ClientId, Reason])
   end,
   %% stop producers and consumers first because they are monitoring socket pids
@@ -398,20 +387,22 @@ find_consumer(Client, Topic, Partition) ->
     {error, client_down}
   end.
 
--spec do_get_partitions(#topic_metadata{}) -> [partition()].
-do_get_partitions(#topic_metadata{ error_code = TopicErrorCode
-                                 , partitions = Partitions}) ->
-  brod_kafka:is_error(TopicErrorCode) andalso
-    erlang:throw(TopicErrorCode),
-  lists:map(fun(#partition_metadata{id = Partition}) -> Partition end,
-            Partitions).
+-spec do_get_partitions(kpro_TopicMetadata()) -> [partition()].
+do_get_partitions(#kpro_TopicMetadata{ errorCode           = TopicEC
+                                     , partitionMetadata_L = Partitions
+                                     }) ->
+  brod_kafka:is_error(TopicEC) andalso
+    erlang:throw({TopicEC, brod_kafka_errors:desc(TopicEC)}),
+  lists:map(fun(#kpro_PartitionMetadata{partition = Partition}) ->
+              Partition
+            end, Partitions).
 
 -spec do_get_metadata(topic(), #state{}) ->
-        {ok, #metadata_response{}} | {error, any()}.
+        {ok, kpro_MetadataResponse()} | {error, any()}.
 do_get_metadata(Topic, #state{ meta_sock = #sock{sock_pid = SockPid}
                              , config    = Config
                              }) ->
-  Request = #metadata_request{topics = [Topic]},
+  Request = #kpro_MetadataRequest{topicName_L = [Topic]},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)).

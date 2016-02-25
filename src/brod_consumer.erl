@@ -193,6 +193,9 @@ handle_info(Info, State) ->
                           [?MODULE, self(), Info]),
   {noreply, State}.
 
+handle_call({subscribe, _Pid, _Options}, _From,
+            #state{ socket_pid = undefined } = State) ->
+  {reply, {error, no_connection}, State};
 handle_call({subscribe, Pid, Options}, _From,
             #state{ subscriber = Subscriber
                   , subscriber_mref = OldMref} = State0) ->
@@ -264,27 +267,17 @@ handle_fetch_response(_Response, CorrId1,
                         "with corr_id = ~p",
                         [?MODULE, self(), CorrId1]),
   {noreply, State};
-handle_fetch_response(#fetch_response{ topics = []
-                                     , error = max_bytes_too_small
-                                     }, _CorrId,
-                      #state{max_bytes = MaxBytes} = State0) ->
-  NewMaxBytes = MaxBytes * 2,
-  error_logger:warning_msg("~p ~p max_bytes ~p is not large enough, "
-                           "trying with a larger value ~p",
-                           [?MODULE, self(), MaxBytes, NewMaxBytes]),
-  State1 = State0#state{max_bytes = NewMaxBytes},
-  State = maybe_send_fetch_request(State1),
-  {noreply, State};
-handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
-                                     , error  = undefined
-                                     }, CorrId, State) ->
+handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
+                                         }, CorrId, State) ->
   CorrId = State#state.last_corr_id, %% assert
-  #topic_fetch_data{ topic = Topic
-                   , partitions = [PM]} = TopicFetchData,
-  #partition_messages{ partition = Partition
-                     , error_code = ErrorCode
-                     , high_wm_offset = HighWmOffset
-                     , messages = Messages} = PM,
+  #kpro_FetchResponseTopic{ topicName = Topic
+                          , fetchResponsePartition_L = [PM]
+                          } = TopicData,
+  #kpro_FetchResponsePartition{ partition           = Partition
+                              , errorCode           = ErrorCode
+                              , highWatermarkOffset = HighWmOffset
+                              , message_L           = Messages0} = PM,
+  Messages = map_messages(Messages0),
   case brod_kafka:is_error(ErrorCode) of
     true ->
       Error = #kafka_fetch_error{ topic      = Topic
@@ -305,6 +298,14 @@ handle_fetch_response(#fetch_response{ topics = [TopicFetchData]
 handle_message_set(#kafka_message_set{messages = []}, State0) ->
   State = maybe_delay_fetch_request(State0),
   {noreply, State};
+handle_message_set(#kafka_message_set{messages = ?incomplete_message_set},
+                   #state{max_bytes = MaxBytes} = State0) ->
+  NewMaxBytes = MaxBytes * 2,
+  error_logger:warning_msg("~p ~p max_bytes ~p is too small, trying with ~p",
+                           [?MODULE, self(), MaxBytes, NewMaxBytes]),
+  State1 = State0#state{max_bytes = NewMaxBytes},
+  State = maybe_send_fetch_request(State1),
+  {noreply, State};
 handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                    #state{ subscriber    = Subscriber
                          , pending_acks  = PendingAcks
@@ -323,6 +324,19 @@ err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
 err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
 err_op(_)                              -> restart.
+
+map_messages(?incomplete_message_set) ->
+  ?incomplete_message_set;
+map_messages(Messages) ->
+  F = fun(M) ->
+        #kafka_message{ offset     = M#kpro_Message.offset
+                      , magic_byte = M#kpro_Message.magicByte
+                      , attributes = M#kpro_Message.attributes
+                      , key        = M#kpro_Message.key
+                      , value      = M#kpro_Message.value
+                      }
+      end,
+  lists:map(F, Messages).
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic
@@ -389,12 +403,14 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
 send_fetch_request(#state{socket_pid = SocketPid} = State) ->
   true = (is_integer(State#state.begin_offset) andalso
           State#state.begin_offset >= 0), %% assert
-  Request = #fetch_request{ topic = State#state.topic
-                          , partition = State#state.partition
-                          , offset = State#state.begin_offset
-                          , max_wait_time = State#state.max_wait_time
-                          , min_bytes = State#state.min_bytes
-                          , max_bytes = State#state.max_bytes},
+  Request =
+    brod_kafka:fetch_request(State#state.topic,
+                             State#state.partition,
+                             State#state.begin_offset,
+                             State#state.max_wait_time,
+                             State#state.min_bytes,
+                             State#state.max_bytes
+                            ),
   brod_sock:send(SocketPid, Request).
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
@@ -436,14 +452,12 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
   end.
 
 fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
-  Request = #offset_request{ topic = Topic
-                           , partition = Partition
-                           , time = InitialOffset
-                           , max_n_offsets = 1},
+  Request = brod_kafka:offset_request(Topic, Partition, InitialOffset,
+                                      _MaxNoOffsets = 1),
   {ok, Response} = brod_sock:send_sync(SocketPid, Request, 5000),
-  #offset_response{topics = [#offset_topic{} = OT]} = Response,
-  #offset_topic{partitions =
-                 [#partition_offsets{offsets = Offsets}]} = OT,
+  #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
+  #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
+  #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
   case Offsets of
     [Offset] -> {ok, Offset};
     []       -> {error, no_available_offsets}

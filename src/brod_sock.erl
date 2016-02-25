@@ -88,7 +88,8 @@ send_sync(Pid, Request, Timeout) ->
 
 -spec maybe_wait_for_resp(pid(), term(), integer(), timeout()) ->
         ok | {ok, term()} | {error, any()}.
-maybe_wait_for_resp(_Pid, #produce_request{acks = 0}, _CorrId, _Timeout) ->
+maybe_wait_for_resp(_Pid, #kpro_ProduceRequest{requiredAcks = 0},
+                    _CorrId, _Timeout) ->
   ok;
 maybe_wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),
@@ -192,10 +193,12 @@ handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
                                     , requests = Requests
                                     } = State, Debug) ->
   Stream = <<Tail0/binary, Bin/binary>>,
-  {Tail, Responses} = brod_kafka:parse_stream(Stream, Requests),
+  {Responses, Tail} = brod_kafka:parse_stream(Stream),
   NewRequests =
     lists:foldl(
-      fun({CorrId, Response}, Reqs) ->
+      fun(#kpro_Response{ correlationId   = CorrId
+                        , responseMessage = Response
+                        }, Reqs) ->
         Caller = brod_kafka_requests:get_caller(Reqs, CorrId),
         cast(Caller, {msg, self(), CorrId, Response}),
         brod_kafka_requests:del(Reqs, CorrId)
@@ -211,9 +214,7 @@ handle_msg({From, {send, Request}},
                  , requests  = Requests
                  } = State, Debug) ->
   {Caller, _Ref} = From,
-  ApiKey = brod_kafka:api_key(Request),
-  {CorrId, NewRequests} =
-    brod_kafka_requests:add(Requests, Caller, ApiKey),
+  {CorrId, NewRequests} = brod_kafka_requests:add(Requests, Caller),
   RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   reply(From, {ok, CorrId}),
