@@ -5,9 +5,9 @@ PROJECT_VERSION = 2.0-dev
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = meck proper
 
-dep_kafka_protocol = git ssh://git@stash.int.klarna.net:7999/syn/kafka_protocol.git dev
+dep_kafka_protocol = git git@github.com:klarna/kafka_protocol.git 0.1.0
 
-COVER = 1
+COVER = true
 
 EUNIT_OPTS = verbose
 ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
