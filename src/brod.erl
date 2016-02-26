@@ -416,9 +416,9 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}], []),
-  {ok, ProducerPid} = brod:get_producer(Client, Topic, Partition),
-  Res = brod:produce_sync(ProducerPid, Key, Value),
+  {ok, Client} = brod:start_link_client(Hosts),
+  ok = brod:start_producer(Client, Topic, []),
+  Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
   brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
