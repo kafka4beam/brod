@@ -35,7 +35,7 @@
 %% Test cases
 -export([ t_skip_unreachable_endpoint/1
         , t_no_reachable_endpoint/1
-        , t_not_a_brod_client/1
+        , t_call_bad_client_id/1
         , t_metadata_socket_restart/1
         , t_payload_socket_restart/1
         ]).
@@ -103,8 +103,7 @@ t_skip_unreachable_endpoint(Config) when is_list(Config) ->
                                      _Config = []),
   ?assert(is_pid(Pid)),
   _Res = brod_client:get_partitions(Pid, <<"some-unknown-topic">>),
-  % auto.create.topics.enabled is 'true' in default spotify/kafka container
-  % ?assertEqual({error, 'UnknownTopicOrPartitionException'}, _Res),
+  ?assertMatch({error, {'UnknownTopicOrPartition', _}}, _Res),
   Ref = erlang:monitor(process, Pid),
   ok = brod:stop_client(Pid),
   Reason = ?WAIT({'DOWN', Ref, process, Pid, Reason_}, Reason_, 5000),
@@ -117,7 +116,7 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
   ?assertMatch({nxdomain, _Stacktrace}, Reason).
 
-t_not_a_brod_client(Config) when is_list(Config) ->
+t_call_bad_client_id(Config) when is_list(Config) ->
   %% call a bad client ID
   Res = brod:produce(?undef, <<"topic">>, _Partition = 0, <<"k">>, <<"v">>),
   ?assertEqual({error, client_down}, Res).
@@ -249,7 +248,6 @@ mock_brod_sock() ->
     end,
   ok = meck:expect(brod_sock, start_link, SocketStartLinkFun),
   Ref.
-
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -283,32 +283,30 @@ consume_ack(ConsumerPid, Offset) ->
   brod_consumer:ack(ConsumerPid, Offset).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()]) -> {ok, #metadata_response{}} | {error, any()}.
+-spec get_metadata([endpoint()]) ->
+                      {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()], [binary()]) ->
-                      {ok, #metadata_response{}} | {error, any()}.
+                      {ok, kpro_MetadataResponse} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, -1, 1)
 -spec get_offsets([endpoint()], binary(), non_neg_integer()) ->
-                     {ok, #offset_response{}} | {error, any()}.
+                     {ok, kpro_OffsetResponse()} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, -1, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
 -spec get_offsets([endpoint()], binary(), non_neg_integer(),
                   integer(), non_neg_integer()) ->
-                     {ok, #offset_response{}} | {error, any()}.
-get_offsets(Hosts, Topic, Partition, Time, MaxNOffsets) ->
+                     {ok, kpro_OffsetResponse()} | {error, any()}.
+get_offsets(Hosts, Topic, Partition, Time, MaxNoOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
-  Request = #offset_request{ topic = Topic
-                           , partition = Partition
-                           , time = Time
-                           , max_n_offsets = MaxNOffsets},
+  Request = kpro:offset_request(Topic, Partition, Time, MaxNoOffsets),
   Response = brod_sock:send_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
@@ -326,22 +324,18 @@ fetch(Hosts, Topic, Partition, Offset) ->
                {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
-  Request = #fetch_request{ topic = Topic
-                          , partition = Partition
-                          , offset = Offset
-                          , max_wait_time = MaxWaitTime
-                          , min_bytes = MinBytes
-                          , max_bytes = MaxBytes},
+  Request = kpro:fetch_request(Topic, Partition, Offset,
+                               MaxWaitTime, MinBytes, MaxBytes),
   {ok, Response} = brod_sock:send_sync(Pid, Request, 10000),
-  #fetch_response{topics = [TopicFetchData]} = Response,
-  #topic_fetch_data{ topic = Topic
-                   , partitions = [PM]} = TopicFetchData,
-  #partition_messages{ error_code = ErrorCode
-                     , messages = Messages} = PM,
+  #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
+  #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
+  #kpro_FetchResponsePartition{ errorCode  = ErrorCode
+                              , message_L  = Messages
+                              } = PM,
   ok = brod_sock:stop(Pid),
-  case brod_kafka:is_error(ErrorCode) of
+  case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
-      {error, brod_kafka_errors:desc(ErrorCode)};
+      {error, kpro_ErrorCode:desc(ErrorCode)};
     false ->
       {ok, Messages}
   end.
@@ -459,15 +453,9 @@ parse_hosts_str(HostsStr) ->
   lists:map(F, string:tokens(HostsStr, ",")).
 
 connect_leader(Hosts, Topic, Partition) ->
-  {ok, Metadata} = get_metadata(Hosts),
-  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
-  #topic_metadata{partitions = Partitions} =
-    lists:keyfind(Topic, #topic_metadata.name, Topics),
-  #partition_metadata{leader_id = Id} =
-    lists:keyfind(Partition, #partition_metadata.id, Partitions),
-  Broker = lists:keyfind(Id, #broker_metadata.node_id, Brokers),
-  Host = Broker#broker_metadata.host,
-  Port = Broker#broker_metadata.port,
+  {ok, Metadata} = get_metadata(Hosts, [Topic]),
+  {ok, {Host, Port}} =
+    brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
 
