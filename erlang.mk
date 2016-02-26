@@ -16,7 +16,7 @@
 
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 
-ERLANG_MK_VERSION = 2.0.0-pre.2-84-g0f600de-dirty
+ERLANG_MK_VERSION = 2.0.0-pre.2-88-gf9f2aa7
 
 # Core configuration.
 
@@ -6104,6 +6104,8 @@ distclean-edoc:
 # Configuration.
 
 ESCRIPT_NAME ?= $(PROJECT)
+ESCRIPT_FILE ?= $(ESCRIPT_NAME)
+
 ESCRIPT_COMMENT ?= This is an -*- erlang -*- file
 
 ESCRIPT_BEAMS ?= "ebin/*", "deps/*/ebin/*"
@@ -6149,7 +6151,7 @@ define ESCRIPT_RAW
 '  ]),'\
 '  file:change_mode(Escript, 8#755)'\
 'end,'\
-'Ez("$(ESCRIPT_NAME)"),'\
+'Ez("$(ESCRIPT_FILE)"),'\
 'halt().'
 endef
 
