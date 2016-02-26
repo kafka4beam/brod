@@ -5,8 +5,6 @@ PROJECT_VERSION = 2.0-dev
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = meck proper
 
-dep_kafka_protocol = git git@github.com:klarna/kafka_protocol.git 0.1.0
-
 COVER = true
 
 EUNIT_OPTS = verbose
