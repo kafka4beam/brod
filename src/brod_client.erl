@@ -28,6 +28,7 @@
         , get_metadata/2
         , get_partitions/2
         , get_producer/3
+        , is_topic_exist/2
         , register_consumer/3
         , register_producer/3
         , start_link/2
@@ -290,20 +291,32 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  case brod_producers_sup:start_producer(
-         State#state.producers_sup, self(), TopicName, ProducerConfig) of
-    {ok, _} ->
-      {reply, ok, State};
-    {error, _} = Error ->
-      {reply, Error, State}
+  try
+    #sock{sock_pid = SockPid} = State#state.meta_sock,
+    is_topic_exist(SockPid, TopicName) orelse
+      throw({invalid_topic, TopicName}),
+    SupPid = State#state.producers_sup,
+    case brod_producers_sup:start_producer(SupPid, self(),
+                                           TopicName, ProducerConfig) of
+      {ok, _} -> {reply, ok, State};
+      Error   -> throw(Error)
+    end
+  catch throw:E ->
+      {reply, E, State}
   end;
 handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
-  case brod_consumers_sup:start_consumer(
-         State#state.consumers_sup, self(), TopicName, ConsumerConfig) of
-    {ok, _} ->
-      {reply, ok, State};
-    {error, _} = Error ->
-      {reply, Error, State}
+  try
+    #sock{sock_pid = SockPid} = State#state.meta_sock,
+    is_topic_exist(SockPid, TopicName) orelse
+      throw({invalid_topic, TopicName}),
+    SupPid = State#state.consumers_sup,
+    case brod_consumers_sup:start_consumer(SupPid, self(),
+                                           TopicName, ConsumerConfig) of
+      {ok, _} -> {reply, ok, State};
+      Error   -> throw(Error)
+    end
+  catch throw:E ->
+      {reply, E, State}
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
@@ -567,6 +580,16 @@ start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
                             , sock_pid = Pid
                             };
     {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
+  end.
+
+-spec is_topic_exist(pid(), topic()) -> boolean().
+is_topic_exist(Socket, Topic) ->
+  Request = #metadata_request{topics = []},
+  {ok, Response} = brod_sock:send_sync(Socket, Request, 10000),
+  #metadata_response{topics = Topics} = Response,
+  case lists:keyfind(Topic, #topic_metadata.name, Topics) of
+    #topic_metadata{} -> true;
+    false             -> false
   end.
 
 %%%_* Emacs ====================================================================

@@ -98,15 +98,19 @@ init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 
 post_init({?SUP2, ClientPid, Topic, Config}) ->
-  {ok, Partitions} = brod_client:get_partitions(ClientPid, Topic),
-  Children = [ producer_spec(ClientPid, Topic, Partition, Config)
-             || Partition <- Partitions ],
-  %% Producer may crash in case of exception in case of network failure,
-  %% or error code received in produce response (e.g. leader transition)
-  %% In any case, restart right away will erry likely fail again.
-  %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
-  %% before supervisor tries to restart it.
-  {ok, {{one_for_one, 0, 1}, Children}}.
+  case brod_client:get_partitions(ClientPid, Topic) of
+    {ok, Partitions} ->
+      Children = [ producer_spec(ClientPid, Topic, Partition, Config)
+                 || Partition <- Partitions ],
+      %% Producer may crash in case of exception in case of network failure,
+      %% or error code received in produce response (e.g. leader transition)
+      %% In any case, restart right away will erry likely fail again.
+      %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
+      %% before supervisor tries to restart it.
+      {ok, {{one_for_one, 0, 1}, Children}};
+    Error ->
+      Error
+  end.
 
 producers_sup_spec(ClientPid, TopicName, Config0) ->
   {Config, DelaySecs} =
