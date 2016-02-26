@@ -27,7 +27,6 @@
 %% API
 -export([ parse_stream/1
         , encode/3
-        , is_error/1
         ]).
 
 -export([ fetch_request/6
@@ -62,8 +61,6 @@ encode(ClientId, CorrId, Request) ->
                    , requestMessage = Request
                    },
   kpro:encode_request(R).
-
-is_error(X) -> kpro_ErrorCode:is_error(X).
 
 -spec offset_request(topic(), partition(), integer(), non_neg_integer()) ->
         kpro_OffsetRequest().

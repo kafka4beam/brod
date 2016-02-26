@@ -333,9 +333,9 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
                               , message_L  = Messages
                               } = PM,
   ok = brod_sock:stop(Pid),
-  case brod_kafka:is_error(ErrorCode) of
+  case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
-      {error, brod_kafka_errors:desc(ErrorCode)};
+      {error, kpro_ErrorCode:desc(ErrorCode)};
     false ->
       {ok, Messages}
   end.

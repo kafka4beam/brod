@@ -278,12 +278,12 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                               , highWatermarkOffset = HighWmOffset
                               , message_L           = Messages0} = PM,
   Messages = map_messages(Messages0),
-  case brod_kafka:is_error(ErrorCode) of
+  case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       Error = #kafka_fetch_error{ topic      = Topic
                                 , partition  = Partition
                                 , error_code = ErrorCode
-                                , error_desc = brod_kafka_errors:desc(ErrorCode)
+                                , error_desc = kpro_ErrorCode:desc(ErrorCode)
                                 },
       handle_fetch_error(Error, State);
     false ->

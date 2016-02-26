@@ -391,8 +391,8 @@ find_consumer(Client, Topic, Partition) ->
 do_get_partitions(#kpro_TopicMetadata{ errorCode           = TopicEC
                                      , partitionMetadata_L = Partitions
                                      }) ->
-  brod_kafka:is_error(TopicEC) andalso
-    erlang:throw({TopicEC, brod_kafka_errors:desc(TopicEC)}),
+  kpro_ErrorCode:is_error(TopicEC) andalso
+    erlang:throw({TopicEC, kpro_ErrorCode:desc(TopicEC)}),
   lists:map(fun(#kpro_PartitionMetadata{partition = Partition}) ->
               Partition
             end, Partitions).

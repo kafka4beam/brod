@@ -92,8 +92,8 @@ find_leader_in_metadata(ConCtx, Metadata, Topic, Partition) ->
   #kpro_TopicMetadata{ errorCode           = TopicEC
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
-  brod_kafka:is_error(TopicEC) andalso
-    erlang:error({TopicEC, brod_kafka_errors:desc(TopicEC), ConCtx}),
+  kpro_ErrorCode:is_error(TopicEC) andalso
+    erlang:error({TopicEC, kpro_ErrorCode:desc(TopicEC), ConCtx}),
   #kpro_PartitionMetadata{leader = Id} =
     lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
   Id >= 0 orelse erlang:error({no_leader, {Topic, Partition, ConCtx}}),
