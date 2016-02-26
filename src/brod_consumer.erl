@@ -298,7 +298,7 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
 handle_message_set(#kafka_message_set{messages = []}, State0) ->
   State = maybe_delay_fetch_request(State0),
   {noreply, State};
-handle_message_set(#kafka_message_set{messages = ?incomplete_message_set},
+handle_message_set(#kafka_message_set{messages = [?incomplete_message]},
                    #state{max_bytes = MaxBytes} = State0) ->
   NewMaxBytes = MaxBytes * 2,
   error_logger:warning_msg("~p ~p max_bytes ~p is too small, trying with ~p",
@@ -325,18 +325,21 @@ err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
 err_op(_)                              -> restart.
 
-map_messages(?incomplete_message_set) ->
-  ?incomplete_message_set;
+%% @private Map message to brod's format.
+%% incomplete message indicator is kept when the only one message is incomplete.
+%% @end
+map_messages([?incomplete_message]) ->
+  [?incomplete_message];
 map_messages(Messages) ->
-  F = fun(M) ->
-        #kafka_message{ offset     = M#kpro_Message.offset
-                      , magic_byte = M#kpro_Message.magicByte
-                      , attributes = M#kpro_Message.attributes
-                      , key        = M#kpro_Message.key
-                      , value      = M#kpro_Message.value
-                      }
+  F = fun(#kpro_Message{} = M) ->
+            #kafka_message{ offset     = M#kpro_Message.offset
+                          , magic_byte = M#kpro_Message.magicByte
+                          , attributes = M#kpro_Message.attributes
+                          , key        = M#kpro_Message.key
+                          , value      = M#kpro_Message.value
+                          }
       end,
-  lists:map(F, Messages).
+  [F(M) || M <- Messages, M =/= ?incomplete_message].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic

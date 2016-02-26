@@ -63,7 +63,7 @@ encode(ClientId, CorrId, Request) ->
                    },
   kpro:encode_request(R).
 
-is_error(X) -> kpro_errorCode:is_error(X).
+is_error(X) -> kpro_ErrorCode:is_error(X).
 
 -spec offset_request(topic(), partition(), integer(), non_neg_integer()) ->
         kpro_OffsetRequest().

@@ -42,11 +42,11 @@ is_error(_)        -> true.
 %% for undefined error codes, return the original integer
 %% @end
 -spec decode(integer()) -> error_code().
-decode(Ec) -> kpro_errorCode:decode(Ec).
+decode(Ec) -> kpro_ErrorCode:decode(Ec).
 
 %% @doc Get description string of error codes.
 -spec desc(error_code()) -> binary().
-desc(Ec) -> kpro_errorCode:desc(Ec).
+desc(Ec) -> kpro_ErrorCode:desc(Ec).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

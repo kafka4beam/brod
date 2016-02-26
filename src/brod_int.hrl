@@ -18,7 +18,7 @@
 -define(__BROD_INT_HRL, true).
 
 -include("brod.hrl").
--include_lib("kpro/include/kpro.hrl").
+-include_lib("kafka_protocol/include/kpro.hrl").
 
 -type topic()     :: kafka_topic().
 -type partition() :: kafka_partition().
