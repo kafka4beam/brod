@@ -60,7 +60,7 @@ add(#requests{ corr_id = CorrId
              , sent    = Sent
              } = Requests, Caller) ->
   NewSent = gb_trees:insert(CorrId, Caller, Sent),
-  NewRequests = Requests#requests{ corr_id = next_corr_id(CorrId)
+  NewRequests = Requests#requests{ corr_id = kpro:next_corr_id(CorrId)
                                  , sent    = NewSent
                                  },
   {CorrId, NewRequests}.
@@ -83,24 +83,6 @@ get_caller(#requests{sent = Sent}, CorrId) ->
 -spec get_corr_id(requests()) -> corr_id().
 get_corr_id(#requests{ corr_id = CorrId }) ->
   CorrId.
-
-%%%_* Internal functions =======================================================
-
-next_corr_id(?MAX_CORR_ID) -> 0;
-next_corr_id(CorrId)       -> CorrId + 1.
-
--ifdef(TEST).
-
--include_lib("eunit/include/eunit.hrl").
-
-next_corr_id_test() ->
-  CorrId = (1 bsl ?CORR_ID_BITS) - 1,
-  Req = #requests{corr_id = CorrId},
-  {CorrId, NewReq} = add(Req, self()),
-  ?assertEqual(0, get_corr_id(NewReq)).
-
--endif. % TEST
-
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
