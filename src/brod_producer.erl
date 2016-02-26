@@ -175,28 +175,9 @@ init({ClientPid, Topic, Partition, Config}) ->
 
   SendFun =
     fun(SockPid, KafkaKvList) ->
-        Messages =
-          lists:map(fun({K, V}) ->
-                      #kpro_Message{ magicByte  = ?KPRO_MAGIC_BYTE
-                                   , attributes = ?KPRO_COMPRESS_NONE
-                                   , key        = K
-                                   , value      = V
-                                   }
-                    end, KafkaKvList),
-        PartitionMsgSet =
-          #kpro_PartitionMessageSet{ partition = Partition
-                                   , message_L = Messages
-                                   },
-        TopicMessageSet =
-          #kpro_TopicMessageSet{ topicName             = Topic
-                               , partitionMessageSet_L = [PartitionMsgSet]
-                               },
-        KafkaReq =
-          #kpro_ProduceRequest{ requiredAcks      = RequiredAcks
-                              , timeout           = AckTimeout
-                              , topicMessageSet_L = [TopicMessageSet]
-                              },
-        case sock_send(SockPid, KafkaReq) of
+        ProduceRequest = kpro:produce_request(Topic, Partition, KafkaKvList,
+                                              RequiredAcks, AckTimeout),
+        case sock_send(SockPid, ProduceRequest) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
           {error, Reason} -> {error, Reason}
