@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 
 -define(API_VERSION, 0).
 -define(MAGIC_BYTE, 0).
-
 -define(REPLICA_ID, -1).
 
 %% Compression

@@ -52,8 +52,6 @@
                 , node_id :: integer()
                 }).
 
-%%%_* metadata request ---------------------------------------------------------
-
 -define(undef, undefined).
 
 -define(DEFAULT_CLIENT_ID, brod).

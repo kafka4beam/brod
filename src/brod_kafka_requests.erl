@@ -95,7 +95,7 @@ next_corr_id(CorrId)       -> CorrId + 1.
 -include_lib("eunit/include/eunit.hrl").
 
 next_corr_id_test() ->
-  CorrId = (1 bsl 27) - 1,
+  CorrId = (1 bsl ?CORR_ID_BITS) - 1,
   Req = #requests{corr_id = CorrId},
   {CorrId, NewReq} = add(Req, self()),
   ?assertEqual(0, get_corr_id(NewReq)).

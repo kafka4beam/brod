@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 %%% @doc A kafka protocol implementation.
 %%%      [https://cwiki.apache.org/confluence/display/KAFKA/
 %%%       A+Guide+To+The+Kafka+Protocol].
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -35,8 +35,6 @@
 
 -include("brod_int.hrl").
 -include("brod_kafka.hrl").
-
--define(INT, signed-integer).
 
 %%%_* APIs =====================================================================
 
@@ -56,8 +54,9 @@ parse_stream(Bin, Acc) ->
   end.
 
 encode(ClientId, CorrId, Request) ->
-  R = #kpro_Request{ correlationId = CorrId
-                   , clientId = ClientId
+  R = #kpro_Request{ apiVersion     = ?API_VERSION
+                   , correlationId  = CorrId
+                   , clientId       = ClientId
                    , requestMessage = Request
                    },
   kpro:encode_request(R).
