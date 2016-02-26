@@ -193,7 +193,7 @@ handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
                                     , requests = Requests
                                     } = State, Debug) ->
   Stream = <<Tail0/binary, Bin/binary>>,
-  {Responses, Tail} = brod_kafka:parse_stream(Stream),
+  {Responses, Tail} = kpro:decode_response(Stream),
   NewRequests =
     lists:foldl(
       fun(#kpro_Response{ correlationId   = CorrId
@@ -215,7 +215,7 @@ handle_msg({From, {send, Request}},
                  } = State, Debug) ->
   {Caller, _Ref} = From,
   {CorrId, NewRequests} = brod_kafka_requests:add(Requests, Caller),
-  RequestBin = brod_kafka:encode(ClientId, CorrId, Request),
+  RequestBin = kpro:encode_request(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   reply(From, {ok, CorrId}),
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);

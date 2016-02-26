@@ -301,6 +301,9 @@ handle_message_set(#kafka_message_set{messages = []}, State0) ->
 handle_message_set(#kafka_message_set{messages = [?incomplete_message]},
                    #state{max_bytes = MaxBytes} = State0) ->
   NewMaxBytes = MaxBytes * 2,
+  NewMaxBytes >= (1 bsl 31) andalso
+      erlang:error({max_bytes_overflow,
+                   <<"perhaps message corruption in broker?">>}),
   error_logger:warning_msg("~p ~p max_bytes ~p is too small, trying with ~p",
                            [?MODULE, self(), MaxBytes, NewMaxBytes]),
   State1 = State0#state{max_bytes = NewMaxBytes},
@@ -407,13 +410,13 @@ send_fetch_request(#state{socket_pid = SocketPid} = State) ->
   true = (is_integer(State#state.begin_offset) andalso
           State#state.begin_offset >= 0), %% assert
   Request =
-    brod_kafka:fetch_request(State#state.topic,
-                             State#state.partition,
-                             State#state.begin_offset,
-                             State#state.max_wait_time,
-                             State#state.min_bytes,
-                             State#state.max_bytes
-                            ),
+    kpro:fetch_request(State#state.topic,
+                       State#state.partition,
+                       State#state.begin_offset,
+                       State#state.max_wait_time,
+                       State#state.min_bytes,
+                       State#state.max_bytes
+                       ),
   brod_sock:send(SocketPid, Request).
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
@@ -455,7 +458,7 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
   end.
 
 fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
-  Request = brod_kafka:offset_request(Topic, Partition, InitialOffset,
+  Request = kpro:offset_request(Topic, Partition, InitialOffset,
                                       _MaxNoOffsets = 1),
   {ok, Response} = brod_sock:send_sync(SocketPid, Request, 5000),
   #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,

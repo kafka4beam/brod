@@ -37,7 +37,6 @@
         ]).
 
 -include("brod_int.hrl").
--include("brod_kafka.hrl").
 
 %% default number of messages in buffer before block callers
 -define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
@@ -178,8 +177,8 @@ init({ClientPid, Topic, Partition, Config}) ->
     fun(SockPid, KafkaKvList) ->
         Messages =
           lists:map(fun({K, V}) ->
-                      #kpro_Message{ magicByte  = ?MAGIC_BYTE
-                                   , attributes = ?COMPRESS_NONE
+                      #kpro_Message{ magicByte  = ?KPRO_MAGIC_BYTE
+                                   , attributes = ?KPRO_COMPRESS_NONE
                                    , key        = K
                                    , value      = V
                                    }

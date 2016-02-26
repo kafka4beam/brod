@@ -23,7 +23,7 @@
 -module(brod_utils).
 
 %% Exports
--export([ find_leader_in_metadata/4
+-export([ find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
         , try_connect/1
@@ -78,14 +78,23 @@ shutdown_pid(Pid) ->
 
 %% @doc Find leader broker ID for the given topic-partiton in
 %% the metadata response received from socket.
-%% The first argument is used for debugging, can be anything to
-%% help identify the socket connection context, e.g. client ID
-%% or broker endpoint from where the metata response was received.
 %% @end
--spec find_leader_in_metadata(any(), kpro_MetadataResponse(),
-                              topic(), partition()) ->
-        endpoint() | no_return().
-find_leader_in_metadata(ConCtx, Metadata, Topic, Partition) ->
+-spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
+        {ok, endpoint()} | {error, any()}.
+find_leader_in_metadata(Metadata, Topic, Partition) ->
+  try
+    {ok, do_find_leader_in_metadata(Metadata, Topic, Partition)}
+  catch throw : Reason ->
+    {error, Reason}
+  end.
+
+
+%%%_* Internal Functions =======================================================
+
+-spec do_find_leader_in_metadata(kpro_MetadataResponse(),
+                                 topic(), partition()) ->
+                                    endpoint() | no_return().
+do_find_leader_in_metadata(Metadata, Topic, Partition) ->
   #kpro_MetadataResponse{ broker_L        = Brokers
                         , topicMetadata_L = [TopicMetadata]
                         } = Metadata,
@@ -93,16 +102,14 @@ find_leader_in_metadata(ConCtx, Metadata, Topic, Partition) ->
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
   kpro_ErrorCode:is_error(TopicEC) andalso
-    erlang:error({TopicEC, kpro_ErrorCode:desc(TopicEC), ConCtx}),
+    erlang:throw({TopicEC, kpro_ErrorCode:desc(TopicEC)}),
   #kpro_PartitionMetadata{leader = Id} =
     lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
-  Id >= 0 orelse erlang:error({no_leader, {Topic, Partition, ConCtx}}),
+  Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),
   Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
   Host = Broker#kpro_Broker.host,
   Port = Broker#kpro_Broker.port,
   {binary_to_list(Host), Port}.
-
-%%%_* Internal Functions =======================================================
 
 %%%_* Tests ====================================================================
 

@@ -20,11 +20,6 @@
 -include("brod.hrl").
 -include_lib("kafka_protocol/include/kpro.hrl").
 
--type topic()     :: kafka_topic().
--type partition() :: kafka_partition().
--type offset()    :: kafka_offset().
--type client_id() :: brod_client_id().
-
 -type consumer_option() :: begin_offset
                          | min_bytes
                          | max_bytes
@@ -37,7 +32,6 @@
 -type endpoint()         :: {hostname(), portnum()}.
 -type cluster_id()       :: atom().
 -type leader_id()        :: non_neg_integer().
--type corr_id()          :: 0..?MAX_CORR_ID.
 -type kafka_kv()         :: {binary(), binary()}.
 -type client_config()    :: brod_client_config().
 -type producer_config()  :: brod_producer_config().

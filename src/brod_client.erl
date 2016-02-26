@@ -136,9 +136,10 @@ stop(Client) ->
 get_leader_connection(Client, Topic, Partition) ->
   case get_metadata(Client, Topic) of
     {ok, Metadata} ->
-      {Host, Port} =
-        brod_utils:find_leader_in_metadata(Client, Metadata, Topic, Partition),
-      get_connection(Client, Host, Port);
+      case brod_utils:find_leader_in_metadata(Metadata, Topic, Partition) of
+        {ok, {Host, Port}} -> get_connection(Client, Host, Port);
+        {error, Reason}    -> {error, Reason}
+      end;
     {error, Reason} ->
       {error, Reason}
   end.
