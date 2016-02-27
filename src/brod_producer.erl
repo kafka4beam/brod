@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -175,12 +175,9 @@ init({ClientPid, Topic, Partition, Config}) ->
 
   SendFun =
     fun(SockPid, KafkaKvList) ->
-        Data = [{Topic, [{Partition, KafkaKvList}]}],
-        KafkaReq = #produce_request{ acks    = RequiredAcks
-                                   , timeout = AckTimeout
-                                   , data    = Data
-                                   },
-        case sock_send(SockPid, KafkaReq) of
+        ProduceRequest = kpro:produce_request(Topic, Partition, KafkaKvList,
+                                              RequiredAcks, AckTimeout),
+        case sock_send(SockPid, ProduceRequest) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
           {error, Reason} -> {error, Reason}
@@ -217,22 +214,24 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {ok, NewState} = schedule_retry(State, Reason),
   {noreply, NewState#state{sock_pid = undefined}};
-handle_info({msg, Pid, CorrId, #produce_response{} = R},
+handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
                   } = State) ->
-  #produce_response{topics = [ProduceTopic]} = R,
-  #produce_topic{topic = Topic, offsets = [ProduceOffset]} = ProduceTopic,
-  #produce_offset{ partition  = Partition
-                 , error_code = ErrorCode
-                 , offset     = Offset
-                 } = ProduceOffset,
+  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
+  #kpro_ProduceResponseTopic{ topicName                  = Topic
+                            , produceResponsePartition_L = [ProduceOffset]
+                            } = ProduceTopic,
+  #kpro_ProduceResponsePartition{ partition  = Partition
+                                , errorCode = ErrorCode
+                                , offset     = Offset
+                                } = ProduceOffset,
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
   {ok, NewState} =
-    case brod_kafka:is_error(ErrorCode) of
+    case kpro_ErrorCode:is_error(ErrorCode) of
       true ->
-        ErrorDesc = brod_kafka_errors:desc(ErrorCode),
+        ErrorDesc = kpro_ErrorCode:desc(ErrorCode),
         error_logger:error_msg(
           "Error in produce response\n"
           "Topic: ~s\n"

@@ -23,7 +23,8 @@
 -module(brod_utils).
 
 %% Exports
--export([ get_metadata/1
+-export([ find_leader_in_metadata/3
+        , get_metadata/1
         , get_metadata/2
         , try_connect/1
         , is_normal_reason/1
@@ -41,7 +42,7 @@ get_metadata(Hosts) ->
 
 get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
-  Request = #metadata_request{topics = Topics},
+  Request = #kpro_MetadataRequest{topicName_L = Topics},
   Response = brod_sock:send_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
@@ -75,7 +76,40 @@ shutdown_pid(Pid) ->
     false -> ok
   end.
 
+%% @doc Find leader broker ID for the given topic-partiton in
+%% the metadata response received from socket.
+%% @end
+-spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
+        {ok, endpoint()} | {error, any()}.
+find_leader_in_metadata(Metadata, Topic, Partition) ->
+  try
+    {ok, do_find_leader_in_metadata(Metadata, Topic, Partition)}
+  catch throw : Reason ->
+    {error, Reason}
+  end.
+
+
 %%%_* Internal Functions =======================================================
+
+-spec do_find_leader_in_metadata(kpro_MetadataResponse(),
+                                 topic(), partition()) ->
+                                    endpoint() | no_return().
+do_find_leader_in_metadata(Metadata, Topic, Partition) ->
+  #kpro_MetadataResponse{ broker_L        = Brokers
+                        , topicMetadata_L = [TopicMetadata]
+                        } = Metadata,
+  #kpro_TopicMetadata{ errorCode           = TopicEC
+                     , partitionMetadata_L = Partitions
+                     } = TopicMetadata,
+  kpro_ErrorCode:is_error(TopicEC) andalso
+    erlang:throw({TopicEC, kpro_ErrorCode:desc(TopicEC)}),
+  #kpro_PartitionMetadata{leader = Id} =
+    lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
+  Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),
+  Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
+  Host = Broker#kpro_Broker.host,
+  Port = Broker#kpro_Broker.port,
+  {binary_to_list(Host), Port}.
 
 %%%_* Tests ====================================================================
 
