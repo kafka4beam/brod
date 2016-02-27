@@ -137,12 +137,15 @@ t_metadata_socket_restart(Config) when is_list(Config) ->
   ?assert(is_process_alive(ClientPid)),
   ?assert(is_process_alive(SocketPid)),
   %% kill the brod_sock pid
+  MRef = erlang:monitor(process, SocketPid),
   exit(SocketPid, kill),
-  %% expect the socket pid get restarted rightaway
+  ?WAIT({'DOWN', MRef, process, SocketPid, Reason_}, Reason_, 5000),
+  %% query metadata to trigger reconnect
+  {ok, _} = brod_client:get_metadata(ClientPid, ?TOPIC),
+  %% expect the socket pid get restarted
   SocketPid2 = ?WAIT({socket_started, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
   ?assert(is_process_alive(SocketPid2)),
-  brod_client:get_metadata(ClientPid, ?TOPIC),
   ok.
 
 t_payload_socket_restart({init, Config}) ->
