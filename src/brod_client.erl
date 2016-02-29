@@ -468,7 +468,7 @@ validate_topic_existence(Topic0, #state{config = Config} = State) ->
       #kpro_MetadataResponse{topicMetadata_L = Topics} = Response,
       case lists:keyfind(Topic0, #kpro_TopicMetadata.topicName, Topics) of
         #kpro_TopicMetadata{} -> {ok, NewState};
-        false                 -> {error, topic_not_found}
+        false                 -> {{error, topic_not_found}, NewState}
       end;
     {{error, Reason}, NewState} ->
       {{error, Reason}, NewState}
