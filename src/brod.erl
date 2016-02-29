@@ -121,7 +121,7 @@ start_link_client(BootstrapEndpoints, ClientId) ->
 %%       is set in borker configuration.
 %%       However if 'allow_topic_auto_creation' is set to 'false' in client
 %%       config, brod will avoid sending metadata requests that may cause an
-%%       auto-creation of the topic regard less of what the broker config is.
+%%       auto-creation of the topic regardless of what the broker config is.
 %% @end
 -spec start_link_client([endpoint()], client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
