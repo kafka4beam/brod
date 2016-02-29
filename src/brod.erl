@@ -89,19 +89,19 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
-%% @equiv stat_link_client(Endpoints, brod_default_client)
+%% @equiv stat_link_client(BootstrapEndpoints, brod_default_client)
 -spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
-start_link_client(Endpoints) ->
-  start_link_client(Endpoints, ?BROD_DEFAULT_CLIENT_ID).
+start_link_client(BootstrapEndpoints) ->
+  start_link_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
-%% @equiv stat_link_client(Endpoints, ClientId, [])
+%% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
 -spec start_link_client([endpoint()], client_id()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, ClientId) ->
-  start_link_client(Endpoints, ClientId, []).
+start_link_client(BootstrapEndpoints, ClientId) ->
+  start_link_client(BootstrapEndpoints, ClientId, []).
 
 %5 @doc Start a client.
-%% Endpoints:
+%% BootstrapEndpoints:
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster
 %%   which does not necessarily have to be a leader of any partition,
 %%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
@@ -115,11 +115,18 @@ start_link_client(Endpoints, ClientId) ->
 %%     reconnect_cool_down_seconds(optional, default=1)
 %%       Delay this configured number of seconds before retrying to
 %%       estabilish a new connection to the kafka partition leader.
-% @end
+%%     allow_topic_auto_creation(optional, default=true)
+%%       By default, brod respects what is configured in broker about
+%%       topic auto-creation. i.e. whatever auto.create.topics.enable
+%%       is set in borker configuration.
+%%       However if 'allow_topic_auto_creation' is set to 'false' in client
+%%       config, brod will avoid sending metadata requests that may cause an
+%%       auto-creation of the topic regard less of what the broker config is.
+%% @end
 -spec start_link_client([endpoint()], client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, ClientId, Config) ->
-  brod_client:start_link(Endpoints, ClientId, Config).
+start_link_client(BootstrapEndpoints, ClientId, Config) ->
+  brod_client:start_link(BootstrapEndpoints, ClientId, Config).
 
 %% @doc Stop a client.
 -spec stop_client(client()) -> ok.

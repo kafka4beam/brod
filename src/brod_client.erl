@@ -453,16 +453,15 @@ do_get_partitions(#kpro_TopicMetadata{ errorCode           = TopicEC
 -spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
         when Result :: ok | {error, any()}.
 validate_topic_existence(Topic0, #state{config = Config} = State) ->
-  %% by default, brod respects what is configured in broker about
-  %% topic auto-creation. i.e. whatever auto.create.topics.enable
-  %% is set in borker configuration.
-  %% however if 'allow_topic_auto_creation' is set to false in client
-  %% config, brod will avoid sending metadata requests that may cause an
-  %% auto-creation of the topic.
+  %% if allow_topic_auto_creation is set 'false', do not try to fetch
+  %% metadata per topic name, fetch all topics instead. As sending
+  %% metadata request with topic name will cause an auto creation of
+  %% the topic in broker if auto.create.topics.enable is set to truei
+  %% in broker config.
   Topic =
     case proplists:get_value(allow_topic_auto_creation, Config, true) of
       true  -> Topic0;
-      false -> ?undef %% ?undef means fetch all topics
+      false -> ?undef
     end,
   case do_get_metadata(Topic, State) of
     {{ok, Response}, NewState} ->
