@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 Klarna AB
+%%%   Copyright (c) 2015-2016 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2015 Klarna AB
+%%% @copyright 2015-2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -30,8 +30,11 @@
         , get_producer/3
         , register_consumer/3
         , register_producer/3
-        , start_link/4
+        , start_link/2
+        , start_link/3
         , start_link/5
+        , start_producer/3
+        , start_consumer/3
         , stop/1
         ]).
 
@@ -89,39 +92,56 @@
         }).
 
 -record(state,
-        { client_id     :: client_id()
-        , endpoints     :: [endpoint()]
-        , meta_sock     :: pid()
-        , sockets = []  :: [#sock{}]
-        , producers_sup :: pid() | undefined
-        , consumers_sup :: pid() | undefined
-        , config        :: client_config()
-        , workers_tab   :: ets:tab()
+        { client_id            :: client_id()
+        , bootstrap_endpoints  :: [endpoint()]
+        , meta_sock_pid        :: pid()
+        , payload_sockets = [] :: [#sock{}]
+        , producers_sup        :: pid()
+        , consumers_sup        :: pid()
+        , config               :: client_config()
+        , workers_tab          :: ets:tab()
         }).
 
 %%%_* APIs =====================================================================
 
--spec start_link( client_id()
-                , [endpoint()]
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]
+-spec start_link( [endpoint()]
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(ClientId, Endpoints, Producers, Consumers, Config)
-  when is_atom(ClientId) ->
-  Args = {ClientId, Endpoints, Producers, Consumers, Config},
-  gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
+start_link(BootstrapEndpoints, Config) ->
+  Args = {BootstrapEndpoints, Config, [], []},
+  gen_server:start_link(?MODULE, Args, []).
 
 -spec start_link( [endpoint()]
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]
+                , client_id()
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(Endpoints, Producers, Consumers, Config) ->
-  Args = {Endpoints, Producers, Consumers, Config},
-  gen_server:start_link(?MODULE, Args, []).
+start_link(BootstrapEndpoints, ClientId, Config) ->
+  start_link(BootstrapEndpoints, ClientId, Config, [], []).
+
+-spec start_link( [endpoint()]
+                , client_id()
+                , client_config()
+                , [{topic(), producer_config()}]
+                , [{topic(), consumer_config()}]) ->
+                    {ok, pid()} | {error, any()}.
+start_link(BootstrapEndpoints, ClientId, Config, Producers, Consumers)
+  when is_atom(ClientId) ->
+  Args = {BootstrapEndpoints, ClientId, Config, Producers, Consumers},
+  gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
+
+%% @doc Dynamically start a per-topic producer
+-spec start_producer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_producer(Client, TopicName, ProducerConfig) ->
+  gen_server:call(Client, {start_producer, TopicName, ProducerConfig}).
+
+%% @doc Dynamically start a per-topic consumer
+-spec start_consumer(client(), topic(), consumer_config()) ->
+                        ok | {error, any()}.
+start_consumer(Client, TopicName, ConsumerConfig) ->
+  gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig}).
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -144,12 +164,14 @@ get_leader_connection(Client, Topic, Partition) ->
       {error, Reason}
   end.
 
--spec get_metadata(client(), topic()) -> {ok, kpro_MetadataResponse()}.
+%% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
+-spec get_metadata(client(), ?undef | topic()) -> {ok, kpro_MetadataResponse()}.
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
 %% @doc Get all partition numbers of a given topic.
--spec get_partitions(client(), topic()) -> {ok, [partition()]} | {error, any()}.
+-spec get_partitions(client(), topic()) ->
+        {ok, [partition()]} | {error, any()}.
 get_partitions(Client, Topic) ->
   case get_metadata(Client, Topic) of
     {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
@@ -197,35 +219,37 @@ get_consumer(Client, Topic, Partition) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({ClientId, Endpoints, Producers, Consumers, Config}) ->
+init({BootstrapEndpoints, ClientId, Config, Producers, Consumers}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id   = ClientId
-             , endpoints   = Endpoints
-             , config      = Config
-             , workers_tab = Tab
+  {ok, #state{ client_id           = ClientId
+             , bootstrap_endpoints = BootstrapEndpoints
+             , config              = Config
+             , workers_tab         = Tab
              }};
-init({Endpoints, Producers, Consumers, Config}) ->
+init({BootstrapEndpoints, Config, Producers, Consumers}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
   self() ! {init, Producers, Consumers},
-  {ok, #state{ client_id   = ?DEFAULT_CLIENT_ID
-             , endpoints   = Endpoints
-             , config      = Config
-             , workers_tab = Tab
+  {ok, #state{ client_id           = ?DEFAULT_CLIENT_ID
+             , bootstrap_endpoints = BootstrapEndpoints
+             , config              = Config
+             , workers_tab         = Tab
              }}.
 
 handle_info({init, Producers, Consumers}, State) ->
   ClientId = State#state.client_id,
-  Endpoints = State#state.endpoints,
-  Sock = start_metadata_socket(ClientId, Endpoints),
-  {ok, ProducersSupPid} = maybe_start_producers_sup(Producers),
-  {ok, ConsumersSupPid} = maybe_start_consumers_sup(Consumers),
-  {noreply, State#state{ meta_sock     = Sock
-                       , producers_sup = ProducersSupPid
-                       , consumers_sup = ConsumersSupPid
+  Endpoints = State#state.bootstrap_endpoints,
+  {ok, MetaSock, ReorderedEndpoints} =
+    start_metadata_socket(ClientId, Endpoints),
+  {ok, ProducersSupPid} = brod_producers_sup:start_link(self(), Producers),
+  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(self(), Consumers),
+  {noreply, State#state{ bootstrap_endpoints = ReorderedEndpoints
+                       , meta_sock_pid       = MetaSock
+                       , producers_sup       = ProducersSupPid
+                       , consumers_sup       = ConsumersSupPid
                        }};
 
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
@@ -233,25 +257,28 @@ handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          } = State) ->
   error_logger:error_msg("client ~p producers supervisor down~nReason: ~p",
                          [ClientId, Pid, Reason]),
-  %% shutdown all producers?
-  {noreply, State#state{producers_sup = ?undef}};
+  {stop, {producers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , consumers_sup = Pid
                                          } = State) ->
   error_logger:error_msg("client ~p consumers supervisor down~nReason: ~p",
                          [ClientId, Pid, Reason]),
-  {noreply, State#state{consumers_sup = ?undef}};
+  {stop, {consumers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason},
-            #state{ client_id = ClientId
-                  , meta_sock = #sock{ sock_pid = Pid
-                                     , endpoint = {Host, Port}
-                                     }
-                  , endpoints = Endpoints
+            #state{ client_id           = ClientId
+                  , meta_sock_pid       = Pid
+                  , bootstrap_endpoints = BootstrapEndpoints0
                   } = State) ->
-  error_logger:info_msg("client ~p metadata socket down ~s:~p~nReason:~p",
+  [{Host, Port} | Rest] = BootstrapEndpoints0,
+  error_logger:error_msg("client ~p metadata socket down ~s:~p~nReason:~p",
                         [ClientId, Host, Port, Reason]),
-  NewSock = start_metadata_socket(ClientId, Endpoints),
-  {noreply, State#state{meta_sock = NewSock}};
+  %% move the newly failed endpoint to the last in the list
+  BootstrapEndpoints = Rest ++ [{Host, Port}],
+  NewState =
+    State#state{ meta_sock_pid       = ?dead_since(os:timestamp(), Reason)
+               , bootstrap_endpoints = BootstrapEndpoints
+               },
+  {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, State) ->
   {ok, NewState} = handle_socket_down(State, Pid, Reason),
   {noreply, NewState};
@@ -260,6 +287,32 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
+  {Result, NewState} = validate_topic_existence(TopicName, State),
+  try
+    Result =:= ok orelse throw(Result),
+    SupPid = State#state.producers_sup,
+    case brod_producers_sup:start_producer(SupPid, self(),
+                                           TopicName, ProducerConfig) of
+      {ok, _} -> {reply, ok, NewState};
+      Error   -> throw(Error)
+    end
+  catch throw:E ->
+      {reply, E, NewState}
+  end;
+handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
+  {Result, NewState} = validate_topic_existence(TopicName, State),
+  try
+    Result =:= ok orelse throw(Result),
+    SupPid = State#state.consumers_sup,
+    case brod_consumers_sup:start_consumer(SupPid, self(),
+                                           TopicName, ConsumerConfig) of
+      {ok, _} -> {reply, ok, NewState};
+      Error   -> throw(Error)
+    end
+  catch throw:E ->
+      {reply, E, NewState}
+  end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
 handle_call(get_producers_sup_pid, _From, State) ->
@@ -267,8 +320,8 @@ handle_call(get_producers_sup_pid, _From, State) ->
 handle_call(get_consumers_sup_pid, _From, State) ->
   {reply, State#state.consumers_sup, State};
 handle_call({get_metadata, Topic}, _From, State) ->
-  Result = do_get_metadata(Topic, State),
-  {reply, Result, State};
+  {Result, NewState} = do_get_metadata(Topic, State),
+  {reply, Result, NewState};
 handle_call({get_connection, Host, Port}, _From, State) ->
   {NewState, Result} = do_get_connection(State, Host, Port),
   {reply, Result, NewState};
@@ -288,11 +341,11 @@ handle_cast(Cast, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-terminate(Reason, #state{ client_id     = ClientId
-                        , meta_sock     = MetaSock
-                        , sockets       = Sockets
-                        , producers_sup = ProducersSup
-                        , consumers_sup = ConsumersSup
+terminate(Reason, #state{ client_id       = ClientId
+                        , meta_sock_pid   = MetaSock
+                        , payload_sockets = Sockets
+                        , producers_sup   = ProducersSup
+                        , consumers_sup   = ConsumersSup
                         }) ->
   case brod_utils:is_normal_reason(Reason) of
     true ->
@@ -304,10 +357,9 @@ terminate(Reason, #state{ client_id     = ClientId
   %% stop producers and consumers first because they are monitoring socket pids
   brod_utils:shutdown_pid(ProducersSup),
   brod_utils:shutdown_pid(ConsumersSup),
+  brod_utils:shutdown_pid(MetaSock),
   lists:foreach(
-    fun(?undef) -> ok;
-       (#sock{sock_pid = Pid}) -> brod_utils:shutdown_pid(Pid)
-    end, [MetaSock | Sockets]).
+    fun(#sock{sock_pid = Pid}) -> brod_utils:shutdown_pid(Pid) end, Sockets).
 
 %%%_* Internal Functions =======================================================
 
@@ -398,15 +450,44 @@ do_get_partitions(#kpro_TopicMetadata{ errorCode           = TopicEC
               Partition
             end, Partitions).
 
--spec do_get_metadata(topic(), #state{}) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
-do_get_metadata(Topic, #state{ meta_sock = #sock{sock_pid = SockPid}
-                             , config    = Config
-                             }) ->
-  Request = #kpro_MetadataRequest{topicName_L = [Topic]},
+-spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
+        when Result :: ok | {error, any()}.
+validate_topic_existence(Topic0, #state{config = Config} = State) ->
+  %% if allow_topic_auto_creation is set 'false', do not try to fetch
+  %% metadata per topic name, fetch all topics instead. As sending
+  %% metadata request with topic name will cause an auto creation of
+  %% the topic in broker if auto.create.topics.enable is set to true
+  %% in broker config.
+  Topic =
+    case proplists:get_value(allow_topic_auto_creation, Config, true) of
+      true  -> Topic0;
+      false -> ?undef
+    end,
+  case do_get_metadata(Topic, State) of
+    {{ok, Response}, NewState} ->
+      #kpro_MetadataResponse{topicMetadata_L = Topics} = Response,
+      case lists:keyfind(Topic0, #kpro_TopicMetadata.topicName, Topics) of
+        #kpro_TopicMetadata{} -> {ok, NewState};
+        false                 -> {{error, topic_not_found}, NewState}
+      end;
+    {{error, Reason}, NewState} ->
+      {{error, Reason}, NewState}
+  end.
+
+-spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
+        when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
+do_get_metadata(Topic, #state{config = Config} = State) ->
+  {ok, NewState} = maybe_restart_metadata_socket(State),
+  Topics = case Topic of
+             ?undef -> []; %% in case no topic is given, get all
+             _      -> [Topic]
+           end,
+  Request = #kpro_MetadataRequest{topicName_L = Topics},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)).
+  SockPid = NewState#state.meta_sock_pid,
+  Result = brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)),
+  {Result, NewState}.
 
 -spec do_get_connection(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
@@ -417,6 +498,7 @@ do_get_connection(#state{} = State, Host, Port) ->
     {error, Reason} ->
       maybe_connect(State, Host, Port, Reason)
   end.
+
 
 -spec maybe_connect(#state{}, hostname(), portnum(), Reason) ->
         {#state{}, Result} when
@@ -439,24 +521,26 @@ maybe_connect(#state{client_id = ClientId} = State,
 
 -spec connect(#state{}, hostname(), portnum()) -> {#state{}, Result}
         when Result :: {ok, pid()} | {error, any()}.
-connect(#state{ client_id = ClientId
-              , sockets   = Sockets
+connect(#state{ client_id       = ClientId
+              , payload_sockets = Sockets
               } = State, Host, Port) ->
+  Endpoint = {Host, Port},
   case brod_sock:start_link(self(), Host, Port, ClientId, []) of
     {ok, Pid} ->
-      S = #sock{ endpoint = {Host, Port}
+      S = #sock{ endpoint = Endpoint
                , sock_pid = Pid
                },
       error_logger:info_msg("client ~p connected to ~s:~p~n",
                             [ClientId, Host, Port]),
-      NewSockets = lists:keystore({Host, Port}, #sock.endpoint, Sockets, S),
-      {State#state{sockets = NewSockets}, {ok, Pid}};
+      NewSockets = lists:keystore(Endpoint, #sock.endpoint, Sockets, S),
+      {State#state{payload_sockets = NewSockets}, {ok, Pid}};
     {error, Reason} ->
       error_logger:error_msg("client ~p failed to connect to ~s:~p~n"
                              "reason:~p",
                              [ClientId, Host, Port, Reason]),
-      {ok, NewState} = mark_socket_dead(State, {Host, Port}, Reason),
-      {NewState, {error, Reason}}
+      {ok, Sock} = mark_socket_dead(#sock{endpoint = Endpoint}, Reason),
+      NewSockets = lists:keystore(Endpoint, #sock.endpoint, Sockets, Sock),
+      {State#state{payload_sockets = NewSockets}, {error, Reason}}
   end.
 
 %% @private Handle socket pid EXIT event, keep the timestamp.
@@ -465,30 +549,33 @@ connect(#state{ client_id = ClientId
 %% it is cooled down.
 %% @end
 -spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
-handle_socket_down(#state{ client_id = ClientId
-                         , sockets   = Sockets
+handle_socket_down(#state{ client_id       = ClientId
+                         , payload_sockets = Sockets
                          } = State, Pid, Reason) ->
   case lists:keyfind(Pid, #sock.sock_pid, Sockets) of
-    #sock{endpoint = {Host, Port} = Endpoint}  ->
+    #sock{endpoint = {Host, Port} = Endpoint} = Socket ->
       error_logger:info_msg("client ~p: payload socket down ~s:~p~n"
                             "reason:~p",
                             [ClientId, Host, Port, Reason]),
-      mark_socket_dead(State, Endpoint, Reason)
+      {ok, NewSocket} = mark_socket_dead(Socket, Reason),
+      NewSockets = lists:keystore(Endpoint, #sock.endpoint, Sockets, NewSocket),
+      {ok, State#state{payload_sockets = NewSockets}};
+    false ->
+      %% is_process_alive is checked and reconnect is done for metadata
+      %% socket in maybe_restart_metadata_socket, hence the 'EXIT' message
+      %% of old metadata socket pid may end up in this clause, simply ignore
+      {ok, State}
   end.
 
--spec mark_socket_dead(#state{}, endpoint(), any()) -> {ok, #state{}}.
-mark_socket_dead(#state{sockets = Sockets} = State, Endpoint, Reason) ->
-  Conn = #sock{ endpoint = Endpoint
-              , sock_pid = ?dead_since(os:timestamp(), Reason)
-              },
-  NewSockets = lists:keystore(Endpoint, #sock.endpoint, Sockets, Conn),
-  {ok, State#state{sockets = NewSockets}}.
+-spec mark_socket_dead(#sock{}, any()) -> {ok, #sock{}}.
+mark_socket_dead(Socket, Reason) ->
+  {ok, Socket#sock{sock_pid = ?dead_since(os:timestamp(), Reason)}}.
 
 -spec find_socket(#state{}, hostname(), portnum()) ->
         {ok, pid()} %% normal case
       | {error, not_found} %% first call
       | {error, dead_socket()}.
-find_socket(#state{sockets = Sockets}, Host, Port) ->
+find_socket(#state{payload_sockets = Sockets}, Host, Port) ->
   case lists:keyfind({Host, Port}, #sock.endpoint, Sockets) of
     #sock{sock_pid = Pid} when is_pid(Pid)         -> {ok, Pid};
     #sock{sock_pid = ?dead_since(_, _) = NotAlive} -> {error, NotAlive};
@@ -503,38 +590,52 @@ is_cooled_down(Ts, #state{config = Config}) ->
   Diff = timer:now_diff(Now, Ts) div 1000000,
   Diff >= Threshold.
 
-%% @private Establish a dedicated socket to kafka cluster endpoint(s) for
-%%          metadata retrievals.
+%% @private Maybe restart the metadata socket pid if it is no longer alive.
+-spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}} | no_return().
+maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
+  case is_pid(MetaSockPid) andalso is_process_alive(MetaSockPid) of
+    true ->
+      {ok, State};
+    false -> % can happen when metadata connection closed
+      ClientId = State#state.client_id,
+      Endpoints = State#state.bootstrap_endpoints,
+      {ok, NewMetaSockPid, ReorderedEndpoints} =
+        start_metadata_socket(ClientId, Endpoints),
+      {ok, State#state{ bootstrap_endpoints = ReorderedEndpoints
+                      , meta_sock_pid       = NewMetaSockPid
+                      }}
+  end.
+
+%% @private Establish a dedicated socket to kafka cluster bootstrap endpoint(s)
+%% for metadata retrievals. Failed endpoints are moved to the end of the list
+%% so that future retries will start from one that has not tried yet, or the
+%% one failed longest ago.
+%%
 %% NOTE: This socket is not intended for kafka payload. This is to avoid
 %%       burst of connection usage when many partition producers (re)start
 %%       at same time, if we use brod_util:get_metadata/2 to fetch metadata.
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
--spec start_metadata_socket(client_id(), [endpoint()]) -> pid() | no_return().
+-spec start_metadata_socket(client_id(), [endpoint()]) ->
+                               {ok, pid(),  [endpoint()]} | no_return().
 start_metadata_socket(ClientId, [_|_] = Endpoints) ->
-  start_metadata_socket(ClientId, Endpoints, ?undef).
+  start_metadata_socket(ClientId, Endpoints,
+                        _FailedEndpoints = [], _Reason = ?undef).
 
-start_metadata_socket(_ClientId, [], Reason) ->
+start_metadata_socket(_ClientId, [], _FailedEndpoints, Reason) ->
   erlang:error(Reason);
-start_metadata_socket(ClientId, [Endpoint | Endpoints], _Reason) ->
+start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints,
+                      FailedEndpoints, _Reason) ->
   {Host, Port} = Endpoint,
   case brod_sock:start_link(self(), Host, Port, ClientId, []) of
-    {ok, Pid}       -> #sock{ endpoint = Endpoint
-                            , sock_pid = Pid
-                            };
-    {error, Reason} -> start_metadata_socket(ClientId, Endpoints, Reason)
+    {ok, Pid} ->
+      ReorderedEndpoints = Endpoints ++ lists:reverse(FailedEndpoints),
+      {ok, Pid, ReorderedEndpoints};
+    {error, Reason} ->
+      start_metadata_socket(ClientId, Rest,
+                            [Endpoint | FailedEndpoints], Reason)
   end.
-
-maybe_start_producers_sup([]) ->
-  {ok, undefined};
-maybe_start_producers_sup(Producers) ->
-  brod_producers_sup:start_link(self(), Producers).
-
-maybe_start_consumers_sup([]) ->
-  {ok, undefined};
-maybe_start_consumers_sup(Consumers) ->
-  brod_consumers_sup:start_link(self(), Consumers).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

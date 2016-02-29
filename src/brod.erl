@@ -32,8 +32,11 @@
 
 %% Client API
 -export([ get_partitions/2
+        , start_link_client/1
+        , start_link_client/2
         , start_link_client/3
-        , start_link_client/5
+        , start_consumer/3
+        , start_producer/3
         , stop_client/1
         ]).
 
@@ -86,31 +89,24 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
-%% @doc Simple version of start_link_client/4.
-%% Deafult client ID and default configs are used.
-%% For more details: @see start_link_client/4
-%% @end
--spec start_link_client( [endpoint()]
-                       , [{topic(), producer_config()}]
-                       , [{topic(), consumer_config()}]) ->
+%% @equiv stat_link_client(BootstrapEndpoints, brod_default_client)
+-spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
+start_link_client(BootstrapEndpoints) ->
+  start_link_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
+
+%% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
+-spec start_link_client([endpoint()], client_id()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(Endpoints, Producers, Consumers) ->
-  start_link_client(?BROD_DEFAULT_CLIENT_ID, Endpoints,
-                    Producers, Consumers, _Config = []).
+start_link_client(BootstrapEndpoints, ClientId) ->
+  start_link_client(BootstrapEndpoints, ClientId, []).
 
 %5 @doc Start a client.
-%% ClientId:
-%%   Atom to identify the client process
-%% Endpoints:
+%% BootstrapEndpoints:
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster
 %%   which does not necessarily have to be a leader of any partition,
 %%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
-%% Producers:
-%%   A list of {Topic, ProducerConfig} where ProducerConfig is a
-%%   proplist, @see brod_producers_sup:start_link/2 for more details
-%% Consumers:
-%%   A list of {Topic, ConsumerConfig} where ConsumerConfig is a
-%%   proplist, @see brod_consumers_sup:start_link/2 for more details
+%% ClientId:
+%%   Atom to identify the client process
 %% Config:
 %%   Proplist, possible values:
 %%     get_metadata_timout_seconds(optional, default=5)
@@ -119,20 +115,35 @@ start_link_client(Endpoints, Producers, Consumers) ->
 %%     reconnect_cool_down_seconds(optional, default=1)
 %%       Delay this configured number of seconds before retrying to
 %%       estabilish a new connection to the kafka partition leader.
-% @end
--spec start_link_client( client_id()
-                       , [endpoint()]
-                       , [{topic(), producer_config()}]
-                       , [{topic(), consumer_config()}]
-                       , client_config()) ->
+%%     allow_topic_auto_creation(optional, default=true)
+%%       By default, brod respects what is configured in broker about
+%%       topic auto-creation. i.e. whatever auto.create.topics.enable
+%%       is set in borker configuration.
+%%       However if 'allow_topic_auto_creation' is set to 'false' in client
+%%       config, brod will avoid sending metadata requests that may cause an
+%%       auto-creation of the topic regardless of what the broker config is.
+%% @end
+-spec start_link_client([endpoint()], client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
-start_link_client(ClientId, Endpoints, Producers, Consumers, Config) ->
-  brod_client:start_link(ClientId, Endpoints, Producers, Consumers, Config).
+start_link_client(BootstrapEndpoints, ClientId, Config) ->
+  brod_client:start_link(BootstrapEndpoints, ClientId, Config).
 
 %% @doc Stop a client.
 -spec stop_client(client()) -> ok.
 stop_client(Client) ->
   brod_client:stop(Client).
+
+%% @doc Dynamically start a per-topic producer
+-spec start_producer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_producer(Client, TopicName, ProducerConfig) ->
+  brod_client:start_producer(Client, TopicName, ProducerConfig).
+
+%% @doc Dynamically start a topic consumer
+-spec start_consumer(client(), topic(), producer_config()) ->
+                        ok | {error, any()}.
+start_consumer(Client, TopicName, ProducerConfig) ->
+  brod_client:start_consumer(Client, TopicName, ProducerConfig).
 
 %% @doc Get all partition numbers of a given topic.
 %% The higher level producers may need the partition numbers to
@@ -406,9 +417,9 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts, [{Topic, []}], []),
-  {ok, ProducerPid} = brod:get_producer(Client, Topic, Partition),
-  Res = brod:produce_sync(ProducerPid, Key, Value),
+  {ok, Client} = brod:start_link_client(Hosts),
+  ok = brod:start_producer(Client, Topic, []),
+  Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
   brod:stop_client(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->

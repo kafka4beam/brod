@@ -28,6 +28,7 @@
         , post_init/1
         , start_link/2
         , find_consumer/3
+        , start_consumer/4
         ]).
 
 -include("brod_int.hrl").
@@ -50,6 +51,13 @@
 -spec start_link(pid(), [{topic(), consumer_config()}]) -> {ok, pid()}.
 start_link(ClientPid, Consumers) ->
   supervisor3:start_link(?MODULE, {?SUP, ClientPid, Consumers}).
+
+%% @doc Dynamically start a per-topic supervisor
+-spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
+                        {ok, pid()} | {error, any()}.
+start_consumer(SupPid, ClientPid, TopicName, Config) ->
+  Spec = consumers_sup_spec(ClientPid, TopicName, Config),
+  supervisor3:start_child(SupPid, Spec).
 
 %% @doc Find a brod_consumer process pid running under sup2
 %% @end
@@ -88,19 +96,24 @@ post_init({?SUP2, ClientPid, Topic, Config}) ->
   %% in a topic if partitions are not set explicitly
   %% in the config
   %% TODO: make it dynamic when consumer groups API is ready
-  Partitions =
-    case proplists:get_value(partitions, Config, []) of
-      [] ->
-        {ok, List} = brod_client:get_partitions(ClientPid, Topic),
-        List;
-      [_|_] = List ->
-        List
-    end,
-  Children = [ consumer_spec(ClientPid, Topic, Partition, Config)
-             || Partition <- Partitions ],
-  {ok, {{one_for_one, 0, 1}, Children}};
+  case get_partitions(ClientPid, Topic, Config) of
+    {ok, Partitions} ->
+      Children = [ consumer_spec(ClientPid, Topic, Partition, Config)
+                 || Partition <- Partitions ],
+      {ok, {{one_for_one, 0, 1}, Children}};
+    Error ->
+      Error
+  end;
 post_init(_) ->
   ignore.
+
+get_partitions(ClientPid, Topic, Config) ->
+  case proplists:get_value(partitions, Config, []) of
+    [] ->
+      brod_client:get_partitions(ClientPid, Topic);
+    [_|_] = List ->
+      {ok, List}
+  end.
 
 consumers_sup_spec(ClientPid, TopicName, Config0) ->
   DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,

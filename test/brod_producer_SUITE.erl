@@ -72,15 +72,14 @@ init_per_testcase(Case, Config) ->
   Client = Case,
   Topic = ?TOPIC,
   Partition = 0,
-  Producer = {Topic, []},
-  Consumer = {Topic, []},
   case whereis(Client) of
     ?undef -> ok;
     Pid_   -> brod:stop_client(Pid_)
   end,
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(Client, ?HOSTS,
-                                           [Producer], [Consumer], []),
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
+  ok = brod:start_producer(Client, Topic, []),
+  ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
   {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
   [{client, Client}, {client_pid, ClientPid},
