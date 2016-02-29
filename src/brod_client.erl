@@ -456,7 +456,7 @@ validate_topic_existence(Topic0, #state{config = Config} = State) ->
   %% if allow_topic_auto_creation is set 'false', do not try to fetch
   %% metadata per topic name, fetch all topics instead. As sending
   %% metadata request with topic name will cause an auto creation of
-  %% the topic in broker if auto.create.topics.enable is set to truei
+  %% the topic in broker if auto.create.topics.enable is set to true
   %% in broker config.
   Topic =
     case proplists:get_value(allow_topic_auto_creation, Config, true) of
