@@ -62,7 +62,8 @@
         ]).
 
 %% Management and testing API
--export([ get_metadata/1
+-export([ create_consumer_group/2
+        , get_metadata/1
         , get_metadata/2
         , get_offsets/3
         , get_offsets/5
@@ -359,6 +360,14 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
       {ok, Messages}
   end.
 
+-spec create_consumer_group([endpoint()] | client(), consumer_group_id()) ->
+        ok | {error, any()}.
+create_consumer_group(ClientOrEndpoints, GroupId) ->
+  case get_bootstrap_connection(ClientOrEndpoints) of
+    {ok, SockPid}   -> do_create_consumer_group(SockPid, GroupId);
+    {error, Reason} -> {error, Reason}
+  end.
+
 %% escript entry point
 main([]) ->
   show_help();
@@ -477,6 +486,69 @@ connect_leader(Hosts, Topic, Partition) ->
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
+
+-spec get_bootstrap_connection(client() | [endpoint()]) ->
+        {ok, pid()} | {error, any()}.
+get_bootstrap_connection(Client) when is_atom(Client) orelse is_pid(Client) ->
+  brod_client:get_metadata_connection(Client);
+get_bootstrap_connection(Endpoints) when is_list(Endpoints) ->
+  brod_utils:try_connect(Endpoints).
+
+-spec do_create_consumer_group(pid(), consumer_group_id()) ->
+        ok | {error, any()}.
+do_create_consumer_group(SockPid, GroupId) ->
+  case get_group_coordinator(SockPid, GroupId) of
+    {ok, #kpro_GroupCoordinatorResponse{ coordinatorHost = Host
+                                       , coordinatorPort = Port
+                                       }} ->
+      _ = get_group_description({binary_to_list(Host), Port}, GroupId),
+      {ok, SockPid2} = brod_utils:try_connect([{binary_to_list(Host), Port}]),
+      Protocol = #kpro_GroupProtocol{ protocolName     = ?GROUP_PROTOCOL_0
+                                    , protocolMetadata = <<0>>
+                                    },
+      Req = #kpro_JoinGroupRequest{ groupId         = atom_to_list(GroupId)
+                                  , sessionTimeout  = 10000
+                                  , memberId        = ""
+                                  , protocolType    = "consumer"
+                                  , groupProtocol_L = [Protocol]
+                                  },
+      brod_sock:send_sync(SockPid2, Req, 10000);
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+-spec get_group_description(endpoint(), consumer_group_id()) ->
+        {ok, #kpro_GroupDescription{}} | {error, any()}.
+get_group_description(Endpoint, GroupId) ->
+  case brod_utils:try_connect([Endpoint]) of
+    {ok, SockPid}   -> do_get_group_description(SockPid, GroupId);
+    {error, Reason} -> {error, Reason}
+  end.
+
+do_get_group_description(SockPid, GroupId) ->
+  Req = #kpro_DescribeGroupsRequest{groupId_L = [atom_to_list(GroupId)]},
+  case brod_sock:send_sync(SockPid, Req, 10000) of
+    {ok, #kpro_DescribeGroupsResponse{groupDescription_L = [Group]}} ->
+      #kpro_GroupDescription{errorCode = EC} = Group,
+      case kpro_ErrorCode:is_error(EC) of
+        true  -> {error, {EC, kpro_ErrorCode:desc(EC)}};
+        false -> {ok, Group}
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+get_group_coordinator(SockPid, GroupId) ->
+  Req = #kpro_GroupCoordinatorRequest{groupId = atom_to_list(GroupId)},
+  case brod_sock:send_sync(SockPid, Req, 10000) of
+    {ok, #kpro_GroupCoordinatorResponse{errorCode = EC} = Coordinator} ->
+      case kpro_ErrorCode:is_error(EC) of
+        true  -> {error, {EC, kpro_ErrorCode:desc(EC)}};
+        false -> {ok, Coordinator}
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

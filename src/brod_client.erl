@@ -41,6 +41,7 @@
 %% Private export
 -export([ find_producer/3
         , find_consumer/3
+        , get_metadata_connection/1
         ]).
 
 -export([ code_change/3
@@ -137,13 +138,27 @@ stop(Client) ->
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
-  gen_server:call(Client, {start_producer, TopicName, ProducerConfig}).
+  case get_producer(Client, TopicName, _Partition = 0) of
+    {ok, _Pid} ->
+      ok; %% already started
+    {error, {producer_not_found, TopicName}} ->
+      gen_server:call(Client, {start_producer, TopicName, ProducerConfig});
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 %% @doc Dynamically start a per-topic consumer
 -spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
-  gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig}).
+  case get_consumer(Client, TopicName, _Partition = 0) of
+    {ok, _Pid} ->
+      ok; %% already started
+    {error, {producer_not_found, TopicName}} ->
+      gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig});
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -164,6 +179,15 @@ get_leader_connection(Client, Topic, Partition) ->
       end;
     {error, Reason} ->
       {error, Reason}
+  end.
+
+%% @doc Get the metadata socket pid. (intended for internal use only).
+-spec get_metadata_connection(client()) -> {ok, pid()} | {error, client_down}.
+get_metadata_connection(Client) ->
+  try
+    gen_server:call(Client, get_metadata_connection, infinity)
+  catch exit : {noproc, _} ->
+    {error, client_down}
   end.
 
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
@@ -282,6 +306,11 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+
+handle_call(get_metadata_connection, _From, State) ->
+  {ok, NewState} = maybe_restart_metadata_socket(State),
+  #state{meta_sock_pid = Sock} = NewState,
+  {reply, {ok, Sock}, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Result, NewState} = validate_topic_existence(TopicName, State),
   try

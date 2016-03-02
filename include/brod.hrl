@@ -17,10 +17,11 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_topic()      :: binary().
--type kafka_partition()  :: non_neg_integer().
--type kafka_offset()     :: integer().
--type kafka_error_code() :: atom() | integer().
+-type kafka_topic()             :: binary().
+-type kafka_partition()         :: non_neg_integer().
+-type kafka_offset()            :: integer().
+-type kafka_error_code()        :: atom() | integer().
+-type kafka_consumer_group_id() :: atom().
 
 -record(kafka_message,
         { offset     :: kafka_offset()
@@ -31,15 +32,15 @@
         }).
 
 -record(kafka_message_set,
-        { topic          :: topic()
-        , partition      :: partition()
+        { topic          :: kafka_topic()
+        , partition      :: kafka_partition()
         , high_wm_offset :: integer() %% max offset of the partition
         , messages       :: [#kafka_message{}]
         }).
 
 -record(kafka_fetch_error,
-        { topic      :: topic()
-        , partition  :: partition()
+        { topic      :: kafka_topic()
+        , partition  :: kafka_partition()
         , error_code :: error_code()
         , error_desc :: string()
         }).

@@ -27,18 +27,18 @@
                          | sleep_timeout
                          | prefetch_count.
 
--type hostname()         :: string().
--type portnum()          :: pos_integer().
--type endpoint()         :: {hostname(), portnum()}.
--type cluster_id()       :: atom().
--type leader_id()        :: non_neg_integer().
--type kafka_kv()         :: {binary(), binary()}.
--type client_config()    :: brod_client_config().
--type producer_config()  :: brod_producer_config().
--type consumer_config()  :: brod_consumer_config().
--type consumer_options() :: [{consumer_option(), integer()}].
--type client()           :: client_id() | pid().
--type required_acks()    :: -1..1.
+-type hostname()          :: string().
+-type portnum()           :: pos_integer().
+-type endpoint()          :: {hostname(), portnum()}.
+-type leader_id()         :: non_neg_integer().
+-type kafka_kv()          :: {binary(), binary()}.
+-type client_config()     :: brod_client_config().
+-type producer_config()   :: brod_producer_config().
+-type consumer_config()   :: brod_consumer_config().
+-type consumer_options()  :: [{consumer_option(), integer()}].
+-type client()            :: client_id() | pid().
+-type required_acks()     :: -1..1.
+-type consumer_group_id() :: kafka_consumer_group_id().
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
@@ -49,6 +49,7 @@
 -define(undef, undefined).
 
 -define(DEFAULT_CLIENT_ID, brod).
+-define(GROUP_PROTOCOL_0, <<"brod-consumer-protocol-0">>).
 
 -endif. % include brod_int.hrl
 
