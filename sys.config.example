@@ -1,6 +1,13 @@
 %% -*- mode: Erlang; fill-column: 80; -*-
 [{brod,
    [ { clients
+     %% A client manages a set of tcp connections for all producers
+     %% and consumers under its hierarchy.
+     %%
+     %% NOTE: Under one client hierarchy, there should NOT be
+     %%       any topic being consumed by two or more consumers
+     %%       (including group consumers).
+     %%       Start another client otherwise.
      , [ { brod_client_1
          , [ { endpoints, [{"localhost", 9092}]}
            , { config
@@ -21,8 +28,6 @@
                      , {partition_restart_delay_seconds, 2}
                      %% no 'partitions' means 'all partitions'
                      % , {partitions, [1,2,3]}
-                     , {cb_mod, brod_consumer_impl}
-                     , {offset, -1}
                      , {min_bytes, 0}
                      , {max_bytes, 1048576}
                      , {max_wait_time, 1000}

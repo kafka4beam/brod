@@ -70,7 +70,7 @@
 -define(DEFAULT_BEGIN_OFFSET, -1).
 -define(DEFAULT_MIN_BYTES, 0).
 -define(DEFAULT_MAX_BYTES, 1048576).  % 1 MB
--define(DEFAULT_MAX_WAIT_TIME, 1000). % 1 sec
+-define(DEFAULT_MAX_WAIT_TIME, 10000). % 1 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
 -define(ERROR_COOLDOWN, 1000).
@@ -86,6 +86,25 @@
 start_link(ClientPid, Topic, Partition, Config) ->
   start_link(ClientPid, Topic, Partition, Config, []).
 
+%% @doc Start (link) a partition consumer.
+%% Possible configs:
+%%   min_bytes (optional default = 0):
+%%     Minimal bytes to fetch in a batch of messages
+%%   max_bytes (optional default = 1MB):
+%%     Maximum bytes to fetch in a batch of messages
+%%     NOTE: this value might be doubled in each retry when it is not enough
+%%           to fetch even one single message.
+%%     NOTE: in current implementation, the value is not shrinked bakc to
+%%           original after it has been expanded.
+%%  max_wait_time (optional, default = 10000 ms):
+%%     Max number of seconds allowd for the broker to collect min_bytes of
+%%     messages in fetch response
+%%  sleep_timeout (optional, default = 1000 ms):
+%%     Allow consumer process to sleep this amout of ms if kafka replied
+%%     'empty' message-set.
+%%  prefetch_count (optional, default = 1):
+%%     The window size (number of messages) allowed to fetch-ahead.
+%% @end
 -spec start_link(pid(), topic(), partition(),
                  consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config, Debug) ->
@@ -96,7 +115,18 @@ start_link(ClientPid, Topic, Partition, Config, Debug) ->
 stop(Pid) ->
   gen_server:call(Pid, stop, infinity).
 
-%% @doc Subscribe on messages from a partition
+%% @doc Subscribe or resubscribe on messages from a partition.
+%% Caller may pass in a set of options which is an extention of consumer config
+%% to update the parameters such as max_bytes and max_wait_time etc.
+%% also to update the start point (begin_offset) of the data stream.
+%% Possible options:
+%%   all consumer configs as documented for start_link/5
+%%   begin_offset (optional, default = -1)
+%%     A subscriber may consume and process messages then persist the associated
+%%     offset to a persistent storage, then start (or restart) with
+%%     last_processed_offset + 1 as the begin_offset to proceed.
+%%     By default, it fetches from the latest available offset (-1)
+%% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).

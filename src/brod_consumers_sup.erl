@@ -29,6 +29,7 @@
         , start_link/2
         , find_consumer/3
         , start_consumer/4
+        , stop_consumer/2
         ]).
 
 -include("brod_int.hrl").
@@ -52,12 +53,18 @@
 start_link(ClientPid, Consumers) ->
   supervisor3:start_link(?MODULE, {?SUP, ClientPid, Consumers}).
 
-%% @doc Dynamically start a per-topic supervisor
+%% @doc Dynamically start a per-topic supervisor.
 -spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(SupPid, ClientPid, TopicName, Config) ->
   Spec = consumers_sup_spec(ClientPid, TopicName, Config),
   supervisor3:start_child(SupPid, Spec).
+
+
+%% @doc Dynamically stop a per-topic supervisor.
+-spec stop_consumer(pid(), topic()) -> ok | {error, any()}.
+stop_consumer(SupPid, TopicName) ->
+  supervisor3:terminate_child(SupPid, TopicName).
 
 %% @doc Find a brod_consumer process pid running under sup2
 %% @end

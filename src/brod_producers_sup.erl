@@ -29,6 +29,7 @@
         , start_link/2
         , find_producer/3
         , start_producer/4
+        , stop_producer/2
         ]).
 
 -include("brod_int.hrl").
@@ -62,6 +63,11 @@ start_link(ClientPid, Producers) ->
 start_producer(SupPid, ClientPid, TopicName, Config) ->
   Spec = producers_sup_spec(ClientPid, TopicName, Config),
   supervisor3:start_child(SupPid, Spec).
+
+%% @doc Dynamically stop a per-topic supervisor
+-spec stop_producer(pid(), topic()) -> ok | {}.
+stop_producer(SupPid, TopicName) ->
+  supervisor3:terminate_child(SupPid, TopicName).
 
 %% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->

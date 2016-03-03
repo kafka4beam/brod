@@ -23,7 +23,9 @@
 -module(brod_client).
 -behaviour(gen_server).
 
--export([ get_consumer/3
+-export([ get_connection/3
+        , get_consumer/3
+        , get_group_coordinator/2
         , get_leader_connection/3
         , get_metadata/2
         , get_partitions_count/2
@@ -36,12 +38,13 @@
         , start_producer/3
         , start_consumer/3
         , stop/1
+        , stop_producer/2
+        , stop_consumer/2
         ]).
 
 %% Private export
 -export([ find_producer/3
         , find_consumer/3
-        , get_metadata_connection/1
         ]).
 
 -export([ code_change/3
@@ -134,7 +137,7 @@ start_link(BootstrapEndpoints, ClientId, Config, Producers, Consumers)
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
 
-%% @doc Dynamically start a per-topic producer
+%% @doc Dynamically start a topic producer
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
@@ -142,12 +145,18 @@ start_producer(Client, TopicName, ProducerConfig) ->
     {ok, _Pid} ->
       ok; %% already started
     {error, {producer_not_found, TopicName}} ->
-      gen_server:call(Client, {start_producer, TopicName, ProducerConfig});
+      gen_server:call(Client, {start_producer, TopicName, ProducerConfig},
+                      infinity);
     {error, Reason} ->
       {error, Reason}
   end.
 
-%% @doc Dynamically start a per-topic consumer
+%% @doc Stop all partition producers of the given topic.
+-spec stop_producer(client(), topic()) -> ok | {error, any()}.
+stop_producer(Client, TopicName) ->
+  gen_server:call(Client, {stop_producer, TopicName}, infinity).
+
+%% @doc Dynamically start a topic consumer
 -spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
@@ -155,10 +164,16 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
     {ok, _Pid} ->
       ok; %% already started
     {error, {producer_not_found, TopicName}} ->
-      gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig});
+      gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig},
+                      infinity);
     {error, Reason} ->
       {error, Reason}
   end.
+
+%% @doc Stop all partition consumers of the given topic.
+-spec stop_consumer(client(), topic()) -> ok | {error, any()}.
+stop_consumer(Client, TopicName) ->
+  gen_server:call(Client, {stop_consumer, TopicName}, infinity).
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -181,15 +196,6 @@ get_leader_connection(Client, Topic, Partition) ->
       {error, Reason}
   end.
 
-%% @doc Get the metadata socket pid. (intended for internal use only).
--spec get_metadata_connection(client()) -> {ok, pid()} | {error, client_down}.
-get_metadata_connection(Client) ->
-  try
-    gen_server:call(Client, get_metadata_connection, infinity)
-  catch exit : {noproc, _} ->
-    {error, client_down}
-  end.
-
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
 -spec get_metadata(client(), ?undef | topic()) -> {ok, kpro_MetadataResponse()}.
 get_metadata(Client, Topic) ->
@@ -204,6 +210,12 @@ get_partitions_count(Client, Topic) when is_atom(Client) ->
 get_partitions_count(Client, Topic) when is_pid(Client) ->
   Ets = gen_server:call(Client, get_workers_table, infinity),
   get_partitions_count(Client, Ets, Topic).
+
+%% @doc Get the endpoint of the group coordinator broker.
+-spec get_group_coordinator(client(), group_id()) ->
+        {ok, endpoint()} | {error, any()}.
+get_group_coordinator(Client, GroupId) ->
+  gen_server:call(Client, {get_group_coordinator, GroupId}, infinity).
 
 %% @doc Register self() as a partition producer. The pid is registered in an ETS
 %% table, then the callers may lookup a producer pid from the table and make
@@ -235,6 +247,18 @@ get_producer(Client, Topic, Partition) ->
         {ok, pid()} | {error, get_consumer_error()}.
 get_consumer(Client, Topic, Partition) ->
   get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
+
+%% @doc Get the connection to kafka broker at Host:Port.
+%% If there is no such connection established yet, try to establish a new one.
+%% If the connection is already established per request from another producer
+%% the same socket is returned.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+%% @end
+-spec get_connection(client(), hostname(), portnum()) ->
+                        {ok, pid()} | {error, any()}.
+get_connection(Client, Host, Port) ->
+  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -306,11 +330,30 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
-
-handle_call(get_metadata_connection, _From, State) ->
+handle_call({stop_producer, Topic}, _From, State) ->
+  brod_producers_sup:stop_producer(State#state.producers_sup, Topic);
+handle_call({stop_consumer, Topic}, _From, State) ->
+  brod_consumers_sup:stop_consumer(State#state.consumers_sup, Topic);
+handle_call({get_group_coordinator, GroupId}, _From, State) ->
   {ok, NewState} = maybe_restart_metadata_socket(State),
-  #state{meta_sock_pid = Sock} = NewState,
-  {reply, {ok, Sock}, NewState};
+  #state{config = Config, meta_sock_pid = SockPid} = NewState,
+  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
+                                ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
+  Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
+  Result =
+    case brod_sock:send_sync(SockPid, Req, timer:seconds(Timeout)) of
+      {ok, #kpro_GroupCoordinatorResponse{ errorCode = EC
+                                         , coordinatorHost = Host
+                                         , coordinatorPort = Port
+                                         }} ->
+        case kpro_ErrorCode:is_error(EC) of
+          true  -> {error, {EC, kpro_ErrorCode:desc(EC)}};
+          false -> {ok, {binary_to_list(Host), Port}}
+        end;
+      {error, Reason} ->
+        {error, Reason}
+    end,
+  {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Result, NewState} = validate_topic_existence(TopicName, State),
   try
@@ -387,18 +430,6 @@ terminate(Reason, #state{ client_id       = ClientId
     fun(#sock{sock_pid = Pid}) -> brod_utils:shutdown_pid(Pid) end, Sockets).
 
 %%%_* Internal Functions =======================================================
-
-%% @private Get the connection to kafka broker at Host:Port.
-%% If there is no such connection established yet, try to establish a new one.
-%% If the connection is already established per request from another producer
-%% the same socket is returned.
-%% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
-%% @end
--spec get_connection(client(), hostname(), portnum()) ->
-                        {ok, pid()} | {error, any()}.
-get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
 
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
