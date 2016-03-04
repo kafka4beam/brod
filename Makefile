@@ -19,7 +19,6 @@ test-env:
 	./scripts/setup-test-env.sh
 
 t: eunit ct
-	$(verbose) :
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 ESCRIPT_FILE = scripts/$(PROJECT)
