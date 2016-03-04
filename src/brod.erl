@@ -191,7 +191,7 @@ produce(ProducerPid, Key, Value) ->
 %% @doc Produce one message. This function first lookup the producer
 %% pid, then call produce/3 to do the actual job.
 %% @end
--spec produce(client(), topic(), partition() | partition_fun(),
+-spec produce(client(), topic(), partition() | brod_partition_fun(),
               binary(), binary()) -> {ok, brod_call_ref()} | {error, any()}.
 produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
   {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
@@ -223,7 +223,7 @@ produce_sync(Pid, Key, Value) ->
   end.
 
 %% @doc Produce one message and wait for ack from kafka.
--spec produce_sync(client(), topic(), partition() | partition_fun(),
+-spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
                    binary(), binary()) -> ok | {error, any()}.
 produce_sync(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
   {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
