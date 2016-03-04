@@ -31,7 +31,7 @@
         ]).
 
 %% Client API
--export([ get_partitions/2
+-export([ get_partitions_count/2
         , start_link_client/1
         , start_link_client/2
         , start_link_client/3
@@ -145,17 +145,17 @@ start_producer(Client, TopicName, ProducerConfig) ->
 start_consumer(Client, TopicName, ProducerConfig) ->
   brod_client:start_consumer(Client, TopicName, ProducerConfig).
 
-%% @doc Get all partition numbers of a given topic.
+%% @doc Get number of partitions for a given topic.
 %% The higher level producers may need the partition numbers to
 %% find the partition producer pid --- if the number of partitions
 %% is not statically configured for them.
 %% It is up to the callers how they want to distribute their data
 %% (e.g. random, roundrobin or consistent-hashing) to the partitions.
 %% @end
--spec get_partitions(client(), topic()) ->
-        {ok, [partition()]} | {error, any()}.
-get_partitions(Client, Topic) ->
-  brod_client:get_partitions(Client, Topic).
+-spec get_partitions_count(client(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
+get_partitions_count(Client, Topic) ->
+  brod_client:get_partitions_count(Client, Topic).
 
 -spec get_consumer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
@@ -191,9 +191,13 @@ produce(ProducerPid, Key, Value) ->
 %% @doc Produce one message. This function first lookup the producer
 %% pid, then call produce/3 to do the actual job.
 %% @end
--spec produce(client(), topic(), partition(), binary(), binary()) ->
-        {ok, brod_call_ref()} | {error, any()}.
-produce(Client, Topic, Partition, Key, Value) ->
+-spec produce(client(), topic(), partition() | partition_fun(),
+              binary(), binary()) -> {ok, brod_call_ref()} | {error, any()}.
+produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
+  {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
+  {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
+  produce(Client, Topic, Partition, Key, Value);
+produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
   case get_producer(Client, Topic, Partition) of
     {ok, Pid}       -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
@@ -219,9 +223,13 @@ produce_sync(Pid, Key, Value) ->
   end.
 
 %% @doc Produce one message and wait for ack from kafka.
--spec produce_sync(client(), topic(), partition(), binary(), binary()) ->
-        ok | {error, any()}.
-produce_sync(Client, Topic, Partition, Key, Value) ->
+-spec produce_sync(client(), topic(), partition() | partition_fun(),
+                   binary(), binary()) -> ok | {error, any()}.
+produce_sync(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
+  {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
+  {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
+  produce_sync(Client, Topic, Partition, Key, Value);
+produce_sync(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
   case produce(Client, Topic, Partition, Key, Value) of
     {ok, CallRef} ->
       sync_produce_request(CallRef);

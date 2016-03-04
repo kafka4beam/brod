@@ -37,6 +37,7 @@
         , t_produce_async/1
         , t_producer_topic_not_found/1
         , t_producer_partition_not_found/1
+        , t_produce_partitioner/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -50,9 +51,11 @@
 
 subscriber_loop(Client, TesterPid) ->
   receive
-    {ConsumerPid, #kafka_message_set{messages = Messages}} ->
+    {ConsumerPid, KMS} ->
+      #kafka_message_set{ messages = Messages
+                        , partition = Partition} = KMS,
       lists:foreach(fun(#kafka_message{offset = Offset, key = K, value = V}) ->
-                      TesterPid ! {K, V},
+                      TesterPid ! {Partition, K, V},
                       ok = brod:consume_ack(ConsumerPid, Offset)
                     end, Messages),
       subscriber_loop(Client, TesterPid);
@@ -71,7 +74,6 @@ end_per_suite(_Config) -> ok.
 init_per_testcase(Case, Config) ->
   Client = Case,
   Topic = ?TOPIC,
-  Partition = 0,
   case whereis(Client) of
     ?undef -> ok;
     Pid_   -> brod:stop_client(Pid_)
@@ -81,7 +83,8 @@ init_per_testcase(Case, Config) ->
   ok = brod:start_producer(Client, Topic, []),
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
-  {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
+  {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
+  {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
   [{client, Client}, {client_pid, ClientPid},
    {subscriber, Subscriber} | Config].
 
@@ -107,7 +110,6 @@ all() -> [F || {F, _A} <- module_info(exports),
                     _         -> false
                   end].
 
-
 %%%_* Test functions ===========================================================
 
 t_produce_sync(Config) when is_list(Config) ->
@@ -120,7 +122,7 @@ t_produce_sync(Config) when is_list(Config) ->
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
-        {K, V} ->
+        {_, K, V} ->
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
         after 5000 ->
@@ -144,7 +146,7 @@ t_produce_async(Config) when is_list(Config) ->
     ct:fail({?MODULE, ?LINE, timeout})
   end,
   receive
-    {K, V} ->
+    {_, K, V} ->
       ?assertEqual(Key, K),
       ?assertEqual(Value, V)
   after 5000 ->
@@ -162,6 +164,34 @@ t_producer_partition_not_found(Config) when is_list(Config) ->
   ?assert(is_pid(Client)),
   ?assertEqual({error, {producer_not_found, ?TOPIC, 100}},
                brod:produce(Client, ?TOPIC, 100, <<"k">>, <<"v">>)).
+
+t_produce_partitioner(Config) when is_list(Config) ->
+  Client = ?config(client),
+  {K1, V1} = make_unique_kv(),
+  {K2, V2} = make_unique_kv(),
+  PartFun = fun(Topic, PartitionsCnt, Key, _Value) ->
+                ?assertEqual(?TOPIC, Topic),
+                ?assertEqual(2, PartitionsCnt),
+                case Key of
+                  K1 -> {ok, 0};
+                  K2 -> {ok, 1}
+                end
+            end,
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
+  ReceiveFun =
+    fun(ExpectedP, ExpectedK, ExpectedV) ->
+      receive
+        {P, K, V} ->
+          ?assertEqual(ExpectedP, P),
+          ?assertEqual(ExpectedK, K),
+          ?assertEqual(ExpectedV, V)
+        after 5000 ->
+          ct:fail({?MODULE, ?LINE, timeout, ExpectedP, ExpectedK, ExpectedV})
+      end
+    end,
+  ReceiveFun(0, K1, V1),
+  ReceiveFun(1, K2, V2).
 
 %%%_* Help functions ===========================================================
 

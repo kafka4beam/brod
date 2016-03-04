@@ -26,7 +26,7 @@
 -export([ get_consumer/3
         , get_leader_connection/3
         , get_metadata/2
-        , get_partitions/2
+        , get_partitions_count/2
         , get_producer/3
         , register_consumer/3
         , register_producer/3
@@ -65,6 +65,8 @@
         {producer, Topic, Partition}).
 -define(CONSUMER_KEY(Topic, Partition),
         {consumer, Topic, Partition}).
+-define(TOPIC_METADATA_KEY(Topic),
+        {topic_metadata, Topic}).
 -define(PRODUCER(Topic, Partition, Pid),
         {?PRODUCER_KEY(Topic, Partition), Pid}).
 -define(CONSUMER(Topic, Partition, Pid),
@@ -169,22 +171,15 @@ get_leader_connection(Client, Topic, Partition) ->
 get_metadata(Client, Topic) ->
   gen_server:call(Client, {get_metadata, Topic}, infinity).
 
-%% @doc Get all partition numbers of a given topic.
--spec get_partitions(client(), topic()) ->
-        {ok, [partition()]} | {error, any()}.
-get_partitions(Client, Topic) ->
-  case get_metadata(Client, Topic) of
-    {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
-      [TopicMetadata] = TopicsMetadata,
-      try
-        {ok, do_get_partitions(TopicMetadata)}
-      catch
-        throw:Reason ->
-          {error, Reason}
-      end;
-    {error, Reason} ->
-      {error, Reason}
-  end.
+%% @doc Get number of partitions for a given topic
+-spec get_partitions_count(client(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
+get_partitions_count(Client, Topic) when is_atom(Client) ->
+  %% Ets =:= ClientId
+  get_partitions_count(Client, Client, Topic);
+get_partitions_count(Client, Topic) when is_pid(Client) ->
+  Ets = gen_server:call(Client, get_workers_table, infinity),
+  get_partitions_count(Client, Ets, Topic).
 
 %% @doc Register self() as a partition producer. The pid is registered in an ETS
 %% table, then the callers may lookup a producer pid from the table and make
@@ -321,6 +316,7 @@ handle_call(get_consumers_sup_pid, _From, State) ->
   {reply, State#state.consumers_sup, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   {Result, NewState} = do_get_metadata(Topic, State),
+  ok = maybe_update_metadata_cache(Result, NewState),
   {reply, Result, NewState};
 handle_call({get_connection, Host, Port}, _From, State) ->
   {NewState, Result} = do_get_connection(State, Host, Port),
@@ -439,16 +435,6 @@ find_consumer(Client, Topic, Partition) ->
   catch exit : {noproc, _} ->
     {error, client_down}
   end.
-
--spec do_get_partitions(kpro_TopicMetadata()) -> [partition()].
-do_get_partitions(#kpro_TopicMetadata{ errorCode           = TopicEC
-                                     , partitionMetadata_L = Partitions
-                                     }) ->
-  kpro_ErrorCode:is_error(TopicEC) andalso
-    erlang:throw({TopicEC, kpro_ErrorCode:desc(TopicEC)}),
-  lists:map(fun(#kpro_PartitionMetadata{partition = Partition}) ->
-              Partition
-            end, Partitions).
 
 -spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
         when Result :: ok | {error, any()}.
@@ -636,6 +622,47 @@ start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints,
       start_metadata_socket(ClientId, Rest,
                             [Endpoint | FailedEndpoints], Reason)
   end.
+
+maybe_update_metadata_cache({ok, #kpro_MetadataResponse{} = R}, State) ->
+  [TopicMetadata] = R#kpro_MetadataResponse.topicMetadata_L,
+  case do_get_partitions_count(TopicMetadata) of
+    {ok, PartitionsCnt} ->
+      Tab = State#state.workers_tab,
+      Topic = TopicMetadata#kpro_TopicMetadata.topicName,
+      ets:insert(Tab, {?TOPIC_METADATA_KEY(Topic),
+                       PartitionsCnt, TopicMetadata}),
+      ok;
+    {error, _} ->
+      ok
+  end;
+maybe_update_metadata_cache({error, _}, _State) ->
+  ok.
+
+get_partitions_count(Client, Ets, Topic) ->
+  case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
+    [{_, PartitionsCnt, _}] ->
+      {ok, PartitionsCnt};
+    [] ->
+      case get_metadata(Client, Topic) of
+        {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
+          [TopicMetadata] = TopicsMetadata,
+          do_get_partitions_count(TopicMetadata);
+        {error, Reason} ->
+          {error, Reason}
+      end
+  end.
+
+do_get_partitions_count(TopicMetadata) ->
+  #kpro_TopicMetadata{ errorCode           = TopicEC
+                     , partitionMetadata_L = Partitions
+                     } = TopicMetadata,
+  case kpro_ErrorCode:is_error(TopicEC) of
+    true ->
+      {error, {TopicEC, kpro_ErrorCode:desc(TopicEC)}};
+    false ->
+      {ok, erlang:length(Partitions)}
+  end.
+
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
