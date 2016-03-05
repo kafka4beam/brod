@@ -100,7 +100,7 @@ t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
   {ok, Pid} = brod:start_link_client([{"localhost", 8092} | ?HOSTS], Client),
   ?assert(is_pid(Pid)),
-  _Res = brod_client:get_partitions(Pid, <<"some-unknown-topic">>),
+  _Res = brod_client:get_partitions_count(Pid, <<"some-unknown-topic">>),
   ?assertMatch({error, {'UnknownTopicOrPartition', _}}, _Res),
   Ref = erlang:monitor(process, Pid),
   ok = brod:stop_client(Pid),

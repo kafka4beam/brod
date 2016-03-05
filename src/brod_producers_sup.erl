@@ -98,10 +98,10 @@ init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 
 post_init({?SUP2, ClientPid, Topic, Config}) ->
-  case brod_client:get_partitions(ClientPid, Topic) of
-    {ok, Partitions} ->
+  case brod_client:get_partitions_count(ClientPid, Topic) of
+    {ok, PartitionsCnt} ->
       Children = [ producer_spec(ClientPid, Topic, Partition, Config)
-                 || Partition <- Partitions ],
+                 || Partition <- lists:seq(0, PartitionsCnt - 1) ],
       %% Producer may crash in case of exception in case of network failure,
       %% or error code received in produce response (e.g. leader transition)
       %% In any case, restart right away will erry likely fail again.

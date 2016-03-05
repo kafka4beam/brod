@@ -68,6 +68,12 @@
 -type brod_producer_config() :: proplists:proplist().
 -type brod_consumer_config() :: proplists:proplist().
 
+-type brod_partition_fun() :: fun(( Topic :: topic()
+                                  , PartitionsCnt :: integer()
+                                  , Key           :: binary()
+                                  , Value         :: binary()) ->
+                                     {ok, Partition :: integer()}).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

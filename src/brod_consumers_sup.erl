@@ -110,9 +110,17 @@ post_init(_) ->
 get_partitions(ClientPid, Topic, Config) ->
   case proplists:get_value(partitions, Config, []) of
     [] ->
-      brod_client:get_partitions(ClientPid, Topic);
+      get_all_partitions(ClientPid, Topic);
     [_|_] = List ->
       {ok, List}
+  end.
+
+get_all_partitions(ClientPid, Topic) ->
+  case brod_client:get_partitions_count(ClientPid, Topic) of
+    {ok, PartitionsCnt} ->
+      {ok, lists:seq(0, PartitionsCnt - 1)};
+    {error, _} = Error ->
+      Error
   end.
 
 consumers_sup_spec(ClientPid, TopicName, Config0) ->

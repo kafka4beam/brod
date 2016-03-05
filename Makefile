@@ -15,6 +15,9 @@ include erlang.mk
 
 ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 
+test-env:
+	./scripts/setup-test-env.sh
+
 t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
