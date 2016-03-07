@@ -174,7 +174,19 @@ get_consumer(Client, Topic, Partition) ->
                        | {producer_not_found, topic()}
                        | {producer_not_found, topic(), partition()}.
 get_producer(Client, Topic, Partition) ->
-  brod_client:get_producer(Client, Topic, Partition).
+  case brod_client:get_producer(Client, Topic, Partition) of
+    {ok, Producer} ->
+      {ok, Producer};
+    {error, Reason} = Error
+      when Reason =:= {producer_not_found, Topic};
+           Reason =:= {producer_not_found, Topic, Partition} ->
+      %% try to start a producer for the given topic if
+      %% auto_start_producers option is enabled for the client
+      AutoStartEnabled = is_producer_autostart_enabled(Client),
+      maybe_start_producer(AutoStartEnabled, Client, Topic, Partition, Error);
+    Error ->
+      Error
+  end.
 
 %% @equiv produce(Pid, 0, <<>>, Value)
 -spec produce(pid(), binary()) ->
@@ -225,11 +237,7 @@ produce_sync(Pid, Key, Value) ->
 %% @doc Produce one message and wait for ack from kafka.
 -spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
                    binary(), binary()) -> ok | {error, any()}.
-produce_sync(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
-  {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
-  {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
-  produce_sync(Client, Topic, Partition, Key, Value);
-produce_sync(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
+produce_sync(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
     {ok, CallRef} ->
       sync_produce_request(CallRef);
@@ -477,6 +485,39 @@ connect_leader(Hosts, Topic, Partition) ->
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
+
+maybe_start_producer(true, Client, Topic, Partition, _Error) ->
+  ProducerConfig = get_default_producer_config(Client),
+  case brod:start_producer(Client, Topic, ProducerConfig) of
+    {error, topic_not_found} = Error ->
+      Error;
+    {error, {already_started, _}} ->
+      brod:get_producer(Client, Topic, Partition);
+    ok ->
+      brod:get_producer(Client, Topic, Partition)
+  end;
+maybe_start_producer(false, _Client, _Topic, _Partition, Error) ->
+  Error.
+
+is_producer_autostart_enabled(Client) ->
+  Clients = application:get_env(brod, clients, []),
+  case lists:keyfind(Client, 1, Clients) of
+    {Client, ClientConfig} ->
+      Config = proplists:get_value(config, ClientConfig, []),
+      proplists:get_value(auto_start_producers, Config, false);
+    false ->
+      false
+  end.
+
+get_default_producer_config(Client) ->
+  Clients = application:get_env(brod, clients, []),
+  case lists:keyfind(Client, 1, Clients) of
+    {Client, ClientConfig} ->
+      Producers = proplists:get_value(producers, ClientConfig, []),
+      proplists:get_value(default, Producers, []);
+    false ->
+      []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

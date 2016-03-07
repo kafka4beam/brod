@@ -4,14 +4,21 @@
      , [ { brod_client_1
          , [ { endpoints, [{"localhost", 9092}]}
            , { config
-             , [ {restart_delay_seconds, 10}]
+             , [ {restart_delay_seconds, 10}
+               , {auto_start_producers, true}]
              }
            , { producers
-             , [ { <<"brod-test-topic-1">>
-                   , [ {topic_restart_delay_seconds, 10}
-                     , {partition_restart_delay_seconds, 2}
-                     , {required_acks, -1}
-                     ]
+             , [ { <<"brod-test-topic-1">>,
+                   [ {topic_restart_delay_seconds, 10}
+                   , {partition_restart_delay_seconds, 2}
+                   , {required_acks, -1}
+                   ]
+                 }
+               , { default,
+                   [ {topic_restart_delay_seconds, 10}
+                   , {partition_restart_delay_seconds, 2}
+                   , {required_acks, -1}
+                   ]
                  }
                ]
              }
