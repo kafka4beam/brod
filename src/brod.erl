@@ -174,17 +174,7 @@ get_consumer(Client, Topic, Partition) ->
                        | {producer_not_found, topic()}
                        | {producer_not_found, topic(), partition()}.
 get_producer(Client, Topic, Partition) ->
-  case brod_client:get_producer(Client, Topic, Partition) of
-    {ok, Producer} ->
-      {ok, Producer};
-    {error, {producer_not_found, Topic}} = Error ->
-      %% try to start a producer for the given topic if
-      %% auto_start_producers option is enabled for the client
-      AutoStartEnabled = is_producer_autostart_enabled(Client),
-      maybe_start_producer(AutoStartEnabled, Client, Topic, Partition, Error);
-    Error ->
-      Error
-  end.
+  brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
 -spec produce(pid(), binary()) ->
@@ -483,38 +473,6 @@ connect_leader(Hosts, Topic, Partition) ->
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
-
-maybe_start_producer(true, Client, Topic, Partition, _Error) ->
-  ProducerConfig = get_default_producer_config(Client),
-  case brod:start_producer(Client, Topic, ProducerConfig) of
-    {error, topic_not_found} = Error ->
-      Error;
-    {error, {already_started, _}} ->
-      brod:get_producer(Client, Topic, Partition);
-    ok ->
-      brod:get_producer(Client, Topic, Partition)
-  end;
-maybe_start_producer(false, _Client, _Topic, _Partition, Error) ->
-  Error.
-
-is_producer_autostart_enabled(Client) ->
-  Clients = application:get_env(brod, clients, []),
-  case lists:keyfind(Client, 1, Clients) of
-    {Client, ClientConfig} ->
-      Config = proplists:get_value(config, ClientConfig, []),
-      proplists:get_value(auto_start_producers, Config, false);
-    false ->
-      false
-  end.
-
-get_default_producer_config(Client) ->
-  Clients = application:get_env(brod, clients, []),
-  case lists:keyfind(Client, 1, Clients) of
-    {Client, ClientConfig} ->
-      proplists:get_value(default_producer_config, ClientConfig, []);
-    false ->
-      []
-  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

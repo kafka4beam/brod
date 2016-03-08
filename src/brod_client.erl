@@ -122,6 +122,27 @@ start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
 
+%% @doc Get producer of the given topic-partition.
+-spec get_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_producer_error()}.
+get_producer(Client, Topic, Partition) ->
+  case get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) of
+    {ok, Pid} ->
+      {ok, Pid};
+    {error, {producer_not_found, Topic}} = Error ->
+      %% try to start a producer for the given topic if
+      %% auto_start_producers option is enabled for the client
+      maybe_start_producer(Client, Topic, Partition, Error);
+    Error ->
+      Error
+  end.
+
+%% @doc Get consumer of the given topic-parition.
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
+get_consumer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
+
 %% @doc Dynamically start a per-topic producer
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
@@ -188,18 +209,6 @@ register_consumer(Client, Topic, Partition) ->
   Consumer = self(),
   Key = ?CONSUMER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Consumer}).
-
-%% @doc Get producer of the given topic-partition.
--spec get_producer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, get_producer_error()}.
-get_producer(Client, Topic, Partition) ->
-  get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)).
-
-%% @doc Get consumer of the given topic-parition.
--spec get_consumer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, get_consumer_error()}.
-get_consumer(Client, Topic, Partition) ->
-  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -272,18 +281,8 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  {Result, NewState} = validate_topic_existence(TopicName, State),
-  try
-    Result =:= ok orelse throw(Result),
-    SupPid = State#state.producers_sup,
-    case brod_producers_sup:start_producer(SupPid, self(),
-                                           TopicName, ProducerConfig) of
-      {ok, _} -> {reply, ok, NewState};
-      Error   -> throw(Error)
-    end
-  catch throw:E ->
-      {reply, E, NewState}
-  end;
+  {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
+  {reply, Reply, NewState};
 handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
   {Result, NewState} = validate_topic_existence(TopicName, State),
   try
@@ -296,6 +295,18 @@ handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
     end
   catch throw:E ->
       {reply, E, NewState}
+  end;
+handle_call({auto_start_producer, Topic}, _From, State) ->
+  ClientConfig = State#state.config,
+  Config = proplists:get_value(config, ClientConfig, []),
+  case proplists:get_value(auto_start_producers, Config, false) of
+    true ->
+      ProducerConfig =
+        proplists:get_value(default_producer_config, ClientConfig, []),
+      {Reply, NewState} = do_start_producer(Topic, ProducerConfig, State),
+      {reply, Reply, NewState};
+    false ->
+      {reply, false, State}
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
@@ -652,6 +663,31 @@ do_get_partitions_count(TopicMetadata) ->
       {ok, erlang:length(Partitions)}
   end.
 
+maybe_start_producer(Client, Topic, Partition, Error) ->
+  case gen_server:call(Client, {auto_start_producer, Topic}) of
+    {error, topic_not_found} = Error ->
+      Error;
+    false ->
+      Error;
+    {error, {already_started, _}} ->
+      get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition));
+    ok ->
+      get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition))
+  end.
+
+do_start_producer(TopicName, ProducerConfig, State) ->
+  {Result, NewState} = validate_topic_existence(TopicName, State),
+  try
+    Result =:= ok orelse throw(Result),
+    SupPid = State#state.producers_sup,
+    case brod_producers_sup:start_producer(SupPid, self(),
+                                           TopicName, ProducerConfig) of
+      {ok, _} -> {ok, NewState};
+      Error   -> throw(Error)
+    end
+  catch throw:E ->
+      {E, NewState}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
