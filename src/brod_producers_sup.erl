@@ -72,21 +72,21 @@ stop_producer(SupPid, TopicName) ->
 %% @doc Find a brod_producer process pid running under sup2.
 -spec find_producer(pid(), topic(), partition()) ->
                        {ok, pid()} | {error, Reason} when
-        Reason :: {producer_not_found, topic()}
-                | {producer_not_found, topic(), partition()}
+        Reason :: {not_found, topic()}
+                | {not_found, topic(), partition()}
                 | {producer_down, noproc}.
 find_producer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
-      {error, {producer_not_found, Topic}};
+      {error, {not_found, Topic}};
     [Sup2Pid] ->
       try
         case supervisor3:find_child(Sup2Pid, Partition) of
           [] ->
             %% no such partition?
-            {error, {producer_not_found, Topic, Partition}};
+            {error, {not_found, Topic, Partition}};
           [Pid] ->
             {ok, Pid}
         end

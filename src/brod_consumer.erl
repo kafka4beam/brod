@@ -129,12 +129,20 @@ stop(Pid) ->
 %% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
-  gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
+  try
+    gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity)
+  catch exit : noproc ->
+    {error, consumer_down}
+  end.
 
 %% @doc Unsubscribe the current subscriber.
 -spec unsubscribe(pid()) -> ok.
 unsubscribe(Pid) ->
-  gen_server:call(Pid, unsubscribe).
+  try
+    gen_server:call(Pid, unsubscribe, infinity)
+  catch exit : noproc ->
+    ok
+  end.
 
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
@@ -273,7 +281,9 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), Cast]),
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+  error_logger:warning_msg("~p ~p terminating, reason:\n~p",
+                           [?MODULE, self(), Reason]),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->

@@ -21,7 +21,7 @@
 %%% ============================================================================
 
 %% @private
--module(brod_consumer_group_SUITE).
+-module(brod_group_subscriber_SUITE).
 
 %% Test framework
 -export([ init_per_suite/1

@@ -23,7 +23,7 @@
 -module(brod_group_subscriber).
 -behaviour(gen_server).
 
--export([ start_link/4
+-export([ start_link/5
         ]).
 
 %% callbacks for brod_group_controller
@@ -44,6 +44,7 @@
 
 -record(cursor, { topic_partition :: {topic(), partition()}
                 , consumer_pid    :: pid()
+                , consumer_mref   :: reference()
                 , begin_offset    :: offset()
                 , acked_offset    :: offset()
                 }).
@@ -51,19 +52,25 @@
 -type cursor() :: #cursor{}.
 
 -record(state,
-        { client          :: client()
-        , controller      :: pid()
-        , assignments     :: [topic_assignment()]
-        , cursors = []    :: [cursor()]
-        , consumer_config :: consumer_config()
+        { client             :: client()
+        , controller         :: pid()
+        , cursors = []       :: [cursor()]
+        , consumer_config    :: consumer_config()
+        , is_blocked = false :: boolean()
         }).
+
+%% delay 2 seconds retry the failed subscription to partiton consumer process
+-define(RESUBSCRIBE_DELAY, 2000).
+
+-define(LO_CMD_SUBSCRIBE_PARTITIONS, subscribe_partitions).
 
 %%%_* APIs =====================================================================
 
--spec start_link(client(), group_id(), group_config(), consumer_config()) ->
-        {ok, pid()} | {error, any()}.
-start_link(Client, GroupId, GroupConfig, ConsumerConfig) ->
-  Args = {Client, GroupId, GroupConfig, ConsumerConfig},
+-spec start_link(client(), group_id(), [topic()],
+                 group_config(), consumer_config()) ->
+                    {ok, pid()} | {error, any()}.
+start_link(Client, GroupId, Topics, GroupConfig, ConsumerConfig) ->
+  Args = {Client, GroupId, Topics, GroupConfig, ConsumerConfig},
   gen_server:start_link(?MODULE, Args, []).
 
 -spec get_offsets_to_commit(pid()) -> ok.
@@ -80,15 +87,26 @@ unsubscribe_all_partitions(Pid) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({Client, GroupId, Topic, GroupConfig, ConsumerConfig}) ->
+init({Client, GroupId, Topics, GroupConfig, ConsumerConfig}) ->
   {ok, Pid} =
-    brod_group_controller:start_link(Client, GroupId, Topic, GroupConfig),
+    brod_group_controller:start_link(Client, GroupId, Topics, GroupConfig),
   State = #state{ client          = Client
                 , controller      = Pid
                 , consumer_config = ConsumerConfig
                 },
   {ok, State}.
 
+handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
+  NewState =
+    case State#state.is_blocked of
+      true ->
+        State;
+      false ->
+        {ok, NewState_} = subscribe_partitions(State),
+        NewState_
+    end,
+  _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
+  {noreply, NewState};
 handle_info(_Info, State) ->
   {noreply, State}.
 
@@ -120,12 +138,22 @@ handle_call(get_offsets_to_commit, _From,
       end, TopicOffsets0),
   {reply, TopicOffsets, State};
 handle_call(unsubscribe_all_partitions, _From,
-            #state{ client      = Client
-                  , assignments = Assignments} = State) ->
-  lists:foreach(fun({Topic, _PartitionAssignments}) ->
-                  brod_client:stop_consumer(Client, Topic)
-                end, Assignments),
-  {reply, ok, State};
+            #state{ cursors = Cursors0
+                  } = State) ->
+  Cursors =
+    lists:map(
+      fun(#cursor{ consumer_pid  = ConsumerPid
+                 , consumer_mref = ConsumerMref
+                 } = Cursor) ->
+        _ = brod:unsubscribe(ConsumerPid),
+        _ = erlang:demonitor(ConsumerMref, [flush]),
+       Cursor#cursor{ consumer_pid  = ?undef
+                    , consumer_mref = ?undef
+                    }
+      end, Cursors0),
+  {reply, ok, State#state{ cursors    = Cursors
+                         , is_blocked = true
+                         }};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -137,39 +165,21 @@ handle_cast({new_assignments, Assignments},
     fun({Topic, _PartitionAssignments}) ->
       ok = brod_client:start_consumer(Client, Topic, ConsumerConfig)
     end, Assignments),
-  PendingAssignments =
-    [ {Topic, Partition, BeginOffset}
+  Cursors =
+    [ #cursor{ topic_partition = {Topic, Partition}
+             , consumer_pid    = ?undef
+             , begin_offset    = BeginOffset
+             , acked_offset    = ?undef
+             }
       || {Topic, PartitionAssignments} <- Assignments,
-         #partition_assignment{ partition = Partition
+         #partition_assignment{ partition    = Partition
                               , begin_offset = BeginOffset
                               } <- PartitionAssignments
     ],
-  Cursors =
-    lists:map(
-      fun({Topic, Partition, BeginOffset}) ->
-        Options = [{begin_offset, BeginOffset}],
-        case brod:subscribe(Client, self(), Topic, Partition, Options) of
-          {ok, Pid} ->
-            #cursor{ topic_partition = {Topic, Partition}
-                   , consumer_pid    = Pid
-                   , begin_offset    = BeginOffset
-                   , acked_offset    = ?undef
-                   };
-          {error, Reason} ->
-            error_logger:error_msg(
-              "error when subscribing to topic ~s pattition ~p\nreason:~p",
-              [Topic, Partition, Reason]),
-            #cursor{ topic_partition = {Topic, Partition}
-                   , consumer_pid    = ?undef
-                   , begin_offset    = BeginOffset
-                   , acked_offset    = ?undef
-                   }
-        end
-      end, PendingAssignments),
-  NewState =
-    State#state{ assignments = Assignments
-               , cursors     = Cursors
-               },
+  _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS),
+  NewState = State#state{ cursors    = Cursors
+                        , is_blocked = false
+                        },
   {noreply, NewState};
 handle_cast(_Cast, State) ->
   {noreply, State}.
@@ -181,6 +191,49 @@ terminate(_Reason, #state{}) ->
   ok.
 
 %%%_* Internal Functions =======================================================
+
+send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
+
+send_lo_cmd(CMD, 0)       -> self() ! CMD;
+send_lo_cmd(CMD, DelayMS) -> erlang:send_after(DelayMS, self(), CMD).
+
+subscribe_partitions(#state{ client  = Client
+                           , cursors = Cursors0
+                           } = State) ->
+  Cursors =
+    lists:map(
+      fun(#cursor{ topic_partition = {Topic, Partition}
+                 , consumer_pid    = ConsumerPid0
+                 , begin_offset    = BeginOffset0
+                 , acked_offset    = AckedOffset
+                 } = Cursor) ->
+        case is_pid(ConsumerPid0) andalso is_process_alive(ConsumerPid0) of
+          true ->
+            %% already subscribed, do nothing
+            Cursor;
+          false ->
+            %% fetch from the last commited offset + 1
+            %% otherwise fetch from the begin offset
+            BeginOffset =
+              case AckedOffset of
+                ?undef        -> BeginOffset0;
+                N when N >= 0 -> N + 1
+              end,
+            Options = [{begin_offset, BeginOffset}],
+            case brod:subscribe(Client, self(), Topic, Partition, Options) of
+              {ok, ConsumerPid} ->
+                Mref = erlang:monitor(process, ConsumerPid),
+                Cursor#cursor{ consumer_pid  = ConsumerPid
+                             , consumer_mref = Mref
+                             };
+              {error, Reason} ->
+                Cursor#cursor{ consumer_pid  = {error, Reason}
+                             , consumer_mref = ?undef
+                             }
+            end
+        end
+      end, Cursors0),
+  {ok, State#state{cursors = Cursors}}.
 
 make_metadata() ->
   io_lib:format("~p ~p ~p", [node(), self(), os:timestamp()]).

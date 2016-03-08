@@ -48,8 +48,11 @@
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
 
--define(ESCALATE_EC(EC), kpro_ErrorCode:is_error(EC) andalso
-                          erlang:throw({EC, kpro_ErrorCode:desc(EC)})).
+%% by default, start from latest available offset
+-define(DEFAULT_BEGIN_OFFSET, -1).
+
+-define(ESCALATE_EC(EC), kpro_ErrorCode:is_error(EC) andalso erlang:throw(EC)).
+
 -define(ESCALATE(Expr), fun() ->
                           case Expr of
                             {ok, Result}    -> Result;
@@ -83,7 +86,7 @@
         , heartbeat_rate_seconds :: pos_integer()
         , max_rejoin_attempts :: non_neg_integer()
         , rejoin_delay_seconds :: non_neg_integer()
-        , offset_retention_seconds :: non_neg_integer()
+        , offset_retention_seconds :: ?undef | integer()
         , default_begin_offset :: offset()
         }).
 
@@ -115,8 +118,8 @@ init({Client, GroupId, Topics, Subscriber, Config}) ->
   HbRateSec = GetCfg({heartbeat_rate_seconds, ?HEARTBEAT_RATE_SECONDS}),
   MaxRejoinAttempts = GetCfg({max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS}),
   RejoinDelaySeconds = GetCfg({rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS}),
-  OffsetRetentionSeconds = GetCfg(offset_retention_seconds),
-  DefaultBeginOffset = GetCfg(default_begin_offset),
+  OffsetRetentionSeconds = GetCfg({offset_retention_seconds, ?undef}),
+  DefaultBeginOffset = GetCfg({default_begin_offset, ?DEFAULT_BEGIN_OFFSET}),
   self() ! ?LO_CMD_JOIN_GROUP(0, ?undef),
   _ = start_heartbeat_timer(HbRateSec),
   {ok, #state{ client                        = Client
@@ -141,6 +144,8 @@ handle_info(?LO_CMD_JOIN_GROUP(N, Reason), State) ->
 handle_info({'EXIT', Pid, Reason}, #state{sock_pid = Pid} = State) ->
   {ok, NewState} = join_group(State, 0, Reason),
   {noreply, NewState};
+handle_info({'EXIT', Pid, _Reason}, #state{subscriber = Pid} = State) ->
+  {stop, subscriber_down, State};
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
                   , session_timeout_seconds = SessionTimeoutSec
@@ -167,7 +172,7 @@ handle_info({msg, _Pid, HbCorrId, #kpro_HeartbeatResponse{errorCode = EC}},
   State = State0#state{hb_ref = ?undef},
   case kpro_ErrorCode:is_error(EC) of
     true ->
-      {ok, NewState} = join_group(State, 0, {EC, kpro_ErrorCode:desc(EC)}),
+      {ok, NewState} = join_group(State, 0, EC),
       {noreply, NewState};
     false ->
       {noreply, State}
@@ -193,7 +198,18 @@ handle_cast(_Cast, State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-terminate(_Reason, #state{sock_pid = SockPid}) ->
+terminate(Reason, #state{ sock_pid = SockPid
+                        , groupId  = GroupId
+                        , memberId = MemberId
+                        } = State) ->
+  log(State, info_msg, "leaving group, reason ~p\n", [Reason]),
+  Request = #kpro_LeaveGroupRequest
+              { groupId = GroupId
+              , memberId = MemberId
+              },
+  try send_sync(SockPid, Request, 1000)
+  catch _ : _ -> ok
+  end,
   _ = brod_sock:stop(SockPid),
   ok.
 
@@ -242,11 +258,11 @@ join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   %$ 3. Cleanup old state depending on the error codes.
   State1 =
     case Reason of
-      {?EC_UNKNOWN_MEMBER_ID, _} ->
+      ?EC_UNKNOWN_MEMBER_ID ->
         %% we are likely kicked out from the group
         %% rejoin with empty member id
         State0#state{memberId = <<>>};
-      {?EC_NOT_COORDINATOR_FOR_GROUP, _} ->
+      ?EC_NOT_COORDINATOR_FOR_GROUP ->
         %% the coordinator have moved to another broker
         %% set it to ?undef to trigger a socket restart
         _ = brod_sock:stop(State0#state.sock_pid),
@@ -358,17 +374,15 @@ do_join_group(#state{ groupId                       = GroupId
         when Reason :: {error_code(), iodata()} | any().
 maybe_commit_current_offsets(#state{subscriber = Subscriber} = State,
                              _AttemptNo = 0,
-                             {?EC_ILLEGAL_GENERATION, _}) ->
+                             ?EC_ILLEGAL_GENERATION) ->
   ok = brod_group_subscriber:unsubscribe_all_partitions(Subscriber),
   case brod_group_subscriber:get_offsets_to_commit(Subscriber) of
     {ok, [_ | _] = Offsets} ->
       %% best-effort, hence ignore throws.
       try
         do_commit_offsets(State, Offsets)
-      catch throw : Reason ->
-        log(State, error_msg,
-            "failed to commit offsets before re-joinning group\n,reason: ~p",
-            [Reason])
+      catch throw : _Reason ->
+        ok
       end;
     _ ->
       ok
@@ -383,13 +397,16 @@ do_commit_offsets(#state{ groupId                  = GroupId
                         , generationId             = GenerationId
                         , sock_pid                 = SockPid
                         , offset_retention_seconds = OffsetRetentionSecs
-                        }, Offsets) ->
+                        } = State, Offsets) ->
   Req =
     #kpro_OffsetCommitRequestV2
       { consumerGroupId = GroupId
       , consumerGroupGenerationId = GenerationId
       , consumerId = MemberId
-      , retentionTime = timer:seconds(OffsetRetentionSecs)
+      , retentionTime = case OffsetRetentionSecs =/= ?undef of
+                          true  -> timer:seconds(OffsetRetentionSecs);
+                          false -> -1
+                        end
       , oCReqV2Topic_L = Offsets
       },
   Rsp = send_sync(SockPid, Req),
@@ -400,9 +417,10 @@ do_commit_offsets(#state{ groupId                  = GroupId
         fun(#kpro_OCRspPartition{partition = Partition, errorCode = EC}) ->
           kpro_ErrorCode:is_error(EC) andalso
             begin
-              Desc = io_lib:format("topic=~s,partition=~p,desc=~s",
-                                   [Topic, Partition, kpro_ErrorCode:desc(EC)]),
-              erlang:throw({EC, iolist_to_binary(Desc)})
+              log(State, error_msg,
+                  "failed to commit offset for topic=~s, partition=~p\n"
+                  "~p:~s", [Topic, Partition, EC, kpro_ErrorCode:desc(EC)]),
+              erlang:throw(EC)
             end
         end, Partitions)
     end, Topics).
@@ -418,7 +436,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
   AllPartitions =
     [ {Topic, Partition}
       || Topic <- Topics,
-         Partition <- ?ESCALATE(brod_client:get_partitions(Client, Topic))
+         Partition <- get_partitions(Client, Topic)
     ],
   Assignments = do_assign_partitions(Strategy, Members, AllPartitions),
   lists:map(
@@ -442,6 +460,11 @@ assign_partitions(State) when ?IS_LEADER(State) ->
 assign_partitions(#state{}) ->
   %% only leader can assign partitions to members
   [].
+
+-spec get_partitions(client(), topic()) -> [partition()] | no_return().
+get_partitions(Client, Topic) ->
+  Count = ?ESCALATE(brod_client:get_partitions_count(Client, Topic)),
+  lists:seq(0, Count-1).
 
 -spec do_assign_partitions(partition_assignment_strategy(),
                            [kpro_GroupMemberMetadata()],
@@ -474,6 +497,7 @@ assign_partition({MemberId, Topics0}, Topic, Partition) ->
 %% @end
 -spec get_topic_assignments(#state{}, kpro_ConsumerGroupMemberAssignment()) ->
         [topic_assignment()].
+get_topic_assignments(#state{}, <<>>) -> [];
 get_topic_assignments(#state{ groupId              = GroupId
                             , sock_pid             = SockPid
                             , default_begin_offset = DefatultBeginOffset
@@ -520,7 +544,7 @@ get_topic_assignments(#state{ groupId              = GroupId
           end, Partitions)
       end, TopicOffsets),
   CommittedOffsets = lists:append(CommittedOffsets0),
-  resolve_begin_offsets(TopicPartitions, CommittedOffsets,
+  resolve_begin_offsets(lists:append(TopicPartitions), CommittedOffsets,
                         DefatultBeginOffset, orddict:from_list([])).
 
 -spec resolve_begin_offsets(
@@ -532,17 +556,19 @@ get_topic_assignments(#state{ groupId              = GroupId
 resolve_begin_offsets([], _, _, Acc) -> Acc;
 resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
                       DefaultBeginOffset, Acc) ->
+  {_, {Offset, Metadata, EC}} =
+    lists:keyfind({Topic, Partition}, 1, CommittedOffsets),
   PartitionAssignment =
-    case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
-      false ->
+    case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
+      true ->
         %% use default begin offset if not found in committed offsets
         #partition_assignment{ partition    = Partition
                              , begin_offset = DefaultBeginOffset
                              , metadata     = <<>>
                              };
-      {_, {Offset, Metadata, EC}} ->
+      false ->
         ?ESCALATE_EC(EC),
-        true = (Offset >= 0),
+        true = (Offset >= 0), %% assert
         #partition_assignment{ partition    = Partition
                              , begin_offset = Offset + 1
                              , metadata     = Metadata

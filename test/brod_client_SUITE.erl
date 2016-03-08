@@ -98,7 +98,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
-  {ok, Pid} = brod:start_link_client([{"localhost", 8092} | ?HOSTS], Client),
+  {ok, Pid} = brod:start_link_client([{"localhost", 8192} | ?HOSTS], Client),
   ?assert(is_pid(Pid)),
   _Res = brod_client:get_partitions_count(Pid, <<"some-unknown-topic">>),
   ?assertMatch({error, {'UnknownTopicOrPartition', _}}, _Res),

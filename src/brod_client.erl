@@ -81,13 +81,13 @@
 
 -type get_producer_error() :: client_down
                             | {producer_down, noproc}
-                            | {producer_not_found, topic()}
-                            | {producer_not_found, topic(), partition()}.
+                            | {not_found, topic()}
+                            | {not_found, topic(), partition()}.
 
 -type get_consumer_error() :: client_down
                             | {consumer_down, noproc}
-                            | {consumer_not_found, topic()}
-                            | {consumer_not_found, topic(), partition()}.
+                            | {not_found, topic()}
+                            | {not_found, topic(), partition()}.
 
 -type get_worker_error() :: get_producer_error()
                           | get_consumer_error().
@@ -144,7 +144,7 @@ start_producer(Client, TopicName, ProducerConfig) ->
   case get_producer(Client, TopicName, _Partition = 0) of
     {ok, _Pid} ->
       ok; %% already started
-    {error, {producer_not_found, TopicName}} ->
+    {error, {not_found, TopicName}} ->
       gen_server:call(Client, {start_producer, TopicName, ProducerConfig},
                       infinity);
     {error, Reason} ->
@@ -163,7 +163,7 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
   case get_consumer(Client, TopicName, _Partition = 0) of
     {ok, _Pid} ->
       ok; %% already started
-    {error, {producer_not_found, TopicName}} ->
+    {error, {not_found, TopicName}} ->
       gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig},
                       infinity);
     {error, Reason} ->
@@ -331,23 +331,24 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({stop_producer, Topic}, _From, State) ->
-  brod_producers_sup:stop_producer(State#state.producers_sup, Topic);
+  ok = brod_producers_sup:stop_producer(State#state.producers_sup, Topic),
+  {reply, ok, State};
 handle_call({stop_consumer, Topic}, _From, State) ->
-  brod_consumers_sup:stop_consumer(State#state.consumers_sup, Topic);
+  ok = brod_consumers_sup:stop_consumer(State#state.consumers_sup, Topic),
+  {reply, ok, State};
 handle_call({get_group_coordinator, GroupId}, _From, State) ->
-  {ok, NewState} = maybe_restart_metadata_socket(State),
-  #state{config = Config, meta_sock_pid = SockPid} = NewState,
+  #state{config = Config} = State,
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
-  Result =
-    case brod_sock:send_sync(SockPid, Req, timer:seconds(Timeout)) of
+  {Result, NewState} =
+    case send_sync(State, Req, timer:seconds(Timeout)) of
       {ok, #kpro_GroupCoordinatorResponse{ errorCode = EC
                                          , coordinatorHost = Host
                                          , coordinatorPort = Port
                                          }} ->
         case kpro_ErrorCode:is_error(EC) of
-          true  -> {error, {EC, kpro_ErrorCode:desc(EC)}};
+          true  -> {error, EC}; %% OBS: {error, EC} is used by group controller
           false -> {ok, {binary_to_list(Host), Port}}
         end;
       {error, Reason} ->
@@ -523,7 +524,6 @@ validate_topic_existence(Topic0, #state{config = Config} = State) ->
 -spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
         when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
 do_get_metadata(Topic, #state{config = Config} = State) ->
-  {ok, NewState} = maybe_restart_metadata_socket(State),
   Topics = case Topic of
              ?undef -> []; %% in case no topic is given, get all
              _      -> [Topic]
@@ -531,9 +531,7 @@ do_get_metadata(Topic, #state{config = Config} = State) ->
   Request = #kpro_MetadataRequest{topicName_L = Topics},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  SockPid = NewState#state.meta_sock_pid,
-  Result = brod_sock:send_sync(SockPid, Request, timer:seconds(Timeout)),
-  {Result, NewState}.
+  send_sync(State, Request, timer:seconds(Timeout)).
 
 -spec do_get_connection(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
@@ -636,22 +634,6 @@ is_cooled_down(Ts, #state{config = Config}) ->
   Diff = timer:now_diff(Now, Ts) div 1000000,
   Diff >= Threshold.
 
-%% @private Maybe restart the metadata socket pid if it is no longer alive.
--spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}} | no_return().
-maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
-  case is_pid(MetaSockPid) andalso is_process_alive(MetaSockPid) of
-    true ->
-      {ok, State};
-    false -> % can happen when metadata connection closed
-      ClientId = State#state.client_id,
-      Endpoints = State#state.bootstrap_endpoints,
-      {ok, NewMetaSockPid, ReorderedEndpoints} =
-        start_metadata_socket(ClientId, Endpoints),
-      {ok, State#state{ bootstrap_endpoints = ReorderedEndpoints
-                      , meta_sock_pid       = NewMetaSockPid
-                      }}
-  end.
-
 %% @private Establish a dedicated socket to kafka cluster bootstrap endpoint(s)
 %% for metadata retrievals. Failed endpoints are moved to the end of the list
 %% so that future retries will start from one that has not tried yet, or the
@@ -721,6 +703,40 @@ do_get_partitions_count(TopicMetadata) ->
       {error, {TopicEC, kpro_ErrorCode:desc(TopicEC)}};
     false ->
       {ok, erlang:length(Partitions)}
+  end.
+
+-spec send_sync(#state{}, kpro_Request(), timer:time()) ->
+        {Result, #state{}} when Result :: {ok, kpro_Response()}
+                                        | {error, any()}.
+send_sync(State, Request, Timeout) ->
+  send_sync(State, Request, Timeout, 0).
+
+send_sync(State, Request, Timeout, RetryCnt) ->
+  RetryCnt >= length(State#state.bootstrap_endpoints) andalso
+    erlang:error(no_reachable_endpoint),
+  {ok, NewState} = maybe_restart_metadata_socket(State),
+  SockPid = NewState#state.meta_sock_pid,
+  case brod_sock:send_sync(SockPid, Request, Timeout) of
+    {error, tcp_closed} ->
+      send_sync(NewState, Request, Timeout, RetryCnt+1);
+    Result ->
+      {Result, State}
+  end.
+
+%% @private Maybe restart the metadata socket pid if it is no longer alive.
+-spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}} | no_return().
+maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
+  case is_pid(MetaSockPid) andalso is_process_alive(MetaSockPid) of
+    true ->
+      {ok, State};
+    false -> % can happen when metadata connection closed
+      ClientId = State#state.client_id,
+      Endpoints = State#state.bootstrap_endpoints,
+      {ok, NewMetaSockPid, ReorderedEndpoints} =
+        start_metadata_socket(ClientId, Endpoints),
+      {ok, State#state{ bootstrap_endpoints = ReorderedEndpoints
+                      , meta_sock_pid       = NewMetaSockPid
+                      }}
   end.
 
 

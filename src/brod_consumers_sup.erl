@@ -81,7 +81,7 @@ find_consumer(SupPid, Topic, Partition) ->
         case supervisor3:find_child(Sup2Pid, Partition) of
           [] ->
             %% no such partition?
-            {error, {consumer_not_found, Topic, Partition}};
+            {error, {not_found, Topic, Partition}};
           [Pid] ->
             {ok, Pid}
         end
