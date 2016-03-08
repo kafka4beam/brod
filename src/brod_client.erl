@@ -32,7 +32,6 @@
         , register_producer/3
         , start_link/2
         , start_link/3
-        , start_link/5
         , start_producer/3
         , start_consumer/3
         , stop/1
@@ -109,24 +108,14 @@
 -spec start_link( [endpoint()]
                 , client_config()) -> {ok, pid()} | {error, any()}.
 start_link(BootstrapEndpoints, Config) ->
-  Args = {BootstrapEndpoints, Config, [], []},
+  Args = {BootstrapEndpoints, Config},
   gen_server:start_link(?MODULE, Args, []).
 
 -spec start_link( [endpoint()]
                 , client_id()
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(BootstrapEndpoints, ClientId, Config) ->
-  start_link(BootstrapEndpoints, ClientId, Config, [], []).
-
--spec start_link( [endpoint()]
-                , client_id()
-                , client_config()
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]) ->
-                    {ok, pid()} | {error, any()}.
-start_link(BootstrapEndpoints, ClientId, Config, Producers, Consumers)
-  when is_atom(ClientId) ->
-  Args = {BootstrapEndpoints, ClientId, Config, Producers, Consumers},
+start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
+  Args = {BootstrapEndpoints, ClientId, Config},
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
@@ -214,33 +203,33 @@ get_consumer(Client, Topic, Partition) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({BootstrapEndpoints, ClientId, Config, Producers, Consumers}) ->
+init({BootstrapEndpoints, ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
-  self() ! {init, Producers, Consumers},
+  self() ! init,
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
              }};
-init({BootstrapEndpoints, Config, Producers, Consumers}) ->
+init({BootstrapEndpoints, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
-  self() ! {init, Producers, Consumers},
+  self() ! init,
   {ok, #state{ client_id           = ?DEFAULT_CLIENT_ID
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
              }}.
 
-handle_info({init, Producers, Consumers}, State) ->
+handle_info(init, State) ->
   ClientId = State#state.client_id,
   Endpoints = State#state.bootstrap_endpoints,
   {ok, MetaSock, ReorderedEndpoints} =
     start_metadata_socket(ClientId, Endpoints),
-  {ok, ProducersSupPid} = brod_producers_sup:start_link(self(), Producers),
-  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(self(), Consumers),
+  {ok, ProducersSupPid} = brod_producers_sup:start_link(),
+  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
   {noreply, State#state{ bootstrap_endpoints = ReorderedEndpoints
                        , meta_sock_pid       = MetaSock
                        , producers_sup       = ProducersSupPid
