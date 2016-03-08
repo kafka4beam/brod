@@ -513,8 +513,7 @@ get_default_producer_config(Client) ->
   Clients = application:get_env(brod, clients, []),
   case lists:keyfind(Client, 1, Clients) of
     {Client, ClientConfig} ->
-      Producers = proplists:get_value(producers, ClientConfig, []),
-      proplists:get_value(default, Producers, []);
+      proplists:get_value(default_producer_config, ClientConfig, []);
     false ->
       []
   end.
