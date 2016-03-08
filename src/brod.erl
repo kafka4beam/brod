@@ -177,9 +177,7 @@ get_producer(Client, Topic, Partition) ->
   case brod_client:get_producer(Client, Topic, Partition) of
     {ok, Producer} ->
       {ok, Producer};
-    {error, Reason} = Error
-      when Reason =:= {producer_not_found, Topic};
-           Reason =:= {producer_not_found, Topic, Partition} ->
+    {error, {producer_not_found, Topic}} = Error ->
       %% try to start a producer for the given topic if
       %% auto_start_producers option is enabled for the client
       AutoStartEnabled = is_producer_autostart_enabled(Client),
