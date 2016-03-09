@@ -149,7 +149,11 @@ unsubscribe(Pid) ->
 %% @end
 -spec ack(pid(), offset()) -> ok.
 ack(Pid, Offset) ->
-  gen_server:call(Pid, {ack, Offset}, infinity).
+  try
+    gen_server:call(Pid, {ack, Offset}, infinity)
+  catch exit : noproc ->
+    {error, consumer_down}
+  end.
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
@@ -432,7 +436,7 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
                                } = State) ->
   case is_pid(SocketPid) andalso
        is_pid(Subscriber) andalso
-       length(PendingAcks) < PrefetchCount of
+       length(PendingAcks) =< PrefetchCount of
     true ->
       case send_fetch_request(State) of
         {ok, CorrId} ->

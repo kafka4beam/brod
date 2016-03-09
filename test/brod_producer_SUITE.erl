@@ -201,13 +201,7 @@ make_unique_kv() ->
   , iolist_to_binary(["val-", make_ts_str()])
   }.
 
-make_ts_str() ->
-  Ts = os:timestamp(),
-  {{Y,M,D}, {H,Min,Sec}} = calendar:now_to_universal_time(Ts),
-  {_, _, Micro} = Ts,
-  S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
-                    [Y, M, D, H, Min, Sec, Micro]),
-  lists:flatten(S).
+make_ts_str() -> brod_utils:os_time_utc_str().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

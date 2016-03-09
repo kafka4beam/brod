@@ -26,10 +26,11 @@
 -export([ find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
-        , try_connect/1
         , is_normal_reason/1
         , is_pid_alive/1
+        , os_time_utc_str/0
         , shutdown_pid/1
+        , try_connect/1
         ]).
 
 -include("brod_int.hrl").
@@ -88,6 +89,14 @@ find_leader_in_metadata(Metadata, Topic, Partition) ->
     {error, Reason}
   end.
 
+-spec os_time_utc_str() -> string().
+os_time_utc_str() ->
+  Ts = os:timestamp(),
+  {{Y,M,D}, {H,Min,Sec}} = calendar:now_to_universal_time(Ts),
+  {_, _, Micro} = Ts,
+  S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
+                    [Y, M, D, H, Min, Sec, Micro]),
+  lists:flatten(S).
 
 %%%_* Internal Functions =======================================================
 
