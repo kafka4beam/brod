@@ -26,7 +26,7 @@
 
 -export([ init/1
         , post_init/1
-        , start_link/2
+        , start_link/0
         , find_producer/3
         , start_producer/4
         ]).
@@ -47,14 +47,12 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Start a root producers supervisor,
-%%      per-topic supervisors and per-partition producer workers.
-%%      The config is passed down to the producers.
+%% @doc Start a root producers supervisor.
 %% For more details: @see brod_producer:start_link/4
 %% @end
--spec start_link(pid(), [{topic(), producer_config()}]) -> {ok, pid()}.
-start_link(ClientPid, Producers) ->
-  supervisor3:start_link(?MODULE, {?SUP, ClientPid, Producers}).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  supervisor3:start_link(?MODULE, ?SUP).
 
 %% @doc Dynamically start a per-topic supervisor
 -spec start_producer(pid(), pid(), topic(), producer_config()) ->
@@ -90,10 +88,8 @@ find_producer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init({?SUP, ClientPid, Producers}) ->
-  Children = [ producers_sup_spec(ClientPid, TopicName, Config)
-             || {TopicName, Config} <- Producers ],
-  {ok, {{one_for_one, 0, 1}, Children}};
+init(?SUP) ->
+  {ok, {{one_for_one, 0, 1}, []}};
 init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 

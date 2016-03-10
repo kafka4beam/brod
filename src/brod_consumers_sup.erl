@@ -26,7 +26,7 @@
 
 -export([ init/1
         , post_init/1
-        , start_link/2
+        , start_link/0
         , find_consumer/3
         , start_consumer/4
         ]).
@@ -44,13 +44,11 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Start a root consumers supervisor,
-%%      per-topic supervisors and per-partition consumer workers.
-%%      The config is passed down to the consumers.
+%% @doc Start a root consumers supervisor.
 %% @end
--spec start_link(pid(), [{topic(), consumer_config()}]) -> {ok, pid()}.
-start_link(ClientPid, Consumers) ->
-  supervisor3:start_link(?MODULE, {?SUP, ClientPid, Consumers}).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  supervisor3:start_link(?MODULE, ?SUP).
 
 %% @doc Dynamically start a per-topic supervisor
 -spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
@@ -84,10 +82,8 @@ find_consumer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init({?SUP, ClientPid, Consumers}) ->
-  Children = [ consumers_sup_spec(ClientPid, TopicName, Config)
-             || {TopicName, Config} <- Consumers ],
-  {ok, {{one_for_one, 0, 1}, Children}};
+init(?SUP) ->
+  {ok, {{one_for_one, 0, 1}, []}};
 init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 

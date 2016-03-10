@@ -225,11 +225,7 @@ produce_sync(Pid, Key, Value) ->
 %% @doc Produce one message and wait for ack from kafka.
 -spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
                    binary(), binary()) -> ok | {error, any()}.
-produce_sync(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
-  {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
-  {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
-  produce_sync(Client, Topic, Partition, Key, Value);
-produce_sync(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
+produce_sync(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
     {ok, CallRef} ->
       sync_produce_request(CallRef);
