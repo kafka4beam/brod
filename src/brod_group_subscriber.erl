@@ -28,7 +28,7 @@
 
 %% callbacks for brod_group_controller
 -export([ get_committed_offsets/2
-        , new_assignments/3
+        , new_assignments/4
         , unsubscribe_all_partitions/1
         ]).
 
@@ -68,7 +68,7 @@
 %%       partition-consumers are fetching more messages behind the scene
 %%       unless prefetch_count is set to 0 in consumer config.
 %%
--callback handle_message(#kafka_message{}, cb_state()) ->
+-callback handle_message(topic(), partition(), #kafka_message{}, cb_state()) ->
             {ok, cb_state()} | {ok, ack, cb_state()}.
 
 %% This callback is called only when subscriber is to commit offsets locally
@@ -78,9 +78,11 @@
 %% For the topic-partitions which have no committed offset found,
 %% the subscriber will take default_begin_offset from consumer group config as
 %% the start point of data stream. (by default, -1: latest available offset)
--callback get_committed_offsets(group_id(), [{topic(), partition()}],
-                                cb_state()) ->
-            {ok, [{{topic(), partition()}, offset()}], cb_state()}.
+%%
+% commented out as optional
+%-callback get_committed_offsets(group_id(), [{topic(), partition()}],
+%                                cb_state()) ->
+%            {ok, [{{topic(), partition()}, offset()}], cb_state()}.
 
 -record(consumer, { topic_partition :: {topic(), partition()}
                   , consumer_pid    :: pid()
@@ -99,8 +101,9 @@
 -record(state,
         { client                :: client()
         , groupId               :: group_id()
-        , controller            :: pid()
+        , memberId              :: member_id()
         , generationId          :: integer()
+        , controller            :: pid()
         , consumers = []        :: [#consumer{}]
         , consumer_config       :: consumer_config()
         , is_blocked = false    :: boolean()
@@ -152,9 +155,10 @@ get_controller(Pid) ->
 %%%_* APIs for group controller ================================================
 
 %% @doc Called by group controller when there is new assignemnt received.
--spec new_assignments(pid(), integer(), [topic_assignment()]) -> ok.
-new_assignments(Pid, GenerationId, TopicAssignments) ->
-  gen_server:cast(Pid, {new_assignments, GenerationId, TopicAssignments}).
+-spec new_assignments(pid(), member_id(), integer(), [topic_assignment()]) -> ok.
+new_assignments(Pid, MemberId, GenerationId, TopicAssignments) ->
+  gen_server:cast(Pid, {new_assignments, MemberId,
+                        GenerationId, TopicAssignments}).
 
 %% @doc Called by group controller before re-joinning the consumer group.
 -spec unsubscribe_all_partitions(pid()) -> ok.
@@ -187,17 +191,20 @@ init({Client, GroupId, Topics, GroupConfig,
                 },
   {ok, State}.
 
-handle_info(#kafka_message_set{ topic     = Topic
-                              , partition = Partition
-                              , messages  = Messages
-                              },
+handle_info({_ConsumerPid,
+             #kafka_message_set{ topic     = Topic
+                               , partition = Partition
+                               , messages  = Messages
+                               }},
             #state{ cb_module        = CbModule
                   , pending_messages = Pendings
                   } = State) ->
   MapFun =
     fun(#kafka_message{offset = Offset} = Msg) ->
       AckRef = {Topic, Partition, Offset},
-      CbFun = fun(CbState) -> CbModule:handle_message(Msg, CbState) end,
+      CbFun = fun(CbState) ->
+                CbModule:handle_message(Topic, Partition, Msg, CbState)
+              end,
       {AckRef, CbFun}
     end,
   NewPendings = Pendings ++ lists:map(MapFun, Messages),
@@ -232,7 +239,8 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
     end,
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
   {noreply, NewState};
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+  log(State, info, "discarded message:~p", [Info]),
   {noreply, State}.
 
 handle_call(get_controller, _From, State) ->
@@ -267,13 +275,16 @@ handle_call(Call, _From, State) ->
 handle_cast({ack, Topic, Partition, Offset}, State) ->
   {ok, NewState} = handle_ack({Topic, Partition, Offset}, State),
   {noreply, NewState};
-handle_cast({new_assignments, GenerationId, Assignments},
+handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ client          = Client
                   , consumer_config = ConsumerConfig
                   } = State) ->
   lists:foreach(
     fun({Topic, _PartitionAssignments}) ->
-      ok = brod_client:start_consumer(Client, Topic, ConsumerConfig)
+      case brod_client:start_consumer(Client, Topic, ConsumerConfig) of
+        ok                               -> ok;
+        {error, {already_started, _Pid}} -> ok
+      end
     end, Assignments),
   Consumers =
     [ #consumer{ topic_partition = {Topic, Partition}
@@ -289,6 +300,7 @@ handle_cast({new_assignments, GenerationId, Assignments},
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS),
   NewState = State#state{ consumers    = Consumers
                         , is_blocked   = false
+                        , memberId     = MemberId
                         , generationId = GenerationId
                         },
   {noreply, NewState};
@@ -399,6 +411,15 @@ subscribe_partition(Client, Consumer) ->
                            }
       end
   end.
+
+log(#state{ groupId  = GroupId
+          , memberId = MemberId
+          , generationId = GenerationId
+          }, Level, Fmt, Args) ->
+  brod_utils:log(
+    Level,
+    "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
+    [GroupId, MemberId, GenerationId, self() | Args]).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

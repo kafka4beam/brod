@@ -217,7 +217,7 @@ handle_info(?SEND_FETCH_REQUEST, State0) ->
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{subscriber = Pid} = State) ->
-  error_logger:info_msg("~p ~p subscriber ~p is down, reason: ~p",
+  error_logger:info_msg("~p ~p subscriber ~p is down, reason:\n~p",
                         [?MODULE, self(), Pid, Reason]),
   NewState = reset_buffer(State#state{ subscriber      = undefined
                                      , subscriber_mref = undefined

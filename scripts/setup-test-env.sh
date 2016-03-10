@@ -18,9 +18,18 @@ while [ "$(sudo docker exec kafka_1 bash -c '/opt/kafka/bin/kafka-topics.sh --zo
   sleep 1
 done
 
-sudo docker exec kafka_1 bash -c "/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions 1 --replication-factor 1 --topic brod-cli-produce-test"
-sudo docker exec kafka_1 bash -c "/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions 1 --replication-factor 1 --topic brod-client-SUITE-topic"
-sudo docker exec kafka_1 bash -c "/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions 2 --replication-factor 1 --topic brod_producer_SUITE"
-sudo docker exec kafka_1 bash -c "/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions 1 --replication-factor 1 --topic brod_consumer_SUITE"
-sudo docker exec kafka_1 bash -c "/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions 7 --replication-factor 2 --topic brod_group_subscriber_SUITE"
+function create_topic {
+  TOPIC_NAME="$1"
+  PARTITIONS="${2:-1}"
+  REPLICAS="${3:-1}"
+  CMD="/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions $PARTITIONS --replication-factor $REPLICAS --topic $TOPIC_NAME"
+  sudo docker exec kafka_1 bash -c "$CMD"
+}
+
+create_topic "brod-cli-produce-test"
+create_topic "brod-client-SUITE-topic"
+create_topic "brod_producer_SUITE"           2
+create_topic "brod_consumer_SUITE"
+create_topic "brod_group_subscriber_SUITE"   7 2
+create_topic "brod-demo-1" 7 2
 

@@ -31,6 +31,7 @@
         , os_time_utc_str/0
         , shutdown_pid/1
         , try_connect/1
+        , log/3
         ]).
 
 -include("brod_int.hrl").
@@ -97,6 +98,16 @@ os_time_utc_str() ->
   S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
+
+%% @doc simple wrapper around error_logger.
+%% NOTE: keep making MFA calls to error_logger to
+%%       1. allow logging libraries such as larger parse_transform
+%%       2. be more xref friendly
+%% @end
+-spec log(info | warning | error, string(), [any()]) -> ok.
+log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
+log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
+log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
 
 %%%_* Internal Functions =======================================================
 

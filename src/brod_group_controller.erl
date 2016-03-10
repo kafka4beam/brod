@@ -64,7 +64,7 @@
 
 %% loopback commands
 -define(LO_CMD_SEND_HB, send_heartbeat).
--define(LO_CMD_COMMIT_OFFSETS, commit_offsets).
+-define(LO_CMD_COMMIT_OFFSETS, lo_cmd_commit_offsets).
 -define(LO_CMD_JOIN_GROUP(AttemptCount, Reason),
         {join_group, AttemptCount, Reason}).
 
@@ -207,16 +207,13 @@ handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
       {noreply, NewState}
   end;
 handle_info(?LO_CMD_COMMIT_OFFSETS, State) ->
-  NewState =
-    case do_commit_offsets(State) of
-      {ok, State_} ->
-        State_;
-      {error, Reason} ->
-        {ok, State_} = join_group(State, 0, Reason),
-        State_
-    end,
-  ok = maybe_start_commit_offsets_timer(NewState),
-  {noreply, NewState};
+  try
+    NewState = ?ESCALATE(do_commit_offsets(State)),
+    ok = maybe_start_commit_offsets_timer(NewState),
+    {noreply, NewState}
+  catch throw : Reason ->
+    {stop, {failed_to_commit_offsets, Reason}, State}
+  end;
 handle_info(?LO_CMD_JOIN_GROUP(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
@@ -266,13 +263,12 @@ handle_call(commit_offsets, _From,
             #state{offset_commit_policy = disabled} = State) ->
   {reply, {error, disabled}, State};
 handle_call(commit_offsets, From, State) ->
-  case  do_commit_offsets(State) of
-    {ok, NewState} ->
-      {reply, ok, NewState};
-    {error, Reason} ->
-      gen_server:reply(From, {error, Reason}),
-      {ok, NewState} = join_group(State, 0, Reason),
-      {noreply, NewState}
+  try
+    NewState = ?ESCALATE(do_commit_offsets(State)),
+    {reply, ok, NewState}
+  catch throw : Reason ->
+    gen_server:reply(From, {error, Reason}),
+    {stop, {failed_to_commit_offsets, Reason}, State}
   end;
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
@@ -287,7 +283,7 @@ terminate(Reason, #state{ sock_pid = SockPid
                         , groupId  = GroupId
                         , memberId = MemberId
                         } = State) ->
-  log(State, info_msg, "leaving group, reason ~p\n", [Reason]),
+  log(State, info, "leaving group, reason ~p\n", [Reason]),
   Request = #kpro_LeaveGroupRequest
               { groupId = GroupId
               , memberId = MemberId
@@ -320,7 +316,7 @@ ensure_connection_to_coordinator(#state{ client      = Client
       _ = brod_sock:stop(SockPid),
       NewSockPid =
         ?ESCALATE(brod_sock:start_link(self(), Host, Port, GroupId, [])),
-      log(State, info_msg, "connected to group coordinator ~s:~p",
+      log(State, info, "connected to group coordinator ~s:~p",
           [Host, Port]),
       State#state{ coordinator = {Host, Port}
                  , sock_pid    = NewSockPid
@@ -336,7 +332,7 @@ join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   %% log the first failure reason,
   %% retry-failures are logged right after the join_group exception below.
   AttemptNo =:= 0 andalso
-    log(State0, info_msg, "re-joining group.\nreason:~p", [Reason]),
+    log(State0, info, "re-joining group.\nreason:~p", [Reason]),
 
   %% 1. unsubscribe all currently assigned partitions
   ok = brod_group_subscriber:unsubscribe_all_partitions(Subscriber),
@@ -348,7 +344,7 @@ join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
           Reason       =:= ?EC_ILLEGAL_GENERATION andalso
           CommitPolicy =/= disabled of
       true ->
-        {ok, State1_} = try_commit_offsets(State0),
+        {ok, #state{} = State1_} = try_commit_offsets(State0),
         State1_;
       false ->
         State0
@@ -377,9 +373,9 @@ join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   %%    send sync group request, wait for response
   %%    tell subscriber to carryout new assignments
   try
-    do_join_group(State)
+    {ok, #state{}} = do_join_group(State)
   catch throw : NewReason ->
-    log(State, error_msg, "failed to join group\nreason:~p\n~p",
+    log(State, error, "failed to join group\nreason:~p\n~p",
         [NewReason, erlang:get_stacktrace()]),
     case AttemptNo =:= 0 of
       true ->
@@ -455,10 +451,12 @@ do_join_group(#state{ groupId                       = GroupId
   ?ESCALATE_EC(SyncErrorCode),
   %% get my partition assignments
   TopicAssignments = get_topic_assignments(State, Assignment),
-  log(State, info_msg, "elected=~p\nassignments:~p",
+  log(State, info, "elected=~p\nassignments:~p",
       [IsGroupLeader, TopicAssignments]),
 
-  ok = brod_group_subscriber:new_assignments(Subscriber, GenerationId,
+  ok = brod_group_subscriber:new_assignments(Subscriber,
+                                             MemberId,
+                                             GenerationId,
                                              TopicAssignments),
 
   {ok, State}.
@@ -467,10 +465,10 @@ do_join_group(#state{ groupId                       = GroupId
 -spec handle_ack(#state{}, topic(), partition(), offset()) -> {ok, #state{}}.
 handle_ack(#state{ acked_offsets = AckedOffsets
                  } = State, Topic, Partition, Offset) ->
-  AckedOffsets =
+  NewAckedOffsets =
     lists:keystore({Topic, Partition}, 1, AckedOffsets,
                    {{Topic, Partition}, Offset}),
-  {ok, State#state{acked_offsets = AckedOffsets}}.
+  {ok, State#state{acked_offsets = NewAckedOffsets}}.
 
 %% @private Commit the current offsets before re-join the group.
 %% NOTE: this is a 'best-effort' attempt, failing to commit offset
@@ -481,7 +479,7 @@ handle_ack(#state{ acked_offsets = AckedOffsets
 -spec try_commit_offsets(#state{}) -> {ok, #state{}}.
 try_commit_offsets(#state{} = State) ->
   try
-    {ok, _} = do_commit_offsets(State)
+    {ok, #state{}} = do_commit_offsets(State)
   catch _ : _ ->
     {ok, State}
   end.
@@ -532,10 +530,10 @@ do_commit_offsets(#state{ groupId                  = GroupId
         fun(#kpro_OCRspPartition{partition = Partition, errorCode = EC}) ->
           kpro_ErrorCode:is_error(EC) andalso
             begin
-              log(State, error_msg,
+              log(State, error,
                   "failed to commit offset for topic=~s, partition=~p\n"
                   "~p:~s", [Topic, Partition, EC, kpro_ErrorCode:desc(EC)]),
-              erlang:throw(EC)
+              erlang:error(EC)
             end
         end, Partitions)
     end, Topics),
@@ -760,7 +758,7 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                                   , memberId = MemberId
                                   , generationId = GenerationId
                                   },
-  CorrId = ?ESCALATE(brod_sock:send(SockPid, Request)),
+  {ok, CorrId} = brod_sock:send(SockPid, Request),
   NewState = State#state{hb_ref = {CorrId, os:timestamp()}},
   {ok, NewState};
 maybe_send_heartbeat(#state{} = State) ->
@@ -779,9 +777,10 @@ make_user_data() ->
 log(#state{ groupId  = GroupId
           , memberId = MemberId
           , generationId = GenerationId
-          }, LevelFun, Fmt, Args) ->
-  error_logger:LevelFun(
-    "groupId=~s memberId=~s generation=~p pid=~p:\n" ++ Fmt,
+          }, Level, Fmt, Args) ->
+  brod_utils:log(
+    Level,
+    "group controller (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
     [GroupId, MemberId, GenerationId, self() | Args]).
 
 make_metadata() ->

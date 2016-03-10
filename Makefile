@@ -26,3 +26,10 @@ t: eunit ct
 
 ESCRIPT_FILE = scripts/$(PROJECT)
 
+DEMO_ERLS = $(wildcard demos/*.erl)
+
+.PHONY: demos
+
+demos: app
+	$(erlc_verbose) erlc -o ebin/ -I include $(ERLC_OPTS) $(DEMO_ERLS)
+

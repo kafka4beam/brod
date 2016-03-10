@@ -41,8 +41,8 @@
 -type required_acks()    :: -1..1.
 
 %% consumer groups
--type group_id()             :: kafka_consumer_group_id().
--type member_id()            :: kafka_consumer_group_member_id().
+-type group_id()             :: kafka_group_id().
+-type member_id()            :: kafka_group_member_id().
 -type group_config()         :: brod_group_config().
 
 -record(partition_assignment, { partition    :: partition()

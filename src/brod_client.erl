@@ -341,9 +341,10 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
-  {Result, NewState} =
-    case send_sync(State, Req, timer:seconds(Timeout)) of
-      {ok, #kpro_GroupCoordinatorResponse{ errorCode = EC
+  {Rsp, NewState} = send_sync(State, Req, timer:seconds(Timeout)),
+  Result =
+    case Rsp of
+      {ok, #kpro_GroupCoordinatorResponse{ errorCode       = EC
                                          , coordinatorHost = Host
                                          , coordinatorPort = Port
                                          }} ->

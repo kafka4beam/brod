@@ -17,12 +17,13 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_topic()                    :: binary().
--type kafka_partition()                :: non_neg_integer().
--type kafka_offset()                   :: integer().
--type kafka_error_code()               :: atom() | integer().
--type kafka_consumer_group_id()        :: binary().
--type kafka_consumer_group_member_id() :: binary().
+-type kafka_topic()           :: binary().
+-type kafka_partition()       :: non_neg_integer().
+-type kafka_offset()          :: integer().
+-type kafka_error_code()      :: atom() | integer().
+-type kafka_group_id()        :: binary().
+-type kafka_group_member_id() :: binary().
+-type brod_client_id()        :: atom().
 
 -record(kafka_message,
         { offset     :: kafka_offset()
@@ -42,11 +43,9 @@
 -record(kafka_fetch_error,
         { topic      :: kafka_topic()
         , partition  :: kafka_partition()
-        , error_code :: error_code()
+        , error_code :: kafka_error_code()
         , error_desc :: string()
         }).
-
--type brod_client_id() :: atom().
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
@@ -73,7 +72,7 @@
 
 -define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 
--type brod_partition_fun() :: fun(( Topic :: topic()
+-type brod_partition_fun() :: fun(( Topic :: kafka_topic()
                                   , PartitionsCnt :: integer()
                                   , Key           :: binary()
                                   , Value         :: binary()) ->
