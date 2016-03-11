@@ -231,16 +231,15 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
   {ok, NewState} =
     case kpro_ErrorCode:is_error(ErrorCode) of
       true ->
-        ErrorDesc = kpro_ErrorCode:desc(ErrorCode),
         error_logger:error_msg(
           "Error in produce response\n"
           "Topic: ~s\n"
           "Partition: ~B\n"
           "Offset: ~B\n"
-          "Error: ~s",
-          [Topic, Partition, Offset, ErrorDesc]),
+          "Error: ~p",
+          [Topic, Partition, Offset, ErrorCode]),
         Error = {produce_response_error, Topic, Partition,
-                 Offset, ErrorCode, ErrorDesc},
+                 Offset, ErrorCode},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
         case brod_producer_buffer:nack(Buffer, CorrId, Error) of
           {ok, NewBuffer}  -> schedule_retry(State#state{buffer = NewBuffer});

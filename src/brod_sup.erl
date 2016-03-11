@@ -139,14 +139,12 @@ post_init(_) ->
 %%%_* Internal functions =======================================================
 client_spec(ClientId, Args) ->
   Endpoints = proplists:get_value(endpoints, Args, []),
-  Producers = proplists:get_value(producers, Args, []),
-  Consumers = proplists:get_value(consumers, Args, []),
-  ok = verify_config(Endpoints, Producers, Consumers),
+  ok        = verify_config(Endpoints),
   Config0   = proplists:get_value(config, Args, []),
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_CLIENT_RESTART_DELAY),
   Config    = proplists:delete(restart_delay_seconds, Config0),
-  StartArgs = [Endpoints, ClientId, Config, Producers, Consumers],
+  StartArgs = [Endpoints, ClientId, Config],
   { _Id       = ClientId
   , _Start    = {brod_client, start_link, StartArgs}
   , _Restart  = {permanent, DelaySecs}
@@ -155,9 +153,9 @@ client_spec(ClientId, Args) ->
   , _Module   = [brod_client]
   }.
 
-verify_config([], _Producers, _Consumers) ->
+verify_config([]) ->
   exit("No endpoints found in brod client config.");
-verify_config(_Endpoints, _Producers, _Consumers) ->
+verify_config(_Endpoints) ->
   ok.
 
 %%%_* Emacs ====================================================================

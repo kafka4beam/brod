@@ -34,7 +34,6 @@
         , register_producer/3
         , start_link/2
         , start_link/3
-        , start_link/5
         , start_producer/3
         , start_consumer/3
         , stop/1
@@ -113,31 +112,45 @@
 -spec start_link( [endpoint()]
                 , client_config()) -> {ok, pid()} | {error, any()}.
 start_link(BootstrapEndpoints, Config) ->
-  Args = {BootstrapEndpoints, Config, [], []},
+  Args = {BootstrapEndpoints, Config},
   gen_server:start_link(?MODULE, Args, []).
 
 -spec start_link( [endpoint()]
                 , client_id()
                 , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(BootstrapEndpoints, ClientId, Config) ->
-  start_link(BootstrapEndpoints, ClientId, Config, [], []).
-
--spec start_link( [endpoint()]
-                , client_id()
-                , client_config()
-                , [{topic(), producer_config()}]
-                , [{topic(), consumer_config()}]) ->
-                    {ok, pid()} | {error, any()}.
-start_link(BootstrapEndpoints, ClientId, Config, Producers, Consumers)
-  when is_atom(ClientId) ->
-  Args = {BootstrapEndpoints, ClientId, Config, Producers, Consumers},
+start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
+  Args = {BootstrapEndpoints, ClientId, Config},
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
 stop(Client) ->
   gen_server:call(Client, stop, infinity).
 
-%% @doc Dynamically start a topic producer
+%% @doc Get producer of the given topic-partition.
+%% The producer is started if auto_start_producers is
+%% enabled in client config.
+%% @end
+-spec get_producer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_producer_error()}.
+get_producer(Client, Topic, Partition) ->
+  case get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)) of
+    {ok, Pid} ->
+      {ok, Pid};
+    {error, {producer_not_found, Topic}} = Error ->
+      %% try to start a producer for the given topic if
+      %% auto_start_producers option is enabled for the client
+      maybe_start_producer(Client, Topic, Partition, Error);
+    Error ->
+      Error
+  end.
+
+%% @doc Get consumer of the given topic-parition.
+-spec get_consumer(client(), topic(), partition()) ->
+        {ok, pid()} | {error, get_consumer_error()}.
+get_consumer(Client, Topic, Partition) ->
+  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
+
+%% @doc Dynamically start a per-topic producer
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
@@ -236,18 +249,6 @@ register_consumer(Client, Topic, Partition) ->
   Key = ?CONSUMER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Consumer}).
 
-%% @doc Get producer of the given topic-partition.
--spec get_producer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, get_producer_error()}.
-get_producer(Client, Topic, Partition) ->
-  get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition)).
-
-%% @doc Get consumer of the given topic-parition.
--spec get_consumer(client(), topic(), partition()) ->
-        {ok, pid()} | {error, get_consumer_error()}.
-get_consumer(Client, Topic, Partition) ->
-  get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
-
 %% @doc Get the connection to kafka broker at Host:Port.
 %% If there is no such connection established yet, try to establish a new one.
 %% If the connection is already established per request from another producer
@@ -262,33 +263,33 @@ get_connection(Client, Host, Port) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({BootstrapEndpoints, ClientId, Config, Producers, Consumers}) ->
+init({BootstrapEndpoints, ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
-  self() ! {init, Producers, Consumers},
+  self() ! init,
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
              }};
-init({BootstrapEndpoints, Config, Producers, Consumers}) ->
+init({BootstrapEndpoints, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
-  self() ! {init, Producers, Consumers},
+  self() ! init,
   {ok, #state{ client_id           = ?DEFAULT_CLIENT_ID
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
              }}.
 
-handle_info({init, Producers, Consumers}, State) ->
+handle_info(init, State) ->
   ClientId = State#state.client_id,
   Endpoints = State#state.bootstrap_endpoints,
   {ok, MetaSock, ReorderedEndpoints} =
     start_metadata_socket(ClientId, Endpoints),
-  {ok, ProducersSupPid} = brod_producers_sup:start_link(self(), Producers),
-  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(self(), Consumers),
+  {ok, ProducersSupPid} = brod_producers_sup:start_link(),
+  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
   {noreply, State#state{ bootstrap_endpoints = ReorderedEndpoints
                        , meta_sock_pid       = MetaSock
                        , producers_sup       = ProducersSupPid
@@ -357,18 +358,8 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
     end,
   {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  {Result, NewState} = validate_topic_existence(TopicName, State),
-  try
-    Result =:= ok orelse throw(Result),
-    SupPid = State#state.producers_sup,
-    case brod_producers_sup:start_producer(SupPid, self(),
-                                           TopicName, ProducerConfig) of
-      {ok, _} -> {reply, ok, NewState};
-      Error   -> throw(Error)
-    end
-  catch throw:E ->
-      {reply, E, NewState}
-  end;
+  {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
+  {reply, Reply, NewState};
 handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
   {Result, NewState} = validate_topic_existence(TopicName, State),
   try
@@ -376,11 +367,26 @@ handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
     SupPid = State#state.consumers_sup,
     case brod_consumers_sup:start_consumer(SupPid, self(),
                                            TopicName, ConsumerConfig) of
-      {ok, _} -> {reply, ok, NewState};
-      Error   -> throw(Error)
+      {ok, _} ->
+        {reply, ok, NewState};
+      {error, {already_started, _Pid}} ->
+        {reply, ok, NewState};
+      Error ->
+        throw(Error)
     end
   catch throw:E ->
       {reply, E, NewState}
+  end;
+handle_call({auto_start_producer, Topic}, _From, State) ->
+  Config = State#state.config,
+  case proplists:get_value(auto_start_producers, Config, false) of
+    true ->
+      ProducerConfig =
+        proplists:get_value(default_producer_config, Config, []),
+      {Reply, NewState} = do_start_producer(Topic, ProducerConfig, State),
+      {reply, Reply, NewState};
+    false ->
+      {reply, false, State}
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, State#state.workers_tab, State};
@@ -681,6 +687,8 @@ maybe_update_metadata_cache({ok, #kpro_MetadataResponse{} = R}, State) ->
 maybe_update_metadata_cache({error, _}, _State) ->
   ok.
 
+-spec get_partitions_count(client(), ets:tab(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Ets, Topic) ->
   case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
     [{_, PartitionsCnt, _}] ->
@@ -695,15 +703,25 @@ get_partitions_count(Client, Ets, Topic) ->
       end
   end.
 
+-spec do_get_partitions_count(kpro_TopicMetadata()) ->
+        {ok, pos_integer()} | {error, any()}.
 do_get_partitions_count(TopicMetadata) ->
   #kpro_TopicMetadata{ errorCode           = TopicEC
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
   case kpro_ErrorCode:is_error(TopicEC) of
-    true ->
-      {error, {TopicEC, kpro_ErrorCode:desc(TopicEC)}};
+    true  -> {error, TopicEC};
+    false -> {ok, erlang:length(Partitions)}
+  end.
+
+maybe_start_producer(Client, Topic, Partition, Error) ->
+  case gen_server:call(Client, {auto_start_producer, Topic}) of
+    ok ->
+      get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition));
+    {error, topic_not_found} = Error ->
+      Error;
     false ->
-      {ok, erlang:length(Partitions)}
+      Error
   end.
 
 -spec send_sync(#state{}, kpro_Request(), timer:time()) ->
@@ -740,6 +758,23 @@ maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
                       }}
   end.
 
+do_start_producer(TopicName, ProducerConfig, State) ->
+  {Result, NewState} = validate_topic_existence(TopicName, State),
+  try
+    Result =:= ok orelse throw(Result),
+    SupPid = State#state.producers_sup,
+    case brod_producers_sup:start_producer(SupPid, self(),
+                                           TopicName, ProducerConfig) of
+      {ok, _} ->
+        {ok, NewState};
+      {error, {already_started, _Pid}} ->
+        {ok, NewState};
+      Error ->
+        throw(Error)
+    end
+  catch throw:E ->
+      {E, NewState}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -26,7 +26,7 @@
 
 -export([ init/1
         , post_init/1
-        , start_link/2
+        , start_link/0
         , find_consumer/3
         , start_consumer/4
         , stop_consumer/2
@@ -45,13 +45,11 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Start a root consumers supervisor,
-%%      per-topic supervisors and per-partition consumer workers.
-%%      The config is passed down to the consumers.
+%% @doc Start a root consumers supervisor.
 %% @end
--spec start_link(pid(), [{topic(), consumer_config()}]) -> {ok, pid()}.
-start_link(ClientPid, Consumers) ->
-  supervisor3:start_link(?MODULE, {?SUP, ClientPid, Consumers}).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+  supervisor3:start_link(?MODULE, ?SUP).
 
 %% @doc Dynamically start a per-topic supervisor.
 -spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
@@ -69,19 +67,22 @@ stop_consumer(SupPid, TopicName) ->
 %% @doc Find a brod_consumer process pid running under sup2
 %% @end
 -spec find_consumer(pid(), topic(), partition()) ->
-                       {ok, pid()} | {error, any()}.
+                       {ok, pid()} | {error, Reason} when
+        Reason :: {consumer_not_found, topic()}
+                | {consumer_not_found, topic(), partition()}
+                | {consumer_down, noproc}.
 find_consumer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
-      {error, {not_found, Topic}};
+      {error, {consumer_not_found, Topic}};
     [Sup2Pid] ->
       try
         case supervisor3:find_child(Sup2Pid, Partition) of
           [] ->
             %% no such partition?
-            {error, {not_found, Topic, Partition}};
+            {error, {consumer_not_found, Topic, Partition}};
           [Pid] ->
             {ok, Pid}
         end
@@ -91,10 +92,8 @@ find_consumer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init({?SUP, ClientPid, Consumers}) ->
-  Children = [ consumers_sup_spec(ClientPid, TopicName, Config)
-             || {TopicName, Config} <- Consumers ],
-  {ok, {{one_for_one, 0, 1}, Children}};
+init(?SUP) ->
+  {ok, {{one_for_one, 0, 1}, []}};
 init({?SUP2, _ClientPid, _Topic, _Config}) ->
   post_init.
 

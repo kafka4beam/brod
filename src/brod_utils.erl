@@ -121,8 +121,7 @@ do_find_leader_in_metadata(Metadata, Topic, Partition) ->
   #kpro_TopicMetadata{ errorCode           = TopicEC
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
-  kpro_ErrorCode:is_error(TopicEC) andalso
-    erlang:throw({TopicEC, kpro_ErrorCode:desc(TopicEC)}),
+  kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
   #kpro_PartitionMetadata{leader = Id} =
     lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
   Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),

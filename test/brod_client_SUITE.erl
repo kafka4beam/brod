@@ -38,6 +38,7 @@
         , t_call_bad_client_id/1
         , t_metadata_socket_restart/1
         , t_payload_socket_restart/1
+        , t_auto_start_producers/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -204,6 +205,34 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   Mref = erlang:monitor(process, WriterPid),
   WriterPid ! stop,
   ?WAIT({'DOWN', Mref, process, WriterPid, normal}, ok, 5000),
+  ok.
+
+t_auto_start_producers({init, Config}) ->
+  meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
+  Config;
+t_auto_start_producers({'end', Config}) ->
+  case whereis(t_auto_start_producers) of
+    ?undef -> ok;
+    Pid    -> brod:stop_client(Pid)
+  end,
+  meck:validate(brod_sock),
+  meck:unload(brod_sock),
+  Config;
+t_auto_start_producers(Config) when is_list(Config) ->
+  Ref = mock_brod_sock(),
+  K = <<"k">>,
+  V = <<"v">>,
+  Client = t_auto_start_producers,
+  {ok, _} = brod:start_link_client(?HOSTS, Client),
+  ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
+  ?assertEqual({error, {producer_not_found, ?TOPIC}},
+               brod:produce_sync(Client, ?TOPIC, 0, K, V)),
+  ClientConfig = [{config, [{auto_start_producers, true}]}],
+  ok = brod:stop_client(Client),
+  {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
+  ?assertEqual(ok,
+               brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
   ok.
 
 %%%_* Help functions ===========================================================
