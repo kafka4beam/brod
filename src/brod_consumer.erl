@@ -306,10 +306,6 @@ handle_fetch_response(_Response, _CorrId,
 handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
                             } = State) when CorrId1 < CorrId2 ->
-  %% handle obsolete fetch responses in case we got new offset from callback
-  error_logger:info_msg("~p ~p Dropping obsolete fetch response "
-                        "with corr_id = ~p",
-                        [?MODULE, self(), CorrId1]),
   {noreply, State};
 handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                                          }, CorrId, State) ->
@@ -501,8 +497,10 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
       {error, Reason}
   end.
 
-fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
-  Request = kpro:offset_request(Topic, Partition, InitialOffset,
+fetch_valid_offset(_S, Offset, _T, _P) when Offset >= 0 ->
+  {ok, Offset};
+fetch_valid_offset(SocketPid, Time, Topic, Partition) ->
+  Request = kpro:offset_request(Topic, Partition, Time,
                                       _MaxNoOffsets = 1),
   {ok, Response} = brod_sock:send_sync(SocketPid, Request, 5000),
   #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
