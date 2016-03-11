@@ -81,13 +81,13 @@
 
 -type get_producer_error() :: client_down
                             | {producer_down, noproc}
-                            | {not_found, topic()}
-                            | {not_found, topic(), partition()}.
+                            | {producer_not_found, topic()}
+                            | {producer_not_found, topic(), partition()}.
 
 -type get_consumer_error() :: client_down
                             | {consumer_down, noproc}
-                            | {not_found, topic()}
-                            | {not_found, topic(), partition()}.
+                            | {consumer_not_found, topic()}
+                            | {consumer_not_found, topic(), partition()}.
 
 -type get_worker_error() :: get_producer_error()
                           | get_consumer_error().
@@ -144,7 +144,7 @@ start_producer(Client, TopicName, ProducerConfig) ->
   case get_producer(Client, TopicName, _Partition = 0) of
     {ok, _Pid} ->
       ok; %% already started
-    {error, {not_found, TopicName}} ->
+    {error, {producer_not_found, TopicName}} ->
       gen_server:call(Client, {start_producer, TopicName, ProducerConfig},
                       infinity);
     {error, Reason} ->
@@ -163,7 +163,7 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
   case get_consumer(Client, TopicName, _Partition = 0) of
     {ok, _Pid} ->
       ok; %% already started
-    {error, {not_found, TopicName}} ->
+    {error, {consumer_not_found, TopicName}} ->
       gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig},
                       infinity);
     {error, Reason} ->
