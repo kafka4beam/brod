@@ -297,12 +297,11 @@ handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
       {reply, E, NewState}
   end;
 handle_call({auto_start_producer, Topic}, _From, State) ->
-  ClientConfig = State#state.config,
-  Config = proplists:get_value(config, ClientConfig, []),
+  Config = State#state.config,
   case proplists:get_value(auto_start_producers, Config, false) of
     true ->
       ProducerConfig =
-        proplists:get_value(default_producer_config, ClientConfig, []),
+        proplists:get_value(default_producer_config, Config, []),
       {Reply, NewState} = do_start_producer(Topic, ProducerConfig, State),
       {reply, Reply, NewState};
     false ->
