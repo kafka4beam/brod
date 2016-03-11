@@ -84,8 +84,10 @@
 %                                cb_state()) ->
 %            {ok, [{{topic(), partition()}, offset()}], cb_state()}.
 
+-define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
+
 -record(consumer, { topic_partition :: {topic(), partition()}
-                  , consumer_pid    :: pid()
+                  , consumer_pid    :: pid() | {down, string(), any()}
                   , consumer_mref   :: reference()
                   , begin_offset    :: offset()
                   , acked_offset    :: offset()
@@ -215,7 +217,7 @@ handle_info({'DOWN', _Mref, process, Pid, Reason},
             #state{consumers = Consumers} = State) ->
   case lists:keyfind(Pid, #consumer.consumer_pid, Consumers) of
     #consumer{topic_partition = TP} = Consumer ->
-      NewConsumer = Consumer#consumer{ consumer_pid  = {down, Reason}
+      NewConsumer = Consumer#consumer{ consumer_pid  = ?DOWN(Reason)
                                      , consumer_mref = ?undef
                                      },
       NewConsumers = lists:keyreplace(TP, #consumer.topic_partition,
@@ -234,7 +236,7 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
       true ->
         State;
       false ->
-        {ok, NewState_} = subscribe_partitions(State),
+        {ok, #state{} = NewState_} = subscribe_partitions(State),
         NewState_
     end,
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
@@ -345,9 +347,9 @@ handle_ack(AckRef, #state{ pending_ack      = AckRef
                          , generationId     = GenerationId
                          , consumers        = Consumers
                          , controller       = Controller
-                         } = State) ->
+                         } = State0) ->
   {Topic, Partition, Offset} = AckRef,
-  NewState =
+  State1 =
     case lists:keyfind({Topic, Partition},
                        #consumer.topic_partition, Consumers) of
       #consumer{consumer_pid = ConsumerPid} = Consumer ->
@@ -359,13 +361,14 @@ handle_ack(AckRef, #state{ pending_ack      = AckRef
         NewConsumers = lists:keyreplace({Topic, Partition},
                                         #consumer.topic_partition,
                                         Consumers, NewConsumer),
-      State#state{consumers = NewConsumers};
+      State0#state{consumers = NewConsumers};
     false ->
       %% stale ack, ignore.
-      State
+      State0
     end,
   Messages =/= [] andalso send_lo_cmd(?LO_CMD_PROCESS_MESSAGE),
-  {ok, NewState};
+  State = State1#state{pending_ack = ?undef},
+  {ok, State};
 handle_ack(_AckRef, State) ->
   %% stale ack, ignore.
   {ok, State}.
@@ -406,7 +409,7 @@ subscribe_partition(Client, Consumer) ->
                            , consumer_mref = Mref
                            };
         {error, Reason} ->
-          Consumer#consumer{ consumer_pid  = {down, Reason}
+          Consumer#consumer{ consumer_pid  = ?DOWN(Reason)
                            , consumer_mref = ?undef
                            }
       end

@@ -49,6 +49,8 @@
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
 -define(OFFSET_COMMIT_POLICY, timer:seconds(60)).
+%% use kfaka's offset meta-topic retention policy
+-define(OFFSET_RETENTION_DEFAULT, -1).
 
 %% by default, start from latest available offset
 -define(DEFAULT_BEGIN_OFFSET, -1).
@@ -63,10 +65,10 @@
                         end()).
 
 %% loopback commands
--define(LO_CMD_SEND_HB, send_heartbeat).
+-define(LO_CMD_SEND_HB, lo_cmd_send_heartbeat).
 -define(LO_CMD_COMMIT_OFFSETS, lo_cmd_commit_offsets).
 -define(LO_CMD_JOIN_GROUP(AttemptCount, Reason),
-        {join_group, AttemptCount, Reason}).
+        {lo_cmd_join_group, AttemptCount, Reason}).
 
 -type config() :: group_config().
 -type ts() :: erlang:timestamp().
@@ -218,10 +220,10 @@ handle_info(?LO_CMD_JOIN_GROUP(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
 handle_info(?LO_CMD_JOIN_GROUP(N, Reason), State) ->
-  {ok, NewState} = join_group(State, N, Reason),
+  {ok, NewState} = stablize(State, N, Reason),
   {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, #state{sock_pid = Pid} = State) ->
-  {ok, NewState} = join_group(State, 0, Reason),
+  {ok, NewState} = stablize(State, 0, Reason),
   {noreply, NewState};
 handle_info({'EXIT', Pid, _Reason}, #state{subscriber = Pid} = State) ->
   {stop, subscriber_down, State};
@@ -231,7 +233,7 @@ handle_info(?LO_CMD_SEND_HB,
                   } = State) ->
   _ = start_heartbeat_timer(State#state.heartbeat_rate_seconds),
   case HbRef of
-    undefined ->
+    ?undef ->
       {ok, NewState} = maybe_send_heartbeat(State),
       {noreply, NewState};
     {_HbCorrId, SentTime} ->
@@ -242,7 +244,7 @@ handle_info(?LO_CMD_SEND_HB,
           {noreply, State};
         false ->
           %% time to re-discover a new coordinator ?
-          {ok, NewState} = join_group(State, 0, hb_timeout),
+          {ok, NewState} = stablize(State, 0, hb_timeout),
           {noreply, NewState}
       end
   end;
@@ -251,7 +253,7 @@ handle_info({msg, _Pid, HbCorrId, #kpro_HeartbeatResponse{errorCode = EC}},
   State = State0#state{hb_ref = ?undef},
   case kpro_ErrorCode:is_error(EC) of
     true ->
-      {ok, NewState} = join_group(State, 0, EC),
+      {ok, NewState} = stablize(State, 0, EC),
       {noreply, NewState};
     false ->
       {noreply, State}
@@ -296,12 +298,12 @@ terminate(Reason, #state{ sock_pid = SockPid
 
 %%%_* Internal Functions =======================================================
 
--spec ensure_connection_to_coordinator(#state{}) -> #state{} | no_return().
-ensure_connection_to_coordinator(#state{ client      = Client
-                                       , coordinator = Coordinator
-                                       , sock_pid    = SockPid
-                                       , groupId     = GroupId
-                                       } = State) ->
+-spec discover_coordinator(#state{}) -> {ok, #state{}} | no_return().
+discover_coordinator(#state{ client      = Client
+                           , coordinator = Coordinator
+                           , sock_pid    = SockPid
+                           , groupId     = GroupId
+                           } = State) ->
   {Host, Port} = ?ESCALATE(brod_client:get_group_coordinator(Client, GroupId)),
   HasConnectionToCoordinator =
     case Coordinator =:= {Host, Port} of
@@ -310,7 +312,7 @@ ensure_connection_to_coordinator(#state{ client      = Client
     end,
   case HasConnectionToCoordinator of
     true ->
-      State;
+      {ok, State};
     false ->
       %% close old socket
       _ = brod_sock:stop(SockPid),
@@ -318,21 +320,21 @@ ensure_connection_to_coordinator(#state{ client      = Client
         ?ESCALATE(brod_sock:start_link(self(), Host, Port, GroupId, [])),
       log(State, info, "connected to group coordinator ~s:~p",
           [Host, Port]),
-      State#state{ coordinator = {Host, Port}
-                 , sock_pid    = NewSockPid
-                 }
+      NewState =
+        State#state{ coordinator = {Host, Port}
+                   , sock_pid    = NewSockPid
+                   },
+      {ok, NewState}
   end.
 
--spec join_group(#state{}, integer(), any()) -> {ok, #state{}}.
-join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
+-spec stablize(#state{}, integer(), any()) -> {ok, #state{}}.
+stablize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
                  , subscriber           = Subscriber
                  , offset_commit_policy = CommitPolicy
                  } = State0, AttemptNo, Reason) ->
 
-  %% log the first failure reason,
-  %% retry-failures are logged right after the join_group exception below.
-  AttemptNo =:= 0 andalso
-    log(State0, info, "re-joining group.\nreason:~p", [Reason]),
+  Reason =/= ?undef andalso
+    log(State0, info, "re-joining group, reason:~p", [Reason]),
 
   %% 1. unsubscribe all currently assigned partitions
   ok = brod_group_subscriber:unsubscribe_all_partitions(Subscriber),
@@ -349,51 +351,62 @@ join_group(#state{ rejoin_delay_seconds = RejoinDelaySeconds
       false ->
         State0
     end,
+  State2 = State1#state{is_in_group = false},
 
   %$ 3. Cleanup old state depending on the error codes.
-  State2 =
+  State =
     case Reason of
       ?EC_UNKNOWN_MEMBER_ID ->
         %% we are likely kicked out from the group
         %% rejoin with empty member id
-        State1#state{memberId = <<>>};
+        State2#state{memberId = <<>>};
       ?EC_NOT_COORDINATOR_FOR_GROUP ->
         %% the coordinator have moved to another broker
         %% set it to ?undef to trigger a socket restart
         _ = brod_sock:stop(State0#state.sock_pid),
-        State1#state{sock_pid = ?undef};
+        State2#state{sock_pid = ?undef};
       _ ->
-        State1
+        State2
     end,
 
   %% 4. ensure we have a connection to the (maybe new) group coordinator
-  State = ensure_connection_to_coordinator(State2),
+  F1 = fun discover_coordinator/1,
+  %% 5. join group
+  F2 = fun join_group/1,
+  %% 6. sync assignemnts
+  F3 = fun sync_group/1,
 
-  %% 5. send join request, wait for response,
-  %%    send sync group request, wait for response
-  %%    tell subscriber to carryout new assignments
-  try
-    {ok, #state{}} = do_join_group(State)
-  catch throw : NewReason ->
-    log(State, error, "failed to join group\nreason:~p\n~p",
-        [NewReason, erlang:get_stacktrace()]),
-    case AttemptNo =:= 0 of
-      true ->
-        %% do not delay before the first retry
-        self() ! ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason);
-      false ->
-        erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
-                          ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason))
+  RetryFun =
+    fun(StateIn, NewReason) ->
+      log(StateIn, error, "failed to join group\nreason:~p\n~p",
+          [NewReason, erlang:get_stacktrace()]),
+      case AttemptNo =:= 0 of
+        true ->
+          %% do not delay before the first retry
+          self() ! ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason);
+        false ->
+          erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
+                            ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason))
+      end,
+      {ok, StateIn}
     end,
-    {ok, State#state{is_in_group = false}}
+  stablize_steps([F1, F2, F3], RetryFun, State).
+
+stablize_steps([], _RetryFun, State) ->
+  {ok, State};
+stablize_steps([F | Rest], RetryFun, State) ->
+  try
+    {ok, #state{} = NewState} = F(State),
+    stablize_steps(Rest, RetryFun, NewState)
+  catch throw : Reason ->
+    RetryFun(State, Reason)
   end.
 
--spec do_join_group(#state{}) -> {ok, #state{}} | no_return().
-do_join_group(#state{ groupId                       = GroupId
+-spec join_group(#state{}) -> {ok, #state{}} | no_return().
+join_group(#state{ groupId                       = GroupId
                     , memberId                      = MemberId0
                     , topics                        = Topics
                     , sock_pid                      = SockPid
-                    , subscriber                    = Subscriber
                     , partition_assignment_strategy = PaStrategy
                     , session_timeout_seconds       = SessionTimeoutSec
                     } = State0) ->
@@ -434,8 +447,17 @@ do_join_group(#state{ groupId                       = GroupId
                 , leaderId     = LeaderId
                 , generationId = GenerationId
                 , members      = Members
-                , is_in_group  = true
                 },
+  log(State, info, "elected=~p", [IsGroupLeader]),
+  {ok, State}.
+
+-spec sync_group(#state{}) -> {ok, #state{}} | no_return().
+sync_group(#state{ groupId      = GroupId
+                 , generationId = GenerationId
+                 , memberId     = MemberId
+                 , sock_pid     = SockPid
+                 , subscriber   = Subscriber
+                 } = State) ->
   SyncReq =
     #kpro_SyncGroupRequest
       { groupId           = GroupId
@@ -451,16 +473,13 @@ do_join_group(#state{ groupId                       = GroupId
   ?ESCALATE_EC(SyncErrorCode),
   %% get my partition assignments
   TopicAssignments = get_topic_assignments(State, Assignment),
-  log(State, info, "elected=~p\nassignments:~p",
-      [IsGroupLeader, TopicAssignments]),
-
   ok = brod_group_subscriber:new_assignments(Subscriber,
                                              MemberId,
                                              GenerationId,
                                              TopicAssignments),
-
-  {ok, State}.
-
+  NewState = State#state{is_in_group = true},
+  log(NewState, info, "assignments:~p", [TopicAssignments]),
+  {ok, NewState}.
 
 -spec handle_ack(#state{}, topic(), partition(), offset()) -> {ok, #state{}}.
 handle_ack(#state{ acked_offsets = AckedOffsets
@@ -494,13 +513,14 @@ do_commit_offsets(#state{ groupId                  = GroupId
                         , offset_retention_seconds = OffsetRetentionSecs
                         , acked_offsets            = AckedOffsets
                         } = State) ->
+  Metadata = make_metadata(),
   TopicOffsets =
     lists:foldl(
       fun({{Topic, Partition}, Offset}, Acc) ->
         PartitionOffset =
           #kpro_OCReqV2Partition{ partition = Partition
                                 , offset    = Offset
-                                , metadata  = make_metadata()
+                                , metadata  = Metadata
                                 },
         orddict:append_list(Topic, [PartitionOffset], Acc)
       end, [], AckedOffsets),
@@ -518,7 +538,7 @@ do_commit_offsets(#state{ groupId                  = GroupId
       , consumerId = MemberId
       , retentionTime = case OffsetRetentionSecs =/= ?undef of
                           true  -> timer:seconds(OffsetRetentionSecs);
-                          false -> -1
+                          false -> ?OFFSET_RETENTION_DEFAULT
                         end
       , oCReqV2Topic_L = Offsets
       },
@@ -708,9 +728,12 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
                              };
       false ->
         ?ESCALATE_EC(EC),
-        true = (Offset >= 0), %% assert
+        BeginOffset = case Offset < 0 of
+                        true  -> Offset;
+                        false -> Offset + 1
+                      end,
         #partition_assignment{ partition    = Partition
-                             , begin_offset = Offset + 1
+                             , begin_offset = BeginOffset
                              , metadata     = Metadata
                              }
     end,

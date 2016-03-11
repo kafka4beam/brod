@@ -39,6 +39,8 @@
 
 -include("brod.hrl").
 
+-define(PRODUCE_DELAY_SECONDS, 5).
+
 %% @doc This function bootstraps everything to demo of group consumer.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
@@ -53,6 +55,9 @@
 %% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
+  bootstrap(?PRODUCE_DELAY_SECONDS).
+
+bootstrap(DelaySeconds) ->
   ClientID = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
@@ -62,8 +67,10 @@ bootstrap() ->
   ok = brod:start_producer(ClientID, Topic, _ProducerConfig = []),
   {ok, PartitionCount} = brod:get_partitions_count(ClientID, Topic),
   Partitions = lists:seq(0, PartitionCount - 1),
-  ok = spawn_consumers(ClientID, Topic, [1,2]),
-  ok = spawn_producers(ClientID, Topic, Partitions),
+  %% spawn N + 1 consumers, one of them will have no assignment
+  %% it should work as a 'standing-by' consumer.
+  ok = spawn_consumers(ClientID, Topic, PartitionCount + 1),
+  ok = spawn_producers(ClientID, Topic, DelaySeconds, Partitions),
   ok.
 
 %% @doc Initialize nothing in our case.
@@ -82,29 +89,33 @@ handle_message(_Topic, Partition, Message, State) ->
 
 %%%_* Internal Functions =======================================================
 
-spawn_consumers(ClientID, Topic, Partitions) ->
+spawn_consumers(ClientID, Topic, ConsumerCount) ->
   %% commit offsets to kafka every 10 seconds
   GroupConfig = [{offset_commit_policy, {periodic_seconds, 10}}],
   GroupID = iolist_to_binary([Topic, "-groupd-id"]),
   lists:foreach(
-    fun(_Partition) ->
+    fun(_I) ->
       {ok, _Subscriber} =
         brod_group_subscriber:start_link(ClientID, GroupID, [Topic],
                                          GroupConfig,
                                          _ConsumerConfig  = [],
                                          _CallbackModule  = ?MODULE,
                                          _CallbackInitArg = [])
-    end, Partitions).
+    end, lists:seq(1, ConsumerCount)).
 
-spawn_producers(_ClientID, _Topic, []) -> ok;
-spawn_producers(ClientID, Topic, [Partition | Partitions]) ->
-  erlang:spawn_link(fun() -> producer_loop(ClientID, Topic, Partition, 0) end),
-  spawn_producers(ClientID, Topic, Partitions).
+spawn_producers(_ClientID, _Topic, _DelaySeconds, []) -> ok;
+spawn_producers(ClientID, Topic, DelaySeconds, [Partition | Partitions]) ->
+  erlang:spawn_link(
+    fun() ->
+      producer_loop(ClientID, Topic, Partition, DelaySeconds, 0)
+    end),
+  spawn_producers(ClientID, Topic, DelaySeconds, Partitions).
 
-producer_loop(ClientID, Topic, Partition, Seqno) ->
+producer_loop(ClientID, Topic, Partition, DelaySeconds, Seqno) ->
   KafkaValue = iolist_to_binary(integer_to_list(Seqno)),
   ok = brod:produce_sync(ClientID, Topic, Partition, _Key = <<>>, KafkaValue),
-  producer_loop(ClientID, Topic, Partition, Seqno+1).
+  timer:sleep(timer:seconds(DelaySeconds)),
+  producer_loop(ClientID, Topic, Partition, DelaySeconds, Seqno+1).
 
 -spec os_time_utc_str() -> string().
 os_time_utc_str() ->
