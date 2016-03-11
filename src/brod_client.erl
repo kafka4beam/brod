@@ -637,6 +637,8 @@ maybe_update_metadata_cache({ok, #kpro_MetadataResponse{} = R}, State) ->
 maybe_update_metadata_cache({error, _}, _State) ->
   ok.
 
+-spec get_partitions_count(client(), ets:tab(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Ets, Topic) ->
   case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
     [{_, PartitionsCnt, _}] ->
@@ -651,15 +653,15 @@ get_partitions_count(Client, Ets, Topic) ->
       end
   end.
 
+-spec do_get_partitions_count(kpro_TopicMetadata()) ->
+        {ok, pos_integer()} | {error, any()}.
 do_get_partitions_count(TopicMetadata) ->
   #kpro_TopicMetadata{ errorCode           = TopicEC
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
   case kpro_ErrorCode:is_error(TopicEC) of
-    true ->
-      {error, {TopicEC, kpro_ErrorCode:desc(TopicEC)}};
-    false ->
-      {ok, erlang:length(Partitions)}
+    true  -> {error, TopicEC};
+    false -> {ok, erlang:length(Partitions)}
   end.
 
 maybe_start_producer(Client, Topic, Partition, Error) ->
