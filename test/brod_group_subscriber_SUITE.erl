@@ -55,7 +55,7 @@ init_per_testcase(Case, Config) ->
   ct:pal("=== ~p begin ===", [Case]),
   Config.
 
-end_per_testcase(Case, Config) ->
+end_per_testcase(Case, Config) when is_list(Config) ->
   ct:pal("=== ~p end ===", [Case]),
   ok.
 

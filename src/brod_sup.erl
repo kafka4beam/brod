@@ -85,30 +85,6 @@
 %%                %% @see brod:start_link_client/5 for more client configs
 %%              ]
 %%            }
-%%          , { producers
-%%            , [ { <<"test-topic">> %% topic name
-%%                , [ {topic_restart_delay_seconds, 2}
-%%                  , {partition_restart_delay_seconds, 2}
-%%                  , {required_acks, -1}
-%%                  %% @see brod:start_link_client/5 for more producer configs
-%%                  ]
-%%                }
-%%              ]
-%%            }
-%%          , { consumers
-%%            , [ { <<"test-topic">> %% topic name
-%%                , [ {min_bytes, 0}
-%%                  , {max_bytes, 1048576}
-%%                  %% see brod_consumer:start_link/4 for more configs
-%%                  ]
-%%                }
-%%                %% TODO: add consumer group
-%%              , { {group, <<"consumer-groupd-id">>}
-%%                  [ {min_bytes, 0}
-%%                  ]
-%%                }
-%%              ]
-%%            }
 %%          ]
 %%        }
 %%      ]

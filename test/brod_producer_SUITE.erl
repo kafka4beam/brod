@@ -177,8 +177,6 @@ t_produce_partitioner(Config) when is_list(Config) ->
                   K2 -> {ok, 1}
                 end
             end,
-  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K1, V1),
-  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun =
     fun(ExpectedP, ExpectedK, ExpectedV) ->
       receive
@@ -190,7 +188,9 @@ t_produce_partitioner(Config) when is_list(Config) ->
           ct:fail({?MODULE, ?LINE, timeout, ExpectedP, ExpectedK, ExpectedV})
       end
     end,
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K1, V1),
   ReceiveFun(0, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun(1, K2, V2).
 
 %%%_* Help functions ===========================================================
