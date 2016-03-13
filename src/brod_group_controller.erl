@@ -48,7 +48,8 @@
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
--define(OFFSET_COMMIT_POLICY, timer:seconds(60)).
+-define(OFFSET_COMMIT_POLICY, commit_to_kafka_v2).
+-define(OFFSET_COMMIT_INTERVAL_SECONDS, 60).
 %% use kfaka's offset meta-topic retention policy
 -define(OFFSET_RETENTION_DEFAULT, -1).
 
@@ -73,8 +74,7 @@
 -type config() :: group_config().
 -type ts() :: erlang:timestamp().
 -type member() :: kpro_GroupMemberMetadata().
--type offset_commit_policy() :: disabled
-                              | {periodic_seconds, pos_integer()}.
+-type offset_commit_policy() :: brod_offset_commit_policy().
 
 -record(state,
         { client :: client()
@@ -128,18 +128,20 @@
         , subscriber :: pid()
           %% The offsets that has been acknowledged by the subscriber
           %% i.e. the offsets that are ready for commit.
-          %% NOTE: this filed is not used if offset_commit_policy is 'disabled'
+          %% NOTE: this filed is not used if offset_commit_policy is
+          %% 'consumer_managed'
         , acked_offsets = [] :: [{{topic(), partition()}, offset()}]
 
           %% configs, see start_link/4 doc for details
-        , partition_assignment_strategy :: partition_assignment_strategy()
-        , session_timeout_seconds       :: pos_integer()
-        , heartbeat_rate_seconds        :: pos_integer()
-        , max_rejoin_attempts           :: non_neg_integer()
-        , rejoin_delay_seconds          :: non_neg_integer()
-        , offset_retention_seconds      :: ?undef | integer()
-        , default_begin_offset          :: offset()
-        , offset_commit_policy          :: offset_commit_policy()
+        , partition_assignment_strategy  :: partition_assignment_strategy()
+        , session_timeout_seconds        :: pos_integer()
+        , heartbeat_rate_seconds         :: pos_integer()
+        , max_rejoin_attempts            :: non_neg_integer()
+        , rejoin_delay_seconds           :: non_neg_integer()
+        , offset_retention_seconds       :: ?undef | integer()
+        , default_begin_offset           :: offset()
+        , offset_commit_policy           :: offset_commit_policy()
+        , offset_commit_interval_seconds :: pos_integer()
         }).
 
 -define(IS_LEADER(S), (S#state.leaderId =:= S#state.memberId)).
@@ -182,22 +184,27 @@ init({Client, GroupId, Topics, Config, Subscriber}) ->
   OffsetRetentionSeconds = GetCfg({offset_retention_seconds, ?undef}),
   DefaultBeginOffset = GetCfg({default_begin_offset, ?DEFAULT_BEGIN_OFFSET}),
   OffsetCommitPolicy = GetCfg({offset_commit_policy, ?OFFSET_COMMIT_POLICY}),
+  OffsetCommitIntervalSeconds = GetCfg({offset_commit_interval_seconds,
+                                        ?OFFSET_COMMIT_INTERVAL_SECONDS}),
   self() ! ?LO_CMD_JOIN_GROUP(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
-  ok = maybe_start_commit_offsets_timer(OffsetCommitPolicy),
-  {ok, #state{ client                        = Client
-             , groupId                       = GroupId
-             , topics                        = Topics
-             , subscriber                    = Subscriber
-             , partition_assignment_strategy = PaStrategy
-             , session_timeout_seconds       = SessionTimeoutSec
-             , heartbeat_rate_seconds        = HbRateSec
-             , max_rejoin_attempts           = MaxRejoinAttempts
-             , rejoin_delay_seconds          = RejoinDelaySeconds
-             , offset_retention_seconds      = OffsetRetentionSeconds
-             , default_begin_offset          = DefaultBeginOffset
-             , offset_commit_policy          = OffsetCommitPolicy
-             }}.
+  State =
+    #state{ client                         = Client
+          , groupId                        = GroupId
+          , topics                         = Topics
+          , subscriber                     = Subscriber
+          , partition_assignment_strategy  = PaStrategy
+          , session_timeout_seconds        = SessionTimeoutSec
+          , heartbeat_rate_seconds         = HbRateSec
+          , max_rejoin_attempts            = MaxRejoinAttempts
+          , rejoin_delay_seconds           = RejoinDelaySeconds
+          , offset_retention_seconds       = OffsetRetentionSeconds
+          , default_begin_offset           = DefaultBeginOffset
+          , offset_commit_policy           = OffsetCommitPolicy
+          , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
+          },
+  ok = maybe_start_offset_commit_timer(State),
+  {ok, State}.
 
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   case GenerationId < State#state.generationId of
@@ -211,7 +218,7 @@ handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
 handle_info(?LO_CMD_COMMIT_OFFSETS, State) ->
   try
     NewState = ?ESCALATE(do_commit_offsets(State)),
-    ok = maybe_start_commit_offsets_timer(NewState),
+    ok = maybe_start_offset_commit_timer(NewState),
     {noreply, NewState}
   catch throw : Reason ->
     {stop, {failed_to_commit_offsets, Reason}, State}
@@ -761,13 +768,19 @@ start_heartbeat_timer(HbRateSec) ->
 %% @private Start a timer to send a loopback command to self() to trigger
 %% a offset commit rquest to group coordinator.
 %% @end
--spec maybe_start_commit_offsets_timer(#state{} | offset_commit_policy()) -> ok.
-maybe_start_commit_offsets_timer(disabled) -> ok;
-maybe_start_commit_offsets_timer(#state{offset_commit_policy = P}) ->
-  maybe_start_commit_offsets_timer(P);
-maybe_start_commit_offsets_timer({periodic_seconds, Seconds}) ->
-  erlang:send_after(timer:seconds(Seconds), self(), ?LO_CMD_COMMIT_OFFSETS),
-  ok.
+-spec maybe_start_offset_commit_timer(#state{} | offset_commit_policy()) -> ok.
+maybe_start_offset_commit_timer(#state{} = State) ->
+  #state{ offset_commit_policy           = Policy
+        , offset_commit_interval_seconds = Seconds
+        } = State,
+  case Policy of
+    consumer_managed ->
+      ok;
+    commit_to_kafka_v2 ->
+      Timeout = timer:seconds(Seconds),
+      _ = erlang:send_after(Timeout, self(), ?LO_CMD_COMMIT_OFFSETS),
+      ok
+  end.
 
 %% @private Send heartbeat request if it has joined the group.
 -spec maybe_send_heartbeat(#state{}) -> {ok, #state{}}.

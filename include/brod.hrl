@@ -69,6 +69,8 @@
 -type brod_producer_config() :: proplists:proplist().
 -type brod_consumer_config() :: proplists:proplist().
 -type brod_group_config() :: proplists:proplist().
+-type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
+                                   | consumer_managed.
 
 -define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 

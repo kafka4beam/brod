@@ -31,5 +31,6 @@ create_topic "brod-client-SUITE-topic"
 create_topic "brod_producer_SUITE"           2
 create_topic "brod_consumer_SUITE"
 create_topic "brod_group_subscriber_SUITE"   7 2
-create_topic "brod-demo-1" 3 2
+create_topic "brod-demo-simple" 3 2
+create_topic "brod-demo-loc" 3 2
 
