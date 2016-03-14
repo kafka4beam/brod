@@ -65,6 +65,7 @@
                , subscriber        :: undefined | pid()
                , subscriber_mref   :: undefined | reference()
                , pending_acks = [] :: [offset()]
+               , is_suspended      :: boolean()
                }).
 
 -define(DEFAULT_BEGIN_OFFSET, -1).
@@ -189,6 +190,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , sleep_timeout  = SleepTimeout
              , prefetch_count = PrefetchCount
              , socket_pid     = undefined
+             , is_suspended   = false
              }}.
 
 handle_info(?INIT_SOCKET,
@@ -255,7 +257,8 @@ handle_call({subscribe, Pid, Options}, _From,
                                },
           %% always reset buffer to fetch again
           State3 = reset_buffer(State2),
-          State = maybe_send_fetch_request(State3),
+          State4 = State3#state{is_suspended = false},
+          State  = maybe_send_fetch_request(State4),
           {reply, ok, State};
         {error, Reason} ->
           {reply, {error, Reason}, State0}
@@ -366,6 +369,7 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
 err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
 err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
+err_op(?EC_OFFSET_OUT_OF_RANGE)        -> suspend;
 err_op(_)                              -> restart.
 
 %% @private Map message to brod's format.
@@ -397,6 +401,10 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       error_logger:error_msg("consumer of topic ~p partition ~p shutdown, "
                              "reason: ~p", [Topic, Partition, ErrorCode]),
       {stop, normal, State};
+    suspend ->
+      ok = cast_to_subscriber(Subscriber, Error),
+      %% Suspend, no more fetch request until the subscriber re-subscribes
+      {noreply, State#state{is_suspended = true}};
     restart ->
       ok = cast_to_subscriber(Subscriber, Error),
       {stop, {restart, ErrorCode}, State}
@@ -429,9 +437,11 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
                                , pending_acks   = PendingAcks
                                , prefetch_count = PrefetchCount
                                , socket_pid     = SocketPid
+                               , is_suspended   = IsSuspended
                                } = State) ->
-  case is_pid(SocketPid) andalso
+  case is_pid(SocketPid)  andalso
        is_pid(Subscriber) andalso
+       not IsSuspended    andalso
        length(PendingAcks) =< PrefetchCount of
     true ->
       case send_fetch_request(State) of

@@ -18,15 +18,8 @@ ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 test-env:
 	./scripts/setup-test-env.sh
 
-t: demos eunit ct
+t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 ESCRIPT_FILE = scripts/$(PROJECT)
-
-DEMO_ERLS = $(wildcard demos/*.erl)
-
-.PHONY: demos
-
-demos: app
-	$(erlc_verbose) erlc -o ebin/ -I include $(ERLC_OPTS) $(DEMO_ERLS)
 

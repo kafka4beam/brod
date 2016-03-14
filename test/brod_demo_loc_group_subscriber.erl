@@ -17,14 +17,14 @@
 %%%=============================================================================
 %%% @doc
 %%% This is a consumer group subscriber example
-%%% This is called 'simple' because it demos a all-configs-by-default minimal
-%%% implenemtation of a consumer group subscriber.
-%%% See bootstrap/0 for more details about all prerequisite.
+%%% This is called 'loc' as in 'Local Offset Commit'. i.e. it demos an
+%%% implementation of group subscriber that writes offsets locally (to file
+%%% in this module), but does not commit offsets to Kafka.
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
--module(brod_demo_simple_group_subscriber).
+-module(brod_demo_loc_group_subscriber).
 
 -behaviour(brod_group_subscriber).
 
@@ -35,6 +35,7 @@
 %% behabviour callbacks
 -export([ init/1
         , handle_message/4
+        , get_committed_offsets/3
         ]).
 
 
@@ -42,10 +43,14 @@
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
+-record(state, { group_id :: binary()
+               , offset_dir :: file:fd()
+               }).
+
 %% @doc This function bootstraps everything to demo of group consumer.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
-%%   - kafka topic named <<"brod-demo-simple">>
+%%   - kafka topic named <<"brod-demo-loc">>
 %%     having two or more partitions.
 %% Processes to spawn:
 %%   - A brod client
@@ -53,7 +58,8 @@
 %%   - X group subscribers, X is the number of partitions
 %%
 %% * consumed sequence numbers are printed to console
-%% * consumed offsets are commited to kafka (using v2 commit requests)
+%% * consumed offsets are written to file /tmp/brod-group-loc-demo/X.offset
+%%   where X is the partition number
 %% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
@@ -63,7 +69,8 @@ bootstrap(DelaySeconds) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
-  Topic = <<"brod-demo-simple">>,
+  Topic = <<"brod-demo-loc">>,
+  GroupId = <<"brod-group-loc-demo">>,
   {ok, _ClientPid} =
     brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
@@ -71,32 +78,69 @@ bootstrap(DelaySeconds) ->
   Partitions = lists:seq(0, PartitionCount - 1),
   %% spawn N + 1 consumers, one of them will have no assignment
   %% it should work as a 'standing-by' consumer.
-  ok = spawn_consumers(ClientId, Topic, PartitionCount + 1),
+  ok = spawn_consumers(GroupId, ClientId, Topic, PartitionCount + 1),
   ok = spawn_producers(ClientId, Topic, DelaySeconds, Partitions),
   ok.
 
 %% @doc Initialize nothing in our case.
-init(_Arg) -> {ok, []}.
+init([GroupId]) ->
+  OffsetDir = "/tmp",
+  {ok, #state{ group_id   = GroupId
+             , offset_dir = OffsetDir
+             }}.
 
 %% @doc Handle one message (not message-set).
-handle_message(_Topic, Partition, Message, State) ->
+handle_message(Topic, Partition, Message,
+               #state{ offset_dir = Dir
+                     , group_id   = GroupId
+                     } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
-  io:format("~p ~p ~s: offset:~8w seqno:~8w\n",
-            [self(), Partition, Now, Offset, Seqno]),
+  error_logger:info_msg(
+    "~p ~p ~s: offset:~8w seqno:~8w\n",
+    [self(), Partition, Now, Offset, Seqno]),
+  ok = commit_offset(Dir, GroupId, Topic, Partition, Offset),
   {ok, ack, State}.
+
+%% @doc This callback is called whenever there is a new assignment received.
+%% e.g. when joining the group after restart, or group assigment rebalance
+%% was triggered if other memgers join or leave the group
+%% NOTE: A subscriber may get assigned with a random set of topic-partitions
+%%       (unless some 'sticky' protocol is introduced to group controller),
+%%       meaning, if group members are running in different hosts they may
+%%       have to perform 'Local Offset Commit' in a central database or
+%%       whatsoever instead of local file system.
+%% @end
+get_committed_offsets(GroupId, TopicPartitions,
+                      #state{offset_dir = Dir} = State) ->
+  F = fun({Topic, Partition}, Acc) ->
+        case file:read_file(filename(Dir, GroupId, Topic, Partition)) of
+          {ok, OffsetBin} ->
+            OffsetStr = string:strip(binary_to_list(OffsetBin), both, $\n),
+            Offset = list_to_integer(OffsetStr),
+            [{{Topic, Partition}, Offset} | Acc];
+          {error, enoent} ->
+            Acc
+        end
+      end,
+  {ok, lists:foldl(F, [], TopicPartitions), State}.
 
 %%%_* Internal Functions =======================================================
 
-spawn_consumers(ClientId, Topic, ConsumerCount) ->
+filename(Dir, GroupId, Topic, Partition) ->
+  filename:join([Dir, GroupId, Topic, integer_to_list(Partition)]).
+
+commit_offset(Dir, GroupId, Topic, Partition, Offset) ->
+  Filename = filename(Dir, GroupId, Topic, Partition),
+  ok = filelib:ensure_dir(Filename),
+  ok = file:write_file(Filename, [integer_to_list(Offset), $\n]).
+
+spawn_consumers(GroupId, ClientId, Topic, ConsumerCount) ->
   %% commit offsets to kafka every 10 seconds
-  GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
-                ,{offset_commit_interval_seconds, 10}
-                ],
-  GroupId = iolist_to_binary([Topic, "-groupd-id"]),
+  GroupConfig = [{offset_commit_policy, consumer_managed}],
   lists:foreach(
     fun(_I) ->
       {ok, _Subscriber} =
@@ -104,7 +148,7 @@ spawn_consumers(ClientId, Topic, ConsumerCount) ->
                                          GroupConfig,
                                          _ConsumerConfig  = [],
                                          _CallbackModule  = ?MODULE,
-                                         _CallbackInitArg = [])
+                                         _CallbackInitArg = [GroupId])
     end, lists:seq(1, ConsumerCount)).
 
 spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok;
@@ -135,3 +179,4 @@ os_time_utc_str() ->
 %%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
+

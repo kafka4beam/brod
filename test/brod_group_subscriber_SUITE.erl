@@ -124,7 +124,14 @@ get_committed_offsets(_GroupId, _TopicPartitions, State) ->
 
 t_loc_demo(Config) when is_list(Config) ->
   {Pid, Mref} =
-    erlang:spawn_monitor(brod_demo_loc_group_subscriber, bootstrap, [1]),
+    erlang:spawn_monitor(
+      fun() ->
+        brod_demo_loc_group_subscriber:bootstrap(1),
+        receive
+          _ ->
+            ok
+        end
+      end),
   receive
     {'DOWN', Mref, process, Pid, Reason} ->
       erlang:error({demo_crashed, Reason})
@@ -135,7 +142,14 @@ t_loc_demo(Config) when is_list(Config) ->
 
 t_simple_demo(Config) when is_list(Config) ->
   {Pid, Mref} =
-    erlang:spawn_monitor(brod_demo_simple_group_subscriber, bootstrap, [1]),
+    erlang:spawn_monitor(
+      fun() ->
+        brod_demo_simple_group_subscriber:bootstrap(1),
+        receive
+          _ ->
+            ok
+        end
+      end),
   receive
     {'DOWN', Mref, process, Pid, Reason} ->
       erlang:error({demo_crashed, Reason})
@@ -179,8 +193,8 @@ t_async_acks(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 5 seconds to receive the first message
-  {_, X} = lists:foldl(RecvFun, {RecvFun, []}, lists:duplicate(5, 1000)),
+  %% wait at most 10 seconds to receive the first message
+  {_, X} = lists:foldl(RecvFun, {RecvFun, []}, [10000]),
   ?assertEqual([0], X),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
