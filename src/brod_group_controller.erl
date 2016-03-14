@@ -43,8 +43,9 @@
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, <<"roundrobin">>). %% default
 -type partition_assignment_strategy() :: binary().
 
--define(SESSION_TIMEOUT_SECONDS, 10). %% default
--define(HEARTBEAT_RATE_SECONDS, 1). %% default heartbeat interval
+%% default configs
+-define(SESSION_TIMEOUT_SECONDS, 10).
+-define(HEARTBEAT_RATE_SECONDS, 2).
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
@@ -68,8 +69,8 @@
 %% loopback commands
 -define(LO_CMD_SEND_HB, lo_cmd_send_heartbeat).
 -define(LO_CMD_COMMIT_OFFSETS, lo_cmd_commit_offsets).
--define(LO_CMD_JOIN_GROUP(AttemptCount, Reason),
-        {lo_cmd_join_group, AttemptCount, Reason}).
+-define(LO_CMD_STABILIZE(AttemptCount, Reason),
+        {lo_cmd_stabilize, AttemptCount, Reason}).
 
 -type config() :: group_config().
 -type ts() :: erlang:timestamp().
@@ -93,10 +94,7 @@
           %% of the group members, e.g. kick out stale members who have not
           %% kept up with the latest generation ID bumps.
         , generationId = 0 :: integer()
-          %% The initial group of topics from which the group members to
-          %% should consume messages. Consider the fact that this is most
-          %% likely statically configured in brod user's configs, it is
-          %% important to have it identical across all group members.
+          %% A set of topic names where the group members consumes from
         , topics = [] :: [topic()]
           %% This is the result of group coordinator discovery.
           %% It may change when the coordinator is down then a new one
@@ -149,7 +147,62 @@
 %%%_* APIs =====================================================================
 
 %% @doc To be called by group subscriber.
-%% TODO: add docs for configs
+%% Client:  ClientId (or pid, but not recommended)
+%% GroupId: Predefined globally unique (in a kafka cluster) binary string.
+%% Topics:  Predefined set of topic names in the group.
+%%          OBS: It is importat to have the same topic set across all members
+%%               in the group. Because all members have a chance of being
+%%               elected as the group leader, then being responsible for
+%%               assigning topic-partitions to group members.
+%% Config:  The group controller configs in a proplist, possible entries:
+%%  - partition_assignment_strategy  (optional, default = <<"roundrobin">>)
+%%      roudrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
+%%                 assign one to each member in a roundrobin fashion.
+%%      TODO: support sticky assignments
+%%  - session_timeout_seconds (optional, default = 10)
+%%      Time in seconds for the group coordinator broker to consider a member
+%%      'down' if no heartbeat or any kind of requests received from a broker
+%%      in the past N seconds.
+%%      A group member may also consider the coordinator broker 'down' if no
+%%      heartbeat response response received in the past N seconds.
+%%  - heartbeat_rate_seconds (optional, default = 2)
+%%      Time in seconds for the member to 'ping' the group coordinator.
+%%      OBS: Care should be taken when picking the number, on one hand, we do
+%%           not want to flush the broker with requests if we set it too low,
+%%           on the other hand, if set it too high, it may take too long for
+%%           the members to realise status changes of the group such as
+%%           assignment rebalacing or group coordinator switchover etc.
+%%  - max_rejoin_attempts (optional, default = 5)
+%%      Maximum number of times allowd for a member to re-join the group.
+%%      The gen_server will stop if it reached the maximum number of retres.
+%%      OBS: 'let it crash' may not be the optimal strategy here because
+%%           the group member id is kept in the gen_server looping state and
+%%           it is reused when re-joining the group.
+%%  - rejoin_delay_seconds (optional, default = 1)
+%%      Delay in seconds before re-joining the group.
+%%  - offset_commit_policy (optional, default = commit_to_kafka_v2)
+%%      How/where to commit offsets, possible values:
+%%        - commit_to_kafka_v2:
+%%            Group controller will commit the offsets to kafka using
+%%            version 2 OffsetCommitRequest.
+%%        - consumer_managed:
+%%            The subscirber (brodh_group_subscriber.erl) is responsible
+%%            for persisting offsets to a local or centralized storage.
+%%            And the callback get_committed_offsets should be implemented
+%%            to allow group controller to retrieve the commited offsets.
+%%  - default_begin_offset (optional, default = -1)
+%%      The offset to be used when there is no offset commit record found.
+%%      i.e. No offset record found in OffsetFetchResponse from group
+%%      coordinator. Or no record returned from get_commiited_offsets callback
+%%      in case of 'consumer_managed' policy.
+%%  - offset_commit_interval_seconds (optional, default = 60)
+%%      The time interval between tow OffsetCommitRequest messages.
+%%      This config is irrelevant if offset_commit_policy is consumer_managed.
+%%  - offset_retention_seconds (optional, default = -1)
+%%      How long the time is to be kept in kafka before it is deleted.
+%%      The default special value -1 indicates that the __consumer_offsets
+%%      topic retention policy is used.
+%%      This config is irrelevant if offset_commit_policy is consumer_managed.
 %% @end
 -spec start_link(client(), group_id(), [topic()], config()) ->
         {ok, pid()} | {error, any()}.
@@ -186,7 +239,7 @@ init({Client, GroupId, Topics, Config, Subscriber}) ->
   OffsetCommitPolicy = GetCfg({offset_commit_policy, ?OFFSET_COMMIT_POLICY}),
   OffsetCommitIntervalSeconds = GetCfg({offset_commit_interval_seconds,
                                         ?OFFSET_COMMIT_INTERVAL_SECONDS}),
-  self() ! ?LO_CMD_JOIN_GROUP(0, ?undef),
+  self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
   State =
     #state{ client                         = Client
@@ -223,17 +276,22 @@ handle_info(?LO_CMD_COMMIT_OFFSETS, State) ->
   catch throw : Reason ->
     {stop, {failed_to_commit_offsets, Reason}, State}
   end;
-handle_info(?LO_CMD_JOIN_GROUP(N, _Reason),
+handle_info(?LO_CMD_STABILIZE(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
-handle_info(?LO_CMD_JOIN_GROUP(N, Reason), State) ->
-  {ok, NewState} = stablize(State, N, Reason),
+handle_info(?LO_CMD_STABILIZE(N, Reason), State) ->
+
+  {ok, NewState} = stabilize(State, N, Reason),
   {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, #state{sock_pid = Pid} = State) ->
-  {ok, NewState} = stablize(State, 0, Reason),
+  {ok, NewState} = stabilize(State, 0, {sockent_down, Reason}),
   {noreply, NewState};
-handle_info({'EXIT', Pid, _Reason}, #state{subscriber = Pid} = State) ->
-  {stop, subscriber_down, State};
+handle_info({'EXIT', Pid, Reason}, #state{subscriber = Pid} = State) ->
+  case Reason of
+    shutdown -> {stop, shutdown, State};
+    normal   -> {stop, normal, State};
+    _        -> {stop, subscriber_down, State}
+  end;
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
                   , session_timeout_seconds = SessionTimeoutSec
@@ -251,7 +309,7 @@ handle_info(?LO_CMD_SEND_HB,
           {noreply, State};
         false ->
           %% time to re-discover a new coordinator ?
-          {ok, NewState} = stablize(State, 0, hb_timeout),
+          {ok, NewState} = stabilize(State, 0, hb_timeout),
           {noreply, NewState}
       end
   end;
@@ -260,7 +318,7 @@ handle_info({msg, _Pid, HbCorrId, #kpro_HeartbeatResponse{errorCode = EC}},
   State = State0#state{hb_ref = ?undef},
   case kpro_ErrorCode:is_error(EC) of
     true ->
-      {ok, NewState} = stablize(State, 0, EC),
+      {ok, NewState} = stabilize(State, 0, EC),
       {noreply, NewState};
     false ->
       {noreply, State}
@@ -269,8 +327,9 @@ handle_info(_Info, State) ->
   {noreply, State}.
 
 handle_call(commit_offsets, _From,
-            #state{offset_commit_policy = disabled} = State) ->
-  {reply, {error, disabled}, State};
+            #state{offset_commit_policy = consumer_managed} = State) ->
+  %% the subscriber is responsible for commiting offsets in handle_message
+  {reply, {error, consumer_managed}, State};
 handle_call(commit_offsets, From, State) ->
   try
     NewState = ?ESCALATE(do_commit_offsets(State)),
@@ -300,8 +359,7 @@ terminate(Reason, #state{ sock_pid = SockPid
   try send_sync(SockPid, Request, 1000)
   catch _ : _ -> ok
   end,
-  _ = brod_sock:stop(SockPid),
-  ok.
+  ok = stop_socket(SockPid).
 
 %%%_* Internal Functions =======================================================
 
@@ -334,11 +392,11 @@ discover_coordinator(#state{ client      = Client
       {ok, NewState}
   end.
 
--spec stablize(#state{}, integer(), any()) -> {ok, #state{}}.
-stablize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
-                 , subscriber           = Subscriber
-                 , offset_commit_policy = CommitPolicy
-                 } = State0, AttemptNo, Reason) ->
+-spec stabilize(#state{}, integer(), any()) -> {ok, #state{}}.
+stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
+                , subscriber           = Subscriber
+                , offset_commit_policy = CommitPolicy
+                } = State0, AttemptNo, Reason) ->
 
   Reason =/= ?undef andalso
     log(State0, info, "re-joining group, reason:~p", [Reason]),
@@ -349,9 +407,9 @@ stablize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   %% 2. if it is illegal generation error code received, try to commit current
   %% current offsets before re-joinning the group.
   State1 =
-    case AttemptNo     =:= 0                      andalso
-          Reason       =:= ?EC_ILLEGAL_GENERATION andalso
-          CommitPolicy =/= disabled of
+    case AttemptNo    =:= 0                      andalso
+         Reason       =:= ?EC_ILLEGAL_GENERATION andalso
+         CommitPolicy =/= consumer_managed of
       true ->
         {ok, #state{} = State1_} = try_commit_offsets(State0),
         State1_;
@@ -360,21 +418,9 @@ stablize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
     end,
   State2 = State1#state{is_in_group = false},
 
-  %$ 3. Cleanup old state depending on the error codes.
-  State =
-    case Reason of
-      ?EC_UNKNOWN_MEMBER_ID ->
-        %% we are likely kicked out from the group
-        %% rejoin with empty member id
-        State2#state{memberId = <<>>};
-      ?EC_NOT_COORDINATOR_FOR_GROUP ->
-        %% the coordinator have moved to another broker
-        %% set it to ?undef to trigger a socket restart
-        _ = brod_sock:stop(State0#state.sock_pid),
-        State2#state{sock_pid = ?undef};
-      _ ->
-        State2
-    end,
+  %$ 3. Clean up state based on the last failure reason
+  State3 = maybe_reset_member_id(State2, Reason),
+  State  = maybe_reset_socket(State3, Reason),
 
   %% 4. ensure we have a connection to the (maybe new) group coordinator
   F1 = fun discover_coordinator/1,
@@ -390,33 +436,64 @@ stablize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
       case AttemptNo =:= 0 of
         true ->
           %% do not delay before the first retry
-          self() ! ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason);
+          self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
         false ->
           erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
-                            ?LO_CMD_JOIN_GROUP(AttemptNo + 1, NewReason))
+                            ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
       end,
       {ok, StateIn}
     end,
-  stablize_steps([F1, F2, F3], RetryFun, State).
+  do_stabilize([F1, F2, F3], RetryFun, State).
 
-stablize_steps([], _RetryFun, State) ->
+do_stabilize([], _RetryFun, State) ->
   {ok, State};
-stablize_steps([F | Rest], RetryFun, State) ->
+do_stabilize([F | Rest], RetryFun, State) ->
   try
     {ok, #state{} = NewState} = F(State),
-    stablize_steps(Rest, RetryFun, NewState)
+    do_stabilize(Rest, RetryFun, NewState)
   catch throw : Reason ->
     RetryFun(State, Reason)
   end.
 
+maybe_reset_member_id(State, Reason) ->
+  case should_reset_member_id(Reason) of
+    true  -> State#state{memberId = <<>>};
+    false -> State
+  end.
+
+should_reset_member_id(?EC_UNKNOWN_MEMBER_ID) ->
+  %% we are likely kicked out from the group
+  %% rejoin with empty member id
+  true;
+should_reset_member_id(?EC_NOT_COORDINATOR_FOR_GROUP) ->
+  %% the coordinator have moved to another broker
+  %% set it to ?undef to trigger a socket restart
+  true;
+should_reset_member_id({socket_down, _Reason}) ->
+  %% old socket was down, new connection will lead
+  %% to a new member id
+  true;
+should_reset_member_id(_) ->
+  false.
+
+maybe_reset_socket(State, ?EC_NOT_COORDINATOR_FOR_GROUP) ->
+  ok = stop_socket(State#state.sock_pid),
+  State#state{sock_pid = ?undef};
+maybe_reset_socket(State, _OtherReason) ->
+  State.
+
+stop_socket(SockPid) ->
+  catch unlink(SockPid),
+  ok = brod_sock:stop(SockPid).
+
 -spec join_group(#state{}) -> {ok, #state{}} | no_return().
 join_group(#state{ groupId                       = GroupId
-                    , memberId                      = MemberId0
-                    , topics                        = Topics
-                    , sock_pid                      = SockPid
-                    , partition_assignment_strategy = PaStrategy
-                    , session_timeout_seconds       = SessionTimeoutSec
-                    } = State0) ->
+                 , memberId                      = MemberId0
+                 , topics                        = Topics
+                 , sock_pid                      = SockPid
+                 , partition_assignment_strategy = PaStrategy
+                 , session_timeout_seconds       = SessionTimeoutSec
+                 } = State0) ->
   ConsumerGroupProtocolMeta =
     #kpro_ConsumerGroupProtocolMetadata
       { version     = ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION
@@ -576,7 +653,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
         } = State,
   AllPartitions =
     [ {Topic, Partition}
-      || Topic <- Topics,
+      || Topic <- lists:usort(Topics),
          Partition <- get_partitions(Client, Topic)
     ],
   Assignments = do_assign_partitions(Strategy, Members, AllPartitions),
@@ -664,12 +741,13 @@ get_topic_assignments(#state{ default_begin_offset = DefatultBeginOffset
         [{{topic(), partition()}, OffsetOrWithMetadata}] when
         OffsetOrWithMetadata :: offset()
                               | {offset(), binary(), error_code()}.
-get_committed_offsets(#state{ offset_commit_policy = disabled
+get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , subscriber           = Subscriber
                             }, TopicPartitions) ->
   brod_group_subscriber:get_committed_offsets(Subscriber, TopicPartitions);
-get_committed_offsets(#state{ groupId            = GroupId
-                            , sock_pid           = SockPid
+get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
+                            , groupId              = GroupId
+                            , sock_pid             = SockPid
                             }, TopicPartitions) ->
   GrouppedPartitions =
     lists:foldl(fun({T, P}, Dict) ->

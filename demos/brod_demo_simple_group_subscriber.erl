@@ -29,6 +29,7 @@
 -behaviour(brod_group_subscriber).
 
 -export([ bootstrap/0
+        , bootstrap/1
         ]).
 
 %% behabviour callbacks
@@ -37,7 +38,7 @@
         ]).
 
 
--include("brod.hrl").
+-include_lib("brod/include/brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 

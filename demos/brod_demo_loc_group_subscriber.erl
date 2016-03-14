@@ -29,6 +29,7 @@
 -behaviour(brod_group_subscriber).
 
 -export([ bootstrap/0
+        , bootstrap/1
         ]).
 
 %% behabviour callbacks
@@ -38,7 +39,7 @@
         ]).
 
 
--include("brod.hrl").
+-include_lib("brod/include/brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
@@ -83,7 +84,7 @@ bootstrap(DelaySeconds) ->
 
 %% @doc Initialize nothing in our case.
 init([GroupId]) ->
-  OffsetDir = filename:join(["/tmp", GroupId]),
+  OffsetDir = "/tmp",
   {ok, #state{ group_id   = GroupId
              , offset_dir = OffsetDir
              }}.
@@ -103,13 +104,23 @@ handle_message(Topic, Partition, Message,
   ok = commit_offset(Dir, GroupId, Topic, Partition, Offset),
   {ok, ack, State}.
 
+%% @doc This callback is called whenever there is a new assignment received.
+%% e.g. when joining the group after restart, or group assigment rebalance
+%% was triggered if other memgers join or leave the group
+%% NOTE: A subscriber may get assigned with a random set of topic-partitions
+%%       (unless some 'sticky' protocol is introduced to group controller),
+%%       meaning, if group members are running in different hosts they may
+%%       have to perform 'Local Offset Commit' in a central database or
+%%       whatsoever instead of local file system.
+%% @end
 get_committed_offsets(GroupId, TopicPartitions,
                       #state{offset_dir = Dir} = State) ->
   F = fun({Topic, Partition}, Acc) ->
         case file:read_file(filename(Dir, GroupId, Topic, Partition)) of
           {ok, OffsetBin} ->
-            Offset = string:strip(binary_to_list(OffsetBin), both, $\n),
-            [{Topic, Partition, Offset} | Acc];
+            OffsetStr = string:strip(binary_to_list(OffsetBin), both, $\n),
+            Offset = list_to_integer(OffsetStr),
+            [{{Topic, Partition}, Offset} | Acc];
           {error, enoent} ->
             Acc
         end
@@ -124,7 +135,7 @@ filename(Dir, GroupId, Topic, Partition) ->
 commit_offset(Dir, GroupId, Topic, Partition, Offset) ->
   Filename = filename(Dir, GroupId, Topic, Partition),
   ok = filelib:ensure_dir(Filename),
-  ok = file:write_file(Filename, integer_to_list(Offset)).
+  ok = file:write_file(Filename, [integer_to_list(Offset), $\n]).
 
 spawn_consumers(GroupId, ClientId, Topic, ConsumerCount) ->
   %% commit offsets to kafka every 10 seconds

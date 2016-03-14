@@ -23,18 +23,16 @@
 -module(brod_group_subscriber).
 -behaviour(gen_server).
 
--export([ start_link/7
+-export([ ack/4
+        , commit/1
+        , start_link/7
+        , stop/1
         ]).
 
 %% callbacks for brod_group_controller
 -export([ get_committed_offsets/2
         , new_assignments/4
         , unsubscribe_all_partitions/1
-        ]).
-
-%% APIs for users
--export([ ack/4
-        , commit/1
         ]).
 
 -export([ code_change/3
@@ -131,6 +129,15 @@ start_link(Client, GroupId, Topics, GroupConfig,
   Args = {Client, GroupId, Topics, GroupConfig,
           ConsumerConfig, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
+
+-spec stop(pid()) -> ok.
+stop(Pid) ->
+  Mref = erlang:monitor(process, Pid),
+  ok = gen_server:cast(Pid, stop),
+  receive
+    {'DOWN', Mref, process, Pid, _Reason} ->
+      ok
+  end.
 
 %% @doc Acknowledge a message.
 -spec ack(pid(), topic(), partition(), offset()) -> ok.
@@ -252,10 +259,13 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
                   , cb_module = CbModule
                   , cb_state  = CbState
                   } = State) ->
-  {ok, Result, NewCbState} =
-    CbModule:get_committed_offsets(GroupId, TopicPartitions, CbState),
-  NewState = State#state{cb_state = NewCbState},
-  {reply, Result, NewState};
+  case CbModule:get_committed_offsets(GroupId, TopicPartitions, CbState) of
+    {ok, Result, NewCbState} ->
+      NewState = State#state{cb_state = NewCbState},
+      {reply, Result, NewState};
+    Unknown ->
+      {stop, {bad_return_balue, CbModule, get_committed_offsets, Unknown}}
+  end;
 handle_call(unsubscribe_all_partitions, _From,
             #state{ consumers = Consumers
                   } = State) ->
@@ -306,6 +316,8 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                         , generationId = GenerationId
                         },
   {noreply, NewState};
+handle_cast(stop, State) ->
+  {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -320,6 +332,7 @@ terminate(_Reason, #state{}) ->
 -spec maybe_process_message(#state{}) -> {ok, #state{}}.
 maybe_process_message(#state{ pending_ack      = ?undef
                             , pending_messages = [{AckRef, F} | Rest]
+                            , cb_module        = CbModule
                             , cb_state         = CbState
                             } = State) ->
   %% process new message only when there is no pending ack
@@ -328,7 +341,9 @@ maybe_process_message(#state{ pending_ack      = ?undef
       {ok, NewCbState_} ->
         {false, NewCbState_};
       {ok, ack, NewCbState_} ->
-        {true, NewCbState_}
+        {true, NewCbState_};
+      Unknown ->
+        erlang:error({bad_return_value, {CbModule, handle_message, Unknown}})
     end,
    NewState =
      State#state{ pending_ack      = AckRef

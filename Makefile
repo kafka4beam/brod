@@ -18,7 +18,7 @@ ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 test-env:
 	./scripts/setup-test-env.sh
 
-t: eunit ct
+t: demos eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 ESCRIPT_FILE = scripts/$(PROJECT)
