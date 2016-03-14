@@ -95,7 +95,7 @@ handle_message(_Topic, Partition, Message, State) ->
 spawn_consumers(ClientId, Topic, ConsumerCount) ->
   %% commit offsets to kafka every 10 seconds
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
-                ,{offset_commit_interval_seconds, 10}
+                ,{offset_commit_interval_seconds, 5}
                 ],
   GroupId = iolist_to_binary([Topic, "-groupd-id"]),
   lists:foreach(

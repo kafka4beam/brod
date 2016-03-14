@@ -163,7 +163,10 @@ t_async_acks(Config) when is_list(Config) ->
   %% so we can control where to start fetching messages from
   MaxSeqNo       = 100,
   GroupConfig    = [{offset_commit_policy, consumer_managed}],
-  ConsumerConfig = [{prefetch_count, MaxSeqNo}, {sleep_timeout, 0}],
+  ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   ],
   CaseRef        = t_async_acks,
   CasePid        = self(),
   InitArgs       = {_SubscriberId = 0, CaseRef, CasePid, _IsAsyncAck = true},
@@ -193,9 +196,11 @@ t_async_acks(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 10 seconds to receive the first message
-  {_, X} = lists:foldl(RecvFun, {RecvFun, []}, [10000]),
-  ?assertEqual([0], X),
+  %% wait at most 2 seconds to receive the first message
+  %% it may or may not receive the first message (0) depending on when
+  %% the consumers starts polling --- before or after the first message
+  %% is produced.
+  _ = RecvFun(2000, {RecvFun, []}),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
