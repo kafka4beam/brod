@@ -40,8 +40,8 @@
 
 -include("brod_int.hrl").
 
--define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, <<"roundrobin">>). %% default
--type partition_assignment_strategy() :: binary().
+-define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
+-type partition_assignment_strategy() :: atom().
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 10).
@@ -155,7 +155,7 @@
 %%               elected as the group leader, then being responsible for
 %%               assigning topic-partitions to group members.
 %% Config:  The group controller configs in a proplist, possible entries:
-%%  - partition_assignment_strategy  (optional, default = <<"roundrobin">>)
+%%  - partition_assignment_strategy  (optional, default = roundrobin)
 %%      roudrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
 %%                 assign one to each member in a roundrobin fashion.
 %%      TODO: support sticky assignments
@@ -502,7 +502,7 @@ join_group(#state{ groupId                       = GroupId
       },
   ConsumerGroupProtocol =
     #kpro_GroupProtocol
-      { protocolName     = PaStrategy
+      { protocolName     = atom_to_list(PaStrategy)
       , protocolMetadata = ConsumerGroupProtocolMeta
       },
   SessionTimeout = timer:seconds(SessionTimeoutSec),
@@ -520,7 +520,7 @@ join_group(#state{ groupId                       = GroupId
   ?ESCALATE_EC(JoinRsp#kpro_JoinGroupResponse.errorCode),
   #kpro_JoinGroupResponse
     { generationId          = GenerationId
-    , protocolName          = PaStrategy
+    , protocolName          = _PaStrategyBinStr
     , leaderId              = LeaderId
     , memberId              = MemberId
     , groupMemberMetadata_L = Members
@@ -687,7 +687,7 @@ get_partitions(Client, Topic) ->
 -spec do_assign_partitions(partition_assignment_strategy(),
                            [kpro_GroupMemberMetadata()],
                            [{topic(), partition()}]) -> [member_assignment()].
-do_assign_partitions(<<"roundrobin">>, Members, AllPartitions) ->
+do_assign_partitions(roundrobin, Members, AllPartitions) ->
   %% round robin, we only care about the member id
   F = fun(#kpro_GroupMemberMetadata{memberId = MemberId}) -> MemberId end,
   MemberIds = lists:map(F, Members),
