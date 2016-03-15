@@ -317,7 +317,8 @@ handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast({ack, Topic, Partition, Offset}, State) ->
-  {ok, NewState} = handle_ack({Topic, Partition, Offset}, State),
+  AckRef = {Topic, Partition, Offset},
+  {ok, NewState} = handle_ack(AckRef, State),
   {noreply, NewState};
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ client          = Client
@@ -400,7 +401,6 @@ handle_ack(AckRef, #state{ pending_ack      = AckRef
     case lists:keyfind({Topic, Partition},
                        #consumer.topic_partition, Consumers) of
       #consumer{consumer_pid = ConsumerPid} = Consumer ->
-        %% TODO: handle error
         ok = brod:consume_ack(ConsumerPid, Offset),
         ok = brod_group_controller:ack(Controller, GenerationId,
                                        Topic, Partition, Offset),
