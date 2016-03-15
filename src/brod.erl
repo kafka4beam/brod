@@ -134,7 +134,7 @@ stop_client(Client) ->
   brod_client:stop(Client).
 
 %% @doc Dynamically start a per-topic producer.
-%% @see brod_client:start_producer/3 for more details.
+%% @see brod_client:start_producer/3. for more details.
 %% @end
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
@@ -142,7 +142,7 @@ start_producer(Client, TopicName, ProducerConfig) ->
   brod_client:start_producer(Client, TopicName, ProducerConfig).
 
 %% @doc Dynamically start a topic consumer.
-%% @see brod_client:start_consumer/3 for more details.
+%% @see brod_client:start_consumer/3. for more details.
 %% @end
 -spec start_consumer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
