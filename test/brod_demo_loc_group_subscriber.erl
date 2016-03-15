@@ -33,7 +33,7 @@
         ]).
 
 %% behabviour callbacks
--export([ init/1
+-export([ init/2
         , handle_message/4
         , get_committed_offsets/3
         ]).
@@ -83,7 +83,7 @@ bootstrap(DelaySeconds) ->
   ok.
 
 %% @doc Initialize nothing in our case.
-init([GroupId]) ->
+init(GroupId, []) ->
   OffsetDir = "/tmp",
   {ok, #state{ group_id   = GroupId
              , offset_dir = OffsetDir
@@ -148,7 +148,7 @@ spawn_consumers(GroupId, ClientId, Topic, ConsumerCount) ->
                                          GroupConfig,
                                          _ConsumerConfig  = [],
                                          _CallbackModule  = ?MODULE,
-                                         _CallbackInitArg = [GroupId])
+                                         _CallbackInitArg = [])
     end, lists:seq(1, ConsumerCount)).
 
 spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok;

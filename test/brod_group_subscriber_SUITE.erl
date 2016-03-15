@@ -33,7 +33,7 @@
         ]).
 
 %% brod subscriber callbacks
--export([ init/1
+-export([ init/2
         , get_committed_offsets/3
         , handle_message/4
         ]).
@@ -94,7 +94,7 @@ all() -> [F || {F, _A} <- module_info(exports),
                , my_id
                }).
 
-init({SubscriberId, CaseRef, CasePid, IsAsyncAck}) ->
+init(_GroupId, {SubscriberId, CaseRef, CasePid, IsAsyncAck}) ->
   {ok, #state{ ct_case_ref  = CaseRef
              , ct_case_pid  = CasePid
              , is_async_ack = IsAsyncAck

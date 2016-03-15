@@ -33,7 +33,7 @@
         ]).
 
 %% behabviour callbacks
--export([ init/1
+-export([ init/2
         , handle_message/4
         ]).
 
@@ -76,7 +76,7 @@ bootstrap(DelaySeconds) ->
   ok.
 
 %% @doc Initialize nothing in our case.
-init(_Arg) -> {ok, []}.
+init(_GroupId, _Arg) -> {ok, []}.
 
 %% @doc Handle one message (not message-set).
 handle_message(_Topic, Partition, Message, State) ->

@@ -63,7 +63,7 @@
 -type cb_state() :: term().
 
 %% Initialize the callback module s state.
--callback init(term()) -> {ok, cb_state()}.
+-callback init(group_id(), term()) -> {ok, cb_state()}.
 
 %% Handle a message. Return one of:
 %%
@@ -222,7 +222,7 @@ get_committed_offsets(Pid, TopicPartitions) ->
 
 init({Client, GroupId, Topics, GroupConfig,
       ConsumerConfig, CbModule, CbInitArg}) ->
-  {ok, CbState} = CbModule:init(CbInitArg),
+  {ok, CbState} = CbModule:init(GroupId, CbInitArg),
   {ok, Pid} =
     brod_group_controller:start_link(Client, GroupId, Topics, GroupConfig),
   State = #state{ client          = Client
