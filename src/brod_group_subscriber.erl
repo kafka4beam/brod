@@ -16,6 +16,21 @@
 
 %%%=============================================================================
 %%% @doc
+%%% A group subscriber is a gen_server which subscribes to partition consumers
+%%% (poller) and calls the user-defined callback functions for message
+%%% processing.
+%%%
+%%% An overview of what it does behind the scene:
+%%%  1. Start a consumer group controller,
+%%%     @see brod_group_controller:start_link/4 to manage the consumer group
+%%%     states.
+%%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
+%%%     to the partition workers when group assignment is received from the group
+%%%     leader, @see brod:start_consumer/3
+%%%  3. Call CallbackModule:handle_message/4 when messages are received from
+%%%     the partition consumers.
+%%%  4. Send acknowledged offsets to group controller which will be committed
+%%%     to kafka periodically.
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
@@ -42,9 +57,6 @@
         , init/1
         , terminate/2
         ]).
-
--epxort_type([ msg_ref/0
-             ]).
 
 -include("brod_int.hrl").
 
@@ -121,6 +133,28 @@
 
 %%%_* APIs =====================================================================
 
+%% @doc Start (link) a group subscriber.
+%% Client:
+%%   Client ID (or pid, but not recommended) of the brod client.
+%% GroupId:
+%%   Consumer group ID which should be unique per kafka cluster
+%% Topics:
+%%   Predefined set of topic names in the group.
+%%   OBS: It is importat to have the same topic set across all members
+%%        in the group. Because all members have a chance of being
+%%        elected as the group leader, then being responsible for
+%%        assigning topic-partitions to group members.
+%% GroupConfig:
+%%   For group controller, @see brod_group_controller:start_link/4
+%% ConsumerConfig:
+%%   For partition consumer, @see brod_consumer:start_link/4
+%% CbModule:
+%%   Callback module which should have the callback functions
+%%   implemented for message processing.
+%% CbInitArg:
+%%   The term() that is going to be passed to CbModule:init/1 when
+%%   initializing the subscriger.
+%% @end
 -spec start_link(client(), group_id(), [topic()],
                  group_config(), consumer_config(), module(), term()) ->
                     {ok, pid()} | {error, any()}.
@@ -293,7 +327,7 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                   } = State) ->
   lists:foreach(
     fun({Topic, _PartitionAssignments}) ->
-      case brod_client:start_consumer(Client, Topic, ConsumerConfig) of
+      case brod:start_consumer(Client, Topic, ConsumerConfig) of
         ok                               -> ok;
         {error, {already_started, _Pid}} -> ok
       end

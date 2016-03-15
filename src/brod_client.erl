@@ -150,7 +150,9 @@ get_producer(Client, Topic, Partition) ->
 get_consumer(Client, Topic, Partition) ->
   get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
 
-%% @doc Dynamically start a per-topic producer
+%% @doc Dynamically start a per-topic producer.
+%% Return ok if the producer is already started.
+%% @end
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
@@ -169,7 +171,9 @@ start_producer(Client, TopicName, ProducerConfig) ->
 stop_producer(Client, TopicName) ->
   gen_server:call(Client, {stop_producer, TopicName}, infinity).
 
-%% @doc Dynamically start a topic consumer
+%% @doc Dynamically start a topic consumer.
+%% Returns ok if the consumer is already started.
+%% @end.
 -spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->

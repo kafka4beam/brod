@@ -150,10 +150,6 @@
 %% Client:  ClientId (or pid, but not recommended)
 %% GroupId: Predefined globally unique (in a kafka cluster) binary string.
 %% Topics:  Predefined set of topic names in the group.
-%%          OBS: It is importat to have the same topic set across all members
-%%               in the group. Because all members have a chance of being
-%%               elected as the group leader, then being responsible for
-%%               assigning topic-partitions to group members.
 %% Config:  The group controller configs in a proplist, possible entries:
 %%  - partition_assignment_strategy  (optional, default = roundrobin)
 %%      roudrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
