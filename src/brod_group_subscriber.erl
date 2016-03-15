@@ -26,7 +26,7 @@
 %%%     states.
 %%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
 %%%     to the partition workers when group assignment is received from the group
-%%%     leader, @see brod:start_consumer/3
+%%%     leader, @see brod:start_consumer/3.
 %%%  3. Call CallbackModule:handle_message/4 when messages are received from
 %%%     the partition consumers.
 %%%  4. Send acknowledged offsets to group controller which will be committed
@@ -103,10 +103,7 @@
                   , acked_offset    :: offset()
                   }).
 
--type cb_fun() :: fun( (cb_state()) ->
-                         {ok, cb_state()}         |
-                         {ok, ack,    cb_state()} |
-                         {ok, commit, cb_state()} ).
+-type cb_fun() :: fun((cb_state()) -> {ok, cb_state()} | {ok, ack, cb_state()}).
 
 -type ack_ref() :: {topic(), partition(), offset()}.
 
