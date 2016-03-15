@@ -54,9 +54,6 @@
 %% use kfaka's offset meta-topic retention policy
 -define(OFFSET_RETENTION_DEFAULT, -1).
 
-%% by default, start from latest available offset
--define(DEFAULT_BEGIN_OFFSET, -1).
-
 -define(ESCALATE_EC(EC), kpro_ErrorCode:is_error(EC) andalso erlang:throw(EC)).
 
 -define(ESCALATE(Expr), fun() ->
@@ -137,7 +134,6 @@
         , max_rejoin_attempts            :: non_neg_integer()
         , rejoin_delay_seconds           :: non_neg_integer()
         , offset_retention_seconds       :: ?undef | integer()
-        , default_begin_offset           :: offset()
         , offset_commit_policy           :: offset_commit_policy()
         , offset_commit_interval_seconds :: pos_integer()
         }).
@@ -186,11 +182,6 @@
 %%            for persisting offsets to a local or centralized storage.
 %%            And the callback get_committed_offsets should be implemented
 %%            to allow group controller to retrieve the commited offsets.
-%%  - default_begin_offset (optional, default = -1)
-%%      The offset to be used when there is no offset commit record found.
-%%      i.e. No offset record found in OffsetFetchResponse from group
-%%      coordinator. Or no record returned from get_commiited_offsets callback
-%%      in case of 'consumer_managed' policy.
 %%  - offset_commit_interval_seconds (optional, default = 60)
 %%      The time interval between tow OffsetCommitRequest messages.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
@@ -231,7 +222,6 @@ init({Client, GroupId, Topics, Config, Subscriber}) ->
   MaxRejoinAttempts = GetCfg({max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS}),
   RejoinDelaySeconds = GetCfg({rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS}),
   OffsetRetentionSeconds = GetCfg({offset_retention_seconds, ?undef}),
-  DefaultBeginOffset = GetCfg({default_begin_offset, ?DEFAULT_BEGIN_OFFSET}),
   OffsetCommitPolicy = GetCfg({offset_commit_policy, ?OFFSET_COMMIT_POLICY}),
   OffsetCommitIntervalSeconds = GetCfg({offset_commit_interval_seconds,
                                         ?OFFSET_COMMIT_INTERVAL_SECONDS}),
@@ -248,7 +238,6 @@ init({Client, GroupId, Topics, Config, Subscriber}) ->
           , max_rejoin_attempts            = MaxRejoinAttempts
           , rejoin_delay_seconds           = RejoinDelaySeconds
           , offset_retention_seconds       = OffsetRetentionSeconds
-          , default_begin_offset           = DefaultBeginOffset
           , offset_commit_policy           = OffsetCommitPolicy
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           },
@@ -712,8 +701,7 @@ assign_partition({MemberId, Topics0}, Topic, Partition) ->
 -spec get_topic_assignments(#state{}, kpro_ConsumerGroupMemberAssignment()) ->
         [topic_assignment()].
 get_topic_assignments(#state{}, <<>>) -> [];
-get_topic_assignments(#state{ default_begin_offset = DefatultBeginOffset
-                            } = State, Assignment) ->
+get_topic_assignments(#state{} = State, Assignment) ->
   #kpro_ConsumerGroupMemberAssignment
     { version                            = _VersionIgnored
     , consumerGroupPartitionAssignment_L = PartitionAssignments
@@ -728,7 +716,7 @@ get_topic_assignments(#state{ default_begin_offset = DefatultBeginOffset
   TopicPartitions = lists:append(TopicPartitions0),
   CommittedOffsets = get_committed_offsets(State, TopicPartitions),
   resolve_begin_offsets(TopicPartitions, CommittedOffsets,
-                        DefatultBeginOffset, orddict:from_list([])).
+                        orddict:from_list([])).
 
 %% @private Fetch committed offsets from kafka,
 %% or call the consumer callback to read committed offsets.
@@ -782,14 +770,12 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
 -spec resolve_begin_offsets(
         TopicPartitions  :: [{topic(), partition()}],
         CommittedOffsets :: [{{topic(), partition()}, OffsetOrWithMetadata}],
-        DefaultOffset    :: offset(),
         [topic_assignment()]) ->
           [topic_assignment()] when
             OffsetOrWithMetadata :: offset()
                                   | {offset(), binary(), error_code()}.
-resolve_begin_offsets([], _, _, Acc) -> Acc;
-resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
-                      DefaultBeginOffset, Acc) ->
+resolve_begin_offsets([], _, Acc) -> Acc;
+resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets, Acc) ->
   {Offset, Metadata, EC} =
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
       {_, Tuple} when is_tuple(Tuple)     ->
@@ -804,7 +790,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
       true ->
         %% use default begin offset if not found in committed offsets
         #partition_assignment{ partition    = Partition
-                             , begin_offset = DefaultBeginOffset
+                             , begin_offset = ?undef
                              , metadata     = <<>>
                              };
       false ->
@@ -819,7 +805,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
                              }
     end,
   NewAcc = orddict:append_list(Topic, [PartitionAssignment], Acc),
-  resolve_begin_offsets(Rest, CommittedOffsets, DefaultBeginOffset, NewAcc).
+  resolve_begin_offsets(Rest, CommittedOffsets, NewAcc).
 
 get_config({Name, Default}, Configs) ->
   proplists:get_value(Name, Configs, Default);

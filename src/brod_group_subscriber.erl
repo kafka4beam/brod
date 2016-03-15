@@ -84,11 +84,12 @@
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
 %% Return {ok, Offsets, cb_state()} where Offsets can be [],
-%% or only the ones that are found in e.g. local storage.
+%% or only the ones that are found in e.g. local storage or database.
 %% For the topic-partitions which have no committed offset found,
-%% the subscriber will take default_begin_offset from consumer group config as
-%% the start point of data stream. (by default, -1: latest available offset)
-%%
+%% the consumer will take 'begin_offset' in consumer config as the start point
+%% of data stream. If 'begin_offset' is not found in consumer config, the
+%% default value -1 (latest) is used.
+%
 % commented out as optional
 %-callback get_committed_offsets(group_id(), [{topic(), partition()}],
 %                                cb_state()) ->
@@ -447,7 +448,11 @@ subscribe_partition(Client, Consumer) ->
                       ?undef        -> BeginOffset0;
                       N when N >= 0 -> N + 1
                     end,
-      Options = [{begin_offset, BeginOffset}],
+      Options =
+        case BeginOffset =:= ?undef of
+          true  -> []; %% fetch from 'begin_offset' in consumer config
+          false -> [{begin_offset, BeginOffset}]
+        end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
           Mref = erlang:monitor(process, ConsumerPid),
