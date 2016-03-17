@@ -365,22 +365,8 @@ handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
   {reply, Reply, NewState};
 handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
-  {Result, NewState} = validate_topic_existence(TopicName, State),
-  try
-    Result =:= ok orelse throw(Result),
-    SupPid = State#state.consumers_sup,
-    case brod_consumers_sup:start_consumer(SupPid, self(),
-                                           TopicName, ConsumerConfig) of
-      {ok, _} ->
-        {reply, ok, NewState};
-      {error, {already_started, _Pid}} ->
-        {reply, ok, NewState};
-      Error ->
-        throw(Error)
-    end
-  catch throw:E ->
-      {reply, E, NewState}
-  end;
+  {Reply, NewState} = do_start_consumer(TopicName, ConsumerConfig, State),
+  {reply, Reply, NewState};
 handle_call({auto_start_producer, Topic}, _From, State) ->
   Config = State#state.config,
   case proplists:get_value(auto_start_producers, Config, false) of
@@ -763,21 +749,34 @@ maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
   end.
 
 do_start_producer(TopicName, ProducerConfig, State) ->
-  {Result, NewState} = validate_topic_existence(TopicName, State),
-  try
-    Result =:= ok orelse throw(Result),
-    SupPid = State#state.producers_sup,
-    case brod_producers_sup:start_producer(SupPid, self(),
-                                           TopicName, ProducerConfig) of
-      {ok, _} ->
-        {ok, NewState};
-      {error, {already_started, _Pid}} ->
-        {ok, NewState};
-      Error ->
-        throw(Error)
-    end
-  catch throw:E ->
-      {E, NewState}
+  SupPid = State#state.producers_sup,
+  F = fun() ->
+        brod_producers_sup:start_producer(SupPid, self(),
+                                          TopicName, ProducerConfig)
+      end,
+  do_on_valid_topic(TopicName, State, F).
+
+do_start_consumer(TopicName, ConsumerConfig, State) ->
+  SupPid = State#state.consumers_sup,
+  F = fun() ->
+        brod_consumers_sup:start_consumer(SupPid, self(),
+                                          TopicName, ConsumerConfig)
+      end,
+  do_on_valid_topic(TopicName, State, F).
+
+do_on_valid_topic(TopicName, State, F) ->
+  case validate_topic_existence(TopicName, State) of
+    {ok, NewState} ->
+      case F() of
+        {ok, _} ->
+          {ok, NewState};
+        {error, {already_started, _Pid}} ->
+          {ok, NewState};
+        {error, Reason} ->
+          {{error, Reason}, NewState}
+      end;
+    {{error, Reason}, NewState} ->
+      {{error, Reason}, NewState}
   end.
 
 %%%_* Emacs ====================================================================
