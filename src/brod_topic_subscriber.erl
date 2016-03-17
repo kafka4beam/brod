@@ -28,6 +28,7 @@
 
 -export([ ack/3
         , start_link/5
+        , start_link/6
         , stop/1
         ]).
 
@@ -275,7 +276,7 @@ subscribe_partition(Client, Topic, Consumer) ->
         end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
-          Mref = erlang:monitor(Client, ConsumerPid),
+          Mref = erlang:monitor(process, ConsumerPid),
           Consumer#consumer{ consumer_pid  = ConsumerPid
                            , consumer_mref = Mref
                            };

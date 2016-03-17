@@ -17,14 +17,15 @@
 %%%=============================================================================
 %%% @doc
 %%% This is a consumer group subscriber example
-%%% This is called 'simple' because it demos a all-configs-by-default minimal
-%%% implenemtation of a consumer group subscriber.
+%%% This is called 'koc' as in kafka-offset-commit,
+%%% it demos a all-configs-by-default minimal implenemtation of a
+%%% consumer group subscriber which commits offsets to kafka.
 %%% See bootstrap/0 for more details about all prerequisite.
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
--module(brod_demo_simple_group_subscriber).
+-module(brod_demo_group_subscriber_koc).
 
 -behaviour(brod_group_subscriber).
 
@@ -42,10 +43,10 @@
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
-%% @doc This function bootstraps everything to demo of group consumer.
+%% @doc This function bootstraps everything to demo of group subscriber.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
-%%   - kafka topic named <<"brod-demo-simple">>
+%%   - kafka topic named <<"brod-group-subscriber-demo-koc">>
 %%     having two or more partitions.
 %% Processes to spawn:
 %%   - A brod client
@@ -63,7 +64,7 @@ bootstrap(DelaySeconds) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
-  Topic = <<"brod-demo-simple">>,
+  Topic = <<"brod-demo-group-subscriber-koc">>,
   {ok, _ClientPid} =
     brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
@@ -85,9 +86,8 @@ handle_message(_Topic, Partition, Message, State) ->
                 } = Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
-  error_logger:info_msg(
-    "~p ~p ~s: offset:~8w seqno:~8w\n",
-    [self(), Partition, Now, Offset, Seqno]),
+  error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
+                        [self(), Partition, Now, Offset, Seqno]),
   {ok, ack, State}.
 
 %%%_* Internal Functions =======================================================

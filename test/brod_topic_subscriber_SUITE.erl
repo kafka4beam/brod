@@ -21,7 +21,7 @@
 %%% ============================================================================
 
 %% @private
--module(brod_group_subscriber_SUITE).
+-module(brod_topic_subscriber_SUITE).
 
 %% Test framework
 -export([ init_per_suite/1
@@ -34,14 +34,12 @@
 
 %% brod subscriber callbacks
 -export([ init/2
-        , get_committed_offsets/3
-        , handle_message/4
+        , handle_message/3
         ]).
 
 %% Test cases
 -export([ t_async_acks/1
-        , t_koc_demo/1
-        , t_loc_demo/1
+        , t_demo/1
         ]).
 
 
@@ -51,7 +49,6 @@
 
 -define(CLIENT_ID, ?MODULE).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
--define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 -define(config(Name), proplists:get_value(Name, Config)).
 
 %%%_* ct callbacks =============================================================
@@ -85,7 +82,7 @@ all() -> [F || {F, _A} <- module_info(exports),
                   end].
 
 
-%%%_* Group subscriber callbacks ===============================================
+%%%_* Topic subscriber callbacks ===============================================
 
 -record(state, { ct_case_ref
                , ct_case_pid
@@ -93,18 +90,19 @@ all() -> [F || {F, _A} <- module_info(exports),
                , my_id
                }).
 
-init(_GroupId, {CaseRef, SubscriberId, CasePid, IsAsyncAck}) ->
-  {ok, #state{ ct_case_ref  = CaseRef
-             , ct_case_pid  = CasePid
-             , is_async_ack = IsAsyncAck
-             , my_id        = SubscriberId
-             }}.
+init(_Topic, {CaseRef, SubscriberId, CasePid, IsAsyncAck}) ->
+  State = #state{ ct_case_ref  = CaseRef
+                , ct_case_pid  = CasePid
+                , is_async_ack = IsAsyncAck
+                , my_id        = SubscriberId
+                },
+  {ok, [], State}.
 
-handle_message(_Topic, Partition, Message, #state{ ct_case_ref  = Ref
-                                                 , ct_case_pid  = Pid
-                                                 , is_async_ack = IsAsyncAck
-                                                 , my_id        = MyId
-                                                 } = State) ->
+handle_message(Partition, Message, #state{ ct_case_ref  = Ref
+                                         , ct_case_pid  = Pid
+                                         , is_async_ack = IsAsyncAck
+                                         , my_id        = MyId
+                                         } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
@@ -115,35 +113,13 @@ handle_message(_Topic, Partition, Message, #state{ ct_case_ref  = Ref
     false -> {ok, ack, State}
   end.
 
-get_committed_offsets(_GroupId, _TopicPartitions, State) ->
-  %% always return []: always fetch from latest available offset
-  {ok, [], State}.
-
 %%%_* Test functions ===========================================================
 
-t_loc_demo(Config) when is_list(Config) ->
+t_demo(Config) when is_list(Config) ->
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_group_subscriber_loc:bootstrap(1),
-        receive
-          _ ->
-            ok
-        end
-      end),
-  receive
-    {'DOWN', Mref, process, Pid, Reason} ->
-      erlang:error({demo_crashed, Reason})
-  after 10000 ->
-    exit(Pid, shutdown),
-    ok
-  end.
-
-t_koc_demo(Config) when is_list(Config) ->
-  {Pid, Mref} =
-    erlang:spawn_monitor(
-      fun() ->
-        brod_demo_group_subscriber_koc:bootstrap(1),
+        brod_demo_topic_subscriber:bootstrap(1),
         receive
           _ ->
             ok
@@ -161,7 +137,6 @@ t_async_acks(Config) when is_list(Config) ->
   %% use consumer managed offset commit behaviour
   %% so we can control where to start fetching messages from
   MaxSeqNo       = 100,
-  GroupConfig    = [{offset_commit_policy, consumer_managed}],
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
@@ -171,8 +146,7 @@ t_async_acks(Config) when is_list(Config) ->
   InitArgs       = {CaseRef, _SubscriberId = 0, CasePid, _IsAsyncAck = true},
   Partition      = 0,
   {ok, SubscriberPid} =
-    brod_group_subscriber:start_link(?CLIENT_ID, ?GROUP_ID, [?TOPIC],
-                                     GroupConfig, ConsumerConfig,
+    brod_topic_subscriber:start_link(?CLIENT_ID, ?TOPIC, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
@@ -183,8 +157,7 @@ t_async_acks(Config) when is_list(Config) ->
     fun(Timeout, {ContinueFun, Acc}) ->
       receive
         {CaseRef, 0, 0, Offset, Value} ->
-          ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC,
-                                         Partition, Offset),
+          ok = brod_topic_subscriber:ack(SubscriberPid, Partition, Offset),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
           ContinueFun(0, {ContinueFun, NewAcc});
@@ -206,7 +179,7 @@ t_async_acks(Config) when is_list(Config) ->
   Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
   {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
   ?assertEqual(L, lists:reverse(ReceivedL)),
-  ok = brod_group_subscriber:stop(SubscriberPid),
+  ok = brod_topic_subscriber:stop(SubscriberPid),
   ok.
 
 %%%_* Help funtions ============================================================

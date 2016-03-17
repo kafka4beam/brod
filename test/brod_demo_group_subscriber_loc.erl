@@ -24,7 +24,7 @@
 %%% @end
 %%%=============================================================================
 
--module(brod_demo_loc_group_subscriber).
+-module(brod_demo_group_subscriber_loc).
 
 -behaviour(brod_group_subscriber).
 
@@ -47,10 +47,10 @@
                , offset_dir :: file:fd()
                }).
 
-%% @doc This function bootstraps everything to demo of group consumer.
+%% @doc This function bootstraps everything to demo of group subscriber.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
-%%   - kafka topic named <<"brod-demo-loc">>
+%%   - kafka topic named <<"brod-demo-group-subscriber-loc">>
 %%     having two or more partitions.
 %% Processes to spawn:
 %%   - A brod client
@@ -58,8 +58,8 @@
 %%   - X group subscribers, X is the number of partitions
 %%
 %% * consumed sequence numbers are printed to console
-%% * consumed offsets are written to file /tmp/brod-group-loc-demo/X.offset
-%%   where X is the partition number
+%% * consumed offsets are written to file /tmp/T/P.offset
+%%   where T is the topic name and X is the partition number
 %% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
@@ -69,8 +69,8 @@ bootstrap(DelaySeconds) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
-  Topic = <<"brod-demo-loc">>,
-  GroupId = <<"brod-group-loc-demo">>,
+  Topic = <<"brod-demo-group-subscriber-loc">>,
+  GroupId = iolist_to_binary([Topic, "-group-id"]),
   {ok, _ClientPid} =
     brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
@@ -99,9 +99,8 @@ handle_message(Topic, Partition, Message,
                 } = Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
-  error_logger:info_msg(
-    "~p ~p ~s: offset:~8w seqno:~8w\n",
-    [self(), Partition, Now, Offset, Seqno]),
+  error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
+                        [self(), Partition, Now, Offset, Seqno]),
   ok = commit_offset(Dir, GroupId, Topic, Partition, Offset),
   {ok, ack, State}.
 
