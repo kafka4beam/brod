@@ -285,7 +285,7 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call(get_controller, _From, State) ->
-  {reply, State#state.controller, State};
+  {reply, {ok, State#state.controller}, State};
 handle_call({get_committed_offsets, TopicPartitions}, _From,
             #state{ groupId   = GroupId
                   , cb_module = CbModule
