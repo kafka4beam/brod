@@ -1,4 +1,4 @@
-%%%
+
 %%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
@@ -105,6 +105,8 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     'empty' message-set.
 %%  prefetch_count (optional, default = 1):
 %%     The window size (number of messages) allowed to fetch-ahead.
+%%  begin_offset (optional, default = -1):
+%%     The offset from which to begin fetch requests.
 %% @end
 -spec start_link(pid(), topic(), partition(),
                  consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
@@ -179,7 +181,7 @@ init({ClientPid, Topic, Partition, Config}) ->
     proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
-  Offset = proplists:get_value(offset, Config, undefined),
+  Offset = proplists:get_value(begin_offset, Config, undefined),
   {ok, #state{ client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
@@ -456,17 +458,18 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
       State
   end.
 
-send_fetch_request(#state{socket_pid = SocketPid} = State) ->
-  true = (is_integer(State#state.begin_offset) andalso
-          State#state.begin_offset >= 0), %% assert
+send_fetch_request(#state{ begin_offset = BeginOffset
+                         , socket_pid   = SocketPid
+                         } = State) ->
+  (is_integer(BeginOffset) andalso BeginOffset >= 0) orelse
+    erlang:error({bad_begin_offset, BeginOffset}),
   Request =
     kpro:fetch_request(State#state.topic,
                        State#state.partition,
                        State#state.begin_offset,
                        State#state.max_wait_time,
                        State#state.min_bytes,
-                       State#state.max_bytes
-                       ),
+                       State#state.max_bytes),
   brod_sock:send(SocketPid, Request).
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
@@ -477,7 +480,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
                          false -> OldBeginOffset
                        end,
   NewBeginOffset = F(begin_offset, DefaultBeginOffset),
-  NewState =
+  State1 =
     State#state{ begin_offset   = NewBeginOffset
                , min_bytes      = F(min_bytes, State#state.min_bytes)
                , max_bytes      = F(max_bytes, State#state.max_bytes)
@@ -485,27 +488,30 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
                , sleep_timeout  = F(sleep_timeout, State#state.sleep_timeout)
                , prefetch_count = F(prefetch_count, State#state.prefetch_count)
                },
-  case NewBeginOffset =/= OldBeginOffset of
-    true ->
-      %% reset buffer in case subscriber wants to fetch from a new offset
-      NewState1 = NewState#state{pending_acks = []},
-      resolve_begin_offset(NewState1);
-    false ->
-      {ok, NewState}
-  end.
+  NewState =
+    case NewBeginOffset =/= OldBeginOffset of
+      true ->
+        %% reset buffer in case subscriber wants to fetch from a new offset
+        State1#state{pending_acks = []};
+      false ->
+        State1
+    end,
+  resolve_begin_offset(NewState).
 
 -spec resolve_begin_offset(#state{}) -> {ok, #state{}} | {error, any()}.
 resolve_begin_offset(#state{ begin_offset = BeginOffset
                            , socket_pid   = SocketPid
                            , topic        = Topic
                            , partition    = Partition
-                           } = State) ->
+                           } = State) when BeginOffset < 0 ->
   case fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) of
     {ok, NewBeginOffset} ->
       {ok, State#state{begin_offset = NewBeginOffset}};
     {error, Reason} ->
       {error, Reason}
-  end.
+  end;
+resolve_begin_offset(State) ->
+  {ok, State}.
 
 fetch_valid_offset(_S, Offset, _T, _P) when Offset >= 0 ->
   {ok, Offset};
