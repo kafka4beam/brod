@@ -28,10 +28,10 @@
         , get_metadata/2
         , is_normal_reason/1
         , is_pid_alive/1
+        , log/3
         , os_time_utc_str/0
         , shutdown_pid/1
         , try_connect/1
-        , log/3
         ]).
 
 -include("brod_int.hrl").

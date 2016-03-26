@@ -115,8 +115,7 @@ start_link(ClientPid, Topic, Partition, Config, Debug) ->
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
-stop(Pid) ->
-  gen_server:call(Pid, stop, infinity).
+stop(Pid) -> safe_gen_call(Pid, stop, infinity).
 
 %% @doc Subscribe or resubscribe on messages from a partition.
 %% Caller may pass in a set of options which is an extention of consumer config
@@ -132,31 +131,17 @@ stop(Pid) ->
 %% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
-  try
-    gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity)
-  catch exit : noproc ->
-    {error, consumer_down}
-  end.
+  safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
 %% @doc Unsubscribe the current subscriber.
 -spec unsubscribe(pid()) -> ok.
-unsubscribe(Pid) ->
-  try
-    gen_server:call(Pid, unsubscribe, infinity)
-  catch exit : noproc ->
-    ok
-  end.
+unsubscribe(Pid) -> safe_gen_call(Pid, unsubscribe, infinity).
 
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
 %% @end
 -spec ack(pid(), offset()) -> ok.
-ack(Pid, Offset) ->
-  try
-    gen_server:call(Pid, {ack, Offset}, infinity)
-  catch exit : noproc ->
-    {error, consumer_down}
-  end.
+ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
@@ -537,6 +522,18 @@ reset_buffer(#state{pending_acks = [Offset | _]} = State) ->
   State#state{ begin_offset = Offset
              , pending_acks = []
              }.
+
+%% @private Catch noproc exit exception when making gen_server:call.
+-spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
+        when Call    :: term(),
+             Timeout :: infinity | integer(),
+             Return  :: {ok, term()} | {error, consumer_down | term()}.
+safe_gen_call(Server, Call, Timeout) ->
+  try
+    gen_server:call(Server, Call, Timeout)
+  catch exit : {noproc, _} ->
+    {error, consumer_down}
+  end.
 
 %%%_* Tests ====================================================================
 

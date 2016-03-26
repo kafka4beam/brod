@@ -123,8 +123,7 @@ start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
-stop(Client) ->
-  gen_server:call(Client, stop, infinity).
+stop(Client) -> safe_gen_call(Client, stop, infinity).
 
 %% @doc Get producer of the given topic-partition.
 %% The producer is started if auto_start_producers is
@@ -160,8 +159,8 @@ start_producer(Client, TopicName, ProducerConfig) ->
     {ok, _Pid} ->
       ok; %% already started
     {error, {producer_not_found, TopicName}} ->
-      gen_server:call(Client, {start_producer, TopicName, ProducerConfig},
-                      infinity);
+      Call = {start_producer, TopicName, ProducerConfig},
+      safe_gen_call(Client, Call, infinity);
     {error, Reason} ->
       {error, Reason}
   end.
@@ -169,7 +168,7 @@ start_producer(Client, TopicName, ProducerConfig) ->
 %% @doc Stop all partition producers of the given topic.
 -spec stop_producer(client(), topic()) -> ok | {error, any()}.
 stop_producer(Client, TopicName) ->
-  gen_server:call(Client, {stop_producer, TopicName}, infinity).
+  safe_gen_call(Client, {stop_producer, TopicName}, infinity).
 
 %% @doc Dynamically start a topic consumer.
 %% Returns ok if the consumer is already started.
@@ -181,8 +180,8 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
     {ok, _Pid} ->
       ok; %% already started
     {error, {consumer_not_found, TopicName}} ->
-      gen_server:call(Client, {start_consumer, TopicName, ConsumerConfig},
-                      infinity);
+      Call = {start_consumer, TopicName, ConsumerConfig},
+      safe_gen_call(Client, Call, infinity);
     {error, Reason} ->
       {error, Reason}
   end.
@@ -190,7 +189,7 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
 %% @doc Stop all partition consumers of the given topic.
 -spec stop_consumer(client(), topic()) -> ok | {error, any()}.
 stop_consumer(Client, TopicName) ->
-  gen_server:call(Client, {stop_consumer, TopicName}, infinity).
+  safe_gen_call(Client, {stop_consumer, TopicName}, infinity).
 
 %% @doc Get the connection to kafka broker which is a leader
 %% for given Topic/Partition.
@@ -214,9 +213,10 @@ get_leader_connection(Client, Topic, Partition) ->
   end.
 
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
--spec get_metadata(client(), ?undef | topic()) -> {ok, kpro_MetadataResponse()}.
+-spec get_metadata(client(), ?undef | topic()) ->
+        {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Client, Topic) ->
-  gen_server:call(Client, {get_metadata, Topic}, infinity).
+  safe_gen_call(Client, {get_metadata, Topic}, infinity).
 
 %% @doc Get number of partitions for a given topic
 -spec get_partitions_count(client(), topic()) ->
@@ -225,14 +225,16 @@ get_partitions_count(Client, Topic) when is_atom(Client) ->
   %% Ets =:= ClientId
   get_partitions_count(Client, Client, Topic);
 get_partitions_count(Client, Topic) when is_pid(Client) ->
-  Ets = gen_server:call(Client, get_workers_table, infinity),
-  get_partitions_count(Client, Ets, Topic).
+  case safe_gen_call(Client, get_workers_table, infinity) of
+    {ok, Ets}       -> get_partitions_count(Client, Ets, Topic);
+    {error, Reason} -> {error, Reason}
+  end.
 
 %% @doc Get the endpoint of the group coordinator broker.
 -spec get_group_coordinator(client(), group_id()) ->
         {ok, endpoint()} | {error, any()}.
 get_group_coordinator(Client, GroupId) ->
-  gen_server:call(Client, {get_group_coordinator, GroupId}, infinity).
+  safe_gen_call(Client, {get_group_coordinator, GroupId}, infinity).
 
 %% @doc Register self() as a partition producer. The pid is registered in an ETS
 %% table, then the callers may lookup a producer pid from the table and make
@@ -263,7 +265,7 @@ register_consumer(Client, Topic, Partition) ->
 -spec get_connection(client(), hostname(), portnum()) ->
                         {ok, pid()} | {error, any()}.
 get_connection(Client, Host, Port) ->
-  gen_server:call(Client, {get_connection, Host, Port}, infinity).
+  safe_gen_call(Client, {get_connection, Host, Port}, infinity).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -376,14 +378,14 @@ handle_call({auto_start_producer, Topic}, _From, State) ->
       {Reply, NewState} = do_start_producer(Topic, ProducerConfig, State),
       {reply, Reply, NewState};
     false ->
-      {reply, false, State}
+      {reply, disabled, State}
   end;
 handle_call(get_workers_table, _From, State) ->
-  {reply, State#state.workers_tab, State};
+  {reply, {ok, State#state.workers_tab}, State};
 handle_call(get_producers_sup_pid, _From, State) ->
-  {reply, State#state.producers_sup, State};
+  {reply, {ok, State#state.producers_sup}, State};
 handle_call(get_consumers_sup_pid, _From, State) ->
-  {reply, State#state.consumers_sup, State};
+  {reply, {ok, State#state.consumers_sup}, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   {Result, NewState} = do_get_metadata(Topic, State),
   ok = maybe_update_metadata_cache(Result, NewState),
@@ -439,8 +441,10 @@ get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
       %% This is a client process started without registered name
       %% have to call the process to get the producer/consumer worker
       %% process registration table.
-      Ets = gen_server:call(ClientPid, get_workers_table, infinity),
-      lookup_partition_worker(ClientPid, Ets, Key)
+      case safe_gen_call(ClientPid, get_workers_table, infinity) of
+        {ok, Ets}       -> lookup_partition_worker(ClientPid, Ets, Key);
+        {error, Reason} -> {error, Reason}
+      end
   end;
 get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
   lookup_partition_worker(ClientId, ?ETS(ClientId), Key).
@@ -477,21 +481,21 @@ find_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)) ->
 -spec find_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, get_producer_error()}.
 find_producer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_producers_sup_pid, infinity),
-    brod_producers_sup:find_producer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
+  case safe_gen_call(Client, get_producers_sup_pid, infinity) of
+    {ok, SupPid} ->
+      brod_producers_sup:find_producer(SupPid, Topic, Partition);
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 -spec find_consumer(client(), topic(), partition()) ->
         {ok, pid()} | {error, get_consumer_error()}.
 find_consumer(Client, Topic, Partition) ->
-  try
-    SupPid = gen_server:call(Client, get_consumers_sup_pid, infinity),
-    brod_consumers_sup:find_consumer(SupPid, Topic, Partition)
-  catch exit : {noproc, _} ->
-    {error, client_down}
+  case safe_gen_call(Client, get_consumers_sup_pid, infinity) of
+    {ok, SupPid} ->
+      brod_consumers_sup:find_consumer(SupPid, Topic, Partition);
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 -spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
@@ -704,14 +708,16 @@ do_get_partitions_count(TopicMetadata) ->
     false -> {ok, erlang:length(Partitions)}
   end.
 
+-spec maybe_start_producer(client(), topic(), partition(), {error, any()}) ->
+        ok | {error, any()}.
 maybe_start_producer(Client, Topic, Partition, Error) ->
-  case gen_server:call(Client, {auto_start_producer, Topic}) of
+  case safe_gen_call(Client, {auto_start_producer, Topic}, infinity) of
     ok ->
       get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition));
-    {error, topic_not_found} = Error ->
+    disabled ->
       Error;
-    false ->
-      Error
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 -spec send_sync(#state{}, kpro_Request(), timer:time()) ->
@@ -768,7 +774,7 @@ do_on_valid_topic(TopicName, State, F) ->
   case validate_topic_existence(TopicName, State) of
     {ok, NewState} ->
       case F() of
-        {ok, _} ->
+        {ok, _Pid} ->
           {ok, NewState};
         {error, {already_started, _Pid}} ->
           {ok, NewState};
@@ -777,6 +783,18 @@ do_on_valid_topic(TopicName, State, F) ->
       end;
     {{error, Reason}, NewState} ->
       {{error, Reason}, NewState}
+  end.
+
+%% @private Catch noproc exit exception when making gen_server:call.
+-spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
+        when Call    :: term(),
+             Timeout :: infinity | integer(),
+             Return  :: ok | {ok, term()} | {error, client_down | term()}.
+safe_gen_call(Server, Call, Timeout) ->
+  try
+    gen_server:call(Server, Call, Timeout)
+  catch exit : {noproc, _} ->
+    {error, client_down}
   end.
 
 %%%_* Emacs ====================================================================
