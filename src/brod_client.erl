@@ -58,6 +58,7 @@
 
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 -define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
+-define(DEFAULT_MAX_METADATA_SOCK_RETRY, 1).
 
 -define(dead_since(TS, REASON), {dead_since, TS, REASON}).
 -type dead_socket() :: ?dead_since(erlang:timestamp(), any()).
@@ -724,19 +725,36 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
         {Result, #state{}} when Result :: {ok, kpro_Response()}
                                         | {error, any()}.
 send_sync(State, Request, Timeout) ->
-  send_sync(State, Request, Timeout, 0).
+  #state{config = Config} = State,
+  MaxRetry = proplists:get_value(get_metadata_timout_seconds, Config,
+                                 ?DEFAULT_MAX_METADATA_SOCK_RETRY),
+  send_sync(State, Request, Timeout, MaxRetry).
 
-send_sync(State, Request, Timeout, RetryCnt) ->
-  RetryCnt >= length(State#state.bootstrap_endpoints) andalso
-    erlang:error(no_reachable_endpoint),
-  {ok, NewState} = maybe_restart_metadata_socket(State),
-  SockPid = NewState#state.meta_sock_pid,
+send_sync(State0, Request, Timeout, RetryLeft) ->
+  {ok, State} = maybe_restart_metadata_socket(State0),
+  SockPid = State#state.meta_sock_pid,
   case brod_sock:send_sync(SockPid, Request, Timeout) of
-    {error, tcp_closed} ->
-      send_sync(NewState, Request, Timeout, RetryCnt+1);
+    {error, tcp_closed} when RetryLeft > 0 ->
+      {ok, NewState} = rotate_endpoints(State, tcp_closed),
+      send_sync(NewState, Request, Timeout, RetryLeft - 1);
+    {error, {sock_down, _} = Reason} when RetryLeft > 0 ->
+      {ok, NewState} = rotate_endpoints(State, Reason),
+      send_sync(NewState, Request, Timeout, RetryLeft - 1);
     Result ->
       {Result, State}
   end.
+
+%% @private Move the newly failed endpoint to the last in the list.
+-spec rotate_endpoints(#state{}, any()) -> {ok, #state{}}.
+rotate_endpoints(State, Reason) ->
+  #state{ client_id           = ClientId
+        , bootstrap_endpoints = BootstrapEndpoints0
+        } = State,
+  [{Host, Port} | Rest] = BootstrapEndpoints0,
+  error_logger:error_msg("client ~p metadata socket down ~s:~p~nReason:~p",
+                        [ClientId, Host, Port, Reason]),
+  BootstrapEndpoints = Rest ++ [{Host, Port}],
+  {ok, State#state{bootstrap_endpoints = BootstrapEndpoints}}.
 
 %% @private Maybe restart the metadata socket pid if it is no longer alive.
 -spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}} | no_return().

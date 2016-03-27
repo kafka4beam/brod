@@ -109,6 +109,8 @@ start_link_client(BootstrapEndpoints, ClientId) ->
 %%   Atom to identify the client process
 %% Config:
 %%   Proplist, possible values:
+%%     max_metadata_sock_retry (optional, default 1)
+%%       Number of retries if failed fetching metadata due to socket error
 %%     get_metadata_timout_seconds(optional, default=5)
 %%       Return timeout error from brod_client:get_metadata/2 in case the
 %%       respons is not received from kafka in this configured time.
