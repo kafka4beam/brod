@@ -71,7 +71,7 @@
 -define(DEFAULT_BEGIN_OFFSET, -1).
 -define(DEFAULT_MIN_BYTES, 0).
 -define(DEFAULT_MAX_BYTES, 1048576).  % 1 MB
--define(DEFAULT_MAX_WAIT_TIME, 10000). % 1 sec
+-define(DEFAULT_MAX_WAIT_TIME, 10000). % 10 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
 -define(ERROR_COOLDOWN, 1000).
@@ -95,7 +95,7 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     Maximum bytes to fetch in a batch of messages
 %%     NOTE: this value might be doubled in each retry when it is not enough
 %%           to fetch even one single message.
-%%     NOTE: in current implementation, the value is not shrinked bakc to
+%%     NOTE: in current implementation, the value is not shrinked back to
 %%           original after it has been expanded.
 %%  max_wait_time (optional, default = 10000 ms):
 %%     Max number of seconds allowd for the broker to collect min_bytes of

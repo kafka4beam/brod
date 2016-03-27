@@ -54,6 +54,8 @@
 -type topic_assignment()     :: {topic(), [partition_assignment()]}.
 -type member_assignment()    :: {member_id(), [topic_assignment()]}.
 
+-define(IS_MEMBER_ID(X), is_binary(X)).
+
 -record(socket, { pid     :: pid()
                 , host    :: string()
                 , port    :: integer()

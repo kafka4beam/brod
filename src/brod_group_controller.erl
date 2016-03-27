@@ -50,7 +50,7 @@
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
 -define(OFFSET_COMMIT_POLICY, commit_to_kafka_v2).
--define(OFFSET_COMMIT_INTERVAL_SECONDS, 60).
+-define(OFFSET_COMMIT_INTERVAL_SECONDS, 5).
 %% use kfaka's offset meta-topic retention policy
 -define(OFFSET_RETENTION_DEFAULT, -1).
 
@@ -80,7 +80,7 @@
           %% Group member ID, which should be set to empty in the first
           %% join group request, then a new member id is assigned by the
           %% group coordinator and in join group response.
-          %% This filed may change if the member has lost connection
+          %% This field may change if the member has lost connection
           %% to the coordinator and received 'UnknownMemberId' exception
           %% in response messages.
         , memberId = <<"">> :: member_id()
@@ -123,7 +123,7 @@
         , subscriber :: pid()
           %% The offsets that has been acknowledged by the subscriber
           %% i.e. the offsets that are ready for commit.
-          %% NOTE: this filed is not used if offset_commit_policy is
+          %% NOTE: this field is not used if offset_commit_policy is
           %% 'consumer_managed'
         , acked_offsets = [] :: [{{topic(), partition()}, offset()}]
 
@@ -148,8 +148,8 @@
 %% Topics:  Predefined set of topic names in the group.
 %% Config:  The group controller configs in a proplist, possible entries:
 %%  - partition_assignment_strategy  (optional, default = roundrobin)
-%%      roudrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
-%%                 assign one to each member in a roundrobin fashion.
+%%      roundrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
+%%                  assign one to each member in a roundrobin fashion.
 %%      TODO: support sticky assignments
 %%  - session_timeout_seconds (optional, default = 10)
 %%      Time in seconds for the group coordinator broker to consider a member
@@ -166,7 +166,7 @@
 %%           assignment rebalacing or group coordinator switchover etc.
 %%  - max_rejoin_attempts (optional, default = 5)
 %%      Maximum number of times allowd for a member to re-join the group.
-%%      The gen_server will stop if it reached the maximum number of retres.
+%%      The gen_server will stop if it reached the maximum number of retries.
 %%      OBS: 'let it crash' may not be the optimal strategy here because
 %%           the group member id is kept in the gen_server looping state and
 %%           it is reused when re-joining the group.
@@ -178,12 +178,12 @@
 %%            Group controller will commit the offsets to kafka using
 %%            version 2 OffsetCommitRequest.
 %%        - consumer_managed:
-%%            The subscirber (brodh_group_subscriber.erl) is responsible
+%%            The subscirber (brod_group_subscriber.erl) is responsible
 %%            for persisting offsets to a local or centralized storage.
 %%            And the callback get_committed_offsets should be implemented
 %%            to allow group controller to retrieve the commited offsets.
-%%  - offset_commit_interval_seconds (optional, default = 60)
-%%      The time interval between tow OffsetCommitRequest messages.
+%%  - offset_commit_interval_seconds (optional, default = 5)
+%%      The time interval between two OffsetCommitRequest messages.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
 %%  - offset_retention_seconds (optional, default = -1)
 %%      How long the time is to be kept in kafka before it is deleted.
@@ -198,7 +198,7 @@ start_link(Client, GroupId, Topics, Config) ->
   Args = {Client, GroupId, Topics, Config, Subscriber},
   gen_server:start_link(?MODULE, Args, []).
 
-%% @doc For group subscriver to call to acknowledge.
+%% @doc For group subscriber to call to acknowledge.
 -spec ack(pid(), integer(), topic(), partition(), offset()) -> ok.
 ack(Pid, GenerationId, Topic, Partition, Offset) ->
   Pid ! {ack, GenerationId, Topic, Partition, Offset},
@@ -273,9 +273,10 @@ handle_info({'EXIT', Pid, Reason}, #state{sock_pid = Pid} = State) ->
   {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, #state{subscriber = Pid} = State) ->
   case Reason of
-    shutdown -> {stop, shutdown, State};
-    normal   -> {stop, normal, State};
-    _        -> {stop, subscriber_down, State}
+    shutdown      -> {stop, shutdown, State};
+    {shutdown, _} -> {stop, shutdown, State};
+    normal        -> {stop, normal, State};
+    _             -> {stop, subscriber_down, State}
   end;
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
@@ -676,16 +677,28 @@ do_assign_partitions(roundrobin, Members, AllPartitions) ->
   %% round robin, we only care about the member id
   F = fun(#kpro_GroupMemberMetadata{memberId = MemberId}) -> MemberId end,
   MemberIds = lists:map(F, Members),
-  roundrobin_assign_loop(AllPartitions, MemberIds).
+  roundrobin_assign_loop(AllPartitions, MemberIds, []).
 
--spec roundrobin_assign_loop([{topic(), partition()}], [member_id()]) ->
-        [member_assignment()].
-roundrobin_assign_loop([], Members) ->
-  %% remove the ones that has no assignments
-  lists:filter(fun(M) -> is_tuple(M) end, Members);
-roundrobin_assign_loop([{Topic, Partition} | Rest], [Member0 | Members]) ->
+-spec roundrobin_assign_loop([{topic(), partition()}],
+                             [member_id()], [member_assignment()]) ->
+                                [member_assignment()].
+roundrobin_assign_loop([], PendingMembers, AssignedMembers) ->
+  case PendingMembers of
+    [MemberId | _] when ?IS_MEMBER_ID(MemberId) ->
+      %% no assignment left for pending members
+      lists:reverse(AssignedMembers);
+    _ ->
+      %% all pending members have already received
+      %% assignments from previous round(s)
+      lists:reverse(AssignedMembers) ++ PendingMembers
+  end;
+roundrobin_assign_loop(Partitions, [], AssignedMembers) ->
+  %% all members have received assignments, continue the next round
+  roundrobin_assign_loop(Partitions, lists:reverse(AssignedMembers), []);
+roundrobin_assign_loop([{Topic, Partition} | Rest],
+                       [Member0 | PendingMembers], AssignedMembers) ->
   Member = assign_partition(Member0, Topic, Partition),
-  roundrobin_assign_loop(Rest, Members ++ [Member]).
+  roundrobin_assign_loop(Rest, PendingMembers, [Member | AssignedMembers]).
 
 -spec assign_partition(Member, topic(), partition()) -> member_assignment()
         when Member :: member_id() | member_assignment().
@@ -826,7 +839,7 @@ start_heartbeat_timer(HbRateSec) ->
   ok.
 
 %% @private Start a timer to send a loopback command to self() to trigger
-%% a offset commit rquest to group coordinator.
+%% a offset commit request to group coordinator.
 %% @end
 -spec maybe_start_offset_commit_timer(#state{} | offset_commit_policy()) -> ok.
 maybe_start_offset_commit_timer(#state{} = State) ->
