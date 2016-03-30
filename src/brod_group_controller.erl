@@ -417,8 +417,7 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
 
   RetryFun =
     fun(StateIn, NewReason) ->
-      log(StateIn, error, "failed to join group\nreason:~p\n~p",
-          [NewReason, erlang:get_stacktrace()]),
+      log(StateIn, info, "failed to join group\nreason:~p", [NewReason]),
       case AttemptNo =:= 0 of
         true ->
           %% do not delay before the first retry
@@ -548,7 +547,7 @@ sync_group(#state{ groupId      = GroupId
                                              GenerationId,
                                              TopicAssignments),
   NewState = State#state{is_in_group = true},
-  log(NewState, info, "assignments:~p", [TopicAssignments]),
+  log(NewState, info, "assignments received:~s", [format_assignments(TopicAssignments)]),
   {ok, NewState}.
 
 -spec handle_ack(#state{}, topic(), partition(), offset()) -> {ok, #state{}}.
@@ -558,6 +557,23 @@ handle_ack(#state{ acked_offsets = AckedOffsets
     lists:keystore({Topic, Partition}, 1, AckedOffsets,
                    {{Topic, Partition}, Offset}),
   {ok, State#state{acked_offsets = NewAckedOffsets}}.
+
+-spec format_assignments([topic_assignment()]) -> iodata().
+format_assignments([]) -> "";
+format_assignments([{Topic, Partitions} | Rest]) ->
+  ["\n", Topic, ":",
+   format_partition_assignments(Partitions),
+   format_assignments(Rest)].
+
+format_partition_assignments([]) -> "";
+format_partition_assignments([PA | Rest]) ->
+  #partition_assignment{ partition    = Partition
+                       , begin_offset = BeginOffset
+                       , metadata     = Metadata
+                       } = PA,
+  [ io_lib:format("~n    partition=~p begin_offset=~p metadata='~s'",
+                  [Partition, BeginOffset, Metadata])
+  , format_partition_assignments(Rest)].
 
 %% @private Commit the current offsets before re-join the group.
 %% NOTE: this is a 'best-effort' attempt, failing to commit offset
@@ -737,7 +753,7 @@ get_topic_assignments(#state{} = State, Assignment) ->
 -spec get_committed_offsets(#state{}, [{topic(), partition()}]) ->
         [{{topic(), partition()}, OffsetOrWithMetadata}] when
         OffsetOrWithMetadata :: offset()
-                              | {offset(), binary(), error_code()}.
+                              | {offset(), binary()}.
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , subscriber           = Subscriber
                             }, TopicPartitions) ->
@@ -769,14 +785,29 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
       fun(#kpro_TopicOffset{ topicName         = Topic
                            , partitionOffset_L = Partitions
                            }) ->
-        lists:map(
+        lists:foldl(
           fun(#kpro_PartitionOffset{ partition = Partition
                                    , offset    = Offset
                                    , metadata  = Metadata
                                    , errorCode = EC
-                                   }) ->
-            {{Topic, Partition}, {Offset, Metadata, EC}}
-          end, Partitions)
+                                   }, Acc) ->
+            case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
+              true ->
+                %% OffsetFetchResponse v0 if no commit history found
+                Acc;
+              false ->
+                case EC       =:= ?EC_NONE andalso
+                     Offset   =:= -1       andalso
+                     Metadata =:= <<>>     of
+                  true ->
+                    %% OffsetFetchResponse v1 if no commit history found
+                    Acc;
+                  false ->
+                    ?ESCALATE_EC(EC),
+                    [{{Topic, Partition}, {Offset, Metadata}} | Acc]
+                end
+            end
+          end, [], Partitions)
       end, TopicOffsets),
   lists:append(CommittedOffsets0).
 
@@ -786,37 +817,30 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
         [topic_assignment()]) ->
           [topic_assignment()] when
             OffsetOrWithMetadata :: offset()
-                                  | {offset(), binary(), error_code()}.
+                                  | {offset(), binary()}.
 resolve_begin_offsets([], _, Acc) -> Acc;
 resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets, Acc) ->
-  {Offset, Metadata, EC} =
+  {Offset, Metadata} =
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
       {_, Tuple} when is_tuple(Tuple)     ->
+        %% Commit history found in kafka
         Tuple;
       {_, Offset_} when is_integer(Offset_) ->
-        {Offset_, <<>>, ?EC_NONE};
+        %% Commit history found from subscriber callback
+        {Offset_, <<>>};
       false  ->
-        {?undef, <<>>, ?EC_UNKNOWN_TOPIC_OR_PARTITION}
+        %% No commit history found
+        {?undef, <<>>}
     end,
+  BeginOffset = case is_integer(Offset) andalso Offset > 0 of
+                  true  -> Offset + 1;
+                  false -> Offset
+                end,
   PartitionAssignment =
-    case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
-      true ->
-        %% use default begin offset if not found in committed offsets
-        #partition_assignment{ partition    = Partition
-                             , begin_offset = ?undef
-                             , metadata     = <<>>
-                             };
-      false ->
-        ?ESCALATE_EC(EC),
-        BeginOffset = case Offset < 0 of
-                        true  -> Offset;
-                        false -> Offset + 1
-                      end,
-        #partition_assignment{ partition    = Partition
-                             , begin_offset = BeginOffset
-                             , metadata     = Metadata
-                             }
-    end,
+    #partition_assignment{ partition    = Partition
+                         , begin_offset = BeginOffset
+                         , metadata     = Metadata
+                         },
   NewAcc = orddict:append_list(Topic, [PartitionAssignment], Acc),
   resolve_begin_offsets(Rest, CommittedOffsets, NewAcc).
 

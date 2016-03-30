@@ -103,7 +103,7 @@ spawn_consumers(ClientId, Topic, ConsumerCount) ->
       {ok, _Subscriber} =
         brod_group_subscriber:start_link(ClientId, GroupId, [Topic],
                                          GroupConfig,
-                                         _ConsumerConfig  = [],
+                                         _ConsumerConfig  = [{begin_offset, -2}],
                                          _CallbackModule  = ?MODULE,
                                          _CallbackInitArg = [])
     end, lists:seq(1, ConsumerCount)).
