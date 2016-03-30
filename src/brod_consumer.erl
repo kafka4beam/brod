@@ -62,8 +62,8 @@
                , sleep_timeout     :: integer()
                , prefetch_count    :: integer()
                , last_corr_id      :: corr_id()
-               , subscriber        :: undefined | pid()
-               , subscriber_mref   :: undefined | reference()
+               , subscriber        :: ?undef | pid()
+               , subscriber_mref   :: ?undef | reference()
                , pending_acks = [] :: [offset()]
                , is_suspended      :: boolean()
                }).
@@ -166,7 +166,7 @@ init({ClientPid, Topic, Partition, Config}) ->
     proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
-  Offset = proplists:get_value(begin_offset, Config, undefined),
+  Offset = proplists:get_value(begin_offset, Config, ?undef),
   {ok, #state{ client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
@@ -176,7 +176,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , max_bytes      = MaxBytes
              , sleep_timeout  = SleepTimeout
              , prefetch_count = PrefetchCount
-             , socket_pid     = undefined
+             , socket_pid     = ?undef
              , is_suspended   = false
              }}.
 
@@ -184,7 +184,7 @@ handle_info(?INIT_SOCKET,
             #state{ client_pid = ClientPid
                   , topic      = Topic
                   , partition  = Partition
-                  , socket_pid = undefined
+                  , socket_pid = ?undef
                   } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
@@ -208,15 +208,15 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{subscriber = Pid} = State) ->
   error_logger:info_msg("~p ~p subscriber ~p is down\nreason:~p",
                         [?MODULE, self(), Pid, Reason]),
-  NewState = reset_buffer(State#state{ subscriber      = undefined
-                                     , subscriber_mref = undefined
+  NewState = reset_buffer(State#state{ subscriber      = ?undef
+                                     , subscriber_mref = ?undef
                                      }),
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   Timeout = ?SOCKET_RETRY_DELAY_MS,
   erlang:send_after(Timeout, self(), ?INIT_SOCKET),
-  State1 = State#state{socket_pid = undefined},
+  State1 = State#state{socket_pid = ?undef},
   NewState = reset_buffer(State1),
   {noreply, NewState};
 handle_info(Info, State) ->
@@ -225,12 +225,12 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({subscribe, _Pid, _Options}, _From,
-            #state{ socket_pid = undefined } = State) ->
+            #state{ socket_pid = ?undef} = State) ->
   {reply, {error, no_connection}, State};
 handle_call({subscribe, Pid, Options}, _From,
             #state{ subscriber = Subscriber
                   , subscriber_mref = OldMref} = State0) ->
-  case Subscriber =:= undefined orelse
+  case Subscriber =:= ?undef orelse
       not is_process_alive(Subscriber) orelse
       Subscriber =:= Pid of
     true ->
@@ -255,8 +255,8 @@ handle_call({subscribe, Pid, Options}, _From,
   end;
 handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
   is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
-  NewState = State#state{ subscriber      = undefined
-                        , subscriber_mref = undefined
+  NewState = State#state{ subscriber      = ?undef
+                        , subscriber_mref = ?undef
                         },
   {reply, ok, reset_buffer(NewState)};
 handle_call({ack, Offset}, _From,
@@ -290,7 +290,7 @@ do_debug(Pid, Debug) ->
   ok.
 
 handle_fetch_response(_Response, _CorrId,
-                      #state{subscriber = undefined} = State) ->
+                      #state{subscriber = ?undef} = State) ->
   %% discard fetch response when there is no (dead?) subscriber
   {noreply, State};
 handle_fetch_response(_Response, CorrId1,
@@ -460,7 +460,7 @@ send_fetch_request(#state{ begin_offset = BeginOffset
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
-  DefaultBeginOffset = case OldBeginOffset =:= undefined of
+  DefaultBeginOffset = case OldBeginOffset =:= ?undef of
                          true  -> ?DEFAULT_BEGIN_OFFSET;
                          false -> OldBeginOffset
                        end,
