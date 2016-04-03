@@ -97,11 +97,11 @@ spawn_consumers(ClientId, Topic, ConsumerCount) ->
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
                 ,{offset_commit_interval_seconds, 5}
                 ],
-  GroupId = iolist_to_binary([Topic, "-groupd-id"]),
+  GroupId = iolist_to_binary([Topic, "-group-id"]),
   lists:foreach(
     fun(_I) ->
       {ok, _Subscriber} =
-        brod_group_subscriber:start_link(ClientId, GroupId, [Topic],
+        brod:start_link_group_subscriber(ClientId, GroupId, [Topic],
                                          GroupConfig,
                                          _ConsumerConfig  = [{begin_offset, -2}],
                                          _CallbackModule  = ?MODULE,

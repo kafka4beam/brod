@@ -3,6 +3,9 @@ PROJECT_DESCRIPTION = Kafka client library in Erlang
 PROJECT_VERSION = 2.0-dev
 
 DEPS = supervisor3 kafka_protocol
+
+dep_kafka_protocol_commit = 0.2.3
+
 TEST_DEPS = meck proper
 
 COVER = true

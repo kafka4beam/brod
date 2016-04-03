@@ -367,8 +367,9 @@ discover_coordinator(#state{ client      = Client
     false ->
       %% close old socket
       _ = brod_sock:stop(SockPid),
+      ClientId = make_group_connection_client_id(GroupId),
       NewSockPid =
-        ?ESCALATE(brod_sock:start_link(self(), Host, Port, GroupId, [])),
+        ?ESCALATE(brod_sock:start_link(self(), Host, Port, ClientId, [])),
       log(State, info, "connected to group coordinator ~s:~p",
           [Host, Port]),
       NewState =
@@ -599,7 +600,7 @@ do_commit_offsets(#state{ groupId                  = GroupId
                         , offset_retention_seconds = OffsetRetentionSecs
                         , acked_offsets            = AckedOffsets
                         } = State) ->
-  Metadata = make_metadata(),
+  Metadata = make_offset_commit_metadata(),
   TopicOffsets =
     lists:foldl(
       fun({{Topic, Partition}, Offset}, Acc) ->
@@ -674,6 +675,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
             #kpro_ConsumerGroupMemberAssignment
               { version = ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION
               , consumerGroupPartitionAssignment_L = PartitionAssignments
+              , userData = <<0>> %% null is not allowed before 0.9.0.1
               }
         }
     end, Assignments);
@@ -691,23 +693,17 @@ get_partitions(Client, Topic) ->
                            [{topic(), partition()}]) -> [member_assignment()].
 do_assign_partitions(roundrobin, Members, AllPartitions) ->
   %% round robin, we only care about the member id
-  F = fun(#kpro_GroupMemberMetadata{memberId = MemberId}) -> MemberId end,
-  MemberIds = lists:map(F, Members),
-  roundrobin_assign_loop(AllPartitions, MemberIds, []).
+  F = fun(#kpro_GroupMemberMetadata{memberId = MemberId}) ->
+        {MemberId, []}
+      end,
+  MemberAssignment = lists:map(F, Members),
+  roundrobin_assign_loop(AllPartitions, MemberAssignment, []).
 
 -spec roundrobin_assign_loop([{topic(), partition()}],
-                             [member_id()], [member_assignment()]) ->
+                             [member_assignment()], [member_assignment()]) ->
                                 [member_assignment()].
 roundrobin_assign_loop([], PendingMembers, AssignedMembers) ->
-  case PendingMembers of
-    [MemberId | _] when ?IS_MEMBER_ID(MemberId) ->
-      %% no assignment left for pending members
-      lists:reverse(AssignedMembers);
-    _ ->
-      %% all pending members have already received
-      %% assignments from previous round(s)
-      lists:reverse(AssignedMembers) ++ PendingMembers
-  end;
+  lists:reverse(AssignedMembers) ++ PendingMembers;
 roundrobin_assign_loop(Partitions, [], AssignedMembers) ->
   %% all members have received assignments, continue the next round
   roundrobin_assign_loop(Partitions, lists:reverse(AssignedMembers), []);
@@ -716,10 +712,8 @@ roundrobin_assign_loop([{Topic, Partition} | Rest],
   Member = assign_partition(Member0, Topic, Partition),
   roundrobin_assign_loop(Rest, PendingMembers, [Member | AssignedMembers]).
 
--spec assign_partition(Member, topic(), partition()) -> member_assignment()
-        when Member :: member_id() | member_assignment().
-assign_partition(MemberId, Topic, Partition) when is_binary(MemberId) ->
-  assign_partition({MemberId, []}, Topic, Partition);
+-spec assign_partition(member_assignment(), topic(), partition()) ->
+        member_assignment().
 assign_partition({MemberId, Topics0}, Topic, Partition) ->
   Topics = orddict:append_list(Topic, [Partition], Topics0),
   {MemberId, Topics}.
@@ -904,9 +898,6 @@ send_sync(SockPid, Request) ->
 send_sync(SockPid, Request, Timeout) ->
   ?ESCALATE(brod_sock:send_sync(SockPid, Request, Timeout)).
 
-make_user_data() ->
-  iolist_to_binary(io_lib:format("~p ~p", [node(), self()])).
-
 log(#state{ groupId  = GroupId
           , memberId = MemberId
           , generationId = GenerationId
@@ -916,8 +907,28 @@ log(#state{ groupId  = GroupId
     "group controller (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
     [GroupId, MemberId, GenerationId, self() | Args]).
 
-make_metadata() ->
+%% @private Make metata to be committed together with offsets.
+-spec make_offset_commit_metadata() -> iodata().
+make_offset_commit_metadata() ->
   io_lib:format("~s ~p ~p", [brod_utils:os_time_utc_str(), node(), self()]).
+
+%% @private Make group member's user data in JoinGroupRequest
+-spec make_user_data() -> iodata().
+make_user_data() -> controller_id().
+
+%% @private Make a client_id() to be used in the requests sent over the group
+%% controller's socket (group coordinator on the other end), this id will be
+%% displayed when describing the group status with admin client/script.
+%% e.g. the-group-id/brod@localhost/<0.45.0>_/172.18.0.1
+%% @end
+-spec make_group_connection_client_id(group_id()) -> binary().
+make_group_connection_client_id(GroupId) ->
+  iolist_to_binary(io_lib:format("~s/~s", [GroupId, controller_id()])).
+
+%% @private Use 'node()/pid()' as unique identifier of each group controller.
+-spec controller_id() -> binary().
+controller_id() ->
+  iolist_to_binary(io_lib:format("~p/~p", [node(), self()])).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
