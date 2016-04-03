@@ -171,7 +171,7 @@ t_async_acks(Config) when is_list(Config) ->
   InitArgs       = {CaseRef, _SubscriberId = 0, CasePid, _IsAsyncAck = true},
   Partition      = 0,
   {ok, SubscriberPid} =
-    brod_group_subscriber:start_link(?CLIENT_ID, ?GROUP_ID, [?TOPIC],
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =

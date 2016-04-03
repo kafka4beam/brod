@@ -296,7 +296,8 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
       NewState = State#state{cb_state = NewCbState},
       {reply, Result, NewState};
     Unknown ->
-      {stop, {bad_return_balue, CbModule, get_committed_offsets, Unknown}}
+      erlang:error({bad_return_value,
+                    {CbModule, get_committed_offsets, Unknown}})
   end;
 handle_call(unsubscribe_all_partitions, _From,
             #state{ consumers = Consumers

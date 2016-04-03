@@ -112,7 +112,7 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   process_flag(trap_exit, true),
   {ok, Pid} = brod:start_link_client([{"badhost", 9092}]),
   Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
-  ?assertMatch({nxdomain, _Stacktrace}, Reason).
+  ?assertMatch({{nxdomain, _Hosts}, _Stacktrace}, Reason).
 
 t_call_bad_client_id(Config) when is_list(Config) ->
   %% call a bad client ID

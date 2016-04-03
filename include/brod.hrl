@@ -74,7 +74,7 @@
 
 -define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 
--type brod_partition_fun() :: fun(( Topic :: kafka_topic()
+-type brod_partition_fun() :: fun(( Topic         :: kafka_topic()
                                   , PartitionsCnt :: integer()
                                   , Key           :: binary()
                                   , Value         :: binary()) ->

@@ -653,8 +653,8 @@ start_metadata_socket(ClientId, [_|_] = Endpoints) ->
   start_metadata_socket(ClientId, Endpoints,
                         _FailedEndpoints = [], _Reason = ?undef).
 
-start_metadata_socket(_ClientId, [], _FailedEndpoints, Reason) ->
-  erlang:error(Reason);
+start_metadata_socket(_ClientId, [], FailedEndpoints, Reason) ->
+  erlang:error({Reason, FailedEndpoints});
 start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints,
                       FailedEndpoints, _Reason) ->
   {Host, Port} = Endpoint,

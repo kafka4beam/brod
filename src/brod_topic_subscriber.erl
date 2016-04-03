@@ -27,7 +27,6 @@
 -behaviour(gen_server).
 
 -export([ ack/3
-        , start_link/5
         , start_link/6
         , stop/1
         ]).
@@ -104,12 +103,6 @@
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
 %%%_* APIs =====================================================================
-
-%% @doc Start (link) a topic subscriber.
--spec start_link(client(), topic(), consumer_config(), module(), term()) ->
-        {ok, pid()} | {error, any()}.
-start_link(Client, Topic, ConsumerConfig, CbModule, CbInitArg) ->
-  start_link(Client, Topic, all, ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages from the given partition set. Use atom 'all' to subscribe to all
