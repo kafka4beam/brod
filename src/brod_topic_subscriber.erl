@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% A topic subscfriber is a gen_server which subscribes to all or a given set
+%%% A topic subscriber is a gen_server which subscribes to all or a given set
 %%% of partition consumers (pollers) of a given topic and calls the user-defined
 %%% callback functions for message processing.
 %%% @copyright 2016 Klarna AB

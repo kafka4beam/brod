@@ -367,7 +367,7 @@ discover_coordinator(#state{ client      = Client
     false ->
       %% close old socket
       _ = brod_sock:stop(SockPid),
-      ClientId = make_group_connection_client_id(GroupId),
+      ClientId = make_group_connection_client_id(),
       NewSockPid =
         ?ESCALATE(brod_sock:start_link(self(), Host, Port, ClientId, [])),
       log(State, info, "connected to group coordinator ~s:~p",
@@ -919,11 +919,10 @@ make_user_data() -> controller_id().
 %% @private Make a client_id() to be used in the requests sent over the group
 %% controller's socket (group coordinator on the other end), this id will be
 %% displayed when describing the group status with admin client/script.
-%% e.g. the-group-id/brod@localhost/<0.45.0>_/172.18.0.1
+%% e.g. brod@localhost/<0.45.0>_/172.18.0.1
 %% @end
--spec make_group_connection_client_id(group_id()) -> binary().
-make_group_connection_client_id(GroupId) ->
-  iolist_to_binary(io_lib:format("~s/~s", [GroupId, controller_id()])).
+-spec make_group_connection_client_id() -> binary().
+make_group_connection_client_id() -> controller_id().
 
 %% @private Use 'node()/pid()' as unique identifier of each group controller.
 -spec controller_id() -> binary().

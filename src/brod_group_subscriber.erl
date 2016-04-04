@@ -138,7 +138,7 @@
 %%   Consumer group ID which should be unique per kafka cluster
 %% Topics:
 %%   Predefined set of topic names in the group.
-%%   OBS: It is importat to have the same topic set across all members
+%%   OBS: It is important to have the same topic set across all members
 %%        in the group. Because all members have a chance of being
 %%        elected as the group leader, then being responsible for
 %%        assigning topic-partitions to group members.
