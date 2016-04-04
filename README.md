@@ -14,7 +14,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Opens max 1 tcp connection to a broker per "brod_client", one can create more cleints if needed
 * Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
 * Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
-* Consumer: has a configurable "prefetch count" - it will send this many "fetch" requests to kafka while waiting for acknowledgement from a "subscriber" process on previously delivered messages
+* Consumer: has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
 * Support for consumer groups with options to have Kafka as offset storage or a custom one
 * Topic subscriber: subscribe on messages from all or selected topic partitions without using consumer groups
 
