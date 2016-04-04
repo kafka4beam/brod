@@ -15,12 +15,12 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
 * Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
 * Consumer: has a configurable "prefetch count" - it will send this many "fetch" requests to kafka while waiting for acknowledgement from a "subscriber" process on previously delivered messages
+* Support for consumer groups with options to have Kafka as offset storage or a custom one
+* Topic subscriber: subscribe on messages from all or selected topic partitions without using consumer groups
 
 # Missing features
 
-* New (0.9) API for consumer groups (work in progress)
 * Compression
-* Auto-partitioning
 
 # Building and testing
 
@@ -32,11 +32,10 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 "client" in brod is a process responsible for establishing and maintaining
 connections to kafka cluster. It also manages producer and consumer processes.
 
-You can use brod:start_link_client/3 or brod:start_link_client/5 to start
-a client on demand, or include its configuration in sys.config.
+You can use brod:start_link_client/1,2,3 to start a client on demand,
+or include its configuration in sys.config.
 
-A required parameter for client is kafka endpoint(s). Optional parameters
-are producers config and/or consumers config.
+A required parameter for client is kafka endpoint(s).
 
 Example of configuration (for sys.config):
 
@@ -48,27 +47,6 @@ Example of configuration (for sys.config):
            , { config
              , [ {restart_delay_seconds, 10}] %% connection error
              }
-           , { producers
-             , [ { <<"brod-test-topic-1">>
-                   , [ {topic_restart_delay_seconds, 10} %% topic error
-                     , {partition_restart_delay_seconds, 2} %% partition error
-                     , {required_acks, -1}
-                     ]
-                 }
-               ]
-             }
-           , { consumers
-             , [ { <<"brod-test-topic-1">>
-                   , [ {topic_restart_delay_seconds, 10} %% topic error
-                     , {partition_restart_delay_seconds, 2} %% partition error
-                     , {begin_offset, -1}
-                     ]
-                 }
-               ]
-             }
-           %% other producers and consumers in client_1 will share the same
-           %% set of connections to the the kafka cluster at endpoints
-           %%  specified above for client_1
            ]
          }
        ]
@@ -81,22 +59,20 @@ Example of configuration (for sys.config):
 
 ## Start brod client on demand
 
-    {ok, ClientPid} =
-      brod:start_link_client(_ClientId  = brod_client_1
-                             _Endpoints = [{"localhost", 9092}],
-                             _Config    = [] %% use default client configs
-                             _Producers = [{<<"brod-test-topic-1">>,
-                                             []} %% use default producer configs
-                             _Consumers = [{<<"brod-test-topic-1">>,
-                                             []} %% use default consumer configs
-                             ]),
+    {ok, ClientPid} = brod:start_link_client([{"localhost", 9092}]).
 
 ## Producer
+
+### Start a producer
+
+    brod:start_producer(_Client         = brod_client_1, %% may also be ClientPid,
+                        _Topic          = <<"brod-test-topic-1">>,
+                        _ProducerConfig = []).
 
 ### Produce to a known topic-partition:
 
     {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1, %% may also be the pid
+      brod:produce(_Client    = brod_client_1, %% may also be ClientPid
                    _Topic     = <<"brod-test-topic-1">>,
                    _Partition = 0
                    _Key       = <<"some-key">>
@@ -117,7 +93,7 @@ Example of configuration (for sys.config):
 Block calling process until Kafka confirmed the message:
 
     {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1, %% may also be the pid
+      brod:produce(_Client    = brod_client_1, %% may also be ClientPid
                    _Topic     = <<"brod-test-topic-1">>,
                    _Partition = 0
                    _Key       = <<"some-key">>
@@ -126,27 +102,20 @@ Block calling process until Kafka confirmed the message:
 
 or the same in one call:
 
-    brod:produce_sync(_Client    = brod_client_1, %% may also be the pid
+    brod:produce_sync(_Client    = brod_client_1, %% may also be ClientPid
                       _Topic     = <<"brod-test-topic-1">>,
                       _Partition = 0
                       _Key       = <<"some-key">>
                       _Value     = <<"some-value">>).
 
-### Using your own partionner (e.g. random):
+### Produce with random partitioner
 
-    Client = brod_client_1, %% may also be the pid
+    Client = brod_client_1, %% may also be ClientPid
     Topic  = <<"brod-test-topic-1">>,
-    {ok, Partitions} = brod:get_partitions(Client, Topic),
-    ProduceFun = fun(Key, Value) ->
-                    Partition = random:uniform(1, length(Partitions)),
-                    brod:produce(Client, Topic, Partition, Key, Value)
-                  end,
-    case ProduceFun(<<"some-key">>, <<"some-value">>) of
-      {ok, CallRef} ->
-        %% keep the reference to match on acknowledgment
-      {error, {producer_down, _} ->
-        %% maybe retry?
-    end,
+    PartitionFun = fun(_Topic, PartitionsCount, _Key, _Value) ->
+                       {ok, crypto:rand_uniform(0, PartitionsCount)}
+                   end,
+    {ok, CallRef} = brod:produce(Client, Topic, PartitionFun, Key, Value).
 
 ### Handle acks from kafka
 
@@ -173,8 +142,37 @@ it may receive replies ordered differently than in which order
 bord:produce API was called.
 
 ## Consumer
+Find more examples in test/ (brod\_demo\_*).
 
-TODO
+### Group consumer commiting offsets to Kafka
+
+    -module(my_consumer).
+
+    init(_GroupId, _Arg) -> {ok, []}.
+
+    handle_message(_Topic, Partition, Message, State) ->
+      #kafka_message{ offset = Offset
+                    , key    = Key
+                    , value  = Value
+                    } = Message,
+      error_logger:info_msg("~p ~p: offset:~w key:~s value:~s\n",
+                            [self(), Partition, Offset, Key, Value]),
+      {ok, ack, State}.
+
+    init() ->
+      Client = brod_client_1, %% may also be ClientPid
+      Topic  = <<"brod-test-topic-1">>,
+      %% commit offsets to kafka every 10 seconds
+      GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
+                    ,{offset_commit_interval_seconds, 5}
+                    ],
+      GroupId = iolist_to_binary([Topic, "-group-id"]),
+      {ok, _Subscriber} =
+        brod:start_link_group_subscriber(ClientId, GroupId, [Topic],
+                                         GroupConfig,
+                                         _ConsumerConfig  = [{begin_offset, -2}],
+                                         _CallbackModule  = ?MODULE,
+                                         _CallbackInitArg = []).
 
 ## Other API to play with/inspect kafka
 These functions open a connetion to kafka cluster, send a request,
