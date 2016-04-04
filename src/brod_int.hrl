@@ -27,10 +27,10 @@
                          | sleep_timeout
                          | prefetch_count.
 
+%% common
 -type hostname()         :: string().
 -type portnum()          :: pos_integer().
 -type endpoint()         :: {hostname(), portnum()}.
--type cluster_id()       :: atom().
 -type leader_id()        :: non_neg_integer().
 -type kafka_kv()         :: {binary(), binary()}.
 -type client_config()    :: brod_client_config().
@@ -39,6 +39,22 @@
 -type consumer_options() :: [{consumer_option(), integer()}].
 -type client()           :: client_id() | pid().
 -type required_acks()    :: -1..1.
+
+%% consumer groups
+-type group_id()             :: kafka_group_id().
+-type member_id()            :: kafka_group_member_id().
+-type group_config()         :: brod_group_config().
+
+-record(partition_assignment, { partition    :: partition()
+                              , begin_offset :: offset()
+                              , metadata     :: iodata()
+                              }).
+
+-type partition_assignment() :: #partition_assignment{}.
+-type topic_assignment()     :: {topic(), [partition_assignment()]}.
+-type member_assignment()    :: {member_id(), [topic_assignment()]}.
+
+-define(IS_MEMBER_ID(X), is_binary(X)).
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
@@ -49,6 +65,7 @@
 -define(undef, undefined).
 
 -define(DEFAULT_CLIENT_ID, brod).
+-define(GROUP_PROTOCOL_0, <<"brod-consumer-protocol-0">>).
 
 -endif. % include brod_int.hrl
 

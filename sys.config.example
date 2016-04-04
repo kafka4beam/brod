@@ -1,6 +1,9 @@
 %% -*- mode: Erlang; fill-column: 80; -*-
 [{brod,
    [ { clients
+     %% A client manages a set of tcp connections for all
+     %% producers and consumers under its hierarchy.
+     %% see brod_sup.erl for more details about supervision tree
      , [ { brod_client_1
          , [ { endpoints, [{"localhost", 9092}]}
            , { config

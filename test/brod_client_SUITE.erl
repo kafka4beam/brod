@@ -99,10 +99,10 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
-  {ok, Pid} = brod:start_link_client([{"localhost", 8092} | ?HOSTS], Client),
+  {ok, Pid} = brod:start_link_client([{"localhost", 8192} | ?HOSTS], Client),
   ?assert(is_pid(Pid)),
   _Res = brod_client:get_partitions_count(Pid, <<"some-unknown-topic">>),
-  ?assertMatch({error, {'UnknownTopicOrPartition', _}}, _Res),
+  ?assertMatch({error, 'UnknownTopicOrPartition'}, _Res),
   Ref = erlang:monitor(process, Pid),
   ok = brod:stop_client(Pid),
   Reason = ?WAIT({'DOWN', Ref, process, Pid, Reason_}, Reason_, 5000),
@@ -112,7 +112,7 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   process_flag(trap_exit, true),
   {ok, Pid} = brod:start_link_client([{"badhost", 9092}]),
   Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
-  ?assertMatch({nxdomain, _Stacktrace}, Reason).
+  ?assertMatch({{nxdomain, _Hosts}, _Stacktrace}, Reason).
 
 t_call_bad_client_id(Config) when is_list(Config) ->
   %% call a bad client ID
@@ -227,7 +227,7 @@ t_auto_start_producers(Config) when is_list(Config) ->
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
   ?assertEqual({error, {producer_not_found, ?TOPIC}},
                brod:produce_sync(Client, ?TOPIC, 0, K, V)),
-  ClientConfig = [{config, [{auto_start_producers, true}]}],
+  ClientConfig = [{auto_start_producers, true}],
   ok = brod:stop_client(Client),
   {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),

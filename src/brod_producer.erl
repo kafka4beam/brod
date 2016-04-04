@@ -203,7 +203,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   {ok, State}.
 
 handle_info(?RETRY_MSG, State0) ->
-  State1 = State0#state{retry_tref = undefined},
+  State1 = State0#state{retry_tref = ?undef},
   {ok, State} =
     case init_socket(State1) of
       {ok, State2}   -> maybe_produce(State2);
@@ -213,7 +213,7 @@ handle_info(?RETRY_MSG, State0) ->
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {ok, NewState} = schedule_retry(State, Reason),
-  {noreply, NewState#state{sock_pid = undefined}};
+  {noreply, NewState#state{sock_pid = ?undef}};
 handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -300,7 +300,7 @@ maybe_produce(#state{buffer = Buffer0, sock_pid = SockPid} = State) ->
     {retry, Buffer} -> schedule_retry(State#state{buffer = Buffer})
   end.
 
-maybe_demonitor(undefined) ->
+maybe_demonitor(?undef) ->
   ok;
 maybe_demonitor(Mref) ->
   true = erlang:demonitor(Mref, [flush]),
@@ -310,7 +310,7 @@ schedule_retry(#state{buffer = Buffer} = State, Reason) ->
   {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
   schedule_retry(State#state{buffer = NewBuffer}).
 
-schedule_retry(#state{retry_tref = undefined} = State) ->
+schedule_retry(#state{retry_tref = ?undef} = State) ->
   {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, ?RETRY_MSG),
   {ok, State#state{retry_tref = TRef}};
 schedule_retry(State) ->

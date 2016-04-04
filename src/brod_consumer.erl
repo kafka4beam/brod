@@ -1,4 +1,4 @@
-%%%
+
 %%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,15 +62,16 @@
                , sleep_timeout     :: integer()
                , prefetch_count    :: integer()
                , last_corr_id      :: corr_id()
-               , subscriber        :: undefined | pid()
-               , subscriber_mref   :: undefined | reference()
+               , subscriber        :: ?undef | pid()
+               , subscriber_mref   :: ?undef | reference()
                , pending_acks = [] :: [offset()]
+               , is_suspended      :: boolean()
                }).
 
 -define(DEFAULT_BEGIN_OFFSET, -1).
 -define(DEFAULT_MIN_BYTES, 0).
 -define(DEFAULT_MAX_BYTES, 1048576).  % 1 MB
--define(DEFAULT_MAX_WAIT_TIME, 1000). % 1 sec
+-define(DEFAULT_MAX_WAIT_TIME, 10000). % 10 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
 -define(ERROR_COOLDOWN, 1000).
@@ -86,6 +87,27 @@
 start_link(ClientPid, Topic, Partition, Config) ->
   start_link(ClientPid, Topic, Partition, Config, []).
 
+%% @doc Start (link) a partition consumer.
+%% Possible configs:
+%%   min_bytes (optional default = 0):
+%%     Minimal bytes to fetch in a batch of messages
+%%   max_bytes (optional default = 1MB):
+%%     Maximum bytes to fetch in a batch of messages
+%%     NOTE: this value might be doubled in each retry when it is not enough
+%%           to fetch even one single message.
+%%     NOTE: in current implementation, the value is not shrinked back to
+%%           original after it has been expanded.
+%%  max_wait_time (optional, default = 10000 ms):
+%%     Max number of seconds allowd for the broker to collect min_bytes of
+%%     messages in fetch response
+%%  sleep_timeout (optional, default = 1000 ms):
+%%     Allow consumer process to sleep this amout of ms if kafka replied
+%%     'empty' message-set.
+%%  prefetch_count (optional, default = 1):
+%%     The window size (number of messages) allowed to fetch-ahead.
+%%  begin_offset (optional, default = -1):
+%%     The offset from which to begin fetch requests.
+%% @end
 -spec start_link(pid(), topic(), partition(),
                  consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config, Debug) ->
@@ -93,25 +115,33 @@ start_link(ClientPid, Topic, Partition, Config, Debug) ->
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
 
 -spec stop(pid()) -> ok | {error, any()}.
-stop(Pid) ->
-  gen_server:call(Pid, stop, infinity).
+stop(Pid) -> safe_gen_call(Pid, stop, infinity).
 
-%% @doc Subscribe on messages from a partition
+%% @doc Subscribe or resubscribe on messages from a partition.
+%% Caller may pass in a set of options which is an extention of consumer config
+%% to update the parameters such as max_bytes and max_wait_time etc.
+%% also to update the start point (begin_offset) of the data stream.
+%% Possible options:
+%%   all consumer configs as documented for start_link/5
+%%   begin_offset (optional, default = -1)
+%%     A subscriber may consume and process messages then persist the associated
+%%     offset to a persistent storage, then start (or restart) with
+%%     last_processed_offset + 1 as the begin_offset to proceed.
+%%     By default, it fetches from the latest available offset (-1)
+%% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
-  gen_server:call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
+  safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
 %% @doc Unsubscribe the current subscriber.
 -spec unsubscribe(pid()) -> ok.
-unsubscribe(Pid) ->
-  gen_server:call(Pid, unsubscribe).
+unsubscribe(Pid) -> safe_gen_call(Pid, unsubscribe, infinity).
 
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
 %% @end
 -spec ack(pid(), offset()) -> ok.
-ack(Pid, Offset) ->
-  gen_server:call(Pid, {ack, Offset}, infinity).
+ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
@@ -136,7 +166,7 @@ init({ClientPid, Topic, Partition, Config}) ->
     proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
-  Offset = proplists:get_value(offset, Config, undefined),
+  Offset = proplists:get_value(begin_offset, Config, ?undef),
   {ok, #state{ client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
@@ -146,14 +176,15 @@ init({ClientPid, Topic, Partition, Config}) ->
              , max_bytes      = MaxBytes
              , sleep_timeout  = SleepTimeout
              , prefetch_count = PrefetchCount
-             , socket_pid     = undefined
+             , socket_pid     = ?undef
+             , is_suspended   = false
              }}.
 
 handle_info(?INIT_SOCKET,
             #state{ client_pid = ClientPid
                   , topic      = Topic
                   , partition  = Partition
-                  , socket_pid = undefined
+                  , socket_pid = ?undef
                   } = State0) ->
   %% 1. Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
@@ -175,17 +206,17 @@ handle_info(?SEND_FETCH_REQUEST, State0) ->
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{subscriber = Pid} = State) ->
-  error_logger:info_msg("~p ~p subscriber ~p is down, reason: ~p",
+  error_logger:info_msg("~p ~p subscriber ~p is down\nreason:~p",
                         [?MODULE, self(), Pid, Reason]),
-  NewState = reset_buffer(State#state{ subscriber      = undefined
-                                     , subscriber_mref = undefined
+  NewState = reset_buffer(State#state{ subscriber      = ?undef
+                                     , subscriber_mref = ?undef
                                      }),
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   Timeout = ?SOCKET_RETRY_DELAY_MS,
   erlang:send_after(Timeout, self(), ?INIT_SOCKET),
-  State1 = State#state{socket_pid = undefined},
+  State1 = State#state{socket_pid = ?undef},
   NewState = reset_buffer(State1),
   {noreply, NewState};
 handle_info(Info, State) ->
@@ -194,12 +225,12 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 handle_call({subscribe, _Pid, _Options}, _From,
-            #state{ socket_pid = undefined } = State) ->
+            #state{ socket_pid = ?undef} = State) ->
   {reply, {error, no_connection}, State};
 handle_call({subscribe, Pid, Options}, _From,
             #state{ subscriber = Subscriber
                   , subscriber_mref = OldMref} = State0) ->
-  case Subscriber =:= undefined orelse
+  case Subscriber =:= ?undef orelse
       not is_process_alive(Subscriber) orelse
       Subscriber =:= Pid of
     true ->
@@ -213,7 +244,8 @@ handle_call({subscribe, Pid, Options}, _From,
                                },
           %% always reset buffer to fetch again
           State3 = reset_buffer(State2),
-          State = maybe_send_fetch_request(State3),
+          State4 = State3#state{is_suspended = false},
+          State  = maybe_send_fetch_request(State4),
           {reply, ok, State};
         {error, Reason} ->
           {reply, {error, Reason}, State0}
@@ -223,8 +255,8 @@ handle_call({subscribe, Pid, Options}, _From,
   end;
 handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
   is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
-  NewState = State#state{ subscriber      = undefined
-                        , subscriber_mref = undefined
+  NewState = State#state{ subscriber      = ?undef
+                        , subscriber_mref = ?undef
                         },
   {reply, ok, reset_buffer(NewState)};
 handle_call({ack, Offset}, _From,
@@ -243,7 +275,9 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), Cast]),
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+  error_logger:warning_msg("~p ~p terminating, reason:\n~p",
+                           [?MODULE, self(), Reason]),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -256,16 +290,12 @@ do_debug(Pid, Debug) ->
   ok.
 
 handle_fetch_response(_Response, _CorrId,
-                      #state{subscriber = undefined} = State) ->
+                      #state{subscriber = ?undef} = State) ->
   %% discard fetch response when there is no (dead?) subscriber
   {noreply, State};
 handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
                             } = State) when CorrId1 < CorrId2 ->
-  %% handle obsolete fetch responses in case we got new offset from callback
-  error_logger:info_msg("~p ~p Dropping obsolete fetch response "
-                        "with corr_id = ~p",
-                        [?MODULE, self(), CorrId1]),
   {noreply, State};
 handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                                          }, CorrId, State) ->
@@ -326,6 +356,7 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
 err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
 err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
+err_op(?EC_OFFSET_OUT_OF_RANGE)        -> suspend;
 err_op(_)                              -> restart.
 
 %% @private Map message to brod's format.
@@ -357,6 +388,10 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       error_logger:error_msg("consumer of topic ~p partition ~p shutdown, "
                              "reason: ~p", [Topic, Partition, ErrorCode]),
       {stop, normal, State};
+    suspend ->
+      ok = cast_to_subscriber(Subscriber, Error),
+      %% Suspend, no more fetch request until the subscriber re-subscribes
+      {noreply, State#state{is_suspended = true}};
     restart ->
       ok = cast_to_subscriber(Subscriber, Error),
       {stop, {restart, ErrorCode}, State}
@@ -389,10 +424,12 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
                                , pending_acks   = PendingAcks
                                , prefetch_count = PrefetchCount
                                , socket_pid     = SocketPid
+                               , is_suspended   = IsSuspended
                                } = State) ->
-  case is_pid(SocketPid) andalso
+  case is_pid(SocketPid)  andalso
        is_pid(Subscriber) andalso
-       length(PendingAcks) < PrefetchCount of
+       not IsSuspended    andalso
+       length(PendingAcks) =< PrefetchCount of
     true ->
       case send_fetch_request(State) of
         {ok, CorrId} ->
@@ -406,28 +443,29 @@ maybe_send_fetch_request(#state{ subscriber     = Subscriber
       State
   end.
 
-send_fetch_request(#state{socket_pid = SocketPid} = State) ->
-  true = (is_integer(State#state.begin_offset) andalso
-          State#state.begin_offset >= 0), %% assert
+send_fetch_request(#state{ begin_offset = BeginOffset
+                         , socket_pid   = SocketPid
+                         } = State) ->
+  (is_integer(BeginOffset) andalso BeginOffset >= 0) orelse
+    erlang:error({bad_begin_offset, BeginOffset}),
   Request =
     kpro:fetch_request(State#state.topic,
                        State#state.partition,
                        State#state.begin_offset,
                        State#state.max_wait_time,
                        State#state.min_bytes,
-                       State#state.max_bytes
-                       ),
+                       State#state.max_bytes),
   brod_sock:send(SocketPid, Request).
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
-  DefaultBeginOffset = case OldBeginOffset =:= undefined of
+  DefaultBeginOffset = case OldBeginOffset =:= ?undef of
                          true  -> ?DEFAULT_BEGIN_OFFSET;
                          false -> OldBeginOffset
                        end,
   NewBeginOffset = F(begin_offset, DefaultBeginOffset),
-  NewState =
+  State1 =
     State#state{ begin_offset   = NewBeginOffset
                , min_bytes      = F(min_bytes, State#state.min_bytes)
                , max_bytes      = F(max_bytes, State#state.max_bytes)
@@ -435,30 +473,35 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
                , sleep_timeout  = F(sleep_timeout, State#state.sleep_timeout)
                , prefetch_count = F(prefetch_count, State#state.prefetch_count)
                },
-  case NewBeginOffset =/= OldBeginOffset of
-    true ->
-      %% reset buffer in case subscriber wants to fetch from a new offset
-      NewState1 = NewState#state{pending_acks = []},
-      resolve_begin_offset(NewState1);
-    false ->
-      {ok, NewState}
-  end.
+  NewState =
+    case NewBeginOffset =/= OldBeginOffset of
+      true ->
+        %% reset buffer in case subscriber wants to fetch from a new offset
+        State1#state{pending_acks = []};
+      false ->
+        State1
+    end,
+  resolve_begin_offset(NewState).
 
 -spec resolve_begin_offset(#state{}) -> {ok, #state{}} | {error, any()}.
 resolve_begin_offset(#state{ begin_offset = BeginOffset
                            , socket_pid   = SocketPid
                            , topic        = Topic
                            , partition    = Partition
-                           } = State) ->
+                           } = State) when BeginOffset < 0 ->
   case fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) of
     {ok, NewBeginOffset} ->
       {ok, State#state{begin_offset = NewBeginOffset}};
     {error, Reason} ->
       {error, Reason}
-  end.
+  end;
+resolve_begin_offset(State) ->
+  {ok, State}.
 
-fetch_valid_offset(SocketPid, InitialOffset, Topic, Partition) ->
-  Request = kpro:offset_request(Topic, Partition, InitialOffset,
+fetch_valid_offset(_S, Offset, _T, _P) when Offset >= 0 ->
+  {ok, Offset};
+fetch_valid_offset(SocketPid, Time, Topic, Partition) ->
+  Request = kpro:offset_request(Topic, Partition, Time,
                                       _MaxNoOffsets = 1),
   {ok, Response} = brod_sock:send_sync(SocketPid, Request, 5000),
   #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
@@ -479,6 +522,18 @@ reset_buffer(#state{pending_acks = [Offset | _]} = State) ->
   State#state{ begin_offset = Offset
              , pending_acks = []
              }.
+
+%% @private Catch noproc exit exception when making gen_server:call.
+-spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
+        when Call    :: term(),
+             Timeout :: infinity | integer(),
+             Return  :: {ok, term()} | {error, consumer_down | term()}.
+safe_gen_call(Server, Call, Timeout) ->
+  try
+    gen_server:call(Server, Call, Timeout)
+  catch exit : {noproc, _} ->
+    {error, consumer_down}
+  end.
 
 %%%_* Tests ====================================================================
 

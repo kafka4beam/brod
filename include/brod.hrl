@@ -17,10 +17,13 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_topic()      :: binary().
--type kafka_partition()  :: non_neg_integer().
--type kafka_offset()     :: integer().
--type kafka_error_code() :: atom() | integer().
+-type kafka_topic()           :: binary().
+-type kafka_partition()       :: non_neg_integer().
+-type kafka_offset()          :: integer().
+-type kafka_error_code()      :: atom() | integer().
+-type kafka_group_id()        :: binary().
+-type kafka_group_member_id() :: binary().
+-type brod_client_id()        :: atom().
 
 -record(kafka_message,
         { offset     :: kafka_offset()
@@ -31,20 +34,18 @@
         }).
 
 -record(kafka_message_set,
-        { topic          :: topic()
-        , partition      :: partition()
+        { topic          :: kafka_topic()
+        , partition      :: kafka_partition()
         , high_wm_offset :: integer() %% max offset of the partition
         , messages       :: [#kafka_message{}]
         }).
 
 -record(kafka_fetch_error,
-        { topic      :: topic()
-        , partition  :: partition()
-        , error_code :: error_code()
+        { topic      :: kafka_topic()
+        , partition  :: kafka_partition()
+        , error_code :: kafka_error_code()
         , error_desc :: string()
         }).
-
--type brod_client_id() :: atom().
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
@@ -67,8 +68,13 @@
 -type brod_client_config() :: proplists:proplist().
 -type brod_producer_config() :: proplists:proplist().
 -type brod_consumer_config() :: proplists:proplist().
+-type brod_group_config() :: proplists:proplist().
+-type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
+                                   | consumer_managed.
 
--type brod_partition_fun() :: fun(( Topic :: topic()
+-define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
+
+-type brod_partition_fun() :: fun(( Topic         :: kafka_topic()
                                   , PartitionsCnt :: integer()
                                   , Key           :: binary()
                                   , Value         :: binary()) ->

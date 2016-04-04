@@ -177,8 +177,6 @@ t_produce_partitioner(Config) when is_list(Config) ->
                   K2 -> {ok, 1}
                 end
             end,
-  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K1, V1),
-  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun =
     fun(ExpectedP, ExpectedK, ExpectedV) ->
       receive
@@ -190,7 +188,9 @@ t_produce_partitioner(Config) when is_list(Config) ->
           ct:fail({?MODULE, ?LINE, timeout, ExpectedP, ExpectedK, ExpectedV})
       end
     end,
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K1, V1),
   ReceiveFun(0, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun(1, K2, V2).
 
 %%%_* Help functions ===========================================================
@@ -201,13 +201,7 @@ make_unique_kv() ->
   , iolist_to_binary(["val-", make_ts_str()])
   }.
 
-make_ts_str() ->
-  Ts = os:timestamp(),
-  {{Y,M,D}, {H,Min,Sec}} = calendar:now_to_universal_time(Ts),
-  {_, _, Micro} = Ts,
-  S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
-                    [Y, M, D, H, Min, Sec, Micro]),
-  lists:flatten(S).
+make_ts_str() -> brod_utils:os_time_utc_str().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

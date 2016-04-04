@@ -29,6 +29,7 @@
         , start_link/0
         , find_consumer/3
         , start_consumer/4
+        , stop_consumer/2
         ]).
 
 -include("brod_int.hrl").
@@ -50,23 +51,32 @@
 start_link() ->
   supervisor3:start_link(?MODULE, ?SUP).
 
-%% @doc Dynamically start a per-topic supervisor
+%% @doc Dynamically start a per-topic supervisor.
 -spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(SupPid, ClientPid, TopicName, Config) ->
   Spec = consumers_sup_spec(ClientPid, TopicName, Config),
   supervisor3:start_child(SupPid, Spec).
 
+
+%% @doc Dynamically stop a per-topic supervisor.
+-spec stop_consumer(pid(), topic()) -> ok | {error, any()}.
+stop_consumer(SupPid, TopicName) ->
+  supervisor3:terminate_child(SupPid, TopicName).
+
 %% @doc Find a brod_consumer process pid running under sup2
 %% @end
 -spec find_consumer(pid(), topic(), partition()) ->
-                       {ok, pid()} | {error, any()}.
+                       {ok, pid()} | {error, Reason} when
+        Reason :: {consumer_not_found, topic()}
+                | {consumer_not_found, topic(), partition()}
+                | {consumer_down, noproc}.
 find_consumer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
-      {error, {not_found, Topic}};
+      {error, {consumer_not_found, Topic}};
     [Sup2Pid] ->
       try
         case supervisor3:find_child(Sup2Pid, Partition) of

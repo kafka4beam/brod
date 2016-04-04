@@ -51,7 +51,7 @@
         , sync_produce_request/1
         ]).
 
-%% Consumer API
+%% Simple Consumer API
 -export([ consume_ack/2
         , consume_ack/4
         , get_consumer/3
@@ -59,6 +59,12 @@
         , subscribe/5
         , unsubscribe/1
         , unsubscribe/3
+        ]).
+
+%% Subscriber API
+-export([ start_link_group_subscriber/7
+        , start_link_topic_subscriber/5
+        , start_link_topic_subscriber/6
         ]).
 
 %% Management and testing API
@@ -109,6 +115,8 @@ start_link_client(BootstrapEndpoints, ClientId) ->
 %%   Atom to identify the client process
 %% Config:
 %%   Proplist, possible values:
+%%     max_metadata_sock_retry (optional, default 1)
+%%       Number of retries if failed fetching metadata due to socket error
 %%     get_metadata_timout_seconds(optional, default=5)
 %%       Return timeout error from brod_client:get_metadata/2 in case the
 %%       respons is not received from kafka in this configured time.
@@ -133,13 +141,17 @@ start_link_client(BootstrapEndpoints, ClientId, Config) ->
 stop_client(Client) ->
   brod_client:stop(Client).
 
-%% @doc Dynamically start a per-topic producer
+%% @doc Dynamically start a per-topic producer.
+%% @see brod_client:start_producer/3. for more details.
+%% @end
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   brod_client:start_producer(Client, TopicName, ProducerConfig).
 
-%% @doc Dynamically start a topic consumer
+%% @doc Dynamically start a topic consumer.
+%% @see brod_client:start_consumer/3. for more details.
+%% @end
 -spec start_consumer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ProducerConfig) ->
@@ -296,6 +308,36 @@ consume_ack(Client, Topic, Partition, Offset) ->
 -spec consume_ack(pid(), offset()) -> ok | {error, any()}.
 consume_ack(ConsumerPid, Offset) ->
   brod_consumer:ack(ConsumerPid, Offset).
+
+%% @equiv brod_group_subscriber:start_link/7
+-spec start_link_group_subscriber(
+        client(), group_id(), [topic()],
+        group_config(), consumer_config(), module(), term()) ->
+          {ok, pid()} | {error, any()}.
+start_link_group_subscriber(Client, GroupId, Topics, GroupCofnig,
+                            ConsumerConfig, CbModule, CbInitArg) ->
+  brod_group_subscriber:start_link(Client, GroupId, Topics, GroupCofnig,
+                                   ConsumerConfig, CbModule, CbInitArg).
+
+%% @equiv start_link_topic_subscriber(Client, Topic, 'all', ConsumerConfig,
+%%                                    CbModule, CbInitArg)
+-spec start_link_topic_subscriber(
+        client(), topic(), consumer_config(), module(), term()) ->
+          {ok, pid()} | {error, any()}.
+start_link_topic_subscriber(Client, Topic, ConsumerConfig,
+                            CbModule, CbInitArg) ->
+  start_link_topic_subscriber(Client, Topic, all, ConsumerConfig,
+                              CbModule, CbInitArg).
+
+%% @equiv brod_topic_subscriber:start_link/6
+-spec start_link_topic_subscriber(
+        client(), topic(), all | [partition()],
+        consumer_config(), module(), term()) ->
+          {ok, pid()} | {error, any()}.
+start_link_topic_subscriber(Client, Topic, Partitions,
+                            ConsumerConfig, CbModule, CbInitArg) ->
+  brod_topic_subscriber:start_link(Client, Topic, Partitions,
+                                   ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) ->

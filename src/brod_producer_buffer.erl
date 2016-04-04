@@ -172,9 +172,9 @@ assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
 
 %% @private Compare two corr-ids, return true if ID-2 is considered a 'later'
 %% one comparing to ID1.
-%% Assuming that no clients would send more than 2^16 messages asynchronously.
+%% Assuming that no clients would send up to 2^26 messages asynchronously.
 %% @end
--spec is_later_corr_id(corr_id(), corr_id()) -> '<' | '=' | '>'.
+-spec is_later_corr_id(corr_id(), corr_id()) -> boolean().
 is_later_corr_id(Id1, Id2) ->
   Diff = abs(Id1 - Id2),
   case Diff < (?MAX_CORR_ID div 2) of

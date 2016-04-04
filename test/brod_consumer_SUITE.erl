@@ -280,6 +280,13 @@ t_subscriber_restart(Config) when is_list(Config) ->
   ok = ProduceFun(0),
   ok = ProduceFun(1),
   ok = ReceiveFun(Subscriber0, 0),
+  Mref = erlang:monitor(process, Subscriber0),
+  receive
+    {'DOWN', Mref, process, Subscriber0, normal} ->
+      ok
+    after 1000 ->
+      ct:fail("timed out waiting for Subscriber0 to exit")
+  end,
   Subscriber1 = erlang:spawn_link(SubscriberFun),
   receive {subscribed, Subscriber1} -> ok end,
   ok = ReceiveFun(Subscriber1, 1),
@@ -294,12 +301,10 @@ t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, Topic, Partition, Key, Key),
   Options1 = [{begin_offset, 10000000000}],
   Options2 = [{sleep_ms, 0}, {begin_offset, -2}],
-  Result = brod:subscribe(Client, self(), Topic, Partition, Options1),
-  ?assertEqual({error, no_available_offsets}, Result),
-  {ok, ConsumerPid} =
-    brod:subscribe(Client, self(), Topic, Partition, Options2),
+  {ok, Consumer} = brod:subscribe(Client, self(), Topic, Partition, Options1),
+  {ok, Consumer} = brod:subscribe(Client, self(), Topic, Partition, Options2),
   receive
-    {ConsumerPid, #kafka_message_set{}} ->
+    {Consumer, #kafka_message_set{}} ->
       ok
   after 1000 ->
     ct:fail("timed out receiving kafka message set", [])
