@@ -124,7 +124,14 @@ start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
 
 -spec stop(client()) -> ok.
-stop(Client) -> safe_gen_call(Client, stop, infinity).
+stop(Client) ->
+  Mref = erlang:monitor(process, Client),
+  _ = safe_gen_call(Client, stop, infinity),
+  receive
+    {'DOWN', Mref, process, _, _Reason} ->
+      ok
+  end.
+
 
 %% @doc Get producer of the given topic-partition.
 %% The producer is started if auto_start_producers is
