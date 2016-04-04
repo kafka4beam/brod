@@ -45,7 +45,7 @@ Example of configuration (for sys.config):
      , [ { brod_client_1 %% registered name
          , [ { endpoints, [{"localhost", 9092}]}
            , { config
-             , [ {restart_delay_seconds, 10}] %% connection error
+             , [ {reconnect_cool_down_seconds, 10}] %% connection error
              }
            ]
          }
@@ -58,6 +58,11 @@ Example of configuration (for sys.config):
 ```
 
 ## Start brod client on demand
+
+    ClientConfig = [{reconnect_cool_down_seconds, 10}],
+    {ok, ClientPid} = brod:start_link_client([{"localhost", 9092}], brod_client_1, ClientConfig).
+
+Or the simplest option:
 
     {ok, ClientPid} = brod:start_link_client([{"localhost", 9092}]).
 
@@ -162,7 +167,7 @@ Find more examples in test/ (brod\_demo\_*).
     init() ->
       Client = brod_client_1, %% may also be ClientPid
       Topic  = <<"brod-test-topic-1">>,
-      %% commit offsets to kafka every 10 seconds
+      %% commit offsets to kafka every 5 seconds
       GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
                     ,{offset_commit_interval_seconds, 5}
                     ],
