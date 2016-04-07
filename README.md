@@ -9,9 +9,9 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Features
 
 * Supports Apache Kafka v0.8.\*, 0.9.\*
-* Robust producer implementation supporing in-flight requests and asynchronous acknowledgements
+* Robust producer implementation supporting in-flight requests and asynchronous acknowledgements
 * Both consumer and producer handle leader re-election and other cluster disturbances internally
-* Opens max 1 tcp connection to a broker per "brod_client", one can create more cleints if needed
+* Opens max 1 tcp connection to a broker per "brod_client", one can create more clients if needed
 * Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
 * Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
 * Consumer: has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
