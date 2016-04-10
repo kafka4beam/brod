@@ -455,7 +455,7 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                        State#state.max_wait_time,
                        State#state.min_bytes,
                        State#state.max_bytes),
-  brod_sock:send(SocketPid, Request).
+  brod_sock:request_async(SocketPid, Request).
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
@@ -503,7 +503,7 @@ fetch_valid_offset(_S, Offset, _T, _P) when Offset >= 0 ->
 fetch_valid_offset(SocketPid, Time, Topic, Partition) ->
   Request = kpro:offset_request(Topic, Partition, Time,
                                       _MaxNoOffsets = 1),
-  {ok, Response} = brod_sock:send_sync(SocketPid, Request, 5000),
+  {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
   #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
   #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
   #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,

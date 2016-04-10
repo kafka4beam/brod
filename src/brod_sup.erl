@@ -17,7 +17,7 @@
 %%%=============================================================================
 %%% @doc brod supervisor
 %%%
-%%% Hiarchy:
+%%% hierarchy:
 %%%   brod_sup (one_for_one)
 %%%     |
 %%%     +--client_1
@@ -44,7 +44,7 @@
 %%%     |          |     +-- partition_1_worker
 %%%     |          |     |...
 %%%     |          |
-%%%     |          +-- consumer_sup level 2 for topic 1
+%%%     |          +-- consumer_sup level 2 for topic 2
 %%%     |          |     |...
 %%%     |          |...
 %%%     |
