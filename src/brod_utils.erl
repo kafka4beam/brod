@@ -32,6 +32,7 @@
         , os_time_utc_str/0
         , shutdown_pid/1
         , try_connect/1
+        , to_binary/1
         ]).
 
 -include("brod_int.hrl").
@@ -108,6 +109,17 @@ os_time_utc_str() ->
 log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
 log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
 log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
+
+
+-spec to_binary(atom() | list() | binary()) -> binary().
+to_binary(X) when is_atom(X) ->
+    to_binary(atom_to_list(X));
+
+to_binary(X) when is_list(X) ->
+    to_binary(list_to_binary(X));
+
+to_binary(X) when is_binary(X) ->
+    X.
 
 %%%_* Internal Functions =======================================================
 
