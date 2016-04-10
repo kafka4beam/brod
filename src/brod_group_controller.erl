@@ -891,7 +891,7 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                                   , memberId = MemberId
                                   , generationId = GenerationId
                                   },
-  {ok, CorrId} = brod_sock:send(SockPid, Request),
+  {ok, CorrId} = brod_sock:request_async(SockPid, Request),
   NewState = State#state{hb_ref = {CorrId, os:timestamp()}},
   {ok, NewState};
 maybe_send_heartbeat(#state{} = State) ->
@@ -902,7 +902,7 @@ send_sync(SockPid, Request) ->
   send_sync(SockPid, Request, 5000).
 
 send_sync(SockPid, Request, Timeout) ->
-  ?ESCALATE(brod_sock:send_sync(SockPid, Request, Timeout)).
+  ?ESCALATE(brod_sock:request_sync(SockPid, Request, Timeout)).
 
 make_user_data() ->
   iolist_to_binary(io_lib:format("~p ~p", [node(), self()])).

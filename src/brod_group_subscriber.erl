@@ -22,7 +22,7 @@
 %%%
 %%% An overview of what it does behind the scene:
 %%%  1. Start a consumer group controller,
-%%%     @see brod_group_controller:start_link/4. to manage the consumer group
+%%%     @see brod_group_controller:start_link/4 to manage the consumer group
 %%%     states.
 %%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
 %%%     to the partition workers when group assignment is received from the group

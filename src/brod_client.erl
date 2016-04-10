@@ -733,7 +733,7 @@ send_sync(State, Request, Timeout) ->
 send_sync(State0, Request, Timeout, RetryLeft) ->
   {ok, State} = maybe_restart_metadata_socket(State0),
   SockPid = State#state.meta_sock_pid,
-  case brod_sock:send_sync(SockPid, Request, Timeout) of
+  case brod_sock:request_sync(SockPid, Request, Timeout) of
     {error, tcp_closed} when RetryLeft > 0 ->
       {ok, NewState} = rotate_endpoints(State, tcp_closed),
       send_sync(NewState, Request, Timeout, RetryLeft - 1);

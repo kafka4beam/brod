@@ -34,10 +34,6 @@
         , stop/1
         ]).
 
--export([ send/2
-        , send_sync/3]).
-
-
 -export([ request_sync/3
         , request_async/2
         ]).
@@ -89,9 +85,6 @@ stop(Pid) ->
     end.
 
 
-send(P, R) ->
-    request_async(P, R).
-
 -spec request_async(pid(), term()) -> 'ok' | {'ok', corr_id()} | {'error', any()}.
 request_async(Pid, Request) ->
     try
@@ -100,9 +93,6 @@ request_async(Pid, Request) ->
         _Class:Reason ->
             {error, {sock_down, Reason}}
     end.
-
-send_sync(P, R, T) ->
-    request_sync(P, R, T).
 
 -spec request_sync(pid(), term(), non_neg_integer()) -> 'ok' | {'ok', corr_id()} | {'error', any()}.
 request_sync(Pid, Request, Timeout) ->

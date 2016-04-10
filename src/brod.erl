@@ -146,10 +146,10 @@ start_producer(Client, TopicName, ProducerConfig) ->
 %% @doc Dynamically start a topic consumer.
 %% @see brod_client:start_consumer/3. for more details.
 %% @end
--spec start_consumer(client(), topic(), producer_config()) ->
+-spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
-start_consumer(Client, TopicName, ProducerConfig) ->
-  brod_client:start_consumer(Client, TopicName, ProducerConfig).
+start_consumer(Client, TopicName, ConsumerConfig) ->
+  brod_client:start_consumer(Client, TopicName, ConsumerConfig).
 
 %% @doc Get number of partitions for a given topic.
 %% The higher level producers may need the partition numbers to
@@ -328,7 +328,7 @@ get_offsets(Hosts, Topic, Partition) ->
 get_offsets(Hosts, Topic, Partition, Time, MaxNoOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = kpro:offset_request(Topic, Partition, Time, MaxNoOffsets),
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  Response = brod_sock:request_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
 
@@ -347,7 +347,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = kpro:fetch_request(Topic, Partition, Offset,
                                MaxWaitTime, MinBytes, MaxBytes),
-  {ok, Response} = brod_sock:send_sync(Pid, Request, 10000),
+  {ok, Response} = brod_sock:request_sync(Pid, Request, 10000),
   #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
   #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
   #kpro_FetchResponsePartition{ errorCode  = ErrorCode
