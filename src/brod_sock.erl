@@ -30,8 +30,8 @@
 -export([ get_tcp_sock/1
         , init/5
         , loop/2
-        , send/2
-        , send_sync/3
+        , request_sync/3
+        , request_async/2
         , start/5
         , start_link/5
         , stop/1
@@ -73,13 +73,13 @@ start(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
 start(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
--spec send(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
-send(Pid, Request) ->
+-spec request_async(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
+request_async(Pid, Request) ->
   call(Pid, {send, Request}).
 
--spec send_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
-send_sync(Pid, Request, Timeout) ->
-  case send(Pid, Request) of
+-spec request_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
+request_sync(Pid, Request, Timeout) ->
+  case request_async(Pid, Request) of
     {ok, CorrId} ->
       maybe_wait_for_resp(Pid, Request, CorrId, Timeout);
     {error, Reason} ->

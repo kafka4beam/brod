@@ -45,7 +45,7 @@ get_metadata(Hosts) ->
 get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
   Request = #kpro_MetadataRequest{topicName_L = Topics},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  Response = brod_sock:request_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
 
