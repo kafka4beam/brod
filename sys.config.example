@@ -1,0 +1,25 @@
+%% -*- mode: Erlang; fill-column: 80; -*-
+[{brod,
+   [ { clients
+     %% A client manages a set of tcp connections for all
+     %% producers and consumers under its hierarchy.
+     %% see brod_sup.erl for more details about supervision tree
+     , [ { brod_client_1
+         , [ { endpoints, [{"localhost", 9092}]}
+           , { config
+             , [ {restart_delay_seconds, 10}
+               , {auto_start_producers, true}
+               , {default_producer_config,
+                  [ {topic_restart_delay_seconds, 10}
+                  , {partition_restart_delay_seconds, 2}
+                  , {required_acks, -1}
+                  ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   ]
+}].

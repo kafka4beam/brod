@@ -21,494 +21,318 @@
 %%%=============================================================================
 
 -module(brod_producer).
-
 -behaviour(gen_server).
 
-%% Server API
 -export([ start_link/4
-        , start_link/5
-        , stop/1
+        , produce/3
+        , sync_produce_request/1
         ]).
 
-%% Kafka API
--export([ produce/4
-        ]).
-
-%% Debug API
--export([ debug/2
-        , no_debug/1
-        , get_sockets/1
-        ]).
-
-
-%% gen_server callbacks
--export([ init/1
+-export([ code_change/3
         , handle_call/3
         , handle_cast/2
         , handle_info/2
+        , init/1
         , terminate/2
-        , code_change/3
-        , format_status/2
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
--include("brod.hrl").
 -include("brod_int.hrl").
 
-%%%_* Records ------------------------------------------------------------------
--type topic()     :: binary().
--type partition() :: non_neg_integer().
--type leader()    :: pid(). % brod_sock pid
--type corr_id()   :: 0..2147483647.
--type sender()    :: {pid(), reference()}.
--type offset()    :: integer().
+%% default number of messages in buffer before block callers
+-define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
+%% default number of message sets sent on wire before block waiting for acks
+-define(DEFAULT_PARITION_ONWIRE_LIMIT, 1).
+%% by default, send max 1 MB of data in one batch (message set)
+-define(DEFAULT_MAX_BATCH_SIZE, 1048576).
+%% by default, require acks from all ISR
+-define(DEFAULT_REQUIRED_ACKS, -1).
+%% by default, leader should wait 1 second for replicas to ack
+-define(DEFAULT_ACK_TIMEOUT, 1000).
+%% by default, brod_producer will sleep for 0.5 second before trying to send
+%% buffered messages again upon receiving a error from kafka
+-define(DEFAULT_RETRY_BACKOFF_MS, 500).
+%% by default, brod_producer will try to retry 3 times before crashing
+-define(DEFAULT_MAX_RETRIES, 3).
 
--ifdef(otp_before_17).
--type data_buffer() :: [{leader(), [{topic(), dict()}]}].
--type senders_buffer() :: dict().
--else.
--type data_buffer() :: [{leader(), [{topic(), dict:dict()}]}].
--type senders_buffer() :: dict:dict(leader(), [sender()]).
--endif.
+-define(RETRY_MSG, retry).
 
--record(state, { hosts            :: [brod:host()]
-               , debug            :: [term()]
-               , acks             :: integer()
-               , ack_timeout      :: integer()
-               , sockets = []     :: [#socket{}]
-               , leaders = []     :: [{{topic(), partition()}, leader()}]
-               , data_buffer = [] :: data_buffer()
-               , senders_buffer = dict:new() :: senders_buffer()
-               , pending = []     :: [{leader(), {corr_id(), [sender()]}}]
-               , client_id        :: client_id()
-               }).
+-define(config(Key, Default), proplists:get_value(Key, Config, Default)).
 
--type produce_error() :: {partition(), offset(), error_code()}.
+-record(state,
+        { client_pid        :: pid()
+        , topic             :: topic()
+        , partition         :: partition()
+        , sock_pid          :: pid()
+        , sock_mref         :: reference()
+        , buffer            :: brod_producer_buffer:buf()
+        , retry_backoff_ms  :: non_neg_integer()
+        , retry_tref        :: timer:tref()
+        , reconnect_timeout :: non_neg_integer()
+        }).
 
-%%%_* API ----------------------------------------------------------------------
--spec start_link([brod:host()], integer(), integer(), client_id()) ->
-                    {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout, ClientId) ->
-  start_link(Hosts, RequiredAcks, AckTimeout, ClientId, []).
+%%%_* APIs =====================================================================
 
--spec start_link([brod:host()], integer(), integer(), client_id(), [term()]) ->
-                    {ok, pid()} | {error, any()}.
-start_link(Hosts, RequiredAcks, AckTimeout, ClientId, Debug) ->
-  Args = [Hosts, RequiredAcks, AckTimeout, ClientId, Debug],
-  gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
+%% @doc Start (link) a partition producer.
+%% Possible configs:
+%%   required_acks (optional, default = -1):
+%%     How many acknowledgements the kafka broker should receive from the
+%%     clustered replicas before acking producer.
+%%       0: the broker will not send any response
+%%          (this is the only case where the broker will not reply to a request)
+%%       1: The leader will wait the data is written to the local log before
+%%          sending a response.
+%%      -1: If it is -1 the broker will block until the message is committed by
+%%          all in sync replicas before acking.
+%%   ack_timeout (optional, default = 1000 ms):
+%%     Maximum time in milliseconds the broker can await the receipt of the
+%%     number of acknowledgements in RequiredAcks. The timeout is not an exact
+%%     limit on the request time for a few reasons: (1) it does not include
+%%     network latency, (2) the timer begins at the beginning of the processing
+%%     of this request so if many requests are queued due to broker overload
+%%     that wait time will not be included, (3) kafka leader will not terminate
+%%     a local write so if the local write time exceeds this timeout it will
+%%     not be respected.
+%%   partition_buffer_limit(optional, default = 256):
+%%     How many requests (per-partition) can be buffered without blocking the
+%%     caller. The callers are released (by receiving the
+%%     'brod_produce_req_buffered' reply) once the request is taken into buffer
+%%     or when the request has been put on wire, then the caller may expect
+%%     a reply 'brod_produce_req_acked' if the request is accepted by kafka
+%%   partition_onwire_limit(optional, default = 1):
+%%     How many message sets (per-partition) can be sent to kafka broker
+%%     asynchronously before receiving ACKs from broker.
+%%     NOTE: setting a number greater than 1 may cause messages being persisted
+%%           in an order different from the order they were produced.
+%%   max_batch_size (in bytes, optional, default = 1M):
+%%     In case callers are producing faster than brokers can handle (or
+%%     congestion on wire), try to accumulate small requests into batches
+%%     as much as possible but not exceeding max_batch_size
+%%   max_retries (optional, default = 3):
+%%     If {max_retries, N} is given, the producer retry produce request for
+%%     N times before crashing in case of failures like socket being shut down
+%%     or exceptions received in produce response from kafka.
+%%     The special value N = -1 means 'retry indefinitely'
+%%   retry_backoff_ms (optional, default = 500)
+%%     Time in milli-seconds to sleep before retry the failed produce request.
+%% @end
+-spec start_link(pid(), topic(), partition(), producer_config()) ->
+        {ok, pid()}.
+start_link(ClientPid, Topic, Partition, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
--spec stop(pid()) -> ok | {error, any()}.
-stop(Pid) ->
-  gen_server:call(Pid, stop, infinity).
+%% @doc Produce a message to partition asynchronizely.
+%% The call is blocked until the request has been buffered in producer worker
+%% The function returns a call reference of type brod_call_ref() to the
+%% caller so the caller can used it to expect (match) a brod_produce_req_acked
+%% message after the produce request has been acked by configured number of
+%% replicas in kafka cluster.
+%% @end
+-spec produce(pid(), binary(), binary()) ->
+        {ok, brod_call_ref()} | {error, any()}.
+produce(Pid, Key, Value) ->
+  CallRef = #brod_call_ref{ caller = self()
+                          , callee = Pid
+                          , ref    = make_ref()
+                          },
+  ok = gen_server:cast(Pid, {produce, CallRef, Key, Value}),
+  ExpectedReply = #brod_produce_reply{ call_ref = CallRef
+                                     , result   = brod_produce_req_buffered
+                                     },
+  %% Wait until the request is buffered
+  case sync_produce_request(ExpectedReply) of
+    ok              -> {ok, CallRef};
+    {error, Reason} -> {error, Reason}
+  end.
 
--spec produce(pid(), binary(), integer(), [{binary(), binary()}]) ->
-                 {ok, reference()}.
-produce(Pid, Topic, Partition, KVList) ->
-  Sender = self(),
-  Ref = erlang:make_ref(),
-  gen_server:call(Pid, {produce, Sender, Ref, Topic, Partition, KVList},
-                  infinity).
+%% @doc Block calling process until it receives ExpectedReply.
+%%      The caller pid of this function must be the caller of produce/3
+%%      in which the call reference was created.
+%% @end
+sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
+  #brod_call_ref{ caller = Caller
+                , callee = Callee
+                } = CallRef,
+  Caller = self(), %% assert
+  Mref = erlang:monitor(process, Callee),
+  receive
+    ExpectedReply ->
+      erlang:demonitor(Mref, [flush]),
+      ok;
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}}
+  end.
 
--spec debug(pid(), print | string() | none) -> ok.
-%% @doc Enable debugging on producer and its connection to a broker
-%%      debug(Pid, pring) prints debug info on stdout
-%%      debug(Pid, File) prints debug info into a File
-debug(Pid, print) ->
-  do_debug(Pid, {trace, true}),
-  do_debug(Pid, {log, print});
-debug(Pid, File) when is_list(File) ->
-  do_debug(Pid, {trace, true}),
-  do_debug(Pid, {log_to_file, File}).
+%%%_* gen_server callbacks =====================================================
 
--spec no_debug(pid()) -> ok.
-%% @doc Disable debugging
-no_debug(Pid) ->
-  do_debug(Pid, no_debug).
+init({ClientPid, Topic, Partition, Config}) ->
+  BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
+  OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
+  MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
+  RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
+  AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
+  MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
+  RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
 
--spec get_sockets(pid()) -> {ok, [#socket{}]}.
-get_sockets(Pid) ->
-  gen_server:call(Pid, get_sockets, infinity).
+  SendFun =
+    fun(SockPid, KafkaKvList) ->
+        ProduceRequest = kpro:produce_request(Topic, Partition, KafkaKvList,
+                                              RequiredAcks, AckTimeout),
+        case sock_send(SockPid, ProduceRequest) of
+          ok              -> ok;
+          {ok, CorrId}    -> {ok, CorrId};
+          {error, Reason} -> {error, Reason}
+        end
+    end,
+  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
+                                    MaxBatchSize, MaxRetries, SendFun),
 
-%%%_* gen_server callbacks -----------------------------------------------------
-init([Hosts, RequiredAcks, AckTimeout, ClientId, Debug]) ->
-  erlang:process_flag(trap_exit, true),
-  {ok, #state{ hosts       = Hosts
-             , debug       = Debug
-             , acks        = RequiredAcks
-             , ack_timeout = AckTimeout
-             , client_id   = ensure_binary(ClientId)
-             }}.
+  State0 = #state{ client_pid       = ClientPid
+                 , topic            = Topic
+                 , partition        = Partition
+                 , buffer           = Buffer
+                 , retry_backoff_ms = RetryBackoffMs
+                 },
 
-handle_call(stop, _From, State) ->
-  {stop, normal, ok, State};
-handle_call(get_sockets, _From, State) ->
-  {reply, {ok, State#state.sockets}, State};
-handle_call({produce, Sender, Ref, Topic, Partition, KVList}, _From, State0) ->
-  case handle_produce(Sender, Ref, Topic, Partition, KVList, State0) of
-    {ok, Leader, State1} ->
-      {ok, State} = maybe_send(Leader, State1),
-      {reply, {ok, Ref}, State};
-    {error, Error} ->
-      {reply, {error, Error}, State0}
-  end;
-handle_call(Request, _From, State) ->
-  {reply, {error, {unsupported_call, Request}}, State}.
+  State = case init_socket(State0) of
+            {ok, NewState} ->
+              NewState;
+            {error, Error} ->
+              {ok, NewState} = schedule_retry(State0, Error),
+              NewState
+          end,
+  {ok, State}.
 
-handle_cast(_Msg, State) ->
-  {noreply, State}.
-
-handle_info({msg, Leader, CorrId, #produce_response{} = R}, State0) ->
-  Errors = get_error_codes(R#produce_response.topics),
-  case handle_produce_response(Leader, CorrId, Errors, State0) of
-    {ok, State} ->
-      {noreply, State};
-    {error, Reason} ->
-      %% Errors found in produce response, terminate myself.
-      %% In a nicer way, it should recognize at least error code
-      %% ?EC_NOT_LEADER_FOR_PARTITION, then try to connect to the
-      %% new leader (if not yet connected) and migrate data buffer
-      %% and pending list from the old leader to the new leader.
-      %% We can not do this now because the payload is not kept in
-      %% the pending list for resend, there is no better solution
-      %% than crash myself and hope the brod clients would (and they
-      %% should) retry after restart.
-      {stop, Reason, State0}
-  end;
-handle_info({'EXIT', Pid, Reason}, State) ->
-  Sockets = lists:keydelete(Pid, #socket.pid, State#state.sockets),
-  %% Shutdown because cluster has elected other leaders for
-  %% every topic/partition most likely.
-  %% Users will have to resend outstanding messages
-  {stop, {socket_down, Reason}, State#state{sockets = Sockets}};
+handle_info(?RETRY_MSG, State0) ->
+  State1 = State0#state{retry_tref = ?undef},
+  {ok, State} =
+    case init_socket(State1) of
+      {ok, State2}   -> maybe_produce(State2);
+      {error, Error} -> schedule_retry(State1, Error)
+    end,
+  {noreply, State};
+handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
+            #state{sock_pid = Pid} = State) ->
+  {ok, NewState} = schedule_retry(State, Reason),
+  {noreply, NewState#state{sock_pid = ?undef}};
+handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
+            #state{ sock_pid = Pid
+                  , buffer   = Buffer
+                  } = State) ->
+  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
+  #kpro_ProduceResponseTopic{ topicName                  = Topic
+                            , produceResponsePartition_L = [ProduceOffset]
+                            } = ProduceTopic,
+  #kpro_ProduceResponsePartition{ partition  = Partition
+                                , errorCode = ErrorCode
+                                , offset     = Offset
+                                } = ProduceOffset,
+  Topic = State#state.topic, %% assert
+  Partition = State#state.partition, %% assert
+  {ok, NewState} =
+    case kpro_ErrorCode:is_error(ErrorCode) of
+      true ->
+        error_logger:error_msg(
+          "Error in produce response\n"
+          "Topic: ~s\n"
+          "Partition: ~B\n"
+          "Offset: ~B\n"
+          "Error: ~p",
+          [Topic, Partition, Offset, ErrorCode]),
+        Error = {produce_response_error, Topic, Partition,
+                 Offset, ErrorCode},
+        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
+        case brod_producer_buffer:nack(Buffer, CorrId, Error) of
+          {ok, NewBuffer}  -> schedule_retry(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end;
+      false ->
+        case brod_producer_buffer:ack(Buffer, CorrId) of
+          {ok, NewBuffer}  -> maybe_produce(State#state{buffer = NewBuffer});
+          {error, ignored} -> maybe_produce(State)
+        end
+    end,
+  {noreply, NewState};
 handle_info(_Info, State) ->
   {noreply, State}.
 
-terminate(_Reason, State) ->
-  F = fun(#socket{pid = Pid}) -> brod_sock:stop(Pid) end,
-  lists:foreach(F, State#state.sockets).
+handle_call(stop, _From, State) ->
+  {stop, normal, ok, State};
+handle_call(_Call, _From, State) ->
+  {reply, {error, {unsupported_call, _Call}}, State}.
+
+handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
+  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  State1 = State#state{buffer = NewBuffer},
+  {ok, NewState} = maybe_produce(State1),
+  {noreply, NewState};
+handle_cast(_Cast, State) ->
+  {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-format_status(_Opt, [_PDict, #state{ data_buffer    = DataBuffer
-                                   , senders_buffer = SendersBuffer
-                                   } = State0]) ->
-  State1 = State0#state{ data_buffer    = fmt_data_buffer(DataBuffer)
-                       , senders_buffer = fmt_senders_buffer(SendersBuffer)
-                       },
-  State = lists:zip(record_info(fields, state), tl(tuple_to_list(State1))),
-  [{data, [{"State", State}]}].
+terminate(_Reason, _State) ->
+  ok.
 
-%%%_* Internal functions -------------------------------------------------------
+%%%_* Internal Functions =======================================================
 
-%% @private Report only the size of the pending data buffer for each leader.
--spec fmt_data_buffer(data_buffer()) ->
-        [{leader(), [{topic(), {size, integer()}}]}].
-fmt_data_buffer(Buffer) ->
-  [{Leader, [{Topic, {size, dict:size(Dict)}} || {Topic, Dict} <- Topics]}
-   || {Leader, Topics} <- Buffer].
-
-%% @private Report only the number of the pending requests in sender's buffer.
--spec fmt_senders_buffer(senders_buffer()) ->
-        [{leader(), {requests, integer()}}].
-fmt_senders_buffer(Dict) ->
-  [{Leader, {requests, length(Reqs)}} || {Leader, Reqs} <- dict:to_list(Dict)].
-
--spec handle_produce_response(pid(), corr_id(), [produce_error()], #state{}) ->
-        {ok, #state{}} | {error, any()}.
-handle_produce_response(Leader, CorrId, [], State0) ->
-  {value, {_, {CorrId, SendersList}}, Pending} =
-    lists:keytake(Leader, 1, State0#state.pending),
-  lists:foreach(fun({Sender, Ref}) ->
-                  Sender ! {{Ref, self()}, ack}
-                end, SendersList),
-  maybe_send(Leader, State0#state{pending = Pending});
-handle_produce_response(_Leader, _CorrId, Errors, _State0) ->
-  {error, Errors}.
-
-%% @private Flatten the per-topic-partition error codes in produce result.
--spec get_error_codes([#produce_topic{}]) -> [produce_error()].
-get_error_codes(Topics) ->
-  lists:reverse(
-    lists:foldl(
-      fun(#produce_topic{offsets = Offsets}, TopicAcc) ->
-        lists:foldl(
-          fun(#produce_offset{partition  = Partition,
-                              error_code = ErrorCode,
-                              offset     = Offset }, OffsetAcc) ->
-            case brod_kafka:is_error(ErrorCode) of
-              true  -> [{Partition, Offset, ErrorCode} | OffsetAcc];
-              false -> OffsetAcc
-            end
-          end, TopicAcc, Offsets)
-      end, [], Topics)).
-
-handle_produce(Sender, Ref, Topic, Partition, KVList, State0) ->
-  case get_leader(Topic, Partition, State0) of
-    {ok, Leader, State1} ->
-      DataBuffer0 = State1#state.data_buffer,
-      LeaderBuffer0 = get_leader_buffer(Leader, DataBuffer0),
-      TopicBuffer0 = get_topic_buffer(Topic, LeaderBuffer0),
-      TopicBuffer = dict:append_list(Partition, KVList, TopicBuffer0),
-      LeaderBuffer = store_topic_buffer(Topic, LeaderBuffer0, TopicBuffer),
-      DataBuffer = store_leader_buffer(Leader, DataBuffer0, LeaderBuffer),
-      SendersBuffer = dict:append(Leader, {Sender, Ref},
-                                  State1#state.senders_buffer),
-      State = State1#state{ data_buffer    = DataBuffer
-                          , senders_buffer = SendersBuffer},
-      {ok, Leader, State};
+init_socket(#state{ client_pid = ClientPid
+                  , sock_mref  = OldSockMref
+                  , topic      = Topic
+                  , partition  = Partition
+                  } = State) ->
+  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, SockPid} ->
+      ok = maybe_demonitor(OldSockMref),
+      SockMref = erlang:monitor(process, SockPid),
+      %% 2. Register self() to client.
+      ok = brod_client:register_producer(ClientPid, Topic, Partition),
+      %% 3. Update state.
+      {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
     {error, Error} ->
       {error, Error}
   end.
 
-get_leader(Topic, Partition, State) ->
-  case lists:keyfind({Topic, Partition}, 1, State#state.leaders) of
-    {_, Leader} ->
-      {ok, Leader, State};
-    false ->
-      connect(Topic, Partition, State)
+maybe_produce(#state{buffer = Buffer0, sock_pid = SockPid} = State) ->
+  case brod_producer_buffer:maybe_send(Buffer0, SockPid) of
+    {ok, Buffer}    -> {ok, State#state{buffer = Buffer}};
+    {retry, Buffer} -> schedule_retry(State#state{buffer = Buffer})
   end.
 
-connect(Topic, Partition, #state{client_id = ClientId, debug = Dbg} = State) ->
-  case fetch_metadata(Topic, Partition, State) of
-    {ok, Leader, LeaderPartitions} ->
-      #broker_metadata{host = Host, port = Port, node_id = LeaderId} = Leader,
-      {ok, Pid} = brod_sock:start_link(self(), Host, Port, ClientId, Dbg),
-      Socket = #socket{pid = Pid, host = Host, port = Port, node_id = LeaderId},
-      Sockets = [Socket | State#state.sockets],
-      NewLeader = lists:map(fun({T, P}) -> {{T, P}, Pid} end, LeaderPartitions),
-      Leaders = lists:append(NewLeader, State#state.leaders),
-      {ok, Pid, State#state{sockets = Sockets, leaders = Leaders}};
-    {error, Reason} ->
-      {error, Reason}
-  end.
-
--spec fetch_metadata(topic(), partition(), #state{}) ->
-        {ok, #broker_metadata{}, [{topic(), partition()}]} | {error, any()}.
-fetch_metadata(Topic, Partition, State) ->
-  {ok, Metadata} = brod_utils:get_metadata(State#state.hosts),
-  #metadata_response{brokers = Brokers, topics = Topics} = Metadata,
-  case lists:keyfind(Topic, #topic_metadata.name, Topics) of
-    false ->
-      {error, {unknown_topic, Topic}};
-    #topic_metadata{partitions = Partitions} ->
-      case lists:keyfind(Partition, #partition_metadata.id, Partitions) of
-        false ->
-          {error, {unknown_partition, Topic, Partition}};
-        #partition_metadata{leader_id = LeaderId} ->
-          Leader = lists:keyfind(LeaderId, #broker_metadata.node_id, Brokers),
-          LeaderPartitions =
-            [{T, P} || #topic_metadata{name = T, partitions = Ps} <- Topics,
-                       #partition_metadata{leader_id = Lid, id = P} <- Ps,
-                       Lid =:= LeaderId],
-          {ok, Leader, LeaderPartitions}
-      end
-  end.
-
-maybe_send(Leader, State) ->
-  case { get_leader_buffer(Leader, State#state.data_buffer)
-       , lists:keyfind(Leader, 1, State#state.pending)} of
-    {[], _} -> % nothing to send right now
-      {ok, State};
-    {LeaderBuffer, false} -> % no outstanding messages
-      Produce = #produce_request{ acks    = State#state.acks
-                                , timeout = State#state.ack_timeout
-                                , data    = LeaderBuffer},
-      {ok, CorrId} = brod_sock:send(Leader, Produce),
-      DataBuffer = lists:keydelete(Leader, 1, State#state.data_buffer),
-      SendersList = dict:fetch(Leader, State#state.senders_buffer),
-      SendersBuffer = dict:erase(Leader, State#state.senders_buffer),
-      Pending = [{Leader, {CorrId, SendersList}} | State#state.pending],
-      {ok, State#state{ data_buffer    = DataBuffer
-                      , senders_buffer = SendersBuffer
-                      , pending        = Pending}};
-    {_, _} -> % waiting for ack
-      {ok, State}
-  end.
-
-get_leader_buffer(Leader, DataBuffer) ->
-  case lists:keyfind(Leader, 1, DataBuffer) of
-    {_, LeaderBuffer} -> LeaderBuffer;
-    false             -> []
-  end.
-
-store_leader_buffer(Leader, DataBuffer, LeaderBuffer) ->
-  lists:keystore(Leader, 1, DataBuffer, {Leader, LeaderBuffer}).
-
-get_topic_buffer(Topic, LeaderBuffer) ->
-  case lists:keyfind(Topic, 1, LeaderBuffer) of
-    {_, TopicBuffer} -> TopicBuffer;
-    false            -> dict:new()
-  end.
-
-store_topic_buffer(Topic, LeaderBuffer, TopicBuffer) ->
-  lists:keystore(Topic, 1, LeaderBuffer, {Topic, TopicBuffer}).
-
-do_debug(Pid, Debug) ->
-  {ok, Sockets} = get_sockets(Pid),
-  lists:foreach(
-    fun(#socket{pid = SocketPid}) ->
-        {ok, _} = gen:call(SocketPid, system, {debug, Debug}, infinity)
-    end, Sockets),
-  {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
+maybe_demonitor(?undef) ->
+  ok;
+maybe_demonitor(Mref) ->
+  true = erlang:demonitor(Mref, [flush]),
   ok.
 
-ensure_binary(A) when is_atom(A)   -> ensure_binary(atom_to_list(A));
-ensure_binary(L) when is_list(L)   -> iolist_to_binary(L);
-ensure_binary(B) when is_binary(B) -> B.
+schedule_retry(#state{buffer = Buffer} = State, Reason) ->
+  {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
+  schedule_retry(State#state{buffer = NewBuffer}).
 
-%% Tests -----------------------------------------------------------------------
--include_lib("eunit/include/eunit.hrl").
+schedule_retry(#state{retry_tref = ?undef} = State) ->
+  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, ?RETRY_MSG),
+  {ok, State#state{retry_tref = TRef}};
+schedule_retry(State) ->
+  %% retry timer has been already activated
+  {ok, State}.
 
--ifdef(TEST).
+is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
+                      EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
+                      EC =:= ?EC_LEADER_NOT_AVAILABLE;
+                      EC =:= ?EC_NOT_LEADER_FOR_PARTITION;
+                      EC =:= ?EC_REQUEST_TIMED_OUT;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS;
+                      EC =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND ->
+  true;
+is_retriable(_) ->
+  false.
 
-mock_brod_sock() ->
-  meck:new(brod_sock, [passthrough]),
-  meck:expect(brod_sock, start_link,
-              fun(_Parent, "h1", _Port, _ClientId, _Debug) -> {ok, p1};
-                 (_Parent, "h2", _Port, _ClientId, _Debug) -> {ok, p2};
-                 (_Parent, "h3", _Port, _ClientId, _Debug) -> {ok, p3}
-              end),
+sock_send(?undef, _KafkaReq) -> {error, sock_down};
+sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
 
-  meck:expect(brod_sock, start,
-              fun(_Parent, "h1", _Port, _ClientId, _Debug) -> {ok, p1};
-                 (_Parent, "h2", _Port, _ClientId, _Debug) -> {ok, p2};
-                 (_Parent, "h3", _Port, _ClientId, _Debug) -> {ok, p3}
-              end),
-
-  meck:expect(brod_sock, stop, 1, ok),
-  meck:expect(brod_sock, send, 2, {ok, 1}),
-
-  meck:expect(brod_sock, send_sync,
-              fun(p1, #metadata_request{}, _Timeout) ->
-                  {ok, #metadata_response{brokers = [], topics = []}};
-                 (p2, #metadata_request{}, _Timeout) ->
-                  Topics = [#topic_metadata{name = <<"t">>, partitions = []}],
-                  {ok, #metadata_response{brokers = [], topics = Topics}};
-                 (p3, #metadata_request{}, _Timeout) ->
-                  Brokers = [#broker_metadata{ node_id = 1,
-                                               host = "h3",
-                                               port = 2181}],
-                  Partitions = [#partition_metadata{id = 0, leader_id = 1}],
-                  Topics = [#topic_metadata{ name = <<"t">>,
-                                             partitions = Partitions}],
-                  {ok, #metadata_response{brokers = Brokers, topics = Topics}}
-              end),
-  ok.
-
-validate_mock() ->
-  true = meck:validate(brod_sock),
-  ok   = meck:unload(brod_sock).
-
-connect_test() ->
-  ok = mock_brod_sock(),
-  Topic = <<"t">>,
-  Partition = 0,
-  H1 = {"h1", 2181}, H2 = {"h2", 2181}, H3 = {"h3", 2181},
-  State0 = #state{hosts = [H1]},
-  Error0 = {error, {unknown_topic, Topic}},
-  ?assertEqual(Error0, connect(Topic, Partition, State0)),
-  State1 = #state{hosts = [H2]},
-  Error1 = {error, {unknown_partition, Topic, Partition}},
-  ?assertEqual(Error1, connect(Topic, Partition, State1)),
-  State2 = #state{hosts = [H3]},
-  Socket = #socket{pid = p3, host = "h3", port = 2181, node_id = 1},
-  Leader = {{Topic, Partition}, p3},
-  State3 = State2#state{ sockets = [Socket]
-                       , leaders = [Leader]},
-  ?assertEqual({ok, p3, State3}, connect(Topic, Partition, State2)),
-  ok = validate_mock().
-
-maybe_send_test() ->
-  ok = mock_brod_sock(),
-  State0 = #state{data_buffer = [], pending = []},
-  L1 = erlang:list_to_pid("<0.0.1>"),
-  ?assertEqual({ok, State0}, maybe_send(L1, State0)),
-  State1 = State0#state{pending = [{L1, 2}]},
-  ?assertEqual({ok, State1}, maybe_send(L1, State1)),
-  L2 = erlang:list_to_pid("<0.0.2>"),
-  SendersBuffer = dict:store(L2, [d], dict:store(L1, [a, b, c], dict:new())),
-  State2 = State0#state{ data_buffer = [{L1, foo}, {L2, bar}]
-                       , senders_buffer = SendersBuffer},
-  ExpectedState = #state{ data_buffer = [{L2, bar}]
-                        , senders_buffer = dict:erase(L1, SendersBuffer)
-                        , pending = [{L1, {1, [a, b, c]}}]},
-  ?assertEqual({ok, ExpectedState}, maybe_send(L1, State2)),
-  ok = validate_mock().
-
-handle_produce_test() ->
-  ok = mock_brod_sock(),
-  T0 = <<"t">>,
-  H1 = {"h1", 2181},
-  State0 = #state{hosts = [H1]},
-  Error0 = {error, {unknown_topic, T0}},
-  ?assertEqual(Error0, handle_produce(pid, ref, T0, p0, [{k0, v0}], State0)),
-
-  S1 = s1,
-  R1 = r1,
-  L1 = 1,
-  T1 = t1,
-  P1 = p1,
-  K1 = k1,
-  V1 = v1,
-  Leaders0 = [{{T1, P1}, L1}],
-  SendersBuffer1 = dict:store(L1, [{s1, r1}], dict:new()),
-  TopicBuffer1 = dict:store(P1, [{K1, V1}], dict:new()),
-  DataBuffer1 = [{L1, [{T1, TopicBuffer1}]}],
-  State1 = #state{leaders = Leaders0},
-  {ok, L1, State2} = handle_produce(S1, R1, T1, P1, [{K1, V1}], State1),
-  ?assertEqual(Leaders0, State2#state.leaders),
-  ?assertEqual(SendersBuffer1, State2#state.senders_buffer),
-  ?assertEqual(DataBuffer1, State2#state.data_buffer),
-
-  K2 = k2,
-  V2 = v2,
-  TopicBuffer2 = dict:append(P1, {K2, V2}, TopicBuffer1),
-  DataBuffer2 = [{L1, [{T1, TopicBuffer2}]}],
-  SendersBuffer2 = dict:append(L1, {S1, R1}, State2#state.senders_buffer),
-  {ok, L1, State3} = handle_produce(S1, R1, T1, P1, [{K2, V2}], State2),
-  ?assertEqual(Leaders0, State2#state.leaders),
-  ?assertEqual(SendersBuffer2, State3#state.senders_buffer),
-  ?assertEqual(DataBuffer2, State3#state.data_buffer),
-
-  S2 = s2,
-  R2 = r2,
-  L2 = 2,
-  P2 = p2,
-  K3 = k3,
-  V3 = v3,
-  SendersBuffer3 = dict:append(L2, {S2, R2}, State3#state.senders_buffer),
-  Leaders1 = [{{T1, P2}, L2} | Leaders0],
-  State4 = State3#state{leaders = Leaders1},
-  TopicBuffer3 = dict:append(P2, {K3, V3}, dict:new()),
-  %% ++ due to lists:keystore/4 behaviour
-  DataBuffer3 = State4#state.data_buffer ++ [{L2, [{T1, TopicBuffer3}]}],
-  {ok, L2, State5} = handle_produce(S2, R2, T1, P2, [{K3, V3}], State4),
-  ?assertEqual(Leaders1, State5#state.leaders),
-  ?assertEqual(SendersBuffer3, State5#state.senders_buffer),
-  ?assertEqual(DataBuffer3, State5#state.data_buffer),
-
-  T2 = t2,
-  S3 = s3,
-  R3 = r3,
-  K4 = k4,
-  V4 = v4,
-  SendersBuffer5 = dict:append(L1, {S3, R3}, State5#state.senders_buffer),
-  Leaders2 = [{{T2, P1}, L1} | Leaders1],
-  State6 = State5#state{leaders = Leaders2},
-  Topic2Buffer = dict:append(P1, {K4, V4}, dict:new()),
-  {value, {L1, [{T1, Topic1Buffer}]}, DataBuffer4} =
-    lists:keytake(L1, 1, DataBuffer3),
-  DataBuffer5 = [{L1, [{T1, Topic1Buffer}, {T2, Topic2Buffer}]} |
-                DataBuffer4],
-  {ok, L1, State7} = handle_produce(S3, R3, T2, P1, [{K4, V4}], State6),
-  ?assertEqual(Leaders2, State7#state.leaders),
-  ?assertEqual(SendersBuffer5, State7#state.senders_buffer),
-  ?assertEqual(DataBuffer5, State7#state.data_buffer),
-  ok = validate_mock().
-
--endif. % TEST
-
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:

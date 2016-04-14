@@ -23,24 +23,29 @@
 -module(brod_utils).
 
 %% Exports
--export([ fetch_response_to_message_set/1
+-export([ find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
+        , is_normal_reason/1
+        , is_pid_alive/1
+        , log/3
+        , os_time_utc_str/0
+        , shutdown_pid/1
         , try_connect/1
         ]).
 
-%%%_* Includes -----------------------------------------------------------------
 -include("brod_int.hrl").
 
-%%%_* Code ---------------------------------------------------------------------
+%%%_* APIs =====================================================================
+
 %% try to connect to any of bootstrapped nodes and fetch metadata
 get_metadata(Hosts) ->
   get_metadata(Hosts, []).
 
 get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
-  Request = #metadata_request{topics = Topics},
-  Response = brod_sock:send_sync(Pid, Request, 10000),
+  Request = #kpro_MetadataRequest{topicName_L = Topics},
+  Response = brod_sock:request_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
 
@@ -53,21 +58,87 @@ try_connect([{Host, Port} | Hosts], _) ->
   %% Do not 'start_link' to avoid unexpected 'EXIT' message.
   %% Should be ok since we're using a single blocking request which
   %% monitors the process anyway.
-  case brod_sock:start(self(), Host, Port, ?DEFAULT_CLIENT_ID, []) of
+  case brod_sock:start(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []) of
     {ok, Pid} -> {ok, Pid};
     Error     -> try_connect(Hosts, Error)
   end.
 
-fetch_response_to_message_set(#fetch_response{topics = [TopicFetchData]}) ->
-  #topic_fetch_data{topic = Topic, partitions = [PM]} = TopicFetchData,
-  #partition_messages{ partition = Partition
-                     , high_wm_offset = HighWmOffset
-                     , messages = Messages} = PM,
-  #message_set{ topic = Topic
-              , partition = Partition
-              , high_wm_offset = HighWmOffset
-              , messages = Messages}.
+%% @doc Check terminate reason for a gen_server implementation
+is_normal_reason(normal)        -> true;
+is_normal_reason(shutdown)      -> true;
+is_normal_reason({shutdown, _}) -> true;
+is_normal_reason(_)             -> false.
 
+is_pid_alive(Pid) ->
+  is_pid(Pid) andalso is_process_alive(Pid).
+
+shutdown_pid(Pid) ->
+  case is_pid_alive(Pid) of
+    true  -> exit(Pid, shutdown);
+    false -> ok
+  end.
+
+%% @doc Find leader broker ID for the given topic-partiton in
+%% the metadata response received from socket.
+%% @end
+-spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
+        {ok, endpoint()} | {error, any()}.
+find_leader_in_metadata(Metadata, Topic, Partition) ->
+  try
+    {ok, do_find_leader_in_metadata(Metadata, Topic, Partition)}
+  catch throw : Reason ->
+    {error, Reason}
+  end.
+
+-spec os_time_utc_str() -> string().
+os_time_utc_str() ->
+  Ts = os:timestamp(),
+  {{Y,M,D}, {H,Min,Sec}} = calendar:now_to_universal_time(Ts),
+  {_, _, Micro} = Ts,
+  S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
+                    [Y, M, D, H, Min, Sec, Micro]),
+  lists:flatten(S).
+
+%% @doc simple wrapper around error_logger.
+%% NOTE: keep making MFA calls to error_logger to
+%%       1. allow logging libraries such as larger parse_transform
+%%       2. be more xref friendly
+%% @end
+-spec log(info | warning | error, string(), [any()]) -> ok.
+log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
+log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
+log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
+
+%%%_* Internal Functions =======================================================
+
+-spec do_find_leader_in_metadata(kpro_MetadataResponse(),
+                                 topic(), partition()) ->
+                                    endpoint() | no_return().
+do_find_leader_in_metadata(Metadata, Topic, Partition) ->
+  #kpro_MetadataResponse{ broker_L        = Brokers
+                        , topicMetadata_L = [TopicMetadata]
+                        } = Metadata,
+  #kpro_TopicMetadata{ errorCode           = TopicEC
+                     , partitionMetadata_L = Partitions
+                     } = TopicMetadata,
+  kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
+  #kpro_PartitionMetadata{leader = Id} =
+    lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
+  Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),
+  Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
+  Host = Broker#kpro_Broker.host,
+  Port = Broker#kpro_Broker.port,
+  {binary_to_list(Host), Port}.
+
+%%%_* Tests ====================================================================
+
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+-endif. % TEST
+
+%%%_* Emacs ====================================================================
 %%% Local Variables:
+%%% allout-layout: t
 %%% erlang-indent-level: 2
-%%% End:

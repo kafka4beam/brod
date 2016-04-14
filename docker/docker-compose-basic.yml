@@ -1,0 +1,13 @@
+version: '2'
+
+services:
+  kafka:
+    build:
+      context: .
+  zookeeper:
+    image: docker_kafka
+    ports:
+      - "2181:2181"
+    container_name: zookeeper
+    command: run zookeeper
+
