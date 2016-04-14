@@ -1,9 +1,12 @@
 %% -*- mode:erlang -*-
 {application,brod,
- [{description,"Kafka client"},
+ [{description,"Apache Kafka Erlang client library"},
   {vsn,"2.0.0"},
   {registered,[]},
   {applications,[kernel,stdlib]},
   {env,[]},
   {mod, {brod, []}},
-  {modules,[]}]}.
+  {modules,[]},
+  {maintainers, ["Ivan Dyachkov", "Shi Zaiming"]},
+  {licenses, ["Apache License 2.0"]},
+  {links, [{"Github", "https://github.com/klarna/brod"}]}]}.
