@@ -9,4 +9,6 @@
   {modules,[]},
   {maintainers, ["Ivan Dyachkov", "Shi Zaiming"]},
   {licenses, ["Apache License 2.0"]},
-  {links, [{"Github", "https://github.com/klarna/brod"}]}]}.
+  {links, [{"Github", "https://github.com/klarna/brod"}]},
+  {files, ["src", "include", "scripts", "docker", "rebar.config", "rebar.lock", "README.md","LICENSE", "NOTICE", "AUTHORS", "Makefile", "erlang.mk", "sys.config.example"]}]}.
+
