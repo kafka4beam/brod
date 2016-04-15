@@ -2,7 +2,7 @@
 
 Brod is an erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
 
-[![Build Status](https://travis-ci.org/klarna/brod.svg?branch=2.0-dev)](https://travis-ci.org/klarna/brod)
+[![Build Status](https://travis-ci.org/klarna/brod.svg?branch=master)](https://travis-ci.org/klarna/brod)
 
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 
