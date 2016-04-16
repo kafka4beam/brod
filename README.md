@@ -14,9 +14,9 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Opens max 1 tcp connection to a broker per "brod_client", one can create more clients if needed
 * Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
 * Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
-* Consumer: has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
-* Support for consumer groups with options to have Kafka as offset storage or a custom one
-* Topic subscriber: subscribe on messages from all or selected topic partitions without using consumer groups
+* Simple consumer: The poller, has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
+* Group subscriber: Support for consumer groups with options to have Kafka as offset storage or a custom one
+* Topic subscriber: Subscribe on messages from all or selected topic partitions without using consumer groups
 
 # Missing features
 
@@ -25,7 +25,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Building and testing
 
     make
-    make t
+    make test-env t # requires docker-composer in place
 
 # Quick start
 
@@ -68,7 +68,15 @@ Or the simplest option:
 
 ## Producer
 
-### Start a producer
+### Auto start producer with default producer config
+
+Put below configs to client config in sys.config or app env:
+
+    {auto_start_producers, true}
+    {default_producer_config, []}
+
+
+### Start a producer on demand
 
     brod:start_producer(_Client         = brod_client_1, %% may also be ClientPid,
                         _Topic          = <<"brod-test-topic-1">>,
