@@ -157,7 +157,6 @@ debug(Pid, File) when is_list(File) ->
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
-  self() ! ?INIT_SOCKET,
   MinBytes = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
   MaxBytes = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
   MaxWaitTime =
@@ -167,6 +166,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   PrefetchCount =
     proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
   Offset = proplists:get_value(begin_offset, Config, ?undef),
+  ok = brod_client:register_consumer(ClientPid, Topic, Partition),
   {ok, #state{ client_pid     = ClientPid
              , topic          = Topic
              , partition      = Partition
@@ -180,24 +180,21 @@ init({ClientPid, Topic, Partition, Config}) ->
              , is_suspended   = false
              }}.
 
-handle_info(?INIT_SOCKET,
-            #state{ client_pid = ClientPid
-                  , topic      = Topic
-                  , partition  = Partition
-                  , socket_pid = ?undef
-                  } = State0) ->
-  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
-  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
-    {ok, SocketPid} ->
-      _ = erlang:monitor(process, SocketPid),
-      State1 = State0#state{socket_pid = SocketPid},
-      ok = brod_client:register_consumer(ClientPid, Topic, Partition),
+handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
+  case is_pid(Subscriber) andalso
+       is_process_alive(Subscriber) andalso
+       maybe_init_socket(State0) of
+    false ->
+      %% subscriber not alive
+      {noreply, State0};
+    {ok, State1} ->
       State = maybe_send_fetch_request(State1),
       {noreply, State};
-    {error, _Reason} ->
-      Timeout = ?SOCKET_RETRY_DELAY_MS,
-      erlang:send_after(Timeout, self(), ?INIT_SOCKET),
-      {noreply, State0}
+    {{error, _Reason}, State} ->
+      %% failed when connecting to partition leader
+      %% retry after a delay
+      ok = maybe_send_init_socket(State),
+      {noreply, State}
   end;
 handle_info({msg, _Pid, CorrId, R}, State) ->
   handle_fetch_response(R, CorrId, State);
@@ -214,8 +211,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
-  Timeout = ?SOCKET_RETRY_DELAY_MS,
-  erlang:send_after(Timeout, self(), ?INIT_SOCKET),
+  ok = maybe_send_init_socket(State),
   State1 = State#state{socket_pid = ?undef},
   NewState = reset_buffer(State1),
   {noreply, NewState};
@@ -224,31 +220,17 @@ handle_info(Info, State) ->
                           [?MODULE, self(), Info]),
   {noreply, State}.
 
-handle_call({subscribe, _Pid, _Options}, _From,
-            #state{ socket_pid = ?undef} = State) ->
-  {reply, {error, no_connection}, State};
 handle_call({subscribe, Pid, Options}, _From,
-            #state{ subscriber = Subscriber
-                  , subscriber_mref = OldMref} = State0) ->
-  case Subscriber =:= ?undef orelse
-      not is_process_alive(Subscriber) orelse
-      Subscriber =:= Pid of
+            #state{subscriber = Subscriber} = State0) ->
+  case Subscriber =:= ?undef           orelse %% no old subscriber
+      not is_process_alive(Subscriber) orelse %% old subscirber died
+      Subscriber =:= Pid of                   %% re-subscribe
     true ->
-      case update_options(Options, State0) of
-        {ok, State1} ->
-          %% demonitor in case the same process tries to subscribe again
-          is_reference(OldMref) andalso erlang:demonitor(OldMref, [flush]),
-          Mref = erlang:monitor(process, Pid),
-          State2 = State1#state{ subscriber      = Pid
-                               , subscriber_mref = Mref
-                               },
-          %% always reset buffer to fetch again
-          State3 = reset_buffer(State2),
-          State4 = State3#state{is_suspended = false},
-          State  = maybe_send_fetch_request(State4),
-          {reply, ok, State};
-        {error, Reason} ->
-          {reply, {error, Reason}, State0}
+      case maybe_init_socket(State0) of
+        {ok, State} ->
+          handle_subscribe_call(Pid, Options, State);
+        {{error, Reason}, State} ->
+          {reply, {error, Reason}, State}
       end;
     false ->
       {reply, {error, {already_subscribed_by, Subscriber}}, State0}
@@ -391,6 +373,8 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
     suspend ->
       ok = cast_to_subscriber(Subscriber, Error),
       %% Suspend, no more fetch request until the subscriber re-subscribes
+      error_logger:info_msg("~p ~p subscriber ~p is suspended\nreason:~p",
+                             [?MODULE, self(), Subscriber, ErrorCode]),
       {noreply, State#state{is_suspended = true}};
     restart ->
       ok = cast_to_subscriber(Subscriber, Error),
@@ -420,16 +404,19 @@ maybe_delay_fetch_request(State) ->
   maybe_send_fetch_request(State).
 
 %% @private Send new fetch request if no pending error.
-maybe_send_fetch_request(#state{ subscriber     = Subscriber
-                               , pending_acks   = PendingAcks
+maybe_send_fetch_request(#state{subscriber = ?undef} = State) ->
+  %% no subscriber
+  State;
+maybe_send_fetch_request(#state{socket_pid = ?undef} = State) ->
+  %% no socket
+  State;
+maybe_send_fetch_request(#state{is_suspended = true} = State) ->
+  %% waiting for subscriber to re-subscribe
+  State;
+maybe_send_fetch_request(#state{ pending_acks   = PendingAcks
                                , prefetch_count = PrefetchCount
-                               , socket_pid     = SocketPid
-                               , is_suspended   = IsSuspended
                                } = State) ->
-  case is_pid(SocketPid)  andalso
-       is_pid(Subscriber) andalso
-       not IsSuspended    andalso
-       length(PendingAcks) =< PrefetchCount of
+  case length(PendingAcks) =< PrefetchCount of
     true ->
       case send_fetch_request(State) of
         {ok, CorrId} ->
@@ -456,6 +443,25 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                        State#state.min_bytes,
                        State#state.max_bytes),
   brod_sock:request_async(SocketPid, Request).
+
+handle_subscribe_call(Pid, Options,
+                      #state{subscriber_mref = OldMref} = State0) ->
+  case update_options(Options, State0) of
+    {ok, State1} ->
+      %% demonitor in case the same process tries to subscribe again
+      is_reference(OldMref) andalso erlang:demonitor(OldMref, [flush]),
+      Mref = erlang:monitor(process, Pid),
+      State2 = State1#state{ subscriber      = Pid
+                           , subscriber_mref = Mref
+                           },
+      %% always reset buffer to fetch again
+      State3 = reset_buffer(State2),
+      State4 = State3#state{is_suspended = false},
+      State  = maybe_send_fetch_request(State4),
+      {reply, ok, State};
+    {error, Reason} ->
+      {reply, {error, Reason}, State0}
+  end.
 
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
@@ -498,8 +504,6 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
 resolve_begin_offset(State) ->
   {ok, State}.
 
-fetch_valid_offset(_S, Offset, _T, _P) when Offset >= 0 ->
-  {ok, Offset};
 fetch_valid_offset(SocketPid, Time, Topic, Partition) ->
   Request = kpro:offset_request(Topic, Partition, Time,
                                       _MaxNoOffsets = 1),
@@ -534,6 +538,36 @@ safe_gen_call(Server, Call, Timeout) ->
   catch exit : {noproc, _} ->
     {error, consumer_down}
   end.
+
+%% @private Init payload socket regardless of subscriber state.
+-spec maybe_init_socket(#state{}) ->
+        {ok, #state{}} | {{error, any()}, #state{}}.
+maybe_init_socket(#state{ client_pid = ClientPid
+                        , topic      = Topic
+                        , partition  = Partition
+                        , socket_pid = ?undef
+                        } = State0) ->
+  %% Lookup, or maybe (re-)establish a connection to partition leader
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, SocketPid} ->
+      _ = erlang:monitor(process, SocketPid),
+      State = State0#state{socket_pid = SocketPid},
+      {ok, State};
+    {error, Reason} ->
+      {{error, Reason}, State0}
+  end;
+maybe_init_socket(State) ->
+  {ok, State}.
+
+
+%% @private Send a ?INIT_SOCKET delayed loopback message to re-init socket.
+-spec maybe_send_init_socket(#state{}) -> ok.
+maybe_send_init_socket(#state{subscriber = Subscriber}) ->
+  Timeout = ?SOCKET_RETRY_DELAY_MS,
+  %% re-init payload socket only when subscriber is alive
+  is_pid(Subscriber) andalso is_process_alive(Subscriber) andalso
+    erlang:send_after(Timeout, self(), ?INIT_SOCKET),
+  ok.
 
 %%%_* Tests ====================================================================
 
