@@ -50,22 +50,26 @@
 -include("brod_int.hrl").
 
 -type options() :: consumer_options().
+-type offset_reset_policy() :: reset_by_subscriber
+                             | reset_to_earliest
+                             | reset_to_latest.
 
--record(state, { client_pid        :: pid()
-               , socket_pid        :: pid()
-               , topic             :: binary()
-               , partition         :: integer()
-               , begin_offset      :: integer()
-               , max_wait_time     :: integer()
-               , min_bytes         :: integer()
-               , max_bytes         :: integer()
-               , sleep_timeout     :: integer()
-               , prefetch_count    :: integer()
-               , last_corr_id      :: corr_id()
-               , subscriber        :: ?undef | pid()
-               , subscriber_mref   :: ?undef | reference()
-               , pending_acks = [] :: [offset()]
-               , is_suspended      :: boolean()
+-record(state, { client_pid          :: pid()
+               , socket_pid          :: pid()
+               , topic               :: binary()
+               , partition           :: integer()
+               , begin_offset        :: integer()
+               , max_wait_time       :: integer()
+               , min_bytes           :: integer()
+               , max_bytes           :: integer()
+               , sleep_timeout       :: integer()
+               , prefetch_count      :: integer()
+               , last_corr_id        :: corr_id()
+               , subscriber          :: ?undef | pid()
+               , subscriber_mref     :: ?undef | reference()
+               , pending_acks = []   :: [offset()]
+               , is_suspended        :: boolean()
+               , offset_reset_policy :: offset_reset_policy()
                }).
 
 -define(DEFAULT_BEGIN_OFFSET, -1).
@@ -74,6 +78,7 @@
 -define(DEFAULT_MAX_WAIT_TIME, 10000). % 10 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 1).
+-define(DEFAULT_OFFSET_RESET_POLICY, reset_by_subscriber).
 -define(ERROR_COOLDOWN, 1000).
 -define(SOCKET_RETRY_DELAY_MS, 1000).
 
@@ -107,6 +112,13 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     The window size (number of messages) allowed to fetch-ahead.
 %%  begin_offset (optional, default = -1):
 %%     The offset from which to begin fetch requests.
+%%  offset_reset_policy (optional, default = reset_by_subscriber)
+%%     How to reset begin_offset if OffsetOutOfRange exception is received.
+%%     reset_by_subscriber: consumer is suspended (is_suspended=true in state)
+%%                          and wait for subscriber to re-subscribe with a new
+%%                          'begin_offset' option.
+%%     reset_to_earliest: consume from the earliest offset.
+%%     reset_to_latest: consume from the last available offset.
 %% @end
 -spec start_link(pid(), topic(), partition(),
                  consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
@@ -157,27 +169,29 @@ debug(Pid, File) when is_list(File) ->
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
-  MinBytes = proplists:get_value(min_bytes, Config, ?DEFAULT_MIN_BYTES),
-  MaxBytes = proplists:get_value(max_bytes, Config, ?DEFAULT_MAX_BYTES),
-  MaxWaitTime =
-    proplists:get_value(max_wait_time, Config, ?DEFAULT_MAX_WAIT_TIME),
-  SleepTimeout =
-    proplists:get_value(sleep_timeout, Config, ?DEFAULT_SLEEP_TIMEOUT),
-  PrefetchCount =
-    proplists:get_value(prefetch_count, Config, ?DEFAULT_PREFETCH_COUNT),
-  Offset = proplists:get_value(begin_offset, Config, ?undef),
+  Cfg = fun(Name, Default) ->
+          proplists:get_value(Name, Config, Default)
+        end,
+  MinBytes = Cfg(min_bytes, ?DEFAULT_MIN_BYTES),
+  MaxBytes = Cfg(max_bytes, ?DEFAULT_MAX_BYTES),
+  MaxWaitTime = Cfg(max_wait_time, ?DEFAULT_MAX_WAIT_TIME),
+  SleepTimeout = Cfg(sleep_timeout, ?DEFAULT_SLEEP_TIMEOUT),
+  PrefetchCount = Cfg(prefetch_count, ?DEFAULT_PREFETCH_COUNT),
+  Offset = Cfg(begin_offset, ?undef),
+  OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
   ok = brod_client:register_consumer(ClientPid, Topic, Partition),
-  {ok, #state{ client_pid     = ClientPid
-             , topic          = Topic
-             , partition      = Partition
-             , begin_offset   = Offset
-             , max_wait_time  = MaxWaitTime
-             , min_bytes      = MinBytes
-             , max_bytes      = MaxBytes
-             , sleep_timeout  = SleepTimeout
-             , prefetch_count = PrefetchCount
-             , socket_pid     = ?undef
-             , is_suspended   = false
+  {ok, #state{ client_pid          = ClientPid
+             , topic               = Topic
+             , partition           = Partition
+             , begin_offset        = Offset
+             , max_wait_time       = MaxWaitTime
+             , min_bytes           = MinBytes
+             , max_bytes           = MaxBytes
+             , sleep_timeout       = SleepTimeout
+             , prefetch_count      = PrefetchCount
+             , socket_pid          = ?undef
+             , is_suspended        = false
+             , offset_reset_policy = OffsetResetPolicy
              }}.
 
 handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
@@ -338,7 +352,7 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
 err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
 err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
-err_op(?EC_OFFSET_OUT_OF_RANGE)        -> suspend;
+err_op(?EC_OFFSET_OUT_OF_RANGE)        -> reset_offset;
 err_op(_)                              -> restart.
 
 %% @private Map message to brod's format.
@@ -370,16 +384,35 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       error_logger:error_msg("consumer of topic ~p partition ~p shutdown, "
                              "reason: ~p", [Topic, Partition, ErrorCode]),
       {stop, normal, State};
-    suspend ->
-      ok = cast_to_subscriber(Subscriber, Error),
-      %% Suspend, no more fetch request until the subscriber re-subscribes
-      error_logger:info_msg("~p ~p subscriber ~p is suspended\nreason:~p",
-                             [?MODULE, self(), Subscriber, ErrorCode]),
-      {noreply, State#state{is_suspended = true}};
+    reset_offset ->
+      handle_reset_offset(State, Error);
     restart ->
       ok = cast_to_subscriber(Subscriber, Error),
       {stop, {restart, ErrorCode}, State}
   end.
+
+handle_reset_offset(#state{ subscriber          = Subscriber
+                          , offset_reset_policy = reset_by_subscriber
+                          } = State, Error) ->
+  ok = cast_to_subscriber(Subscriber, Error),
+  %% Suspend, no more fetch request until the subscriber re-subscribes
+  error_logger:info_msg("~p ~p consumer is suspended, "
+                        "waiting for subscriber ~p to resubscribe with "
+                        "new begin_offset", [?MODULE, self(), Subscriber]),
+  {noreply, State#state{is_suspended = true}};
+handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
+  error_logger:info_msg("~p ~p offset out of range, applying reset policy ~p",
+                        [?MODULE, self(), Policy]),
+  BeginOffset = case Policy of
+                  reset_to_earliest -> -2;
+                  reset_to_latest   -> -1
+                end,
+  State1 = State#state{ begin_offset = BeginOffset
+                      , pending_acks = []
+                      },
+  {ok, State2} = resolve_begin_offset(State1),
+  NewState = maybe_send_fetch_request(State2),
+  {noreply, NewState}.
 
 handle_ack([], _Offset) -> [];
 handle_ack([H | Offsets], Offset) ->
@@ -471,14 +504,16 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
                          false -> OldBeginOffset
                        end,
   NewBeginOffset = F(begin_offset, DefaultBeginOffset),
-  State1 =
-    State#state{ begin_offset   = NewBeginOffset
-               , min_bytes      = F(min_bytes, State#state.min_bytes)
-               , max_bytes      = F(max_bytes, State#state.max_bytes)
-               , max_wait_time  = F(max_wait_time, State#state.max_wait_time)
-               , sleep_timeout  = F(sleep_timeout, State#state.sleep_timeout)
-               , prefetch_count = F(prefetch_count, State#state.prefetch_count)
-               },
+  OffsetResetPolicy = F(offset_reset_policy, State#state.offset_reset_policy),
+  State1 = State#state
+    { begin_offset        = NewBeginOffset
+    , min_bytes           = F(min_bytes, State#state.min_bytes)
+    , max_bytes           = F(max_bytes, State#state.max_bytes)
+    , max_wait_time       = F(max_wait_time, State#state.max_wait_time)
+    , sleep_timeout       = F(sleep_timeout, State#state.sleep_timeout)
+    , prefetch_count      = F(prefetch_count, State#state.prefetch_count)
+    , offset_reset_policy = OffsetResetPolicy
+    },
   NewState =
     case NewBeginOffset =/= OldBeginOffset of
       true ->
