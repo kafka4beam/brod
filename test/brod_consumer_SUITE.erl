@@ -38,6 +38,7 @@
         , t_consumer_resubscribe/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
+        , t_offset_reset_policy/1
         ]).
 
 
@@ -307,6 +308,24 @@ t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
     {Consumer, #kafka_message_set{}} ->
       ok
   after 1000 ->
+    ct:fail("timed out receiving kafka message set", [])
+  end.
+
+t_offset_reset_policy(Config) when is_list(Config) ->
+  Client = ?config(client_pid),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key0 = make_unique_key(),
+  %% produce some random data just to make sure the partition is not empty
+  ok = brod:produce_sync(Client, Topic, Partition, Key0, Key0),
+  Options = [{sleep_ms, 0},
+             {begin_offset, 10000000000}, %% make sure it's an unknown offset
+             {offset_reset_policy, reset_to_earliest}],
+  {ok, Consumer} = brod:subscribe(Client, self(), Topic, Partition, Options),
+  receive
+    {Consumer, #kafka_message_set{}} ->
+      ok
+  after 2000 ->
     ct:fail("timed out receiving kafka message set", [])
   end.
 
