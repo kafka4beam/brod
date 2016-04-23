@@ -76,6 +76,8 @@
 -define(CONSUMER(Topic, Partition, Pid),
         {?CONSUMER_KEY(Topic, Partition), Pid}).
 
+-define(UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS, 120).
+
 -type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
                               | ?CONSUMER_KEY(topic(), partition()).
 
@@ -396,7 +398,6 @@ handle_call(get_consumers_sup_pid, _From, State) ->
   {reply, {ok, State#state.consumers_sup}, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   {Result, NewState} = do_get_metadata(Topic, State),
-  ok = maybe_update_metadata_cache(Result, NewState),
   {reply, Result, NewState};
 handle_call({get_connection, Host, Port}, _From, State) ->
   {NewState, Result} = do_get_connection(State, Host, Port),
@@ -508,7 +509,16 @@ find_consumer(Client, Topic, Partition) ->
 
 -spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
         when Result :: ok | {error, any()}.
-validate_topic_existence(Topic0, #state{config = Config} = State) ->
+validate_topic_existence(Topic, #state{workers_tab = Ets} = State) ->
+  case lookup_partitions_count_cache(Ets, Topic) of
+    {ok, _Count}    -> {ok, State};
+    {error, Reason} -> {{error, Reason}, State};
+    false           -> do_validate_topic_existence(Topic, State)
+  end.
+
+-spec do_validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
+        when Result :: ok | {error, any()}.
+do_validate_topic_existence(Topic0, #state{config = Config} = State) ->
   %% if allow_topic_auto_creation is set 'false', do not try to fetch
   %% metadata per topic name, fetch all topics instead. As sending
   %% metadata request with topic name will cause an auto creation of
@@ -523,8 +533,13 @@ validate_topic_existence(Topic0, #state{config = Config} = State) ->
     {{ok, Response}, NewState} ->
       #kpro_MetadataResponse{topicMetadata_L = Topics} = Response,
       case lists:keyfind(Topic0, #kpro_TopicMetadata.topicName, Topics) of
-        #kpro_TopicMetadata{} -> {ok, NewState};
-        false                 -> {{error, topic_not_found}, NewState}
+        #kpro_TopicMetadata{} = TopicMetadata ->
+          case do_get_partitions_count(TopicMetadata) of
+            {ok, _Count}    -> {ok, NewState};
+            {error, Reason} -> {{error, Reason},NewState}
+          end;
+        false ->
+          {{error, ?EC_UNKNOWN_TOPIC_OR_PARTITION}, NewState}
       end;
     {{error, Reason}, NewState} ->
       {{error, Reason}, NewState}
@@ -532,7 +547,9 @@ validate_topic_existence(Topic0, #state{config = Config} = State) ->
 
 -spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
         when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
-do_get_metadata(Topic, #state{config = Config} = State) ->
+do_get_metadata(Topic, #state{ config      = Config
+                             , workers_tab = Ets
+                             } = State) ->
   Topics = case Topic of
              ?undef -> []; %% in case no topic is given, get all
              _      -> [Topic]
@@ -540,7 +557,9 @@ do_get_metadata(Topic, #state{config = Config} = State) ->
   Request = #kpro_MetadataRequest{topicName_L = Topics},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  send_sync(State, Request, timer:seconds(Timeout)).
+  {Result, NewState} = send_sync(State, Request, timer:seconds(Timeout)),
+  ok = maybe_update_partitions_count_cache(Ets, Result),
+  {Result, NewState}.
 
 -spec do_get_connection(#state{}, hostname(), portnum()) ->
         {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
@@ -674,28 +693,42 @@ start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints,
                             [Endpoint | FailedEndpoints], Reason)
   end.
 
-maybe_update_metadata_cache({ok, #kpro_MetadataResponse{} = R}, State) ->
-  [TopicMetadata] = R#kpro_MetadataResponse.topicMetadata_L,
-  case do_get_partitions_count(TopicMetadata) of
-    {ok, PartitionsCnt} ->
-      Tab = State#state.workers_tab,
-      Topic = TopicMetadata#kpro_TopicMetadata.topicName,
-      ets:insert(Tab, {?TOPIC_METADATA_KEY(Topic),
-                       PartitionsCnt, TopicMetadata}),
-      ok;
-    {error, _} ->
-      ok
-  end;
-maybe_update_metadata_cache({error, _}, _State) ->
+%% @private Cache the number of partitions, but nothing else so far.
+%% since that is the only thing relatively 'static' in topic metadata.
+%% @end
+-spec maybe_update_partitions_count_cache(
+        ets:tab(), {ok, kpro_MetadataResponse()} | {error, any()}) -> ok.
+maybe_update_partitions_count_cache(Ets, {ok, #kpro_MetadataResponse{} = R}) ->
+  update_partitions_count_cache(Ets, R#kpro_MetadataResponse.topicMetadata_L);
+maybe_update_partitions_count_cache(_Ets, {error, _}) ->
   ok.
 
+-spec update_partitions_count_cache(ets:tab(), [kpro_TopicMetadata()]) -> ok.
+update_partitions_count_cache(_Ets, []) -> ok;
+update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
+  Topic = TopicMetadata#kpro_TopicMetadata.topicName,
+  case do_get_partitions_count(TopicMetadata) of
+    {ok, Cnt} ->
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
+    {error, ?EC_UNKNOWN_TOPIC_OR_PARTITION} = Err ->
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, os:timestamp()});
+    {error, _Reason} ->
+      ok
+  end,
+  update_partitions_count_cache(Ets, Rest).
+
+%% @private Partition counter is cached,
+%% {ok, undefined} indicates the non-existing state of the given topic
+%% @end.
 -spec get_partitions_count(client(), ets:tab(), topic()) ->
         {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Ets, Topic) ->
-  case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
-    [{_, PartitionsCnt, _}] ->
-      {ok, PartitionsCnt};
-    [] ->
+  case lookup_partitions_count_cache(Ets, Topic) of
+    {ok, Result} ->
+      {ok, Result};
+    {error, Reason} ->
+      {error, Reason};
+    false ->
       case get_metadata(Client, Topic) of
         {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
           [TopicMetadata] = TopicsMetadata,
@@ -703,6 +736,23 @@ get_partitions_count(Client, Ets, Topic) ->
         {error, Reason} ->
           {error, Reason}
       end
+  end.
+
+-spec lookup_partitions_count_cache(ets:tab(), ?undef | topic()) ->
+        {ok, pos_integer()} | {error, any()} | false.
+lookup_partitions_count_cache(_Ets, ?undef) -> false;
+lookup_partitions_count_cache(Ets, Topic) ->
+  case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
+    [{_, Count, _Ts}] when is_integer(Count) ->
+      {ok, Count};
+    [{_, {error, Reason}, Ts}] ->
+      case timer:now_diff(os:timestamp(), Ts) =<
+             ?UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS * 1000000 of
+        true  -> {error, Reason};
+        false -> false
+      end;
+    [] ->
+      false
   end.
 
 -spec do_get_partitions_count(kpro_TopicMetadata()) ->

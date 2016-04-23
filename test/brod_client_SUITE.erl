@@ -39,6 +39,7 @@
         , t_metadata_socket_restart/1
         , t_payload_socket_restart/1
         , t_auto_start_producers/1
+        , t_auto_start_producer_for_unknown_topic/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -123,10 +124,7 @@ t_metadata_socket_restart({init, Config}) ->
   meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_metadata_socket_restart({'end', Config}) ->
-  case whereis(t_metadata_socket_restart) of
-    ?undef -> ok;
-    Pid    -> brod:stop_client(Pid)
-  end,
+  brod:stop_client(t_metadata_socket_restart),
   meck:validate(brod_sock),
   meck:unload(brod_sock),
   Config;
@@ -153,10 +151,7 @@ t_payload_socket_restart({init, Config}) ->
   meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_payload_socket_restart({'end', Config}) ->
-  case whereis(t_payload_socket_restart) of
-    ?undef -> ok;
-    Pid    -> brod:stop_client(Pid)
-  end,
+  brod:stop_client(t_payload_socket_restart),
   meck:validate(brod_sock),
   meck:unload(brod_sock),
   Config;
@@ -208,31 +203,40 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   ok.
 
 t_auto_start_producers({init, Config}) ->
-  meck:new(brod_sock, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_auto_start_producers({'end', Config}) ->
-  case whereis(t_auto_start_producers) of
-    ?undef -> ok;
-    Pid    -> brod:stop_client(Pid)
-  end,
-  meck:validate(brod_sock),
-  meck:unload(brod_sock),
+  brod:stop_client(t_auto_start_producers),
   Config;
 t_auto_start_producers(Config) when is_list(Config) ->
-  Ref = mock_brod_sock(),
   K = <<"k">>,
   V = <<"v">>,
   Client = t_auto_start_producers,
   {ok, _} = brod:start_link_client(?HOSTS, Client),
-  ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
   ?assertEqual({error, {producer_not_found, ?TOPIC}},
                brod:produce_sync(Client, ?TOPIC, 0, K, V)),
   ClientConfig = [{auto_start_producers, true}],
   ok = brod:stop_client(Client),
   {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
-  ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
-  ?assertEqual(ok,
-               brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
+  ?assertEqual(ok, brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
+  ok.
+
+t_auto_start_producer_for_unknown_topic({'end', Config}) ->
+  brod:stop_client(t_auto_start_producer_for_unknown_topic),
+  Config;
+t_auto_start_producer_for_unknown_topic(Config) when is_list(Config) ->
+  Client = t_auto_start_producer_for_unknown_topic,
+  ClientConfig = [{auto_start_producers, true}],
+  {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  Topic0 = ?TOPIC,
+  Partition = 1000, %% non-existing partition
+  ?assertEqual({error, {producer_not_found, Topic0, Partition}},
+               brod:produce_sync(Client, Topic0, Partition, <<>>, <<"v">>)),
+  Topic1 = <<"unknown-topic">>,
+  ?assertEqual({error, 'UnknownTopicOrPartition'},
+               brod:produce_sync(Client, Topic1, 0, <<>>, <<"v">>)),
+  %% this error should hit the cache
+  ?assertEqual({error, 'UnknownTopicOrPartition'},
+               brod:produce_sync(Client, Topic1, 0, <<>>, <<"v">>)),
   ok.
 
 %%%_* Help functions ===========================================================
