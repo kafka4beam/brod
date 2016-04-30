@@ -367,6 +367,7 @@ map_messages(Messages) ->
                           , attributes = M#kpro_Message.attributes
                           , key        = M#kpro_Message.key
                           , value      = M#kpro_Message.value
+                          , crc        = M#kpro_Message.crc
                           }
       end,
   [F(M) || M <- Messages, M =/= ?incomplete_message].
