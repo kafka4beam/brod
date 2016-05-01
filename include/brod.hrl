@@ -31,6 +31,7 @@
         , attributes :: integer()
         , key        :: binary()
         , value      :: binary()
+        , crc        :: integer()
         }).
 
 -record(kafka_message_set,
