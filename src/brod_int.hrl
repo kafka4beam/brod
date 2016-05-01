@@ -67,6 +67,18 @@
 -define(DEFAULT_CLIENT_ID, brod).
 -define(GROUP_PROTOCOL_0, <<"brod-consumer-protocol-0">>).
 
+-define(OFFSET_EARLIEST, earliest).
+-define(OFFSET_LATEST, latest).
+
+-define(IS_SPECIAL_OFFSET(O), (O =:= ?OFFSET_EARLIEST orelse
+                               O =:= ?OFFSET_LATEST orelse
+                               O =:= -2 orelse
+                               O =:= -1)).
+
+-type offset_time() :: integer()
+                     | ?OFFSET_EARLIEST
+                     | ?OFFSET_LATEST.
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================
