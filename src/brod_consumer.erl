@@ -72,7 +72,7 @@
                , offset_reset_policy :: offset_reset_policy()
                }).
 
--define(DEFAULT_BEGIN_OFFSET, -1).
+-define(DEFAULT_BEGIN_OFFSET, ?OFFSET_LATEST).
 -define(DEFAULT_MIN_BYTES, 0).
 -define(DEFAULT_MAX_BYTES, 1048576).  % 1 MB
 -define(DEFAULT_MAX_WAIT_TIME, 10000). % 10 sec
@@ -110,7 +110,7 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     'empty' message-set.
 %%  prefetch_count (optional, default = 1):
 %%     The window size (number of messages) allowed to fetch-ahead.
-%%  begin_offset (optional, default = -1):
+%%  begin_offset (optional, default = latest):
 %%     The offset from which to begin fetch requests.
 %%  offset_reset_policy (optional, default = reset_by_subscriber)
 %%     How to reset begin_offset if OffsetOutOfRange exception is received.
@@ -135,11 +135,11 @@ stop(Pid) -> safe_gen_call(Pid, stop, infinity).
 %% also to update the start point (begin_offset) of the data stream.
 %% Possible options:
 %%   all consumer configs as documented for start_link/5
-%%   begin_offset (optional, default = -1)
+%%   begin_offset (optional, default = latest)
 %%     A subscriber may consume and process messages then persist the associated
 %%     offset to a persistent storage, then start (or restart) with
 %%     last_processed_offset + 1 as the begin_offset to proceed.
-%%     By default, it fetches from the latest available offset (-1)
+%%     By default, it fetches from the latest available offset.
 %% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
@@ -404,8 +404,8 @@ handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
   error_logger:info_msg("~p ~p offset out of range, applying reset policy ~p",
                         [?MODULE, self(), Policy]),
   BeginOffset = case Policy of
-                  reset_to_earliest -> -2;
-                  reset_to_latest   -> -1
+                  reset_to_earliest -> ?OFFSET_EARLIEST;
+                  reset_to_latest   -> ?OFFSET_LATEST
                 end,
   State1 = State#state{ begin_offset = BeginOffset
                       , pending_acks = []
@@ -529,7 +529,7 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
                            , socket_pid   = SocketPid
                            , topic        = Topic
                            , partition    = Partition
-                           } = State) when BeginOffset < 0 ->
+                           } = State) when ?IS_SPECIAL_OFFSET(BeginOffset) ->
   case fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) of
     {ok, NewBeginOffset} ->
       {ok, State#state{begin_offset = NewBeginOffset}};
@@ -539,9 +539,8 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
 resolve_begin_offset(State) ->
   {ok, State}.
 
-fetch_valid_offset(SocketPid, Time, Topic, Partition) ->
-  Request = kpro:offset_request(Topic, Partition, Time,
-                                      _MaxNoOffsets = 1),
+fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) ->
+  Request = brod_utils:make_offset_request(Topic, Partition, BeginOffset),
   {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
   #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
   #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
