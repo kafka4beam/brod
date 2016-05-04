@@ -65,8 +65,8 @@ bootstrap(DelaySeconds) ->
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
   Topic = <<"brod-demo-topic-subscriber">>,
-  {ok, _ClientPid} =
-    brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
+  {ok, _} = application:ensure_all_started(brod),
+  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
   {ok, _Pid} = spawn_consumer(ClientId, Topic),
   {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),
