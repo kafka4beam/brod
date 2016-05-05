@@ -49,7 +49,7 @@
 %% The offset+1 of each partition will be used as the start point when fetching
 %% messages from kafka.
 %% OBS: If there is no offset committed before for certain (or all) partitions
-%%      e.g. CommittedOffsets = [], the consumer will use -1 (latest) by default,
+%%      e.g. CommittedOffsets = [], the consumer will use 'latest' by default,
 %%      or 'begin_offset' in consumer config (if found) to start fetching.
 %% CbState is the user's looping state for message processing.
 -callback init(topic(), term()) -> {ok, [{partition(), offset()}], cb_state()}.

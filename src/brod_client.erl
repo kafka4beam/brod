@@ -28,6 +28,7 @@
         , get_group_coordinator/2
         , get_leader_connection/3
         , get_metadata/2
+        , get_offsets/5
         , get_partitions_count/2
         , get_producer/3
         , register_consumer/3
@@ -134,7 +135,6 @@ stop(Client) ->
       ok
   end.
 
-
 %% @doc Get producer of the given topic-partition.
 %% The producer is started if auto_start_producers is
 %% enabled in client config.
@@ -227,6 +227,13 @@ get_leader_connection(Client, Topic, Partition) ->
         {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Client, Topic) ->
   safe_gen_call(Client, {get_metadata, Topic}, infinity).
+
+-spec get_offsets(client(), topic(), partition(),
+                  offset_time(), pos_integer()) ->
+                      {ok, [offset()]} | {error, any()}.
+get_offsets(Client, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
+  safe_gen_call(Client, {get_offsets, Topic, Partition,
+                         TimeOrSemanticOffset, MaxNoOffsets}, infinity).
 
 %% @doc Get number of partitions for a given topic
 -spec get_partitions_count(client(), topic()) ->
@@ -398,6 +405,13 @@ handle_call(get_consumers_sup_pid, _From, State) ->
   {reply, {ok, State#state.consumers_sup}, State};
 handle_call({get_metadata, Topic}, _From, State) ->
   {Result, NewState} = do_get_metadata(Topic, State),
+  {reply, Result, NewState};
+handle_call({get_offsets, Topic, Partition,
+             TimeOrSemanticOffset, MaxNoOffsets}, _From, State) ->
+  {ok, NewState} = maybe_restart_metadata_socket(State),
+  SockPid = State#state.meta_sock_pid,
+  Result = brod_utils:fetch_offsets(SockPid, Topic, Partition,
+                                    TimeOrSemanticOffset, MaxNoOffsets),
   {reply, Result, NewState};
 handle_call({get_connection, Host, Port}, _From, State) ->
   {NewState, Result} = do_get_connection(State, Host, Port),
@@ -783,7 +797,7 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
                                         | {error, any()}.
 send_sync(State, Request, Timeout) ->
   #state{config = Config} = State,
-  MaxRetry = proplists:get_value(get_metadata_timout_seconds, Config,
+  MaxRetry = proplists:get_value(max_metadata_sock_retry, Config,
                                  ?DEFAULT_MAX_METADATA_SOCK_RETRY),
   send_sync(State, Request, Timeout, MaxRetry).
 

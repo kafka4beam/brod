@@ -4,7 +4,7 @@ PROJECT_VERSION = 2.0-dev
 
 DEPS = supervisor3 kafka_protocol
 
-dep_kafka_protocol_commit = 0.2.3
+dep_kafka_protocol_commit = add-compression
 
 TEST_DEPS = meck proper
 

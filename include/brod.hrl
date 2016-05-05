@@ -23,6 +23,7 @@
 -type kafka_error_code()      :: atom() | integer().
 -type kafka_group_id()        :: binary().
 -type kafka_group_member_id() :: binary().
+-type kafka_compression()     :: no_compression | gzip | snappy.
 -type brod_client_id()        :: atom().
 
 -record(kafka_message,
@@ -31,6 +32,7 @@
         , attributes :: integer()
         , key        :: binary()
         , value      :: binary()
+        , crc        :: integer()
         }).
 
 -record(kafka_message_set,
