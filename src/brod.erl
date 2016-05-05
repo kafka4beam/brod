@@ -390,21 +390,26 @@ get_metadata(Hosts, Topics) ->
 
 %% @equiv get_offsets(Hosts, Topic, Partition, latest, 1)
 -spec get_offsets([endpoint()], binary(), non_neg_integer()) ->
-                     {ok, kpro_OffsetResponse()} | {error, any()}.
+                     {ok, [offset()]} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, ?OFFSET_LATEST, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
 -spec get_offsets([endpoint()], binary(), non_neg_integer(),
-                  offset_time(), non_neg_integer()) ->
-                     {ok, kpro_OffsetResponse()} | {error, any()}.
+                  offset_time(), pos_integer()) ->
+                     {ok, [offset()]} | {error, any()}.
+get_offsets(Client, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets)
+  when is_atom(Client) orelse is_pid(Client) ->
+  brod_client:get_offsets(Client, Topic, Partition,
+                          TimeOrSemanticOffset, MaxNoOffsets);
 get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
-  Request = brod_utils:make_offset_request(Topic, Partition,
-                                           TimeOrSemanticOffset, MaxNoOffsets),
-  Response = brod_sock:request_sync(Pid, Request, 10000),
-  ok = brod_sock:stop(Pid),
-  Response.
+  try
+    brod_utils:fetch_offsets(Pid, Topic, Partition,
+                             TimeOrSemanticOffset, MaxNoOffsets)
+  after
+    ok = brod_sock:stop(Pid)
+  end.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->

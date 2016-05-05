@@ -83,7 +83,7 @@ end_per_testcase(Case, Config) ->
     Ref = erlang:monitor(process, whereis(Client)),
     brod:stop_client(Client),
     receive
-      {'DOWN', Ref, process, Pid, _} -> ok
+      {'DOWN', Ref, process, _Pid, _} -> ok
     end
   catch _ : _ ->
     ok
