@@ -134,7 +134,6 @@ stop(Client) ->
       ok
   end.
 
-
 %% @doc Get producer of the given topic-partition.
 %% The producer is started if auto_start_producers is
 %% enabled in client config.
@@ -783,7 +782,7 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
                                         | {error, any()}.
 send_sync(State, Request, Timeout) ->
   #state{config = Config} = State,
-  MaxRetry = proplists:get_value(get_metadata_timout_seconds, Config,
+  MaxRetry = proplists:get_value(max_metadata_sock_retry, Config,
                                  ?DEFAULT_MAX_METADATA_SOCK_RETRY),
   send_sync(State, Request, Timeout, MaxRetry).
 

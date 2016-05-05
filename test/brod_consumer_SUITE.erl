@@ -55,7 +55,9 @@
 
 suite() -> [{timetrap, {seconds, 30}}].
 
-init_per_suite(Config) -> Config.
+init_per_suite(Config) ->
+  {ok, _} = application:ensure_all_started(brod),
+  Config.
 
 end_per_suite(_Config) -> ok.
 
@@ -68,21 +70,18 @@ init_per_testcase(Case, Config) ->
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
   ProducerConfig = [ {partition_restart_delay_seconds, ProducerRestartDelay}
                    , {max_retries, 0}],
-  case whereis(Client) of
-    ?undef -> ok;
-    Pid_   -> brod:stop_client(Pid_)
-  end,
-  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  brod:stop_client(Client),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   ok = brod:start_consumer(Client, Topic, []),
-  [{client, Client}, {client_pid, ClientPid} | Config].
+  [{client, Client} | Config].
 
 end_per_testcase(Case, Config) ->
   ct:pal("=== ~p end ===", [Case]),
-  Pid = ?config(client_pid),
+  Client = ?config(client),
   try
-    Ref = erlang:monitor(process, Pid),
-    brod:stop_client(Pid),
+    Ref = erlang:monitor(process, whereis(Client)),
+    brod:stop_client(Client),
     receive
       {'DOWN', Ref, process, Pid, _} -> ok
     end
@@ -103,7 +102,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 %% when it's not great enough to fetch one single message
 %% @end
 t_consumer_max_bytes_too_small(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Partition = 0,
   Key = make_unique_key(),
   Value = make_bytes(2000),
@@ -123,7 +122,7 @@ t_consumer_max_bytes_too_small(Config) ->
 %% notice a thing except for a few seconds of break in data streaming
 %% @end
 t_consumer_socket_restart(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -192,7 +191,7 @@ t_consumer_socket_restart(Config) ->
 %% the last acked offset
 %% @end
 t_consumer_resubscribe(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -237,7 +236,7 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   ok.
 
 t_subscriber_restart(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -294,7 +293,7 @@ t_subscriber_restart(Config) when is_list(Config) ->
   ok.
 
 t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   Key = make_unique_key(),
@@ -312,7 +311,7 @@ t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
   end.
 
 t_offset_reset_policy(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   Key0 = make_unique_key(),

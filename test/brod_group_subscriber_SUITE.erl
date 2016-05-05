@@ -58,7 +58,9 @@
 
 suite() -> [{timetrap, {seconds, 30}}].
 
-init_per_suite(Config) -> Config.
+init_per_suite(Config) ->
+  {ok, _} = application:ensure_all_started(brod),
+  Config.
 
 end_per_suite(_Config) -> ok.
 
@@ -68,8 +70,7 @@ init_per_testcase(Case, Config) ->
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig   = [],
   Topic          = ?TOPIC,
-  {ok, _ClientPid} =
-    brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
+  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
   Config.
 

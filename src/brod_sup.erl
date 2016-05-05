@@ -62,9 +62,14 @@
 -export([ init/1
         , post_init/1
         , start_link/0
+        , start_client/3
+        , stop_client/1
+        , find_client/1
         ]).
 
 -include("brod_int.hrl").
+
+-define(SUP, ?MODULE).
 
 %% By deafult, restart client process after a 10-seconds delay
 -define(DEFAULT_CLIENT_RESTART_DELAY, 10).
@@ -73,18 +78,22 @@
 
 %% @doc Start root supervisor.
 %%
-%% To start permanent clients, a minimal example of app env (sys.config):
+%% To start permanent clients add 'clients' section in sys.config.
+%% So far only 'endpoints' config is mandatory, other options are optional.
+%%
 %% ```
 %%  [
 %%     %% Permanent clients
 %%    { clients
 %%    , [ {client_1 %% unique client ID
-%%        , [ { endpoints, [{"localhost", 9092}]}
-%%          , { config
-%%            , [ {restart_delay_seconds, 10}
-%%                %% @see brod:start_link_client/5 for more client configs
-%%              ]
-%%            }
+%%        , [ {endpoints, [{"localhost", 9092}]}
+%%          , {restart_delay_seconds, 10}
+%%          , {max_metadata_sock_retry, 1}
+%%          , {get_metadata_timeout_seconds, 5}
+%%          , {reconnect_cool_down_seconds, 1}
+%%          , {allow_topic_auto_creation, true}
+%%          , {auto_start_producers, false}
+%%          , {default_producer_config, []}
 %%          ]
 %%        }
 %%      ]
@@ -94,9 +103,27 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link({local, ?MODULE}, ?MODULE, clients_sup).
+  supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
 
-%% @doc supervisor3 callback.
+-spec start_client([endpoint()], client_id(), client_config()) ->
+                      ok | {error, any()}.
+start_client(Endpoints, ClientId, Config) ->
+  ClientSpec = client_spec(Endpoints, ClientId, Config),
+  case supervisor3:start_child(?SUP, ClientSpec) of
+    {ok, _Pid} -> ok;
+    Error      -> Error
+  end.
+
+-spec stop_client(client_id()) -> ok | {error, any()}.
+stop_client(ClientId) ->
+  supervisor3:terminate_child(?SUP, ClientId),
+  supervisor3:delete_child(?SUP, ClientId).
+
+-spec find_client(client_id()) -> [pid()].
+find_client(Client) ->
+  supervisor3:find_child(?SUP, Client).
+
+%% @doc supervisor3 callback
 init(clients_sup) ->
   Clients = application:get_env(brod, clients, []),
   ClientSpecs =
@@ -113,10 +140,16 @@ post_init(_) ->
   ignore.
 
 %%%_* Internal functions =======================================================
-client_spec(ClientId, Args) ->
-  Endpoints = proplists:get_value(endpoints, Args, []),
-  ok        = verify_config(Endpoints),
-  Config0   = proplists:get_value(config, Args, []),
+client_spec(ClientId, Config) ->
+  Endpoints = proplists:get_value(endpoints, Config, []),
+  client_spec(Endpoints, ClientId, Config).
+
+client_spec([], ClientId, _Config) ->
+  Error = lists:flatten(
+            io_lib:format("No endpoints found in brod client '~p' config",
+                          [ClientId])),
+  exit(Error);
+client_spec(Endpoints, ClientId, Config0) ->
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_CLIENT_RESTART_DELAY),
   Config    = proplists:delete(restart_delay_seconds, Config0),
@@ -128,11 +161,6 @@ client_spec(ClientId, Args) ->
   , _Type     = worker
   , _Module   = [brod_client]
   }.
-
-verify_config([]) ->
-  exit("No endpoints found in brod client config.");
-verify_config(_Endpoints) ->
-  ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

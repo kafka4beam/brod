@@ -32,6 +32,9 @@
 
 %% Client API
 -export([ get_partitions_count/2
+        , start_client/1
+        , start_client/2
+        , start_client/3
         , start_link_client/1
         , start_link_client/2
         , start_link_client/3
@@ -79,6 +82,8 @@
 %% escript
 -export([main/1]).
 
+-deprecated([{start_link_client, '_', next_version}]).
+
 -include("brod_int.hrl").
 
 %%%_* APIs =====================================================================
@@ -95,6 +100,58 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
+%% @equiv stat_client(BootstrapEndpoints, brod_default_client)
+-spec start_client([endpoint()]) -> ok | {error, any()}.
+start_client(BootstrapEndpoints) ->
+  start_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
+
+%% @equiv stat_client(BootstrapEndpoints, ClientId, [])
+-spec start_client([endpoint()], client_id()) ->
+                           ok | {error, any()}.
+start_client(BootstrapEndpoints, ClientId) ->
+  start_client(BootstrapEndpoints, ClientId, []).
+
+%% @doc Start a client.
+%% BootstrapEndpoints:
+%%   Kafka cluster endpoints, can be any of the brokers in the cluster
+%%   which does not necessarily have to be a leader of any partition,
+%%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% ClientId:
+%%   Atom to identify the client process
+%% Config:
+%%   Proplist, possible values:
+%%     restart_delay_seconds (optional, default=10)
+%%       How much time to wait between attempts to restart brod_client
+%%       process when it crashes
+%%     max_metadata_sock_retry (optional, default=1)
+%%       Number of retries if failed fetching metadata due to socket error
+%%     get_metadata_timeout_seconds(optional, default=5)
+%%       Return timeout error from brod_client:get_metadata/2 in case the
+%%       respons is not received from kafka in this configured time.
+%%     reconnect_cool_down_seconds (optional, default=1)
+%%       Delay this configured number of seconds before retrying to
+%%       estabilish a new connection to the kafka partition leader.
+%%     allow_topic_auto_creation (optional, default=true)
+%%       By default, brod respects what is configured in broker about
+%%       topic auto-creation. i.e. whatever auto.create.topics.enable
+%%       is set in borker configuration.
+%%       However if 'allow_topic_auto_creation' is set to 'false' in client
+%%       config, brod will avoid sending metadata requests that may cause an
+%%       auto-creation of the topic regardless of what the broker config is.
+%%     auto_start_producers (optional, default=false)
+%%       If true, brod client will spawn a producer automatically when
+%%       user is trying to call 'produce' but did not call
+%%       brod:start_producer explicitly. Can be useful for applications
+%%       which don't know beforehand which topics they will be working with.
+%%     default_producer_config (optional, default [])
+%%       Producer configuration to use when auto_start_producers is true.
+%%       @see brod_client:start_producer/3. for more details.
+%% @end
+-spec start_client([endpoint()], client_id(), client_config()) ->
+                      ok | {error, any()}.
+start_client(BootstrapEndpoints, ClientId, Config) ->
+  brod_sup:start_client(BootstrapEndpoints, ClientId, Config).
+
 %% @equiv stat_link_client(BootstrapEndpoints, brod_default_client)
 -spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints) ->
@@ -106,31 +163,6 @@ start_link_client(BootstrapEndpoints) ->
 start_link_client(BootstrapEndpoints, ClientId) ->
   start_link_client(BootstrapEndpoints, ClientId, []).
 
-%5 @doc Start a client.
-%% BootstrapEndpoints:
-%%   Kafka cluster endpoints, can be any of the brokers in the cluster
-%%   which does not necessarily have to be a leader of any partition,
-%%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
-%% ClientId:
-%%   Atom to identify the client process
-%% Config:
-%%   Proplist, possible values:
-%%     max_metadata_sock_retry (optional, default 1)
-%%       Number of retries if failed fetching metadata due to socket error
-%%     get_metadata_timout_seconds(optional, default=5)
-%%       Return timeout error from brod_client:get_metadata/2 in case the
-%%       respons is not received from kafka in this configured time.
-%%     reconnect_cool_down_seconds(optional, default=1)
-%%       Delay this configured number of seconds before retrying to
-%%       estabilish a new connection to the kafka partition leader.
-%%     allow_topic_auto_creation(optional, default=true)
-%%       By default, brod respects what is configured in broker about
-%%       topic auto-creation. i.e. whatever auto.create.topics.enable
-%%       is set in borker configuration.
-%%       However if 'allow_topic_auto_creation' is set to 'false' in client
-%%       config, brod will avoid sending metadata requests that may cause an
-%%       auto-creation of the topic regardless of what the broker config is.
-%% @end
 -spec start_link_client([endpoint()], client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId, Config) ->
@@ -138,7 +170,12 @@ start_link_client(BootstrapEndpoints, ClientId, Config) ->
 
 %% @doc Stop a client.
 -spec stop_client(client()) -> ok.
-stop_client(Client) ->
+stop_client(Client) when is_atom(Client) ->
+  case brod_sup:find_client(Client) of
+    [_Pid] -> brod_sup:stop_client(Client);
+    []     -> brod_client:stop(Client)
+  end;
+stop_client(Client) when is_pid(Client) ->
   brod_client:stop(Client).
 
 %% @doc Dynamically start a per-topic producer.
@@ -464,10 +501,10 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod:start_link_client(Hosts),
+  {ok, Client} = brod_client:start_link(Hosts, []),
   ok = brod:start_producer(Client, Topic, []),
   Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
-  brod:stop_client(Client),
+  brod_client:stop(Client),
   Res;
 call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
   Hosts = parse_hosts_str(HostsStr),
