@@ -45,6 +45,8 @@
         , format_status/2
         ]).
 
+-define(CONNECT_TIMEOUT, timer:seconds(5)).
+
 %%%_* Includes =================================================================
 -include("brod_int.hrl").
 
@@ -135,7 +137,7 @@ debug(Pid, File) when is_list(File) ->
 init(Parent, Host, Port, ClientId, Debug0) ->
   Debug = sys:debug_options(Debug0),
   SockOpts = [{active, true}, {packet, raw}, binary, {nodelay, true}],
-  case gen_tcp:connect(Host, Port, SockOpts) of
+  case gen_tcp:connect(Host, Port, SockOpts, ?CONNECT_TIMEOUT) of
     {ok, Sock} ->
       proc_lib:init_ack(Parent, {ok, self()}),
       try
