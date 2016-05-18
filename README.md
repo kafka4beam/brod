@@ -18,6 +18,10 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Group subscriber: Support for consumer groups with options to have Kafka as offset storage or a custom one
 * Topic subscriber: Subscribe on messages from all or selected topic partitions without using consumer groups
 
+# Missing features
+
+* snappy/lz4 compression & decompression
+
 # Building and testing
 
     make
