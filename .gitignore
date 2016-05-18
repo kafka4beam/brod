@@ -14,5 +14,10 @@ eunit.coverdata
 ct.coverdata
 sys.config
 xrefr
-/brod
-/brod.plt
+brod
+brod.plt
+_build/
+_rel/
+rebar.lock
+.eunit/
+.rebar/
