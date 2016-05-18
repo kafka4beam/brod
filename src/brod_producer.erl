@@ -53,6 +53,10 @@
 -define(DEFAULT_RETRY_BACKOFF_MS, 500).
 %% by default, brod_producer will try to retry 3 times before crashing
 -define(DEFAULT_MAX_RETRIES, 3).
+%% by default, no compression
+-define(DEFAULT_COMPRESSION, no_compression).
+%% by default, only compress if batch size is >= 1k
+-define(DEFAULT_MIN_COMPRESSION_BATCH_SIZE, 1024).
 
 -define(RETRY_MSG, retry).
 
@@ -106,14 +110,22 @@
 %%   max_batch_size (in bytes, optional, default = 1M):
 %%     In case callers are producing faster than brokers can handle (or
 %%     congestion on wire), try to accumulate small requests into batches
-%%     as much as possible but not exceeding max_batch_size
+%%     as much as possible but not exceeding max_batch_size.
+%%     OBS: If compression is enabled, care should be taken when picking
+%%          the max batch size, because a compressed batch will be produced
+%%          as one message and this message might be larger than
+%%          'max.message.bytes' in kafka config (or topic config)
 %%   max_retries (optional, default = 3):
 %%     If {max_retries, N} is given, the producer retry produce request for
 %%     N times before crashing in case of failures like socket being shut down
 %%     or exceptions received in produce response from kafka.
 %%     The special value N = -1 means 'retry indefinitely'
-%%   retry_backoff_ms (optional, default = 500)
+%%   retry_backoff_ms (optional, default = 500);
 %%     Time in milli-seconds to sleep before retry the failed produce request.
+%%   compression (optional, default = no_compression):
+%%     'gzip' or 'snappy' to enable compression
+%%   min_compression_batch_size (in bytes, optional, default = 1K):
+%%     Only try to compress when batch size is greater than this value.
 %% @end
 -spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
@@ -168,15 +180,27 @@ init({ClientPid, Topic, Partition, Config}) ->
   BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
   OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
   MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
-  RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
-  AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
   MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
   RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
 
+  RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
+  AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
+  Compression = ?config(compression, ?DEFAULT_COMPRESSION),
+  MinCompressBatchSize = ?config(min_compression_batch_size,
+                                 ?DEFAULT_MIN_COMPRESSION_BATCH_SIZE),
+  MaybeCompress =
+    fun(KafkaKvList) ->
+      case Compression =/= no_compression andalso
+           batch_size(KafkaKvList) >= MinCompressBatchSize of
+        true  -> Compression;
+        false -> no_compression
+      end
+    end,
   SendFun =
     fun(SockPid, KafkaKvList) ->
         ProduceRequest = kpro:produce_request(Topic, Partition, KafkaKvList,
-                                              RequiredAcks, AckTimeout),
+                                              RequiredAcks, AckTimeout,
+                                              MaybeCompress(KafkaKvList)),
         case sock_send(SockPid, ProduceRequest) of
           ok              -> ok;
           {ok, CorrId}    -> {ok, CorrId};
@@ -330,6 +354,9 @@ is_retriable(_) ->
 
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
+
+batch_size([]) -> 0;
+batch_size([{K,V} | T]) -> size(K) + size(V) + batch_size(T).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

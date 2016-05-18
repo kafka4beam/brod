@@ -1,4 +1,3 @@
-
 %%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
@@ -541,14 +540,9 @@ resolve_begin_offset(State) ->
   {ok, State}.
 
 fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) ->
-  Request = brod_utils:make_offset_request(Topic, Partition, BeginOffset),
-  {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
-  #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
-  #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
-  #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
-  case Offsets of
-    [Offset] -> {ok, Offset};
-    []       -> {error, no_available_offsets}
+  case brod_utils:fetch_offsets(SocketPid, Topic, Partition, BeginOffset, 1) of
+    {ok, [Offset]} -> {ok, Offset};
+    {ok, []}       -> {error, no_available_offsets}
   end.
 
 %% @private Reset fetch buffer, use the last unacked offset as the next begin
