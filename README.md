@@ -20,7 +20,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Missing features
 
-* Compression
+* snappy/lz4 compression & decompression
 
 # Building and testing
 
@@ -32,7 +32,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 "client" in brod is a process responsible for establishing and maintaining
 connections to kafka cluster. It also manages producer and consumer processes.
 
-You can use brod:start_link_client/1,2,3 to start a client on demand,
+You can use brod:start_client/1,2,3 to start a client on demand,
 or include its configuration in sys.config.
 
 A required parameter for client is kafka endpoint(s).
@@ -44,9 +44,7 @@ Example of configuration (for sys.config):
    [ { clients
      , [ { brod_client_1 %% registered name
          , [ { endpoints, [{"localhost", 9092}]}
-           , { config
-             , [ {reconnect_cool_down_seconds, 10}] %% connection error
-             }
+           , { reconnect_cool_down_seconds, 10} %% connection error
            ]
          }
        ]
@@ -60,11 +58,7 @@ Example of configuration (for sys.config):
 ## Start brod client on demand
 
     ClientConfig = [{reconnect_cool_down_seconds, 10}],
-    {ok, ClientPid} = brod:start_link_client([{"localhost", 9092}], brod_client_1, ClientConfig).
-
-Or the simplest option:
-
-    {ok, ClientPid} = brod:start_link_client([{"localhost", 9092}]).
+    ok = brod:start_client([{"localhost", 9092}], brod_client_1, ClientConfig).
 
 ## Producer
 
@@ -78,14 +72,14 @@ Put below configs to client config in sys.config or app env:
 
 ### Start a producer on demand
 
-    brod:start_producer(_Client         = brod_client_1, %% may also be ClientPid,
+    brod:start_producer(_Client         = brod_client_1,
                         _Topic          = <<"brod-test-topic-1">>,
                         _ProducerConfig = []).
 
 ### Produce to a known topic-partition:
 
     {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1, %% may also be ClientPid
+      brod:produce(_Client    = brod_client_1,
                    _Topic     = <<"brod-test-topic-1">>,
                    _Partition = 0
                    _Key       = <<"some-key">>
@@ -106,7 +100,7 @@ Put below configs to client config in sys.config or app env:
 Block calling process until Kafka confirmed the message:
 
     {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1, %% may also be ClientPid
+      brod:produce(_Client    = brod_client_1,
                    _Topic     = <<"brod-test-topic-1">>,
                    _Partition = 0
                    _Key       = <<"some-key">>
@@ -115,7 +109,7 @@ Block calling process until Kafka confirmed the message:
 
 or the same in one call:
 
-    brod:produce_sync(_Client    = brod_client_1, %% may also be ClientPid
+    brod:produce_sync(_Client    = brod_client_1,
                       _Topic     = <<"brod-test-topic-1">>,
                       _Partition = 0
                       _Key       = <<"some-key">>
@@ -123,7 +117,7 @@ or the same in one call:
 
 ### Produce with random partitioner
 
-    Client = brod_client_1, %% may also be ClientPid
+    Client = brod_client_1,
     Topic  = <<"brod-test-topic-1">>,
     PartitionFun = fun(_Topic, PartitionsCount, _Key, _Value) ->
                        {ok, crypto:rand_uniform(0, PartitionsCount)}
@@ -173,7 +167,7 @@ Find more examples in test/ (brod\_demo\_*).
       {ok, ack, State}.
 
     init() ->
-      Client = brod_client_1, %% may also be ClientPid
+      Client = brod_client_1,
       Topic  = <<"brod-test-topic-1">>,
       %% commit offsets to kafka every 5 seconds
       GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}

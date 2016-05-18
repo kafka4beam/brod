@@ -71,8 +71,8 @@ bootstrap(DelaySeconds) ->
   ClientConfig = [],
   Topic = <<"brod-demo-group-subscriber-loc">>,
   GroupId = iolist_to_binary([Topic, "-group-id"]),
-  {ok, _ClientPid} =
-    brod:start_link_client(BootstrapHosts, ClientId, ClientConfig),
+  {ok, _} = application:ensure_all_started(brod),
+  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
   {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),
   Partitions = lists:seq(0, PartitionCount - 1),

@@ -66,9 +66,13 @@
 
 suite() -> [{timetrap, {seconds, 30}}].
 
-init_per_suite(Config) -> Config.
+init_per_suite(Config) ->
+  {ok, _} = application:ensure_all_started(brod),
+  Config.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+  application:stop(brod),
+  ok.
 
 init_per_testcase(Case, Config) ->
   ct:pal("=== ~p begin ===", [Case]),
@@ -100,19 +104,23 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
-  {ok, Pid} = brod:start_link_client([{"localhost", 8192} | ?HOSTS], Client),
-  ?assert(is_pid(Pid)),
-  _Res = brod_client:get_partitions_count(Pid, <<"some-unknown-topic">>),
+  ok = brod:start_client([{"localhost", 8192} | ?HOSTS], Client),
+  _Res = brod_client:get_partitions_count(Client, <<"some-unknown-topic">>),
   ?assertMatch({error, 'UnknownTopicOrPartition'}, _Res),
-  Ref = erlang:monitor(process, Pid),
-  ok = brod:stop_client(Pid),
-  Reason = ?WAIT({'DOWN', Ref, process, Pid, Reason_}, Reason_, 5000),
-  ?assertEqual(normal, Reason).
+  ClientPid = whereis(Client),
+  Ref = erlang:monitor(process, ClientPid),
+  ok = brod:stop_client(Client),
+  Reason = ?WAIT({'DOWN', Ref, process, ClientPid, Reason_}, Reason_, 5000),
+  ?assertEqual(shutdown, Reason).
 
+t_no_reachable_endpoint({'end', _Config}) ->
+  brod:stop_client(t_no_reachable_endpoint);
 t_no_reachable_endpoint(Config) when is_list(Config) ->
-  process_flag(trap_exit, true),
-  {ok, Pid} = brod:start_link_client([{"badhost", 9092}]),
-  Reason = ?WAIT({'EXIT', Pid, Reason_}, Reason_, 1000),
+  Client = t_no_reachable_endpoint,
+  ok = brod:start_client([{"badhost", 9092}], Client),
+  ClientPid = whereis(Client),
+  Mref = erlang:monitor(process, ClientPid),
+  Reason = ?WAIT({'DOWN', Mref, process, ClientPid, Reason_}, Reason_, 1000),
   ?assertMatch({{nxdomain, _Hosts}, _Stacktrace}, Reason).
 
 t_call_bad_client_id(Config) when is_list(Config) ->
@@ -130,8 +138,9 @@ t_metadata_socket_restart({'end', Config}) ->
   Config;
 t_metadata_socket_restart(Config) when is_list(Config) ->
   Ref = mock_brod_sock(),
-  {ok, ClientPid} =
-    brod:start_link_client(?HOSTS, t_metadata_socket_restart),
+  Client = t_metadata_socket_restart,
+  ok = brod:start_client(?HOSTS, Client),
+  ClientPid = whereis(Client),
   SocketPid = ?WAIT({socket_started, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
   ?assert(is_process_alive(SocketPid)),
@@ -140,7 +149,7 @@ t_metadata_socket_restart(Config) when is_list(Config) ->
   exit(SocketPid, kill),
   ?WAIT({'DOWN', MRef, process, SocketPid, Reason_}, Reason_, 5000),
   %% query metadata to trigger reconnect
-  {ok, _} = brod_client:get_metadata(ClientPid, ?TOPIC),
+  {ok, _} = brod_client:get_metadata(Client, ?TOPIC),
   %% expect the socket pid get restarted
   SocketPid2 = ?WAIT({socket_started, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
@@ -160,8 +169,8 @@ t_payload_socket_restart(Config) when is_list(Config) ->
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
-  {ok, Client} =
-    brod:start_link_client(?HOSTS, t_payload_socket_restart, ClientConfig),
+  Client = t_payload_socket_restart,
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ?WAIT({socket_started, Ref, _MetadataSocket}, ok, 5000),
   ProducerConfig = [{partition_restart_delay_seconds, ProducerRestartDelay},
                     {max_retries, 0}],
@@ -211,12 +220,12 @@ t_auto_start_producers(Config) when is_list(Config) ->
   K = <<"k">>,
   V = <<"v">>,
   Client = t_auto_start_producers,
-  {ok, _} = brod:start_link_client(?HOSTS, Client),
+  ok = brod:start_client(?HOSTS, Client),
   ?assertEqual({error, {producer_not_found, ?TOPIC}},
                brod:produce_sync(Client, ?TOPIC, 0, K, V)),
   ClientConfig = [{auto_start_producers, true}],
   ok = brod:stop_client(Client),
-  {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ?assertEqual(ok, brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
   ok.
 
@@ -226,7 +235,7 @@ t_auto_start_producer_for_unknown_topic({'end', Config}) ->
 t_auto_start_producer_for_unknown_topic(Config) when is_list(Config) ->
   Client = t_auto_start_producer_for_unknown_topic,
   ClientConfig = [{auto_start_producers, true}],
-  {ok, _} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   Topic0 = ?TOPIC,
   Partition = 1000, %% non-existing partition
   ?assertEqual({error, {producer_not_found, Topic0, Partition}},

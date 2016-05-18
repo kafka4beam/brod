@@ -68,7 +68,9 @@ subscriber_loop(Client, TesterPid) ->
 
 suite() -> [{timetrap, {seconds, 30}}].
 
-init_per_suite(Config) -> Config.
+init_per_suite(Config) ->
+  {ok, _} = application:ensure_all_started(brod),
+  Config.
 
 end_per_suite(_Config) -> ok.
 
@@ -81,28 +83,24 @@ init_per_testcase(Case, Config) ->
 init_client(Case, Config) ->
   Client = Case,
   Topic = ?TOPIC,
-  case whereis(Client) of
-    ?undef -> ok;
-    Pid_   -> brod:stop_client(Pid_)
-  end,
+  brod:stop_client(Client),
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
+  ok = brod:start_client(?HOSTS, Client),
   ok = brod:start_producer(Client, Topic, []),
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
   {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
-  [{client, Client}, {client_pid, ClientPid},
-   {subscriber, Subscriber} | Config].
+  [{client, Client}, {subscriber, Subscriber} | Config].
 
 end_per_testcase(_Case, Config) ->
   Subscriber = ?config(subscriber),
   unlink(Subscriber),
   exit(Subscriber, kill),
-  Pid = ?config(client_pid),
+  Pid = whereis(?config(client)),
   try
     Ref = erlang:monitor(process, Pid),
-    brod:stop_client(Pid),
+    brod:stop_client(?config(client)),
     receive
       {'DOWN', Ref, process, Pid, _} -> ok
     end
@@ -205,8 +203,7 @@ t_producer_topic_not_found(Config) when is_list(Config) ->
 
 
 t_producer_partition_not_found(Config) when is_list(Config) ->
-  Client = whereis(t_producer_partition_not_found),
-  ?assert(is_pid(Client)),
+  Client = whereis(?config(client)),
   ?assertEqual({error, {producer_not_found, ?TOPIC, 100}},
                brod:produce(Client, ?TOPIC, 100, <<"k">>, <<"v">>)).
 

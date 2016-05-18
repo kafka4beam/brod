@@ -38,6 +38,7 @@
         , t_consumer_resubscribe/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
+        , t_offset_reset_policy/1
         ]).
 
 
@@ -54,7 +55,9 @@
 
 suite() -> [{timetrap, {seconds, 30}}].
 
-init_per_suite(Config) -> Config.
+init_per_suite(Config) ->
+  {ok, _} = application:ensure_all_started(brod),
+  Config.
 
 end_per_suite(_Config) -> ok.
 
@@ -67,23 +70,20 @@ init_per_testcase(Case, Config) ->
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
   ProducerConfig = [ {partition_restart_delay_seconds, ProducerRestartDelay}
                    , {max_retries, 0}],
-  case whereis(Client) of
-    ?undef -> ok;
-    Pid_   -> brod:stop_client(Pid_)
-  end,
-  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, ClientConfig),
+  brod:stop_client(Client),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   ok = brod:start_consumer(Client, Topic, []),
-  [{client, Client}, {client_pid, ClientPid} | Config].
+  [{client, Client} | Config].
 
 end_per_testcase(Case, Config) ->
   ct:pal("=== ~p end ===", [Case]),
-  Pid = ?config(client_pid),
+  Client = ?config(client),
   try
-    Ref = erlang:monitor(process, Pid),
-    brod:stop_client(Pid),
+    Ref = erlang:monitor(process, whereis(Client)),
+    brod:stop_client(Client),
     receive
-      {'DOWN', Ref, process, Pid, _} -> ok
+      {'DOWN', Ref, process, _Pid, _} -> ok
     end
   catch _ : _ ->
     ok
@@ -102,7 +102,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 %% when it's not great enough to fetch one single message
 %% @end
 t_consumer_max_bytes_too_small(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Partition = 0,
   Key = make_unique_key(),
   Value = make_bytes(2000),
@@ -122,7 +122,7 @@ t_consumer_max_bytes_too_small(Config) ->
 %% notice a thing except for a few seconds of break in data streaming
 %% @end
 t_consumer_socket_restart(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -191,7 +191,7 @@ t_consumer_socket_restart(Config) ->
 %% the last acked offset
 %% @end
 t_consumer_resubscribe(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -236,7 +236,7 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   ok.
 
 t_subscriber_restart(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   ProduceFun =
@@ -293,7 +293,7 @@ t_subscriber_restart(Config) when is_list(Config) ->
   ok.
 
 t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
-  Client = ?config(client_pid),
+  Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
   Key = make_unique_key(),
@@ -307,6 +307,24 @@ t_subscribe_with_unknown_offset(Config) when is_list(Config) ->
     {Consumer, #kafka_message_set{}} ->
       ok
   after 1000 ->
+    ct:fail("timed out receiving kafka message set", [])
+  end.
+
+t_offset_reset_policy(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key0 = make_unique_key(),
+  %% produce some random data just to make sure the partition is not empty
+  ok = brod:produce_sync(Client, Topic, Partition, Key0, Key0),
+  Options = [{sleep_ms, 0},
+             {begin_offset, 10000000000}, %% make sure it's an unknown offset
+             {offset_reset_policy, reset_to_earliest}],
+  {ok, Consumer} = brod:subscribe(Client, self(), Topic, Partition, Options),
+  receive
+    {Consumer, #kafka_message_set{}} ->
+      ok
+  after 2000 ->
     ct:fail("timed out receiving kafka message set", [])
   end.
 

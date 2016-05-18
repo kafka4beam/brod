@@ -32,6 +32,7 @@
         , os_time_utc_str/0
         , shutdown_pid/1
         , try_connect/1
+        , fetch_offsets/5
         ]).
 
 -include("brod_int.hrl").
@@ -109,7 +110,35 @@ log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
 log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
 log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
 
+%% @doc Request (sync) for topic-partition offsets.
+-spec fetch_offsets(pid(), topic(), partition(),
+                    offset_time(), pos_integer()) -> {ok, [offset()]}.
+fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
+  Request = offset_request(Topic, Partition, TimeOrSemanticOffset, NrOfOffsets),
+  {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
+  #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
+  #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
+  #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
+  {ok, Offsets}.
+
 %%%_* Internal Functions =======================================================
+
+%% @private Make a 'OffsetRequest' request message for fetching offsets.
+%% In kafka protocol, -2 and -1 are semantic 'time' to request for
+%% 'earliest' and 'latest' offsets.
+%% In brod implementation, -2, -1, 'earliest' and 'latest'
+%% are semantic 'offset', this is why often a variable named
+%% Offset is used as the Time argument.
+%% @end
+-spec offset_request(topic(), partition(),
+                     offset_time(), pos_integer()) -> kpro_OffsetRequest().
+offset_request(Topic, Partition, TimeOrSemanticOffset, MaxOffsets) ->
+  Time = ensure_integer_offset_time(TimeOrSemanticOffset),
+  kpro:offset_request(Topic, Partition, Time, MaxOffsets).
+
+ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
+ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
+ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 -spec do_find_leader_in_metadata(kpro_MetadataResponse(),
                                  topic(), partition()) ->

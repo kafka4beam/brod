@@ -21,7 +21,9 @@ otp_release:
   - R16B03-1
 
 script:
-  - make test-env t
+  - make test-env
+  - make deps
+  - make t
   - ERLVSN="$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt().')"; if [[ $ERLVSN = R* ]]; then echo 'skipping xref'; else make xref; fi
   - make edoc
   - make escript
