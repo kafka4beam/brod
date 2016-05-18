@@ -34,6 +34,7 @@
 
 %% Test cases
 -export([ t_produce_sync/1
+        , t_produce_no_ack/1
         , t_produce_async/1
         , t_producer_topic_not_found/1
         , t_producer_partition_not_found/1
@@ -74,6 +75,12 @@ init_per_suite(Config) ->
 end_per_suite(_Config) -> ok.
 
 init_per_testcase(Case, Config) ->
+  try ?MODULE:Case({'init', Config})
+  catch error : function_clause ->
+    init_client(Case, Config)
+  end.
+
+init_client(Case, Config) ->
   Client = Case,
   Topic = ?TOPIC,
   brod:stop_client(Client),
@@ -117,6 +124,44 @@ t_produce_sync(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, ?TOPIC, Partition, K1, V1),
   {K2, V2} = make_unique_kv(),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, K2, V2),
+  ReceiveFun =
+    fun(ExpectedK, ExpectedV) ->
+      receive
+        {_, K, V} ->
+          ?assertEqual(ExpectedK, K),
+          ?assertEqual(ExpectedV, V)
+        after 5000 ->
+          ct:fail({?MODULE, ?LINE, timeout, ExpectedK, ExpectedV})
+      end
+    end,
+  ReceiveFun(K1, V1),
+  ReceiveFun(K2, V2).
+
+t_produce_no_ack({init, Config}) ->
+  Client = t_produce_no_ack,
+  Topic = ?TOPIC,
+  case whereis(Client) of
+    ?undef -> ok;
+    Pid_   -> brod:stop_client(Pid_)
+  end,
+  TesterPid = self(),
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
+  ok = brod:start_producer(Client, Topic, [{required_acks, 0}]),
+  ok = brod:start_consumer(Client, Topic, []),
+  Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
+  {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
+  {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
+  [{client, Client}, {client_pid, ClientPid},
+   {subscriber, Subscriber} | Config];
+t_produce_no_ack(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Partition = 0,
+  {K1, V1} = make_unique_kv(),
+  {K2, V2} = make_unique_kv(),
+  {ok, Ref1} = brod:produce(Client, ?TOPIC, Partition, K1, V1),
+  ok = brod:sync_produce_request(Ref1),
+  {ok, Ref2} = brod:produce(Client, ?TOPIC, Partition, K2, V2),
+  ok = brod:sync_produce_request(Ref2),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive

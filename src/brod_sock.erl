@@ -75,23 +75,27 @@ start(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
 
 -spec request_async(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
-  call(Pid, {send, Request}).
-
--spec request_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
-request_sync(Pid, Request, Timeout) ->
-  case request_async(Pid, Request) of
+  case call(Pid, {send, Request}) of
     {ok, CorrId} ->
-      maybe_wait_for_resp(Pid, Request, CorrId, Timeout);
+      case Request of
+        #kpro_ProduceRequest{requiredAcks = 0} -> ok;
+        _                                      -> {ok, CorrId}
+      end;
     {error, Reason} ->
       {error, Reason}
   end.
 
--spec maybe_wait_for_resp(pid(), term(), integer(), timeout()) ->
-        ok | {ok, term()} | {error, any()}.
-maybe_wait_for_resp(_Pid, #kpro_ProduceRequest{requiredAcks = 0},
-                    _CorrId, _Timeout) ->
-  ok;
-maybe_wait_for_resp(Pid, _, CorrId, Timeout) ->
+-spec request_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
+request_sync(Pid, Request, Timeout) ->
+  case request_async(Pid, Request) of
+    ok              -> ok;
+    {ok, CorrId}    -> wait_for_resp(Pid, Request, CorrId, Timeout);
+    {error, Reason} -> {error, Reason}
+  end.
+
+-spec wait_for_resp(pid(), term(), integer(), timeout()) ->
+        {ok, term()} | {error, any()}.
+wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),
   receive
     {msg, Pid, CorrId, Response} ->

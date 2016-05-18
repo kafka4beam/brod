@@ -201,11 +201,7 @@ init({ClientPid, Topic, Partition, Config}) ->
         ProduceRequest = kpro:produce_request(Topic, Partition, KafkaKvList,
                                               RequiredAcks, AckTimeout,
                                               MaybeCompress(KafkaKvList)),
-        case sock_send(SockPid, ProduceRequest) of
-          ok              -> ok;
-          {ok, CorrId}    -> {ok, CorrId};
-          {error, Reason} -> {error, Reason}
-        end
+        sock_send(SockPid, ProduceRequest)
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                     MaxBatchSize, MaxRetries, SendFun),
