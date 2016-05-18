@@ -34,9 +34,9 @@
 
 %% Test cases
 -export([ t_produce_gzip/1
-        , t_produce_snappy/1
+        %, t_produce_snappy/1
         , t_produce_compressed_batch_consume_from_middle_gzip/1
-        , t_produce_compressed_batch_consume_from_middle_snappy/1
+        %, t_produce_compressed_batch_consume_from_middle_snappy/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -91,14 +91,14 @@ all() -> [F || {F, _A} <- module_info(exports),
 t_produce_gzip(Config) ->
   run(fun produce/1, gzip, Config).
 
-t_produce_snappy(Config) ->
-  run(fun produce/1, snappy, Config).
+%t_produce_snappy(Config) ->
+%  run(fun produce/1, snappy, Config).
 
 t_produce_compressed_batch_consume_from_middle_gzip(Config) ->
   run(fun produce_compressed_batch_consume_from_middle/1, gzip, Config).
 
-t_produce_compressed_batch_consume_from_middle_snappy(Config) ->
-  run(fun produce_compressed_batch_consume_from_middle/1, snappy, Config).
+%t_produce_compressed_batch_consume_from_middle_snappy(Config) ->
+%  run(fun produce_compressed_batch_consume_from_middle/1, snappy, Config).
 
 %%%_* Help functions ===========================================================
 
