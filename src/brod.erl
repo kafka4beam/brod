@@ -106,7 +106,7 @@ start_client(BootstrapEndpoints) ->
   start_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
 %% @equiv stat_client(BootstrapEndpoints, ClientId, [])
--spec start_client([endpoint()], client_id()) ->
+-spec start_client([endpoint()], brod_client_id()) ->
                            ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId) ->
   start_client(BootstrapEndpoints, ClientId, []).
@@ -147,7 +147,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       Producer configuration to use when auto_start_producers is true.
 %%       @see brod_client:start_producer/3. for more details.
 %% @end
--spec start_client([endpoint()], client_id(), client_config()) ->
+-spec start_client([endpoint()], brod_client_id(), client_config()) ->
                       ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId, Config) ->
   brod_sup:start_client(BootstrapEndpoints, ClientId, Config).
@@ -158,12 +158,12 @@ start_link_client(BootstrapEndpoints) ->
   start_link_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
 %% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
--spec start_link_client([endpoint()], client_id()) ->
+-spec start_link_client([endpoint()], brod_client_id()) ->
                            {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId) ->
   start_link_client(BootstrapEndpoints, ClientId, []).
 
--spec start_link_client([endpoint()], client_id(), client_config()) ->
+-spec start_link_client([endpoint()], brod_client_id(), client_config()) ->
                            {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId, Config) ->
   brod_client:start_link(BootstrapEndpoints, ClientId, Config).

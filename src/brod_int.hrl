@@ -37,7 +37,7 @@
 -type producer_config()  :: brod_producer_config().
 -type consumer_config()  :: brod_consumer_config().
 -type consumer_options() :: [{consumer_option(), integer()}].
--type client()           :: client_id() | pid().
+-type client()           :: brod_client_id() | pid().
 -type required_acks()    :: -1..1.
 
 %% consumer groups

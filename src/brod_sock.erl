@@ -59,7 +59,7 @@
                }).
 
 %%%_* API ======================================================================
--spec start_link(pid(), string(), integer(), client_id() | binary(), term()) ->
+-spec start_link(pid(), string(), integer(), brod_client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
@@ -67,7 +67,7 @@ start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
 start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
 
--spec start(pid(), string(), integer(), client_id() | binary(), term()) ->
+-spec start(pid(), string(), integer(), brod_client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
 start(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
