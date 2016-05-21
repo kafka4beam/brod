@@ -59,7 +59,8 @@
                }).
 
 %%%_* API ======================================================================
--spec start_link(pid(), string(), integer(), brod_client_id() | binary(), term()) ->
+-spec start_link(pid(), string(), integer(),
+                 brod_client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
@@ -87,7 +88,8 @@ request_async(Pid, Request) ->
       {error, Reason}
   end.
 
--spec request_sync(pid(), term(), integer()) -> {ok, term()} | ok | {error, any()}.
+-spec request_sync(pid(), term(), integer()) ->
+        {ok, term()} | ok | {error, any()}.
 request_sync(Pid, Request, Timeout) ->
   case request_async(Pid, Request) of
     ok              -> ok;
@@ -134,6 +136,9 @@ debug(Pid, File) when is_list(File) ->
   system_call(Pid, {debug, {log_to_file, File}}).
 
 %%%_* Internal functions =======================================================
+
+-spec init(pid(), hostname(), portnum(), brod_client_id(), [any()]) ->
+        no_return().
 init(Parent, Host, Port, ClientId, Debug0) ->
   Debug = sys:debug_options(Debug0),
   SockOpts = [{active, true}, {packet, raw}, binary, {nodelay, true}],
@@ -141,11 +146,13 @@ init(Parent, Host, Port, ClientId, Debug0) ->
     {ok, Sock} ->
       proc_lib:init_ack(Parent, {ok, self()}),
       try
-        loop(#state{ client_id = ClientId
-                   , parent    = Parent
-                   , sock      = Sock
-                   , requests  = brod_kafka_requests:new()
-                   }, Debug)
+        Requests = brod_kafka_requests:new(),
+        State = #state{ client_id = ClientId
+                      , parent    = Parent
+                      , sock      = Sock
+                      , requests  = Requests
+                      },
+        loop(State, Debug)
       catch error : E ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
@@ -226,11 +233,11 @@ handle_msg({From, {send, Request}},
   reply(From, {ok, CorrId}),
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
-  reply(From, {ok, State#state.sock}),
+  _ = reply(From, {ok, State#state.sock}),
   ?MODULE:loop(State, Debug);
 handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
   gen_tcp:close(Sock),
-  reply(From, ok),
+  _ = reply(From, ok),
   ok;
 handle_msg(Msg, State, Debug) ->
   error_logger:warning_msg("[~p] ~p got unrecognized message: ~p",
@@ -248,6 +255,7 @@ cast(Pid, Msg) ->
 system_continue(_Parent, Debug, State) ->
   ?MODULE:loop(State, Debug).
 
+-spec system_terminate(any(), _, _, _) -> no_return().
 system_terminate(Reason, _Parent, Debug, _Misc) ->
   sys:print_log(Debug),
   exit(Reason).

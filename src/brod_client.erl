@@ -102,7 +102,7 @@
 -record(state,
         { client_id            :: brod_client_id()
         , bootstrap_endpoints  :: [endpoint()]
-        , meta_sock_pid        :: pid()
+        , meta_sock_pid        :: pid() | dead_socket()
         , payload_sockets = [] :: [#sock{}]
         , producers_sup        :: pid()
         , consumers_sup        :: pid()
@@ -357,7 +357,7 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
-  {Rsp, NewState} = send_sync(State, Req, timer:seconds(Timeout)),
+  {Rsp, NewState} = request_sync(State, Req, timer:seconds(Timeout)),
   Result =
     case Rsp of
       {ok, #kpro_GroupCoordinatorResponse{ errorCode       = EC
@@ -387,7 +387,7 @@ handle_call({auto_start_producer, Topic}, _From, State) ->
       {Reply, NewState} = do_start_producer(Topic, ProducerConfig, State),
       {reply, Reply, NewState};
     false ->
-      {reply, disabled, State}
+      {reply, {error, disabled}, State}
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, {ok, State#state.workers_tab}, State};
@@ -556,7 +556,7 @@ do_get_metadata(Topic, #state{ config      = Config
   Request = #kpro_MetadataRequest{topicName_L = Topics},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  {Result, NewState} = send_sync(State, Request, timer:seconds(Timeout)),
+  {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
   ok = maybe_update_partitions_count_cache(Ets, Result),
   {Result, NewState}.
 
@@ -673,7 +673,7 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %%       should be restarted by supervisor.
 %% @end
 -spec start_metadata_socket(brod_client_id(), [endpoint()]) ->
-                               {ok, pid(),  [endpoint()]} | no_return().
+                               {ok, pid(),  [endpoint()]}.
 start_metadata_socket(ClientId, [_|_] = Endpoints) ->
   start_metadata_socket(ClientId, Endpoints,
                         _FailedEndpoints = [], _Reason = ?undef).
@@ -771,31 +771,31 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
   case safe_gen_call(Client, {auto_start_producer, Topic}, infinity) of
     ok ->
       get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition));
-    disabled ->
+    {error, disabled} ->
       Error;
     {error, Reason} ->
       {error, Reason}
   end.
 
--spec send_sync(#state{}, kpro_Request(), timer:time()) ->
-        {Result, #state{}} when Result :: {ok, kpro_Response()}
+-spec request_sync(#state{}, kpro_RequestMessage(), non_neg_integer()) ->
+        {Result, #state{}} when Result :: {ok, kpro_ResponseMessage()}
                                         | {error, any()}.
-send_sync(State, Request, Timeout) ->
+request_sync(State, Request, Timeout) ->
   #state{config = Config} = State,
   MaxRetry = proplists:get_value(max_metadata_sock_retry, Config,
                                  ?DEFAULT_MAX_METADATA_SOCK_RETRY),
-  send_sync(State, Request, Timeout, MaxRetry).
+  request_sync(State, Request, Timeout, MaxRetry).
 
-send_sync(State0, Request, Timeout, RetryLeft) ->
+request_sync(State0, Request, Timeout, RetryLeft) ->
   {ok, State} = maybe_restart_metadata_socket(State0),
   SockPid = State#state.meta_sock_pid,
   case brod_sock:request_sync(SockPid, Request, Timeout) of
     {error, tcp_closed} when RetryLeft > 0 ->
       {ok, NewState} = rotate_endpoints(State, tcp_closed),
-      send_sync(NewState, Request, Timeout, RetryLeft - 1);
+      request_sync(NewState, Request, Timeout, RetryLeft - 1);
     {error, {sock_down, _} = Reason} when RetryLeft > 0 ->
       {ok, NewState} = rotate_endpoints(State, Reason),
-      send_sync(NewState, Request, Timeout, RetryLeft - 1);
+      request_sync(NewState, Request, Timeout, RetryLeft - 1);
     Result ->
       {Result, State}
   end.
@@ -813,7 +813,7 @@ rotate_endpoints(State, Reason) ->
   {ok, State#state{bootstrap_endpoints = BootstrapEndpoints}}.
 
 %% @private Maybe restart the metadata socket pid if it is no longer alive.
--spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}} | no_return().
+-spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}}.
 maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
   case is_pid(MetaSockPid) andalso is_process_alive(MetaSockPid) of
     true ->

@@ -72,7 +72,7 @@
 %%%_* Types and macros =========================================================
 
 -type cb_state() :: term().
--type cb_fun()   :: fun((cb_state()) -> {ok, cb_state()} | {ok, ack, cb_state()}).
+-type cb_fun()   :: fun((cb_state()) -> {AckNow :: boolean(), cb_state()}).
 -type ack_ref()  :: {partition(), offset()}.
 
 -record(consumer,
@@ -153,9 +153,18 @@ handle_info({_ConsumerPid,
   MapFun =
     fun(#kafka_message{offset = Offset} = Msg) ->
       AckRef = {Partition, Offset},
-      CbFun = fun(CbState) ->
-                CbModule:handle_message(Partition, Msg, CbState)
-              end,
+      CbFun =
+        fun(CbState) ->
+          case CbModule:handle_message(Partition, Msg, CbState) of
+            {ok, NewCbState} ->
+              {_AckNow = false, NewCbState};
+            {ok, ack, NewCbState} ->
+              {_AckNow = true, NewCbState};
+            Unknown ->
+              erlang:error({bad_return_value,
+                           {CbModule, handle_message, Unknown}})
+          end
+        end,
       {AckRef, CbFun}
     end,
   NewPendings = Pendings ++ lists:map(MapFun, Messages),
@@ -283,24 +292,15 @@ subscribe_partition(Client, Topic, Consumer) ->
 -spec maybe_process_message(#state{}) -> {ok, #state{}}.
 maybe_process_message(#state{ pending_ack      = ?undef
                             , pending_messages = [{AckRef, F} | Rest]
-                            , cb_module        = CbModule
                             , cb_state         = CbState
                             } = State) ->
   %% process new message only when there is no pending ack
-  {AckNow, NewCbState} =
-    case F(CbState) of
-      {ok, NewCbState_} ->
-        {false, NewCbState_};
-      {ok, ack, NewCbState_} ->
-        {true, NewCbState_};
-      Unknown ->
-        erlang:error({bad_return_value, {CbModule, handle_message, Unknown}})
-    end,
-   NewState =
-     State#state{ pending_ack      = AckRef
-                , pending_messages = Rest
-                , cb_state         = NewCbState
-                },
+  {AckNow, NewCbState} = F(CbState),
+  NewState =
+    State#state{ pending_ack      = AckRef
+               , pending_messages = Rest
+               , cb_state         = NewCbState
+               },
   case AckNow of
     true  -> handle_ack(AckRef, NewState);
     false -> {ok, NewState}

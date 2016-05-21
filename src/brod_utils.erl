@@ -141,8 +141,7 @@ ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
 ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 -spec do_find_leader_in_metadata(kpro_MetadataResponse(),
-                                 topic(), partition()) ->
-                                    endpoint() | no_return().
+                                 topic(), partition()) -> endpoint().
 do_find_leader_in_metadata(Metadata, Topic, Partition) ->
   #kpro_MetadataResponse{ broker_L        = Brokers
                         , topicMetadata_L = [TopicMetadata]

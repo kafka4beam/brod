@@ -48,7 +48,10 @@
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
 
--type send_fun() :: fun((pid(), [{binary(), binary()}]) -> {ok, corr_id()}).
+-type send_fun() :: fun((pid(), [{binary(), binary()}]) ->
+                        ok |
+                        {ok, corr_id()} |
+                        {error, any()}).
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -record(buf,
@@ -100,8 +103,7 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
 %% request to kafka. In case a request has been tried for more than limited
 %% times, and 'exit' exception is raised.
 %% @end
--spec maybe_send(buf(), pid()) ->
-        {ok, buf()} | {retry, buf()} | no_return().
+-spec maybe_send(buf(), pid()) -> {ok, buf()} | {retry, buf()}.
 maybe_send(#buf{} = Buf, SockPid) ->
   case take_reqs_to_send(Buf) of
     {[], NewBuf}   -> {ok, NewBuf};
@@ -163,7 +165,7 @@ is_empty(#buf{}) -> false.
 %% guarantees the produce responses are replied in the order the corresponding
 %% produce requests were received from clients.
 %% @end
--spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true | no_return().
+-spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true.
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
   true;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
@@ -236,8 +238,7 @@ take_reqs_to_send(#buf{ buffer_count = BufferCount
   take_reqs_to_send(NewBuf, [Req | Acc], AccBytes + Req#req.bytes).
 
 %% @private Send produce request to kafka.
--spec do_send([#req{}], buf(), pid()) ->
-        {ok, buf()} | {retry, buf()} | no_return().
+-spec do_send([#req{}], buf(), pid()) -> {ok, buf()} | {retry, buf()}.
 do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
