@@ -35,18 +35,21 @@
         , crc        :: integer()
         }).
 
+-type kafka_message() :: kafka_message()
+                       | incomplete_message. %% brod internal only
+
 -record(kafka_message_set,
         { topic          :: kafka_topic()
         , partition      :: kafka_partition()
         , high_wm_offset :: integer() %% max offset of the partition
-        , messages       :: [#kafka_message{}]
+        , messages       :: [kafka_message()]
         }).
 
 -record(kafka_fetch_error,
         { topic      :: kafka_topic()
         , partition  :: kafka_partition()
         , error_code :: kafka_error_code()
-        , error_desc :: string()
+        , error_desc :: binary()
         }).
 
 -define(BROD_DEFAULT_CLIENT_ID, brod_default_client).

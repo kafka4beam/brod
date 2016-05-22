@@ -384,7 +384,7 @@ get_metadata(Hosts) ->
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()], [binary()]) ->
-                      {ok, kpro_MetadataResponse} | {error, any()}.
+                      {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
@@ -395,7 +395,7 @@ get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, ?OFFSET_LATEST, 1).
 
 %% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([endpoint()], binary(), non_neg_integer(),
+-spec get_offsets([endpoint()], topic(), partition(),
                   offset_time(), pos_integer()) ->
                      {ok, [offset()]} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
@@ -414,9 +414,8 @@ fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([endpoint()], binary(), non_neg_integer(),
-            integer(), non_neg_integer(), non_neg_integer(),
-            pos_integer()) ->
+-spec fetch([endpoint()], topic(), partition(), offset_time(),
+            non_neg_integer(), non_neg_integer(), pos_integer()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
@@ -548,6 +547,7 @@ parse_hosts_str(HostsStr) ->
       end,
   lists:map(F, string:tokens(HostsStr, ",")).
 
+-spec connect_leader([endpoint()], topic(), partition()) -> {ok, pid()}.
 connect_leader(Hosts, Topic, Partition) ->
   {ok, Metadata} = get_metadata(Hosts, [Topic]),
   {ok, {Host, Port}} =

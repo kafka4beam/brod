@@ -116,7 +116,7 @@ start_client(Endpoints, ClientId, Config) ->
 
 -spec stop_client(brod_client_id()) -> ok | {error, any()}.
 stop_client(ClientId) ->
-  supervisor3:terminate_child(?SUP, ClientId),
+  _ = supervisor3:terminate_child(?SUP, ClientId),
   supervisor3:delete_child(?SUP, ClientId).
 
 -spec find_client(brod_client_id()) -> [pid()].

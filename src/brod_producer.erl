@@ -348,6 +348,8 @@ is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
 is_retriable(_) ->
   false.
 
+-spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
+        ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
 

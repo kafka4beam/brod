@@ -52,6 +52,7 @@
 
 %%%_* APIs =====================================================================
 
+-spec new() -> requests().
 new() -> #requests{}.
 
 %% @doc Add a new request to sent collection.

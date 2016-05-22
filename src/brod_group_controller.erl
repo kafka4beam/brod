@@ -213,18 +213,19 @@ commit_offsets(ControllerPid) ->
 
 init({Client, GroupId, Topics, Config, Subscriber}) ->
   process_flag(trap_exit, true),
-  GetCfg = fun(NameOrWithDefault) -> get_config(NameOrWithDefault, Config) end,
-  PaStrategy = GetCfg({partition_assignment_strategy,
-                       ?PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN}),
-  SessionTimeoutSec =
-    GetCfg({session_timeout_seconds, ?SESSION_TIMEOUT_SECONDS}),
-  HbRateSec = GetCfg({heartbeat_rate_seconds, ?HEARTBEAT_RATE_SECONDS}),
-  MaxRejoinAttempts = GetCfg({max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS}),
-  RejoinDelaySeconds = GetCfg({rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS}),
-  OffsetRetentionSeconds = GetCfg({offset_retention_seconds, ?undef}),
-  OffsetCommitPolicy = GetCfg({offset_commit_policy, ?OFFSET_COMMIT_POLICY}),
-  OffsetCommitIntervalSeconds = GetCfg({offset_commit_interval_seconds,
-                                        ?OFFSET_COMMIT_INTERVAL_SECONDS}),
+  GetCfg = fun(Name, Default) ->
+             proplists:get_value(Name, Config, Default)
+           end,
+  PaStrategy = GetCfg(partition_assignment_strategy,
+                      ?PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN),
+  SessionTimeoutSec = GetCfg(session_timeout_seconds, ?SESSION_TIMEOUT_SECONDS),
+  HbRateSec = GetCfg(heartbeat_rate_seconds, ?HEARTBEAT_RATE_SECONDS),
+  MaxRejoinAttempts = GetCfg(max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS),
+  RejoinDelaySeconds = GetCfg(rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS),
+  OffsetRetentionSeconds = GetCfg(offset_retention_seconds, ?undef),
+  OffsetCommitPolicy = GetCfg(offset_commit_policy, ?OFFSET_COMMIT_POLICY),
+  OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
+                                       ?OFFSET_COMMIT_INTERVAL_SECONDS),
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
   State =
@@ -255,7 +256,7 @@ handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   end;
 handle_info(?LO_CMD_COMMIT_OFFSETS, State) ->
   try
-    NewState = ?ESCALATE(do_commit_offsets(State)),
+    {ok, NewState} = do_commit_offsets(State),
     ok = maybe_start_offset_commit_timer(NewState),
     {noreply, NewState}
   catch throw : Reason ->
@@ -318,7 +319,7 @@ handle_call(commit_offsets, _From,
   {reply, {error, consumer_managed}, State};
 handle_call(commit_offsets, From, State) ->
   try
-    NewState = ?ESCALATE(do_commit_offsets(State)),
+    {ok, NewState} = do_commit_offsets(State),
     {reply, ok, NewState}
   catch throw : Reason ->
     gen_server:reply(From, {error, Reason}),
@@ -349,7 +350,7 @@ terminate(Reason, #state{ sock_pid = SockPid
 
 %%%_* Internal Functions =======================================================
 
--spec discover_coordinator(#state{}) -> {ok, #state{}} | no_return().
+-spec discover_coordinator(#state{}) -> {ok, #state{}}.
 discover_coordinator(#state{ client      = Client
                            , coordinator = Coordinator
                            , sock_pid    = SockPid
@@ -419,7 +420,7 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   RetryFun =
     fun(StateIn, NewReason) ->
       log(StateIn, info, "failed to join group\nreason:~p", [NewReason]),
-      case AttemptNo =:= 0 of
+      _ = case AttemptNo =:= 0 of
         true ->
           %% do not delay before the first retry
           self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
@@ -472,7 +473,7 @@ stop_socket(SockPid) ->
   catch unlink(SockPid),
   ok = brod_sock:stop(SockPid).
 
--spec join_group(#state{}) -> {ok, #state{}} | no_return().
+-spec join_group(#state{}) -> {ok, #state{}}.
 join_group(#state{ groupId                       = GroupId
                  , memberId                      = MemberId0
                  , topics                        = Topics
@@ -521,7 +522,7 @@ join_group(#state{ groupId                       = GroupId
   log(State, info, "elected=~p", [IsGroupLeader]),
   {ok, State}.
 
--spec sync_group(#state{}) -> {ok, #state{}} | no_return().
+-spec sync_group(#state{}) -> {ok, #state{}}.
 sync_group(#state{ groupId      = GroupId
                  , generationId = GenerationId
                  , memberId     = MemberId
@@ -646,8 +647,7 @@ do_commit_offsets(#state{ groupId                  = GroupId
     end, Topics),
   {ok, State#state{acked_offsets = []}}.
 
--spec assign_partitions(#state{}) ->
-        [kpro_GroupAssignment()] | no_return().
+-spec assign_partitions(#state{}) -> [kpro_GroupAssignment()].
 assign_partitions(State) when ?IS_LEADER(State) ->
   #state{ client                        = Client
         , topics                        = Topics
@@ -683,7 +683,7 @@ assign_partitions(#state{}) ->
   %% only leader can assign partitions to members
   [].
 
--spec get_partitions(client(), topic()) -> [partition()] | no_return().
+-spec get_partitions(client(), topic()) -> [partition()].
 get_partitions(Client, Topic) ->
   Count = ?ESCALATE(brod_client:get_partitions_count(Client, Topic)),
   lists:seq(0, Count-1).
@@ -837,14 +837,6 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets, Acc) ->
                          },
   NewAcc = orddict:append_list(Topic, [PartitionAssignment], Acc),
   resolve_begin_offsets(Rest, CommittedOffsets, NewAcc).
-
-get_config({Name, Default}, Configs) ->
-  proplists:get_value(Name, Configs, Default);
-get_config(Name, Configs) ->
-  case proplists:is_defined(Name, Configs) of
-    true  -> proplists:get_value(Name, Configs);
-    false -> erlang:error({bad_config, Name})
-  end.
 
 %% @private Start a timer to send a loopback command to self() to trigger
 %% a heartbeat request to the group coordinator.

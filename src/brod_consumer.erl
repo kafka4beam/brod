@@ -57,7 +57,7 @@
                , socket_pid          :: pid()
                , topic               :: binary()
                , partition           :: integer()
-               , begin_offset        :: integer()
+               , begin_offset        :: offset_time()
                , max_wait_time       :: integer()
                , min_bytes           :: integer()
                , max_bytes           :: integer()
@@ -357,6 +357,8 @@ err_op(_)                              -> restart.
 %% @private Map message to brod's format.
 %% incomplete message indicator is kept when the only one message is incomplete.
 %% @end
+-spec map_messages([?incomplete_message | kpro_Message()]) ->
+        [?incomplete_message | #kafka_message{}].
 map_messages([?incomplete_message]) ->
   [?incomplete_message];
 map_messages(Messages) ->
@@ -429,7 +431,7 @@ cast_to_subscriber(Pid, Msg) ->
     ok
   end.
 
--spec maybe_delay_fetch_request(#state{}) -> ok.
+-spec maybe_delay_fetch_request(#state{}) -> #state{}.
 maybe_delay_fetch_request(#state{sleep_timeout = T} = State) when T > 0 ->
   _ = erlang:send_after(T, self(), ?SEND_FETCH_REQUEST),
   State;
@@ -560,7 +562,7 @@ reset_buffer(#state{pending_acks = [Offset | _]} = State) ->
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
-             Return  :: {ok, term()} | {error, consumer_down | term()}.
+             Return  :: ok | {ok, term()} | {error, consumer_down | term()}.
 safe_gen_call(Server, Call, Timeout) ->
   try
     gen_server:call(Server, Call, Timeout)
