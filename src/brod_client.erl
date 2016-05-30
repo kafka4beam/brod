@@ -329,7 +329,7 @@ handle_info({'EXIT', Pid, Reason},
                   , bootstrap_endpoints = BootstrapEndpoints0
                   } = State) ->
   [{Host, Port} | Rest] = BootstrapEndpoints0,
-  error_logger:error_msg("client ~p metadata socket down ~s:~p~nReason:~p",
+  error_logger:info_msg("client ~p metadata socket down ~s:~p~nReason:~p",
                         [ClientId, Host, Port, Reason]),
   %% move the newly failed endpoint to the last in the list
   BootstrapEndpoints = Rest ++ [{Host, Port}],
