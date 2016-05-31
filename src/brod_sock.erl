@@ -218,7 +218,7 @@ handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
       end, Requests, Responses),
   ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
 handle_msg({tcp_closed, _Sock}, _State, _) ->
-  exit(tcp_closed);
+  exit({shutdown, tcp_closed});
 handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
   exit({tcp_error, Reason});
 handle_msg({From, {send, Request}},
