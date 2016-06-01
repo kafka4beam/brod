@@ -64,7 +64,6 @@
 
 -define(undef, undefined).
 
--define(DEFAULT_CLIENT_ID, brod).
 -define(GROUP_PROTOCOL_0, <<"brod-consumer-protocol-0">>).
 
 -define(OFFSET_EARLIEST, earliest).

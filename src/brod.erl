@@ -35,12 +35,15 @@
         , start_client/1
         , start_client/2
         , start_client/3
-        , start_link_client/1
-        , start_link_client/2
-        , start_link_client/3
         , start_consumer/3
         , start_producer/3
         , stop_client/1
+        ]).
+
+%% Client API (deprecated)
+-export([ start_link_client/1
+        , start_link_client/2
+        , start_link_client/3
         ]).
 
 %% Producer API
@@ -501,7 +504,8 @@ call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
   Pos = string:chr(KVStr, $:),
   Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
   Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  {ok, Client} = brod_client:start_link(Hosts, []),
+  Client = brod_cli,
+  {ok, _Pid} = brod_client:start_link(Hosts, Client, []),
   ok = brod:start_producer(Client, Topic, []),
   Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
   brod_client:stop(Client),
