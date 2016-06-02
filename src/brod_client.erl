@@ -32,7 +32,6 @@
         , get_producer/3
         , register_consumer/3
         , register_producer/3
-        , start_link/2
         , start_link/3
         , start_producer/3
         , start_consumer/3
@@ -111,12 +110,6 @@
         }).
 
 %%%_* APIs =====================================================================
-
--spec start_link( [endpoint()]
-                , client_config()) -> {ok, pid()} | {error, any()}.
-start_link(BootstrapEndpoints, Config) ->
-  Args = {BootstrapEndpoints, Config},
-  gen_server:start_link(?MODULE, Args, []).
 
 -spec start_link( [endpoint()]
                 , brod_client_id()
@@ -227,13 +220,14 @@ get_leader_connection(Client, Topic, Partition) ->
 get_metadata(Client, Topic) ->
   safe_gen_call(Client, {get_metadata, Topic}, infinity).
 
-%% @doc Get number of partitions for a given topic
+%% @doc Get number of partitions for a given topic.
 -spec get_partitions_count(client(), topic()) ->
         {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Topic) when is_atom(Client) ->
   %% Ets =:= ClientId
   get_partitions_count(Client, Client, Topic);
 get_partitions_count(Client, Topic) when is_pid(Client) ->
+  %% TODO: remove this clause when brod:start_link_client/_ is removed.
   case safe_gen_call(Client, get_workers_table, infinity) of
     {ok, Ets}       -> get_partitions_count(Client, Ets, Topic);
     {error, Reason} -> {error, Reason}
@@ -284,15 +278,6 @@ init({BootstrapEndpoints, ClientId, Config}) ->
                 [named_table, protected, {read_concurrency, true}]),
   self() ! init,
   {ok, #state{ client_id           = ClientId
-             , bootstrap_endpoints = BootstrapEndpoints
-             , config              = Config
-             , workers_tab         = Tab
-             }};
-init({BootstrapEndpoints, Config}) ->
-  erlang:process_flag(trap_exit, true),
-  Tab = ets:new(workers_tab, [protected, {read_concurrency, true}]),
-  self() ! init,
-  {ok, #state{ client_id           = ?DEFAULT_CLIENT_ID
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
@@ -390,6 +375,7 @@ handle_call({auto_start_producer, Topic}, _From, State) ->
       {reply, {error, disabled}, State}
   end;
 handle_call(get_workers_table, _From, State) ->
+  %% TODO: remove this clause when brod:start_link_client/_ is removed
   {reply, {ok, State#state.workers_tab}, State};
 handle_call(get_producers_sup_pid, _From, State) ->
   {reply, {ok, State#state.producers_sup}, State};
@@ -442,6 +428,7 @@ terminate(Reason, #state{ client_id       = ClientId
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
+  %% TODO: remove this clause when bord:start_link_client/_ is removed.
   case erlang:process_info(ClientPid, registered_name) of
     {registered_name, ClientId} when is_atom(ClientId) ->
       get_partition_worker(ClientId, Key);
@@ -668,7 +655,7 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %%
 %% NOTE: This socket is not intended for kafka payload. This is to avoid
 %%       burst of connection usage when many partition producers (re)start
-%%       at same time, if we use brod_util:get_metadata/2 to fetch metadata.
+%%       at same time, if we always start a new socket to fetch metadata.
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
@@ -716,9 +703,9 @@ update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
   end,
   update_partitions_count_cache(Ets, Rest).
 
-%% @private Partition counter is cached,
-%% {ok, undefined} indicates the non-existing state of the given topic
-%% @end.
+%% @private Get partition counter from cache.
+%% If cache is not hit, send meta data request to retrieve.
+%% @end
 -spec get_partitions_count(client(), ets:tab(), topic()) ->
         {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Ets, Topic) ->
@@ -728,6 +715,7 @@ get_partitions_count(Client, Ets, Topic) ->
     {error, Reason} ->
       {error, Reason};
     false ->
+      %% This call should populate the cache
       case get_metadata(Client, Topic) of
         {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
           [TopicMetadata] = TopicsMetadata,
