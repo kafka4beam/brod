@@ -42,6 +42,7 @@
 -export([ t_async_acks/1
         , t_koc_demo/1
         , t_loc_demo/1
+        , t_2_members_subscribe_to_different_topics/1
         ]).
 
 
@@ -50,7 +51,9 @@
 -include_lib("brod/include/brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
--define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
+-define(TOPIC1, <<"brod-group-subscriber-1">>).
+-define(TOPIC2, <<"brod-group-subscriber-2">>).
+-define(TOPIC3, <<"brod-group-subscriber-3">>).
 -define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 -define(config(Name), proplists:get_value(Name, Config)).
 
@@ -69,9 +72,10 @@ init_per_testcase(Case, Config) ->
   ClientId       = ?CLIENT_ID,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig   = [],
-  Topic          = ?TOPIC,
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
-  ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
+  ok = brod:start_producer(ClientId, ?TOPIC1, _ProducerConfig = []),
+  ok = brod:start_producer(ClientId, ?TOPIC2, _ProducerConfig = []),
+  ok = brod:start_producer(ClientId, ?TOPIC3, _ProducerConfig = []),
   Config.
 
 end_per_testcase(Case, Config) when is_list(Config) ->
@@ -91,26 +95,26 @@ all() -> [F || {F, _A} <- module_info(exports),
 -record(state, { ct_case_ref
                , ct_case_pid
                , is_async_ack
-               , my_id
                }).
 
-init(_GroupId, {CaseRef, SubscriberId, CasePid, IsAsyncAck}) ->
+-define(MSG(Ref, Pid, Topic, Partition, Offset, Value),
+        {Ref, Pid, Topic, Partition, Offset, Value}).
+
+init(_GroupId, {CaseRef, CasePid, IsAsyncAck}) ->
   {ok, #state{ ct_case_ref  = CaseRef
              , ct_case_pid  = CasePid
              , is_async_ack = IsAsyncAck
-             , my_id        = SubscriberId
              }}.
 
-handle_message(_Topic, Partition, Message, #state{ ct_case_ref  = Ref
-                                                 , ct_case_pid  = Pid
-                                                 , is_async_ack = IsAsyncAck
-                                                 , my_id        = MyId
-                                                 } = State) ->
+handle_message(Topic, Partition, Message, #state{ ct_case_ref  = Ref
+                                                , ct_case_pid  = Pid
+                                                , is_async_ack = IsAsyncAck
+                                                } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
   %% forward the message to ct case for verification.
-  Pid ! {Ref, MyId, Partition, Offset, Value},
+  Pid ! ?MSG(Ref, self(), Topic, Partition, Offset, Value),
   case IsAsyncAck of
     true  -> {ok, State};
     false -> {ok, ack, State}
@@ -169,22 +173,22 @@ t_async_acks(Config) when is_list(Config) ->
                    ],
   CaseRef        = t_async_acks,
   CasePid        = self(),
-  InitArgs       = {CaseRef, _SubscriberId = 0, CasePid, _IsAsyncAck = true},
+  InitArgs       = {CaseRef, CasePid, _IsAsyncAck = true},
   Partition      = 0,
   {ok, SubscriberPid} =
-    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC],
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
       Value = list_to_binary(integer_to_list(I)),
-      ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, Partition, <<>>, Value)
+      ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, Value)
     end,
   RecvFun =
     fun(Timeout, {ContinueFun, Acc}) ->
       receive
-        {CaseRef, 0, 0, Offset, Value} ->
-          ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC,
+        ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
+          ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1,
                                          Partition, Offset),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
@@ -208,6 +212,70 @@ t_async_acks(Config) when is_list(Config) ->
   {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
   ?assertEqual(L, lists:reverse(ReceivedL)),
   ok = brod_group_subscriber:stop(SubscriberPid),
+  ok.
+
+t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
+  MaxSeqNo       = 100,
+  GroupConfig    = [{offset_commit_policy, consumer_managed}],
+  ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   ],
+  CaseRef        = t_2_members_subscribe_to_different_topics,
+  CasePid        = self(),
+  InitArgs       = {CaseRef, CasePid, _IsAsyncAck = false},
+  {ok, SubscriberPid1} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC2],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  {ok, SubscriberPid2} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC3],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
+                  {ok, crypto:rand_uniform(0, PartitionCnt)}
+                end,
+  SendFun =
+    fun(I) ->
+      Value = list_to_binary(integer_to_list(I)),
+      Topic =
+        case crypto:rand_uniform(0,2) of
+          0 -> ?TOPIC2;
+          1 -> ?TOPIC3
+        end,
+      ok = brod:produce_sync(?CLIENT_ID, Topic, Partitioner, <<>>, Value)
+    end,
+  RecvFun =
+    fun(Timeout, {ContinueFun, Acc}) ->
+      receive
+        ?MSG(CaseRef, _SubscriberPid, Topic, _Partition, _Offset, Value) ->
+          ?assert(Topic =:= ?TOPIC2 orelse Topic =:= ?TOPIC3),
+          I = binary_to_list(Value),
+          NewAcc = [list_to_integer(I) | Acc],
+          ContinueFun(0, {ContinueFun, NewAcc});
+        Msg ->
+          erlang:error({unexpected_msg, Msg})
+      after Timeout ->
+        {ContinueFun, Acc}
+      end
+    end,
+  ok = SendFun(0),
+  %% wait at most 2 seconds to receive the first message
+  %% it may or may not receive the first message (0) depending on when
+  %% the consumers starts polling --- before or after the first message
+  %% is produced.
+  _ = RecvFun(2000, {RecvFun, []}),
+  L = lists:seq(1, MaxSeqNo),
+  ok = lists:foreach(SendFun, L),
+  %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
+  Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
+  {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
+  %% since the nubmers are produced to different partitions and collected
+  %% by different consumers, they have a very good chance to go out of the
+  %% original order, hence we do not verify the order here
+  ?assertEqual(L, lists:sort(ReceivedL)),
+  ok = brod_group_subscriber:stop(SubscriberPid1),
+  ok = brod_group_subscriber:stop(SubscriberPid2),
   ok.
 
 %%%_* Help funtions ============================================================
