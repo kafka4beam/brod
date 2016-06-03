@@ -26,9 +26,20 @@
 
 -mode(compile).
 
-main([UtCoverDataFile, CtCoverDataFile]) ->
-  io:format("using coverdata file: ~s\n", [UtCoverDataFile]),
-  io:format("using coverdata file: ~s\n", [CtCoverDataFile]),
+main([]) ->
+  io:format(user, "expecting at least one coverdata file\n", []),
+  halt(1);
+main(Files) ->
+  ok = import_coverdata(Files),
+  Modules = get_imported_modules(),
+  Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
+  lists:foreach(fun({Module, NotCoveredLines}) ->
+                  print_mod_summary(Module, lists:sort(NotCoveredLines))
+                end, Result).
+
+import_coverdata([]) -> ok;
+import_coverdata([Filename | Rest]) ->
+  io:format(user, "Importing coverdata file: ~s\n", [Filename]),
   Parent = self(),
   Ref = make_ref(),
   erlang:spawn_link(
@@ -36,17 +47,16 @@ main([UtCoverDataFile, CtCoverDataFile]) ->
       %% shutup the chatty prints from cover:xxx calls
       {ok, F} = file:open("/dev/null", [write]),
       group_leader(F, self()),
-      ok = cover:import(UtCoverDataFile),
-      ok = cover:import(CtCoverDataFile),
-      Modules = get_imported_modules(),
-      Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
-      Parent ! {Ref, Result}
+      ok = cover:import(Filename),
+      Parent ! {ok, Ref},
+      %% keep it alive
+      receive stop ->
+        exit(normal)
+      end
     end),
   receive
-    {Ref, Result} ->
-      lists:foreach(fun({Module, NotCoveredLines}) ->
-                      print_mod_summary(Module, lists:sort(NotCoveredLines))
-                    end, Result)
+    {ok, Ref} ->
+      import_coverdata(Rest)
   end.
 
 get_imported_modules() ->
@@ -71,7 +81,7 @@ analyse_module(Module) ->
 
 print_mod_summary(_Module, []) -> ok;
 print_mod_summary(Module, NotCoveredLines) ->
-  io:format("================ ~p ================\n", [Module]),
+  io:format(user, "================ ~p ================\n", [Module]),
   case whicherl(Module) of
     Filename when is_list(Filename) ->
       print_lines(Filename, NotCoveredLines);
@@ -97,7 +107,7 @@ print_lines(Fd, N, [M | Rest] = Lines) ->
       eof ->
         erlang:error({eof, N, Lines});
       Line when N =:= M ->
-        io:format("~5p: ~s", [N, Line]),
+        io:format(user, "~5p: ~s", [N, Line]),
         Rest;
      _ ->
        Lines
