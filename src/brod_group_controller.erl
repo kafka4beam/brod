@@ -145,7 +145,7 @@
 %% @doc To be called by group subscriber.
 %% Client:  ClientId (or pid, but not recommended)
 %% GroupId: Predefined globally unique (in a kafka cluster) binary string.
-%% Topics:  Predefined set of topic names in the group.
+%% Topics:  Predefined set of topic names to join the group.
 %% Config:  The group controller configs in a proplist, possible entries:
 %%  - partition_assignment_strategy  (optional, default = roundrobin)
 %%      roundrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
@@ -650,13 +650,13 @@ do_commit_offsets(#state{ groupId                  = GroupId
 -spec assign_partitions(#state{}) -> [kpro_GroupAssignment()].
 assign_partitions(State) when ?IS_LEADER(State) ->
   #state{ client                        = Client
-        , topics                        = Topics
         , members                       = Members
         , partition_assignment_strategy = Strategy
         } = State,
+  AllTopics = all_topics(Members),
   AllPartitions =
     [ {Topic, Partition}
-      || Topic <- lists:usort(Topics),
+      || Topic <- AllTopics,
          Partition <- get_partitions(Client, Topic)
     ],
   Assignments = do_assign_partitions(Strategy, Members, AllPartitions),
@@ -682,6 +682,16 @@ assign_partitions(State) when ?IS_LEADER(State) ->
 assign_partitions(#state{}) ->
   %% only leader can assign partitions to members
   [].
+
+%% collect topics from all members
+-spec all_topics([member()]) -> [topic()].
+all_topics(Members) ->
+  lists:usort(
+    lists:append(
+      lists:map(
+        fun(#kpro_GroupMemberMetadata{protocolMetadata = M}) ->
+          M#kpro_ConsumerGroupProtocolMetadata.topicName_L
+        end, Members))).
 
 -spec get_partitions(client(), topic()) -> [partition()].
 get_partitions(Client, Topic) ->
