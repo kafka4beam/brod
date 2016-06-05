@@ -142,7 +142,7 @@ ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 -spec do_find_leader_in_metadata(kpro_MetadataResponse(),
                                  topic(), partition()) -> endpoint().
-do_find_leader_in_metadata(Metadata, Topic, Partition) ->
+do_find_leader_in_metadata(Metadata, _Topic, Partition) ->
   #kpro_MetadataResponse{ broker_L        = Brokers
                         , topicMetadata_L = [TopicMetadata]
                         } = Metadata,
@@ -150,9 +150,15 @@ do_find_leader_in_metadata(Metadata, Topic, Partition) ->
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
   kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
-  #kpro_PartitionMetadata{leader = Id} =
-    lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
-  Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),
+  Id = case lists:keyfind(Partition,
+                          #kpro_PartitionMetadata.partition, Partitions) of
+         #kpro_PartitionMetadata{leader = Leader} when Leader >= 0 ->
+           Leader;
+         #kpro_PartitionMetadata{} ->
+           erlang:throw(?EC_LEADER_NOT_AVAILABLE);
+         _ ->
+           erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION)
+       end,
   Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
   Host = Broker#kpro_Broker.host,
   Port = Broker#kpro_Broker.port,
