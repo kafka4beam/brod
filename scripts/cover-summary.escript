@@ -26,9 +26,18 @@
 
 -mode(compile).
 
-main([UtCoverDataFile, CtCoverDataFile]) ->
-  io:format("using coverdata file: ~s\n", [UtCoverDataFile]),
-  io:format("using coverdata file: ~s\n", [CtCoverDataFile]),
+main([]) ->
+  io:format(user, "expecting at least one coverdata file\n", []),
+  halt(1);
+main(Files) ->
+  ok = import_coverdata(Files),
+  Modules = get_imported_modules(),
+  Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
+  print_summary(Result).
+
+import_coverdata([]) -> ok;
+import_coverdata([Filename | Rest]) ->
+  io:format(user, "Importing coverdata file: ~s\n", [Filename]),
   Parent = self(),
   Ref = make_ref(),
   erlang:spawn_link(
@@ -36,15 +45,16 @@ main([UtCoverDataFile, CtCoverDataFile]) ->
       %% shutup the chatty prints from cover:xxx calls
       {ok, F} = file:open("/dev/null", [write]),
       group_leader(F, self()),
-      ok = cover:import(UtCoverDataFile),
-      ok = cover:import(CtCoverDataFile),
-      Modules = get_imported_modules(),
-      Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
-      Parent ! {Ref, Result}
+      ok = cover:import(Filename),
+      Parent ! {ok, Ref},
+      %% keep it alive
+      receive stop ->
+        exit(normal)
+      end
     end),
   receive
-    {Ref, Result} ->
-      print_summary(Result)
+    {ok, Ref} ->
+      import_coverdata(Rest)
   end.
 
 get_imported_modules() ->
@@ -88,7 +98,7 @@ print_coverage(Width, [{Module, {Covered, NotCovered}} | Rest]) ->
   print_coverage(Width, Rest).
 
 fmt_line(Width, Mod, Covered, NotCovered, Coverage) ->
-  io:format("~s ~s ~s ~s\n",
+  io:format(user, "~s ~s ~s ~s\n",
             [ col_module(Mod, Width)
             , col_covered(Covered)
             , col_not_covered(NotCovered)

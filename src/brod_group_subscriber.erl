@@ -136,11 +136,10 @@
 %% GroupId:
 %%   Consumer group ID which should be unique per kafka cluster
 %% Topics:
-%%   Predefined set of topic names in the group.
-%%   OBS: It is important to have the same topic set across all members
-%%        in the group. Because all members have a chance of being
-%%        elected as the group leader, then being responsible for
-%%        assigning topic-partitions to group members.
+%%   Predefined set of topic names to join the group.
+%%   NOTE: The group leader member will collect topics from all members and
+%%         assign all collected topic-partitions to members in the group.
+%%         i.e. members can join with arbitrary set of topics.
 %% GroupConfig:
 %%   For group controller, @see brod_group_controller:start_link/4
 %% ConsumerConfig:
