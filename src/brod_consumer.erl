@@ -176,13 +176,13 @@ init({ClientPid, Topic, Partition, Config}) ->
   MaxWaitTime = Cfg(max_wait_time, ?DEFAULT_MAX_WAIT_TIME),
   SleepTimeout = Cfg(sleep_timeout, ?DEFAULT_SLEEP_TIMEOUT),
   PrefetchCount = Cfg(prefetch_count, ?DEFAULT_PREFETCH_COUNT),
-  Offset = Cfg(begin_offset, ?undef),
+  BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
   ok = brod_client:register_consumer(ClientPid, Topic, Partition),
   {ok, #state{ client_pid          = ClientPid
              , topic               = Topic
              , partition           = Partition
-             , begin_offset        = Offset
+             , begin_offset        = BeginOffset
              , max_wait_time       = MaxWaitTime
              , min_bytes           = MinBytes
              , max_bytes           = MaxBytes
@@ -501,11 +501,7 @@ handle_subscribe_call(Pid, Options,
 -spec update_options(options(), #state{}) -> {ok, #state{}} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
-  DefaultBeginOffset = case OldBeginOffset =:= ?undef of
-                         true  -> ?DEFAULT_BEGIN_OFFSET;
-                         false -> OldBeginOffset
-                       end,
-  NewBeginOffset = F(begin_offset, DefaultBeginOffset),
+  NewBeginOffset = F(begin_offset, OldBeginOffset),
   OffsetResetPolicy = F(offset_reset_policy, State#state.offset_reset_policy),
   State1 = State#state
     { begin_offset        = NewBeginOffset

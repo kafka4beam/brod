@@ -147,12 +147,20 @@ do_find_leader_in_metadata(Metadata, Topic, Partition) ->
                         , topicMetadata_L = [TopicMetadata]
                         } = Metadata,
   #kpro_TopicMetadata{ errorCode           = TopicEC
+                     , topicName           = RealTopic
                      , partitionMetadata_L = Partitions
                      } = TopicMetadata,
+  RealTopic /= Topic andalso erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION),
   kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
-  #kpro_PartitionMetadata{leader = Id} =
-    lists:keyfind(Partition, #kpro_PartitionMetadata.partition, Partitions),
-  Id >= 0 orelse erlang:throw({no_leader, {Topic, Partition}}),
+  Id = case lists:keyfind(Partition,
+                          #kpro_PartitionMetadata.partition, Partitions) of
+         #kpro_PartitionMetadata{leader = Leader} when Leader >= 0 ->
+           Leader;
+         #kpro_PartitionMetadata{} ->
+           erlang:throw(?EC_LEADER_NOT_AVAILABLE);
+         false ->
+           erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION)
+       end,
   Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
   Host = Broker#kpro_Broker.host,
   Port = Broker#kpro_Broker.port,
