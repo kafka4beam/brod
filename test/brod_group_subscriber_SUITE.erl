@@ -248,8 +248,11 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   RecvFun =
     fun(Timeout, {ContinueFun, Acc}) ->
       receive
-        ?MSG(CaseRef, _SubscriberPid, Topic, _Partition, _Offset, Value) ->
-          ?assert(Topic =:= ?TOPIC2 orelse Topic =:= ?TOPIC3),
+        ?MSG(CaseRef, SubscriberPid, Topic, _Partition, _Offset, Value) ->
+          %% assert subscribers assigned with only topics in subscription list
+          ?assert((SubscriberPid =:= SubscriberPid1 andalso Topic =:= ?TOPIC2)
+                  orelse
+                  (SubscriberPid =:= SubscriberPid2 andalso Topic =:= ?TOPIC3)),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
           ContinueFun(0, {ContinueFun, NewAcc});

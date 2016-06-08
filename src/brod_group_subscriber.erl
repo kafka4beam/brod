@@ -24,8 +24,8 @@
 %%%  1. Start a consumer group controller to manage the consumer group states,
 %%%     @see brod_group_controller:start_link/4.
 %%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
-%%%     to the partition workers when group assignment is received from the group
-%%%     leader, @see brod:start_consumer/3.
+%%%     to the partition workers when group assignment is received from the
+%%      group leader, @see brod:start_consumer/3.
 %%%  3. Call CallbackModule:handle_message/4 when messages are received from
 %%%     the partition consumers.
 %%%  4. Send acknowledged offsets to group controller which will be committed
@@ -35,7 +35,9 @@
 %%%=============================================================================
 
 -module(brod_group_subscriber).
+
 -behaviour(gen_server).
+-behaviour(brod_group_controller).
 
 -export([ ack/4
         , commit/1
@@ -141,7 +143,7 @@
 %%         assign all collected topic-partitions to members in the group.
 %%         i.e. members can join with arbitrary set of topics.
 %% GroupConfig:
-%%   For group controller, @see brod_group_controller:start_link/4
+%%   For group controller, @see brod_group_controller:start_link/5
 %% ConsumerConfig:
 %%   For partition consumer, @see brod_consumer:start_link/4
 %% CbModule:
@@ -219,8 +221,8 @@ get_committed_offsets(Pid, TopicPartitions) ->
 init({Client, GroupId, Topics, GroupConfig,
       ConsumerConfig, CbModule, CbInitArg}) ->
   {ok, CbState} = CbModule:init(GroupId, CbInitArg),
-  {ok, Pid} =
-    brod_group_controller:start_link(Client, GroupId, Topics, GroupConfig),
+  {ok, Pid} = brod_group_controller:start_link(Client, GroupId, Topics,
+                                               GroupConfig, ?MODULE),
   State = #state{ client          = Client
                 , groupId         = GroupId
                 , controller      = Pid
@@ -334,10 +336,7 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                   } = State) ->
   lists:foreach(
     fun({Topic, _PartitionAssignments}) ->
-      case brod:start_consumer(Client, Topic, ConsumerConfig) of
-        ok                               -> ok;
-        {error, {already_started, _Pid}} -> ok
-      end
+      ok = brod:start_consumer(Client, Topic, ConsumerConfig)
     end, Assignments),
   Consumers =
     [ #consumer{ topic_partition = {Topic, Partition}

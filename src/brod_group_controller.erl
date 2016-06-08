@@ -23,11 +23,12 @@
 %%%=============================================================================
 
 -module(brod_group_controller).
+
 -behaviour(gen_server).
 
 -export([ ack/5
         , commit_offsets/1
-        , start_link/4
+        , start_link/5
         ]).
 
 -export([ code_change/3
@@ -38,10 +39,27 @@
         , terminate/2
         ]).
 
+%% Call the callback module to initialize assignments.
+%% NOTE: this function is called only when `offset_commit_policy' is
+%% `consumer_managed' in group config.
+-callback get_committed_offsets(pid(), [{topic(), partition()}]) ->
+            {ok, [{{topic(), partition()}, offset()}]}.
+
+%% Called when assignments are received from group leader.
+%% the subscriber process should now call brod:subscribe/5
+%% to start receiving message from kafka.
+-callback new_assignments(pid(), member_id(), integer(),
+                          [topic_assignment()]) -> ok.
+
+%% Called before group re-balancing, the subscriber should call
+%% brod:unsubscribe/3 to unsubscribe from all currently subscribed partitions.
+-callback unsubscribe_all_partitions(pid()) -> ok.
+
 -include("brod_int.hrl").
 
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
--type partition_assignment_strategy() :: atom().
+
+-type partition_assignment_strategy() :: roundrobin.
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 10).
@@ -118,16 +136,18 @@
           %% loopback command message sending a HeartbeatRequest to
           %% the group coordinator broker.
         , is_in_group = false :: boolean()
-          %% The message-set subscriber which subscribes to all
+          %% The process which is responsible to subscribe/unsubscribe to all
           %% assigned topic-partitions.
         , subscriber :: pid()
+          %% The module which implements group subscriber functionality
+        , subscriber_module :: module()
           %% The offsets that has been acknowledged by the subscriber
           %% i.e. the offsets that are ready for commit.
           %% NOTE: this field is not used if offset_commit_policy is
           %% 'consumer_managed'
         , acked_offsets = [] :: [{{topic(), partition()}, offset()}]
 
-          %% configs, see start_link/4 doc for details
+          %% configs, see start_link/5 doc for details
         , partition_assignment_strategy  :: partition_assignment_strategy()
         , session_timeout_seconds        :: pos_integer()
         , heartbeat_rate_seconds         :: pos_integer()
@@ -143,14 +163,18 @@
 %%%_* APIs =====================================================================
 
 %% @doc To be called by group subscriber.
-%% Client:  ClientId (or pid, but not recommended)
-%% GroupId: Predefined globally unique (in a kafka cluster) binary string.
-%% Topics:  Predefined set of topic names to join the group.
-%% Config:  The group controller configs in a proplist, possible entries:
+%% Client:     ClientId (or pid, but not recommended)
+%% GroupId:    Predefined globally unique (in a kafka cluster) binary string.
+%% Topics:     Predefined set of topic names to join the group.
+%% CbModule:   The module which implements group controller callbacks
+%% Subscriber: The subscriber pid.
+%% Config: The group controller configs in a proplist, possible entries:
 %%  - partition_assignment_strategy  (optional, default = roundrobin)
-%%      roundrobin: Take all topic-offset (sorted [{TopicName, Partition}] list)
-%%                  assign one to each member in a roundrobin fashion.
-%%      TODO: support sticky assignments
+%%      roundrobin (topic-sticky):
+%%        Take all topic-offset (sorted [{TopicName, Partition}] list)
+%%        assign one to each member in a roundrobin fashion. However only
+%%        partitions in the subscription topic list are assiged.
+%%      TODO: Add partition-sticky assignment
 %%  - session_timeout_seconds (optional, default = 10)
 %%      Time in seconds for the group coordinator broker to consider a member
 %%      'down' if no heartbeat or any kind of requests received from a broker
@@ -178,7 +202,7 @@
 %%            Group controller will commit the offsets to kafka using
 %%            version 2 OffsetCommitRequest.
 %%        - consumer_managed:
-%%            The subscirber (brod_group_subscriber.erl) is responsible
+%%            The subscirber (e.g. brod_group_subscriber.erl) is responsible
 %%            for persisting offsets to a local or centralized storage.
 %%            And the callback get_committed_offsets should be implemented
 %%            to allow group controller to retrieve the commited offsets.
@@ -191,12 +215,17 @@
 %%      topic retention policy is used.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
 %% @end
--spec start_link(client(), group_id(), [topic()], config()) ->
+-spec start_link(client(), group_id(), [topic()], config(), module()) ->
         {ok, pid()} | {error, any()}.
-start_link(Client, GroupId, Topics, Config) ->
-  Subscriber = self(),
-  Args = {Client, GroupId, Topics, Config, Subscriber},
+start_link(Client, GroupId, Topics, Config, CbModule) ->
+  SubscriberPid = self(),
+  Args = {Client, GroupId, Topics, Config, CbModule, SubscriberPid},
   gen_server:start_link(?MODULE, Args, []).
+
+%% @doc Force commit offsets immediately.
+-spec commit_offsets(pid()) -> ok | {error, any()}.
+commit_offsets(ControllerPid) ->
+  gen_server:call(ControllerPid, commit_offsets, infinity).
 
 %% @doc For group subscriber to call to acknowledge.
 -spec ack(pid(), integer(), topic(), partition(), offset()) -> ok.
@@ -204,15 +233,10 @@ ack(Pid, GenerationId, Topic, Partition, Offset) ->
   Pid ! {ack, GenerationId, Topic, Partition, Offset},
   ok.
 
-%% @doc Force commit offsets immediately.
--spec commit_offsets(pid()) -> ok | {error, any()}.
-commit_offsets(ControllerPid) ->
-  gen_server:call(ControllerPid, commit_offsets, infinity).
-
 %%%_* gen_server callbacks =====================================================
 
-init({Client, GroupId, Topics, Config, Subscriber}) ->
-  process_flag(trap_exit, true),
+init({Client, GroupId, Topics, Config, CbModule, Subscriber}) ->
+  erlang:process_flag(trap_exit, true),
   GetCfg = fun(Name, Default) ->
              proplists:get_value(Name, Config, Default)
            end,
@@ -233,6 +257,7 @@ init({Client, GroupId, Topics, Config, Subscriber}) ->
           , groupId                        = GroupId
           , topics                         = Topics
           , subscriber                     = Subscriber
+          , subscriber_module              = CbModule
           , partition_assignment_strategy  = PaStrategy
           , session_timeout_seconds        = SessionTimeoutSec
           , heartbeat_rate_seconds         = HbRateSec
@@ -384,13 +409,14 @@ discover_coordinator(#state{ client      = Client
 stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
                 , subscriber           = Subscriber
                 , offset_commit_policy = CommitPolicy
+                , subscriber_module    = SubscriberModule
                 } = State0, AttemptNo, Reason) ->
 
   Reason =/= ?undef andalso
     log(State0, info, "re-joining group, reason:~p", [Reason]),
 
   %% 1. unsubscribe all currently assigned partitions
-  ok = brod_group_subscriber:unsubscribe_all_partitions(Subscriber),
+  ok = SubscriberModule:unsubscribe_all_partitions(Subscriber),
 
   %% 2. if it is illegal generation error code received, try to commit current
   %% current offsets before re-joinning the group.
@@ -523,11 +549,12 @@ join_group(#state{ groupId                       = GroupId
   {ok, State}.
 
 -spec sync_group(#state{}) -> {ok, #state{}}.
-sync_group(#state{ groupId      = GroupId
-                 , generationId = GenerationId
-                 , memberId     = MemberId
-                 , sock_pid     = SockPid
-                 , subscriber   = Subscriber
+sync_group(#state{ groupId           = GroupId
+                 , generationId      = GenerationId
+                 , memberId          = MemberId
+                 , sock_pid          = SockPid
+                 , subscriber        = Subscriber
+                 , subscriber_module = SubscriberModule
                  } = State) ->
   SyncReq =
     #kpro_SyncGroupRequest
@@ -544,10 +571,10 @@ sync_group(#state{ groupId      = GroupId
   ?ESCALATE_EC(SyncErrorCode),
   %% get my partition assignments
   TopicAssignments = get_topic_assignments(State, Assignment),
-  ok = brod_group_subscriber:new_assignments(Subscriber,
-                                             MemberId,
-                                             GenerationId,
-                                             TopicAssignments),
+  ok = SubscriberModule:new_assignments(Subscriber,
+                                        MemberId,
+                                        GenerationId,
+                                        TopicAssignments),
   NewState = State#state{is_in_group = true},
   log(NewState, info, "assignments received:~s", [format_assignments(TopicAssignments)]),
   {ok, NewState}.
@@ -702,31 +729,40 @@ get_partitions(Client, Topic) ->
                            [kpro_GroupMemberMetadata()],
                            [{topic(), partition()}]) -> [member_assignment()].
 do_assign_partitions(roundrobin, Members, AllPartitions) ->
-  %% round robin, we only care about the member id
-  F = fun(#kpro_GroupMemberMetadata{memberId = MemberId}) ->
-        {MemberId, []}
+  F = fun(#kpro_GroupMemberMetadata{ memberId          = MemberId
+                                   , protocolMetadata  = M
+                                   }) ->
+        SubscribedTopics = M#kpro_ConsumerGroupProtocolMetadata.topicName_L,
+        IsValidAssignment = fun(Topic, _Partition) ->
+                              lists:member(Topic, SubscribedTopics)
+                            end,
+        {MemberId, IsValidAssignment, []}
       end,
   MemberAssignment = lists:map(F, Members),
-  roundrobin_assign_loop(AllPartitions, MemberAssignment, []).
+  [ {MemberId, Assignments}
+    || {MemberId, _ValidationFun, Assignments}
+         <- roundrobin_assign_loop(AllPartitions, MemberAssignment, [])
+  ].
 
--spec roundrobin_assign_loop([{topic(), partition()}],
-                             [member_assignment()], [member_assignment()]) ->
-                                [member_assignment()].
 roundrobin_assign_loop([], PendingMembers, AssignedMembers) ->
   lists:reverse(AssignedMembers) ++ PendingMembers;
 roundrobin_assign_loop(Partitions, [], AssignedMembers) ->
   %% all members have received assignments, continue the next round
   roundrobin_assign_loop(Partitions, lists:reverse(AssignedMembers), []);
-roundrobin_assign_loop([{Topic, Partition} | Rest],
-                       [Member0 | PendingMembers], AssignedMembers) ->
-  Member = assign_partition(Member0, Topic, Partition),
-  roundrobin_assign_loop(Rest, PendingMembers, [Member | AssignedMembers]).
-
--spec assign_partition(member_assignment(), topic(), partition()) ->
-        member_assignment().
-assign_partition({MemberId, Topics0}, Topic, Partition) ->
-  Topics = orddict:append_list(Topic, [Partition], Topics0),
-  {MemberId, Topics}.
+roundrobin_assign_loop([{Topic, Partition} | Rest] = TopicPartitions,
+                       [{MemberId, IsValidAssignment, AssignedTopics} = Member0
+                        | PendingMembers], AssignedMembers) ->
+  case IsValidAssignment(Topic, Partition) of
+    true ->
+      NewTopics = orddict:append_list(Topic, [Partition], AssignedTopics),
+      Member = {MemberId, IsValidAssignment, NewTopics},
+      roundrobin_assign_loop(Rest, PendingMembers, [Member | AssignedMembers]);
+    false ->
+      %% The fist member in the pending list is not interested in this
+      %% topic-partition,
+      roundrobin_assign_loop(TopicPartitions, PendingMembers,
+                             [Member0 | AssignedMembers])
+  end.
 
 %% @private Extract the partition assignemts from SyncGroupResponse
 %% then fetch the committed offsets of each partition.
@@ -760,8 +796,9 @@ get_topic_assignments(#state{} = State, Assignment) ->
                               | {offset(), binary()}.
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , subscriber           = Subscriber
+                            , subscriber_module    = SubscriberModule
                             }, TopicPartitions) ->
-  brod_group_subscriber:get_committed_offsets(Subscriber, TopicPartitions);
+  SubscriberModule:get_committed_offsets(Subscriber, TopicPartitions);
 get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                             , groupId              = GroupId
                             , sock_pid             = SockPid
