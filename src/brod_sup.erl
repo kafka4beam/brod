@@ -127,7 +127,10 @@ find_client(Client) ->
 init(clients_sup) ->
   Clients = application:get_env(brod, clients, []),
   ClientSpecs =
-    [ client_spec(ClientId, Args) || {ClientId, Args} <- Clients ],
+    lists:map(fun({ClientId, Args}) ->
+                is_atom(ClientId) orelse exit({bad_client_id, ClientId}),
+                client_spec(ClientId, Args)
+              end, Clients),
   %% A client may crash and restart due to network failure
   %% e.g. when none of the kafka endpoints are reachable.
   %% In this case, restart right away will very likely fail again.

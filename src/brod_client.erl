@@ -350,7 +350,7 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
                                          , coordinatorPort = Port
                                          }} ->
         case kpro_ErrorCode:is_error(EC) of
-          true  -> {error, EC}; %% OBS: {error, EC} is used by group controller
+          true  -> {error, EC}; %% OBS: {error, EC} is used by group coordinator
           false -> {ok, {binary_to_list(Host), Port}}
         end;
       {error, Reason} ->

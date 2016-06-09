@@ -190,6 +190,7 @@ t_async_acks(Config) when is_list(Config) ->
         ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
           ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1,
                                          Partition, Offset),
+          ok = brod_group_subscriber:commit(SubscriberPid),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
           ContinueFun(0, {ContinueFun, NewAcc});

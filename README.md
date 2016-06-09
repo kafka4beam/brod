@@ -184,7 +184,7 @@ Find more examples in test/ (brod\_demo\_*).
 ### Implement your own group consumer
 
 brod_group_subscriber supports only serialized message processing, i.e. no async parallel processing + delayed acking.
-Implement brod_group_controller behaviour for better flexibility.
+Implement brod_group_member behaviour for better flexibility.
 
 ## Other API to play with/inspect kafka
 
