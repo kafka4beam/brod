@@ -16,10 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% This is a consumer group subscriber example
-%%% This is called 'loc' as in 'Local Offset Commit'. i.e. it demos an
-%%% implementation of group subscriber that writes offsets locally (to file
-%%% in this module), but does not commit offsets to Kafka.
+%%% This is a topic subscriber example
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
@@ -74,7 +71,7 @@ bootstrap(DelaySeconds) ->
   ok = spawn_producers(ClientId, Topic, DelaySeconds, Partitions),
   ok.
 
-%% @doc Initialize nothing in our case.
+%% @doc Get committed offsets from file `/tmp/<topic>'
 init(Topic, []) ->
   OffsetDir = filename:join(["/tmp", Topic]),
   Offsets = read_offsets(OffsetDir),
