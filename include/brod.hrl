@@ -17,14 +17,15 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_topic()           :: binary().
--type kafka_partition()       :: non_neg_integer().
--type kafka_offset()          :: integer().
--type kafka_error_code()      :: atom() | integer().
--type kafka_group_id()        :: binary().
--type kafka_group_member_id() :: binary().
--type kafka_compression()     :: no_compression | gzip | snappy.
--type brod_client_id()        :: atom().
+-type kafka_topic()               :: binary().
+-type kafka_partition()           :: non_neg_integer().
+-type kafka_offset()              :: integer().
+-type kafka_error_code()          :: atom() | integer().
+-type kafka_group_id()            :: binary().
+-type kafka_group_member_id()     :: binary().
+-type kafka_group_generation_id() :: non_neg_integer().
+-type kafka_compression()         :: no_compression | gzip | snappy.
+-type brod_client_id()            :: atom().
 
 -record(kafka_message,
         { offset     :: kafka_offset()
@@ -76,6 +77,28 @@
 -type brod_group_config() :: proplists:proplist().
 -type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
                                    | consumer_managed.
+-type brod_partition_assignment_strategy() :: roundrobin
+                                            | callback_implemented.
+
+-record(kafka_group_member_metadata,
+        { version   :: non_neg_integer()
+        , topics    :: [kafka_topic()]
+        , user_data :: binary()
+        }).
+
+-type kafka_group_member() :: {kafka_group_member_id(),
+                               #kafka_group_member_metadata{}}.
+
+-type brod_partition_assignment() ::
+        {kafka_topic(), [kafka_partition()]}.
+
+-record(brod_received_assignment,
+        { topic        :: kafka_topic()
+        , partition    :: kafka_partition()
+        , begin_offset :: undefined | kafka_offset()
+        }).
+
+-type brod_received_assignments() :: [#brod_received_assignment{}].
 
 -define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 
@@ -84,6 +107,8 @@
                                   , Key           :: binary()
                                   , Value         :: binary()) ->
                                      {ok, Partition :: integer()}).
+
+
 
 -endif. % include brod.hrl
 

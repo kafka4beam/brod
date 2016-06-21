@@ -181,7 +181,13 @@ Find more examples in test/ (brod\_demo\_*).
                                          _CallbackModule  = ?MODULE,
                                          _CallbackInitArg = []).
 
+### Implement your own group consumer
+
+brod_group_subscriber supports only serialized message processing, i.e. no async parallel processing + delayed acking.
+Implement brod_group_member behaviour for better flexibility.
+
 ## Other API to play with/inspect kafka
+
 These functions open a connetion to kafka cluster, send a request,
 await response and then close the connection.
 

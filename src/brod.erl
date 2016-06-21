@@ -64,7 +64,9 @@
         , subscribe/3
         , subscribe/5
         , unsubscribe/1
+        , unsubscribe/2
         , unsubscribe/3
+        , unsubscribe/4
         ]).
 
 %% Subscriber API
@@ -324,18 +326,28 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
-%% @doc Ubsubscribe the current subscriber.
+%% @doc Unsubscribe the current subscriber. Assuming the subscriber is self().
 -spec unsubscribe(client(), topic(), partition()) -> ok | {error, any()}.
 unsubscribe(Client, Topic, Partition) ->
+  unsubscribe(Client, Topic, Partition, self()).
+
+%% @doc Unsubscribe the current subscriber.
+-spec unsubscribe(client(), topic(), partition(), pid()) -> ok | {error, any()}.
+unsubscribe(Client, Topic, Partition, SubscriberPid) ->
   case brod_client:get_consumer(Client, Topic, Partition) of
-    {ok, ConsumerPid} -> unsubscribe(ConsumerPid);
+    {ok, ConsumerPid} -> unsubscribe(ConsumerPid, SubscriberPid);
     Error             -> Error
   end.
 
-%% @doc Ubsubscribe the current subscriber.
--spec unsubscribe(pid()) -> ok.
+%% @doc Unsubscribe the current subscriber. Assuming the subscriber is self().
+-spec unsubscribe(pid()) -> ok | {error, any()}.
 unsubscribe(ConsumerPid) ->
-  brod_consumer:unsubscribe(ConsumerPid).
+  unsubscribe(ConsumerPid, self()).
+
+%% @doc Unsubscribe the current subscriber.
+-spec unsubscribe(pid(), pid()) -> ok | {error, any()}.
+unsubscribe(ConsumerPid, SubscriberPid) ->
+  brod_consumer:unsubscribe(ConsumerPid, SubscriberPid).
 
 -spec consume_ack(client(), topic(), partition(), offset()) ->
         ok | {error, any()}.

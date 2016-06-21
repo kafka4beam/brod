@@ -45,15 +45,6 @@
 -type member_id()            :: kafka_group_member_id().
 -type group_config()         :: brod_group_config().
 
--record(partition_assignment, { partition    :: partition()
-                              , begin_offset :: offset()
-                              , metadata     :: iodata()
-                              }).
-
--type partition_assignment() :: #partition_assignment{}.
--type topic_assignment()     :: {topic(), [partition_assignment()]}.
--type member_assignment()    :: {member_id(), [topic_assignment()]}.
-
 -record(socket, { pid     :: pid()
                 , host    :: string()
                 , port    :: integer()

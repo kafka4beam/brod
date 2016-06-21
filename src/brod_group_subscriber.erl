@@ -21,21 +21,23 @@
 %%% processing.
 %%%
 %%% An overview of what it does behind the scene:
-%%%  1. Start a consumer group controller to manage the consumer group states,
-%%%     @see brod_group_controller:start_link/4.
+%%%  1. Start a consumer group coordinator to manage the consumer group states,
+%%%     @see brod_group_coordinator:start_link/4.
 %%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
-%%%     to the partition workers when group assignment is received from the group
-%%%     leader, @see brod:start_consumer/3.
+%%%     to the partition workers when group assignment is received from the
+%%      group leader, @see brod:start_consumer/3.
 %%%  3. Call CallbackModule:handle_message/4 when messages are received from
 %%%     the partition consumers.
-%%%  4. Send acknowledged offsets to group controller which will be committed
+%%%  4. Send acknowledged offsets to group coordinator which will be committed
 %%%     to kafka periodically.
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
 -module(brod_group_subscriber).
+
 -behaviour(gen_server).
+-behaviour(brod_group_member).
 
 -export([ ack/4
         , commit/1
@@ -43,10 +45,11 @@
         , stop/1
         ]).
 
-%% callbacks for brod_group_controller
+%% callbacks for brod_group_coordinator
 -export([ get_committed_offsets/2
-        , new_assignments/4
-        , unsubscribe_all_partitions/1
+        , assignments_received/4
+        , assignments_revoked/1
+        , assign_partitions/3
         ]).
 
 -export([ code_change/3
@@ -89,10 +92,20 @@
 %% of data stream. If 'begin_offset' is not found in consumer config, the
 %% default value -1 (latest) is used.
 %
-% commented out as optional
+% commented out as it's an optional callback
 %-callback get_committed_offsets(group_id(), [{topic(), partition()}],
 %                                cb_state()) ->
 %            {ok, [{{topic(), partition()}, offset()}], cb_state()}.
+
+
+%% This function is called only when 'partition_assignment_strategy' is
+%% 'callback_implemented' in group config.
+%
+% commented out as it's an optional callback
+%-callback assign_partitions([kafka_group_member()],
+%                            [{topic(), partition()}]
+%                            cb_state()) -> [{kafka_group_member_id(),
+%                                            [brod_partition_assignment()]}].
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
@@ -112,7 +125,7 @@
         , groupId               :: group_id()
         , memberId              :: member_id()
         , generationId          :: integer()
-        , controller            :: pid()
+        , coordinator           :: pid()
         , consumers = []        :: [#consumer{}]
         , consumer_config       :: consumer_config()
         , is_blocked = false    :: boolean()
@@ -141,7 +154,7 @@
 %%         assign all collected topic-partitions to members in the group.
 %%         i.e. members can join with arbitrary set of topics.
 %% GroupConfig:
-%%   For group controller, @see brod_group_controller:start_link/4
+%%   For group coordinator, @see brod_group_coordinator:start_link/5
 %% ConsumerConfig:
 %%   For partition consumer, @see brod_consumer:start_link/4
 %% CbModule:
@@ -174,37 +187,34 @@ stop(Pid) ->
 ack(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Topic, Partition, Offset}).
 
-%% @doc Commit all acked offsets.
--spec commit(pid()) -> ok | {error, any()}.
+%% @doc Commit all acked offsets. NOTE: This is an async call.
+-spec commit(pid()) -> ok.
 commit(Pid) ->
-  Caller = self(),
-  case Caller =:= Pid of
-    true ->
-      spawn_link(fun() -> ok = ?MODULE:commit(Pid) end),
-      ok;
-    false ->
-      {ok, Controller} = get_controller(Pid),
-      ok = brod_group_controller:commit_offsets(Controller)
-  end.
+  gen_server:cast(Pid, commit_offsets).
 
--spec get_controller(pid()) -> {ok, pid()}.
-get_controller(Pid) ->
-  gen_server:call(Pid, get_controller, infinity).
+%%%_* APIs for group coordinator ===============================================
 
-%%%_* APIs for group controller ================================================
-
-%% @doc Called by group controller when there is new assignemnt received.
--spec new_assignments(pid(), member_id(), integer(), [topic_assignment()]) -> ok.
-new_assignments(Pid, MemberId, GenerationId, TopicAssignments) ->
+%% @doc Called by group coordinator when there is new assignemnt received.
+-spec assignments_received(pid(), member_id(), integer(),
+                           brod_received_assignments()) -> ok.
+assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
   gen_server:cast(Pid, {new_assignments, MemberId,
                         GenerationId, TopicAssignments}).
 
-%% @doc Called by group controller before re-joinning the consumer group.
--spec unsubscribe_all_partitions(pid()) -> ok.
-unsubscribe_all_partitions(Pid) ->
+%% @doc Called by group coordinator before re-joinning the consumer group.
+-spec assignments_revoked(pid()) -> ok.
+assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
 
-%% @doc Called by group controller when initializing the assignments
+-spec assign_partitions(pid(), [kpro_GroupMemberMetadata()],
+                        [{topic(), partition()}]) ->
+                            [{kafka_group_member_id(),
+                              [brod_partition_assignment()]}].
+assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
+  Call = {assign_partitions, MemberMetadataList, TopicPartitionList},
+  gen_server:call(Pid, Call, infinity).
+
+%% @doc Called by group coordinator when initializing the assignments
 %% for subscriber.
 %% NOTE: this function is called only when it is DISABLED to commit offsets
 %%       to kafka.
@@ -219,11 +229,11 @@ get_committed_offsets(Pid, TopicPartitions) ->
 init({Client, GroupId, Topics, GroupConfig,
       ConsumerConfig, CbModule, CbInitArg}) ->
   {ok, CbState} = CbModule:init(GroupId, CbInitArg),
-  {ok, Pid} =
-    brod_group_controller:start_link(Client, GroupId, Topics, GroupConfig),
+  {ok, Pid} = brod_group_coordinator:start_link(Client, GroupId, Topics,
+                                                GroupConfig, ?MODULE, self()),
   State = #state{ client          = Client
                 , groupId         = GroupId
-                , controller      = Pid
+                , coordinator     = Pid
                 , consumer_config = ConsumerConfig
                 , cb_module       = CbModule
                 , cb_state        = CbState
@@ -291,8 +301,6 @@ handle_info(Info, State) ->
   log(State, info, "discarded message:~p", [Info]),
   {noreply, State}.
 
-handle_call(get_controller, _From, State) ->
-  {reply, {ok, State#state.controller}, State};
 handle_call({get_committed_offsets, TopicPartitions}, _From,
             #state{ groupId   = GroupId
                   , cb_module = CbModule
@@ -306,6 +314,13 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
       erlang:error({bad_return_value,
                     {CbModule, get_committed_offsets, Unknown}})
   end;
+handle_call({assign_partitions, MemberMetadataList, TopicPartitions}, _From,
+            #state{ cb_module = CbModule
+                  , cb_state  = CbState
+                  } = State) ->
+  Result = CbModule:assign_partitions(MemberMetadataList,
+                                      TopicPartitions, CbState),
+  {reply, Result, State};
 handle_call(unsubscribe_all_partitions, _From,
             #state{ consumers = Consumers
                   } = State) ->
@@ -313,7 +328,7 @@ handle_call(unsubscribe_all_partitions, _From,
     fun(#consumer{ consumer_pid  = ConsumerPid
                  , consumer_mref = ConsumerMref
                  }) ->
-      _ = brod:unsubscribe(ConsumerPid),
+      _ = brod:unsubscribe(ConsumerPid, self()),
       _ = erlang:demonitor(ConsumerMref, [flush])
     end, Consumers),
   {reply, ok, State#state{ consumers        = []
@@ -328,27 +343,31 @@ handle_cast({ack, Topic, Partition, Offset}, State) ->
   AckRef = {Topic, Partition, Offset},
   {ok, NewState} = handle_ack(AckRef, State),
   {noreply, NewState};
+handle_cast(commit_offsets, State) ->
+  ok = brod_group_coordinator:commit_offsets(State#state.coordinator),
+  {noreply, State};
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ client          = Client
                   , consumer_config = ConsumerConfig
                   } = State) ->
+  AllTopics =
+    lists:map(fun(#brod_received_assignment{topic = Topic}) ->
+                Topic
+              end, Assignments),
   lists:foreach(
-    fun({Topic, _PartitionAssignments}) ->
-      case brod:start_consumer(Client, Topic, ConsumerConfig) of
-        ok                               -> ok;
-        {error, {already_started, _Pid}} -> ok
-      end
-    end, Assignments),
+    fun(Topic) ->
+      ok = brod:start_consumer(Client, Topic, ConsumerConfig)
+    end, lists:usort(AllTopics)),
   Consumers =
     [ #consumer{ topic_partition = {Topic, Partition}
                , consumer_pid    = ?undef
                , begin_offset    = BeginOffset
                , acked_offset    = ?undef
                }
-      || {Topic, PartitionAssignments} <- Assignments,
-         #partition_assignment{ partition    = Partition
-                              , begin_offset = BeginOffset
-                              } <- PartitionAssignments
+    || #brod_received_assignment{ topic        = Topic
+                                , partition    = Partition
+                                , begin_offset = BeginOffset
+                                } <- Assignments
     ],
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS),
   NewState = State#state{ consumers    = Consumers
@@ -394,7 +413,7 @@ handle_ack(AckRef, #state{ pending_ack      = AckRef
                          , pending_messages = Messages
                          , generationId     = GenerationId
                          , consumers        = Consumers
-                         , controller       = Controller
+                         , coordinator      = Coordinator
                          } = State0) ->
   {Topic, Partition, Offset} = AckRef,
   State1 =
@@ -402,8 +421,8 @@ handle_ack(AckRef, #state{ pending_ack      = AckRef
                        #consumer.topic_partition, Consumers) of
       #consumer{consumer_pid = ConsumerPid} = Consumer ->
         ok = brod:consume_ack(ConsumerPid, Offset),
-        ok = brod_group_controller:ack(Controller, GenerationId,
-                                       Topic, Partition, Offset),
+        ok = brod_group_coordinator:ack(Coordinator, GenerationId,
+                                        Topic, Partition, Offset),
         NewConsumer = Consumer#consumer{acked_offset = Offset},
         NewConsumers = lists:keyreplace({Topic, Partition},
                                         #consumer.topic_partition,

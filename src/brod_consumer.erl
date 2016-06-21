@@ -29,7 +29,7 @@
         , start_link/5
         , stop/1
         , subscribe/3
-        , unsubscribe/1
+        , unsubscribe/2
         ]).
 
 %% Debug API
@@ -145,8 +145,9 @@ subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
 %% @doc Unsubscribe the current subscriber.
--spec unsubscribe(pid()) -> ok.
-unsubscribe(Pid) -> safe_gen_call(Pid, unsubscribe, infinity).
+-spec unsubscribe(pid(), pid()) -> ok | {error, any()}.
+unsubscribe(Pid, SubscriberPid) ->
+  safe_gen_call(Pid, {unsubscribe, SubscriberPid}, infinity).
 
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
@@ -214,10 +215,8 @@ handle_info({msg, _Pid, CorrId, R}, State) ->
 handle_info(?SEND_FETCH_REQUEST, State0) ->
   State = maybe_send_fetch_request(State0),
   {noreply, State};
-handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
+handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{subscriber = Pid} = State) ->
-  error_logger:info_msg("~p ~p subscriber ~p is down\nreason:~p",
-                        [?MODULE, self(), Pid, Reason]),
   NewState = reset_buffer(State#state{ subscriber      = ?undef
                                      , subscriber_mref = ?undef
                                      }),
@@ -248,12 +247,19 @@ handle_call({subscribe, Pid, Options}, _From,
     false ->
       {reply, {error, {already_subscribed_by, Subscriber}}, State0}
   end;
-handle_call(unsubscribe, _From, #state{subscriber_mref = Mref} = State) ->
-  is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
-  NewState = State#state{ subscriber      = ?undef
-                        , subscriber_mref = ?undef
-                        },
-  {reply, ok, reset_buffer(NewState)};
+handle_call({unsubscribe, SubscriberPid}, _From,
+            #state{ subscriber = CurrentSubscriber
+                  , subscriber_mref = Mref} = State) ->
+  case SubscriberPid =:= CurrentSubscriber of
+    true ->
+      is_reference(Mref) andalso erlang:demonitor(Mref, [flush]),
+      NewState = State#state{ subscriber      = ?undef
+                            , subscriber_mref = ?undef
+                            },
+      {reply, ok, reset_buffer(NewState)};
+    false ->
+      {reply, {error, ignored}, State}
+  end;
 handle_call({ack, Offset}, _From,
             #state{pending_acks = PendingAcks} = State0) ->
   NewPendingAcks = handle_ack(PendingAcks, Offset),
