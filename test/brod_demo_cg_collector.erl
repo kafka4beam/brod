@@ -46,6 +46,8 @@
         , handle_message/3
         ]).
 
+-record(state, {ets}).
+
 start() ->
   start([{"localhost", 9092}]).
 start(BootstrapHosts) ->
@@ -65,10 +67,10 @@ start(BootstrapHosts, ClientId, CgTopic, EtsName) ->
 
 init(_Topic, EtsName) ->
   EtsName = ets:new(EtsName, [named_table, ordered_set, public]),
-  {ok, [], #{ets => EtsName}}.
+  {ok, [], #state{ets = EtsName}}.
 
 handle_message(_Partition, #kafka_message{key = KeyBin, value = ValueBin},
-               #{ets := Ets} = State) ->
+               #state{ets = Ets} = State) ->
   {Tag, Key, Value} = kpro_consumer_group:decode(KeyBin, ValueBin),
   Kf = fun(K) -> {K, V} = lists:keyfind(K, 1, Key), V end,
   case Tag of
