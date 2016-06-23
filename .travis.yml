@@ -16,9 +16,9 @@ notifications:
   email: false
 
 otp_release:
-  - 18.1
-  - 17.4
-  - R16B03-1
+  - 18.2.1
+  - 17.5
+  - R16B03
 
 script:
   - make test-env
