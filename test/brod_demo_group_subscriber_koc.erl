@@ -101,11 +101,11 @@ spawn_consumers(ClientId, Topic, ConsumerCount) ->
   lists:foreach(
     fun(_I) ->
       {ok, _Subscriber} =
-        brod:start_link_group_subscriber(ClientId, GroupId, [Topic],
-                                         GroupConfig,
-                                         _ConsumerConfig  = [{begin_offset, -2}],
-                                         _CallbackModule  = ?MODULE,
-                                         _CallbackInitArg = [])
+        brod:start_link_group_subscriber(
+          ClientId, GroupId, [Topic], GroupConfig,
+          _ConsumerConfig  = [{begin_offset, -2}],
+          _CallbackModule  = ?MODULE,
+          _CallbackInitArg = [])
     end, lists:seq(1, ConsumerCount)).
 
 spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok;
