@@ -225,8 +225,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   ok = maybe_send_init_socket(State),
   State1 = State#state{socket_pid = ?undef},
-  NewState = reset_buffer(State1),
-  {noreply, NewState};
+  {noreply, State1};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p ~p got unexpected info: ~p",
                           [?MODULE, self(), Info]),
