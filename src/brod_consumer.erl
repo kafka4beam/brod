@@ -295,7 +295,7 @@ handle_fetch_response(_Response, _CorrId,
   {noreply, State};
 handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
-                            } = State) when CorrId1 < CorrId2 ->
+                            } = State) when CorrId1 =/= CorrId2 ->
   {noreply, State};
 handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                                          }, CorrId, State) ->
