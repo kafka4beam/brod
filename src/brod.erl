@@ -89,6 +89,23 @@
 
 -deprecated([{start_link_client, '_', next_version}]).
 
+-export_type([ brod_call_ref/0
+             , brod_client_id/0
+             , brod_partition_fun/0
+             , client/0
+             , client_config/0
+             , consumer_config/0
+             , consumer_options/0
+             , endpoint/0
+             , group_config/0
+             , group_id/0
+             , kpro_MetadataResponse/0
+             , offset/0
+             , offset_time/0
+             , producer_config/0
+             , topic/0
+             ]).
+
 -include("brod_int.hrl").
 
 %%%_* APIs =====================================================================
