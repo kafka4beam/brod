@@ -365,16 +365,7 @@ err_op(_)                              -> restart.
 map_messages([?incomplete_message]) ->
   [?incomplete_message];
 map_messages(Messages) ->
-  F = fun(#kpro_Message{} = M) ->
-            #kafka_message{ offset     = M#kpro_Message.offset
-                          , magic_byte = M#kpro_Message.magicByte
-                          , attributes = M#kpro_Message.attributes
-                          , key        = M#kpro_Message.key
-                          , value      = M#kpro_Message.value
-                          , crc        = M#kpro_Message.crc
-                          }
-      end,
-  [F(M) || M <- Messages, M =/= ?incomplete_message].
+  [brod_utils:kafka_message(M) || M <- Messages, M =/= ?incomplete_message].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic

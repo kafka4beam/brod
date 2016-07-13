@@ -33,6 +33,7 @@
         , shutdown_pid/1
         , try_connect/1
         , fetch_offsets/5
+        , kafka_message/1
         ]).
 
 -include("brod_int.hrl").
@@ -120,6 +121,30 @@ fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
   #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
   #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
   {ok, Offsets}.
+
+%% @doc Convert a `kpro_Message' to a `kafka_message'.
+-spec kafka_message(#kpro_Message{})     -> #kafka_message{};
+                   (?incomplete_message) -> ?incomplete_message.
+kafka_message(#kpro_Message{ offset     = Offset
+                           , magicByte  = MagicByte
+                           , attributes = Attributes
+                           , key        = MaybeKey
+                           , value      = Value
+                           , crc        = Crc
+                           }) ->
+  Key = case MaybeKey of
+          ?undef -> <<>>;
+          _      -> MaybeKey
+        end,
+  #kafka_message{ offset     = Offset
+                , magic_byte = MagicByte
+                , attributes = Attributes
+                , key        = Key
+                , value      = Value
+                , crc        = Crc
+                };
+kafka_message(?incomplete_message) ->
+  ?incomplete_message.
 
 %%%_* Internal Functions =======================================================
 

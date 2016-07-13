@@ -441,14 +441,14 @@ get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
 -spec fetch([endpoint()], topic(), partition(), offset_time(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = kpro:fetch_request(Topic, Partition, Offset,
@@ -464,7 +464,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
     true ->
       {error, kpro_ErrorCode:desc(ErrorCode)};
     false ->
-      {ok, Messages}
+      {ok, lists:map(fun brod_utils:kafka_message/1, Messages)}
   end.
 
 %% escript entry point
