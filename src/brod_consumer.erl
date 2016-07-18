@@ -195,8 +195,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              }}.
 
 handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
-  case is_pid(Subscriber) andalso
-       is_process_alive(Subscriber) andalso
+  case brod_utils:is_pid_alive(Subscriber) andalso
        maybe_init_socket(State0) of
     false ->
       %% subscriber not alive
@@ -225,8 +224,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
             #state{socket_pid = Pid} = State) ->
   ok = maybe_send_init_socket(State),
   State1 = State#state{socket_pid = ?undef},
-  NewState = reset_buffer(State1),
-  {noreply, NewState};
+  {noreply, State1};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p ~p got unexpected info: ~p",
                           [?MODULE, self(), Info]),
@@ -234,9 +232,8 @@ handle_info(Info, State) ->
 
 handle_call({subscribe, Pid, Options}, _From,
             #state{subscriber = Subscriber} = State0) ->
-  case Subscriber =:= ?undef           orelse %% no old subscriber
-      not is_process_alive(Subscriber) orelse %% old subscirber died
-      Subscriber =:= Pid of                   %% re-subscribe
+  case (not brod_utils:is_pid_alive(Subscriber)) %% old subscriber died
+    orelse Subscriber =:= Pid of                 %% re-subscribe
     true ->
       case maybe_init_socket(State0) of
         {ok, State} ->
@@ -296,7 +293,7 @@ handle_fetch_response(_Response, _CorrId,
   {noreply, State};
 handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
-                            } = State) when CorrId1 < CorrId2 ->
+                            } = State) when CorrId1 =/= CorrId2 ->
   {noreply, State};
 handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                                          }, CorrId, State) ->
@@ -368,16 +365,7 @@ err_op(_)                              -> restart.
 map_messages([?incomplete_message]) ->
   [?incomplete_message];
 map_messages(Messages) ->
-  F = fun(#kpro_Message{} = M) ->
-            #kafka_message{ offset     = M#kpro_Message.offset
-                          , magic_byte = M#kpro_Message.magicByte
-                          , attributes = M#kpro_Message.attributes
-                          , key        = M#kpro_Message.key
-                          , value      = M#kpro_Message.value
-                          , crc        = M#kpro_Message.crc
-                          }
-      end,
-  [F(M) || M <- Messages, M =/= ?incomplete_message].
+  [brod_utils:kafka_message(M) || M <- Messages, M =/= ?incomplete_message].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic
@@ -598,7 +586,7 @@ maybe_init_socket(State) ->
 maybe_send_init_socket(#state{subscriber = Subscriber}) ->
   Timeout = ?SOCKET_RETRY_DELAY_MS,
   %% re-init payload socket only when subscriber is alive
-  is_pid(Subscriber) andalso is_process_alive(Subscriber) andalso
+  brod_utils:is_pid_alive(Subscriber) andalso
     erlang:send_after(Timeout, self(), ?INIT_SOCKET),
   ok.
 

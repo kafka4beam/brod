@@ -1,7 +1,7 @@
 %% -*- mode:erlang -*-
 {application,brod,
  [{description,"Apache Kafka Erlang client library"},
-  {vsn,"2.1.8"},
+  {vsn,"2.1.9"},
   {registered,[]},
   {applications,[kernel,stdlib,supervisor3,kafka_protocol]},
   {env,[]},
@@ -12,4 +12,3 @@
   {links, [{"Github", "https://github.com/klarna/brod"}]},
   {build_tools, ["make", "rebar3"]},
   {files, ["src", "include", "scripts", "docker", "rebar.config", "rebar.lock", "README.md","LICENSE", "NOTICE", "AUTHORS", "Makefile", "erlang.mk", "sys.config.example"]}]}.
-

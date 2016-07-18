@@ -262,7 +262,7 @@ subscribe_partition(Client, Topic, Consumer) ->
            , consumer_pid = Pid
            , acked_offset = AckedOffset
            } = Consumer,
-  case is_pid(Pid) andalso is_process_alive(Pid) of
+  case brod_utils:is_pid_alive(Pid) of
     true ->
       %% already subscribed
       Consumer;

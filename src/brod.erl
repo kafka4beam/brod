@@ -89,6 +89,23 @@
 
 -deprecated([{start_link_client, '_', next_version}]).
 
+-export_type([ brod_call_ref/0
+             , brod_client_id/0
+             , brod_partition_fun/0
+             , client/0
+             , client_config/0
+             , consumer_config/0
+             , consumer_options/0
+             , endpoint/0
+             , group_config/0
+             , group_id/0
+             , kpro_MetadataResponse/0
+             , offset/0
+             , offset_time/0
+             , producer_config/0
+             , topic/0
+             ]).
+
 -include("brod_int.hrl").
 
 %%%_* APIs =====================================================================
@@ -424,14 +441,14 @@ get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
 -spec fetch([endpoint()], topic(), partition(), offset_time(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
   Request = kpro:fetch_request(Topic, Partition, Offset,
@@ -447,7 +464,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
     true ->
       {error, kpro_ErrorCode:desc(ErrorCode)};
     false ->
-      {ok, Messages}
+      {ok, lists:map(fun brod_utils:kafka_message/1, Messages)}
   end.
 
 %% escript entry point

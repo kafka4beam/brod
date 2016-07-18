@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.1.7
+PROJECT_VERSION = 2.1.9
 
 DEPS = supervisor3 kafka_protocol
 
@@ -26,4 +26,3 @@ t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 ESCRIPT_FILE = scripts/$(PROJECT)
-

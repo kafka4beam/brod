@@ -619,7 +619,7 @@ handle_socket_down(#state{ client_id       = ClientId
       NewSockets = lists:keystore(Endpoint, #sock.endpoint, Sockets, NewSocket),
       {ok, State#state{payload_sockets = NewSockets}};
     false ->
-      %% is_process_alive is checked and reconnect is done for metadata
+      %% is_pid_alive is checked and reconnect is done for metadata
       %% socket in maybe_restart_metadata_socket, hence the 'EXIT' message
       %% of old metadata socket pid may end up in this clause, simply ignore
       {ok, State}
@@ -803,7 +803,7 @@ rotate_endpoints(State, Reason) ->
 %% @private Maybe restart the metadata socket pid if it is no longer alive.
 -spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}}.
 maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
-  case is_pid(MetaSockPid) andalso is_process_alive(MetaSockPid) of
+  case brod_utils:is_pid_alive(MetaSockPid) of
     true ->
       {ok, State};
     false -> % can happen when metadata connection closed
