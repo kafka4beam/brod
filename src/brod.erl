@@ -99,11 +99,14 @@
              , endpoint/0
              , group_config/0
              , group_id/0
+             , key/0
              , kpro_MetadataResponse/0
+             , kv_list/0
              , offset/0
              , offset_time/0
              , producer_config/0
              , topic/0
+             , value/0
              ]).
 
 -include("brod_int.hrl").
@@ -248,22 +251,30 @@ get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
--spec produce(pid(), binary()) ->
+-spec produce(pid(), value()) ->
                  {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
-%% @doc Produce one message. The pid should be a producer pid.
--spec produce(pid(), binary(), binary()) ->
+%% @doc Produce one message if Value is binary or iolist,
+%% or a message set if Value is a (nested) kv-list, in this case Key
+%% is discarded (only the keys in kv-list are sent to kafka).
+%% The pid should be a partition producer pid, NOT client pid.
+%% @end
+-spec produce(pid(), key(), value()) ->
         {ok, brod_call_ref()} | {error, any()}.
 produce(ProducerPid, Key, Value) ->
   brod_producer:produce(ProducerPid, Key, Value).
 
-%% @doc Produce one message. This function first lookup the producer
-%% pid, then call produce/3 to do the actual job.
+%% @doc Produce one message if Value is binary or iolist,
+%% or a message set if Value is a (nested) kv-list, in this case Key
+%% is used only for partitioning (or discarded if Partition is used
+%% instead of PartFun).
+%% This function first lookup the producer pid,
+%% then call produce/3 to do the real work.
 %% @end
 -spec produce(client(), topic(), partition() | brod_partition_fun(),
-              binary(), binary()) -> {ok, brod_call_ref()} | {error, any()}.
+              key(), value()) -> {ok, brod_call_ref()} | {error, any()}.
 produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
   {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
   {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
@@ -275,14 +286,16 @@ produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
   end.
 
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
--spec produce_sync(pid(), binary()) -> ok.
+-spec produce_sync(pid(), value()) -> ok.
 produce_sync(Pid, Value) ->
   produce_sync(Pid, _Key = <<>>, Value).
 
-%% @doc Produce one message and wait for ack from kafka.
-%% The pid should be a partition producer pid, NOT client pid.
+%% @doc Sync version of produce/3
+%% This function will not return until a response is received from kafka,
+%% however if producer is started with required_acks set to 0, this function
+%% will return onece the messages is buffered in the producer process.
 %% @end
--spec produce_sync(pid(), binary(), binary()) ->
+-spec produce_sync(pid(), key(), value()) ->
         ok | {error, any()}.
 produce_sync(Pid, Key, Value) ->
   case produce(Pid, Key, Value) of
@@ -293,9 +306,13 @@ produce_sync(Pid, Key, Value) ->
       {error, Reason}
   end.
 
-%% @doc Produce one message and wait for ack from kafka.
+%% @doc Sync version of produce/5
+%% This function will not reutnr until a response is received from kafka,
+%% however if producer is started with required_acks set to 0, this function
+%% will return onece the messages is buffered in the producer process.
+%% @end
 -spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
-                   binary(), binary()) -> ok | {error, any()}.
+                   key(), value()) -> ok | {error, any()}.
 produce_sync(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
     {ok, CallRef} ->
@@ -415,13 +432,13 @@ get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()], [binary()]) ->
+-spec get_metadata([endpoint()], [topic()]) ->
                       {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @equiv get_offsets(Hosts, Topic, Partition, latest, 1)
--spec get_offsets([endpoint()], binary(), non_neg_integer()) ->
+-spec get_offsets([endpoint()], topic(), non_neg_integer()) ->
                      {ok, [offset()]} | {error, any()}.
 get_offsets(Hosts, Topic, Partition) ->
   get_offsets(Hosts, Topic, Partition, ?OFFSET_LATEST, 1).
@@ -440,7 +457,7 @@ get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
   end.
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
--spec fetch([endpoint()], binary(), non_neg_integer(), integer()) ->
+-spec fetch([endpoint()], topic(), partition(), integer()) ->
                {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).

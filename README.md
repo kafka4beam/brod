@@ -95,6 +95,7 @@ Put below configs to client config in sys.config or app env:
       erlang:exit(timeout)
     end.
 
+
 ### Synchronized produce request
 
 Block calling process until Kafka confirmed the message:
@@ -123,6 +124,24 @@ or the same in one call:
                        {ok, crypto:rand_uniform(0, PartitionsCount)}
                    end,
     {ok, CallRef} = brod:produce(Client, Topic, PartitionFun, Key, Value).
+
+
+### Produce a batch of (nested) Key-Value list
+
+    %% The top-level key is used for partitioning
+    %% and nested keys are discarded.
+    %% Nested messages are serialized into a message set to the same partition.
+    brod:produce(_Client    = brod_client_1,
+                 _Topic     = <<"brod-test-topic-1">>,
+                 _Partition = MyPartitionerFun
+                 _Key       = KeyUsedForPartitioning
+                 _Value     = [ {<<"k1", <<"v1">>}
+                              , {<<"k2", <<"v2">>}
+                              , { _KeyDiscarded = <<>>
+                                , [ {<<"k3">>, <<"v3">>}
+                                  , {<<"k4">>, <<"v4">>}
+                                  ]}
+                              ]).
 
 ### Handle acks from kafka
 

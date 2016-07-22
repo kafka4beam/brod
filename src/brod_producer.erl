@@ -139,7 +139,7 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
--spec produce(pid(), binary(), binary()) ->
+-spec produce(pid(), key(), value()) ->
         {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
