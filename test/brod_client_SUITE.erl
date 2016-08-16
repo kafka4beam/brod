@@ -121,7 +121,7 @@ t_no_reachable_endpoint(Config) when is_list(Config) ->
   ClientPid = whereis(Client),
   Mref = erlang:monitor(process, ClientPid),
   Reason = ?WAIT({'DOWN', Mref, process, ClientPid, Reason_}, Reason_, 1000),
-  ?assertMatch({{nxdomain, _Hosts}, _Stacktrace}, Reason).
+  ?assertMatch({{{connection_failure, nxdomain}, _Hosts}, _Stacktrace}, Reason).
 
 t_call_bad_client_id(Config) when is_list(Config) ->
   %% call a bad client ID
