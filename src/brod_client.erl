@@ -287,7 +287,7 @@ handle_info(init, State) ->
   ClientId = State#state.client_id,
   Endpoints = State#state.bootstrap_endpoints,
   {ok, MetaSock, ReorderedEndpoints} =
-    start_metadata_socket(ClientId, Endpoints),
+    start_metadata_socket(ClientId, Endpoints, State#state.config),
   {ok, ProducersSupPid} = brod_producers_sup:start_link(),
   {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
   {noreply, State#state{ bootstrap_endpoints = ReorderedEndpoints
@@ -581,9 +581,10 @@ maybe_connect(#state{client_id = ClientId} = State,
         when Result :: {ok, pid()} | {error, any()}.
 connect(#state{ client_id       = ClientId
               , payload_sockets = Sockets
+              , config          = Config
               } = State, Host, Port) ->
   Endpoint = {Host, Port},
-  case brod_sock:start_link(self(), Host, Port, ClientId, []) of
+  case brod_sock:start_link(self(), Host, Port, ClientId, Config) of
     {ok, Pid} ->
       S = #sock{ endpoint = Endpoint
                , sock_pid = Pid
@@ -659,23 +660,23 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
--spec start_metadata_socket(brod_client_id(), [endpoint()]) ->
+-spec start_metadata_socket(brod_client_id(), [endpoint()], client_config()) ->
                                {ok, pid(),  [endpoint()]}.
-start_metadata_socket(ClientId, [_|_] = Endpoints) ->
-  start_metadata_socket(ClientId, Endpoints,
+start_metadata_socket(ClientId, [_|_] = Endpoints, Config) ->
+  start_metadata_socket(ClientId, Endpoints, Config,
                         _FailedEndpoints = [], _Reason = ?undef).
 
-start_metadata_socket(_ClientId, [], FailedEndpoints, Reason) ->
+start_metadata_socket(_ClientId, [], _Config, FailedEndpoints, Reason) ->
   erlang:error({Reason, FailedEndpoints});
-start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints,
+start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints, Config,
                       FailedEndpoints, _Reason) ->
   {Host, Port} = Endpoint,
-  case brod_sock:start_link(self(), Host, Port, ClientId, []) of
+  case brod_sock:start_link(self(), Host, Port, ClientId, Config) of
     {ok, Pid} ->
       ReorderedEndpoints = Endpoints ++ lists:reverse(FailedEndpoints),
       {ok, Pid, ReorderedEndpoints};
     {error, Reason} ->
-      start_metadata_socket(ClientId, Rest,
+      start_metadata_socket(ClientId, Rest, Config,
                             [Endpoint | FailedEndpoints], Reason)
   end.
 
@@ -810,7 +811,7 @@ maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
       ClientId = State#state.client_id,
       Endpoints = State#state.bootstrap_endpoints,
       {ok, NewMetaSockPid, ReorderedEndpoints} =
-        start_metadata_socket(ClientId, Endpoints),
+        start_metadata_socket(ClientId, Endpoints, State#state.config),
       {ok, State#state{ bootstrap_endpoints = ReorderedEndpoints
                       , meta_sock_pid       = NewMetaSockPid
                       }}
