@@ -5,7 +5,7 @@ PROJECT_VERSION = 2.2.0
 DEPS = supervisor3 kafka_protocol
 
 dep_supervisor_commit = 1.1.2
-dep_kafka_protocol_commit = produce-nested-kv-list
+dep_kafka_protocol_commit = 0.6.0
 
 TEST_DEPS = meck proper
 
