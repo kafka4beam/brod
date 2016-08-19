@@ -307,9 +307,9 @@ produce_sync(Pid, Key, Value) ->
   end.
 
 %% @doc Sync version of produce/5
-%% This function will not reutnr until a response is received from kafka,
+%% This function will not return until a response is received from kafka,
 %% however if producer is started with required_acks set to 0, this function
-%% will return onece the messages is buffered in the producer process.
+%% will return once the messages are buffered in the producer process.
 %% @end
 -spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
                    key(), value()) -> ok | {error, any()}.
