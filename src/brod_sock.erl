@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2016, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014, 2015 Klarna AB
+%%% @copyright 2014-2016 Klarna AB
 %%% @end
 %%% ============================================================================
 
@@ -32,7 +32,9 @@
         , loop/2
         , request_sync/3
         , request_async/2
+        , start/4
         , start/5
+        , start_link/4
         , start_link/5
         , stop/1
         , debug/2
@@ -56,25 +58,34 @@
                , sock        :: port()
                , tail = <<>> :: binary() %% leftover of last data stream
                , requests    :: brod_kafka_requests:requests()
+               , mod         :: gen_tcp | ssl
                }).
 
 %%%_* API ======================================================================
+%% @equiv start_link(Parent, Host, Port, ClientId, [])
+start_link(Parent, Host, Port, ClientId) ->
+  start_link(Parent, Host, Port, ClientId, []).
+
 -spec start_link(pid(), string(), integer(),
                  brod_client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
-start_link(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
+start_link(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
-  start_link(Parent, Host, Port, BinClientId, Debug);
-start_link(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
-  proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
+  start_link(Parent, Host, Port, BinClientId, Options);
+start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
+  proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
+
+%% @equiv start(Parent, Host, Port, ClientId, [])
+start(Parent, Host, Port, ClientId) ->
+  start(Parent, Host, Port, ClientId, []).
 
 -spec start(pid(), string(), integer(), brod_client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
-start(Parent, Host, Port, ClientId, Debug) when is_atom(ClientId) ->
+start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
-  start(Parent, Host, Port, BinClientId, Debug);
-start(Parent, Host, Port, ClientId, Debug) when is_binary(ClientId) ->
-  proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Debug]).
+  start(Parent, Host, Port, BinClientId, Options);
+start(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
+  proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
 
 -spec request_async(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
@@ -139,20 +150,36 @@ debug(Pid, File) when is_list(File) ->
 
 -spec init(pid(), hostname(), portnum(), brod_client_id(), [any()]) ->
         no_return().
-init(Parent, Host, Port, ClientId, Debug0) ->
-  Debug = sys:debug_options(Debug0),
+init(Parent, Host, Port, ClientId, Options) ->
+  Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
+  Timeout = proplists:get_value(timeout, Options, ?CONNECT_TIMEOUT),
   SockOpts = [{active, true}, {packet, raw}, binary, {nodelay, true}],
-  case gen_tcp:connect(Host, Port, SockOpts, ?CONNECT_TIMEOUT) of
+  case gen_tcp:connect(Host, Port, SockOpts, Timeout) of
     {ok, Sock} ->
+      State0 = #state{client_id = ClientId, parent = Parent},
+      %% adjusting buffer size as per recommendation at
+      %% http://erlang.org/doc/man/inet.html#setopts-2
+      %% idea is from github.com/epgsql/epgsql
+      {ok, [{recbuf, RecBufSize}, {sndbuf, SndBufSize}]} =
+        inet:getopts(Sock, [recbuf, sndbuf]),
+      ok = inet:setopts(Sock, [{buffer, max(RecBufSize, SndBufSize)}]),
+      State = case proplists:get_value(ssl, Options, []) of
+                [] ->
+                  State0#state{mod = gen_tcp, sock = Sock};
+                SslOpts ->
+                  error_logger:info_msg("Trying to establish ssl connection with options: ~p\n", [SslOpts]),
+                  case ssl:connect(Sock, SslOpts, Timeout) of
+                    {ok, SslSock} ->
+                      State0#state{mod = ssl, sock = SslSock};
+                    {error, Reason} ->
+                      exit({ssl_negotiation_failure, Reason,
+                            erlang:get_stacktrace()})
+                  end
+              end,
       proc_lib:init_ack(Parent, {ok, self()}),
       try
         Requests = brod_kafka_requests:new(),
-        State = #state{ client_id = ClientId
-                      , parent    = Parent
-                      , sock      = Sock
-                      , requests  = Requests
-                      },
-        loop(State, Debug)
+        loop(State#state{requests = Requests}, Debug)
       catch error : E ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
@@ -160,7 +187,7 @@ init(Parent, Host, Port, ClientId, Debug0) ->
     {error, Reason} ->
       %% exit instead of {error, Reason}
       %% otherwise exit reason will be 'normal'
-      exit(Reason)
+      exit({connection_failure, Reason})
   end.
 
 system_call(Pid, Request) ->
@@ -200,11 +227,11 @@ decode_msg(Msg, State, Debug0) ->
   Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
   handle_msg(Msg, State, Debug).
 
-handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
-                                    , requests = Requests
-                                    } = State, Debug) ->
-  Stream = <<Tail0/binary, Bin/binary>>,
-  {Responses, Tail} = kpro:decode_response(Stream),
+handle_msg({_, Sock, Bin}, #state{ sock     = Sock
+                                 , tail     = Tail0
+                                 , requests = Requests
+                                 } = State, Debug) ->
+  {Responses, Tail} = kpro:decode_response(<<Tail0/binary, Bin/binary>>),
   NewRequests =
     lists:foldl(
       fun(#kpro_Response{ correlationId   = CorrId
@@ -215,26 +242,31 @@ handle_msg({tcp, _Sock, Bin}, #state{ tail     = Tail0
         brod_kafka_requests:del(Reqs, CorrId)
       end, Requests, Responses),
   ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
-handle_msg({tcp_closed, _Sock}, _State, _) ->
+handle_msg({tcp_closed, Sock}, #state{sock = Sock}, _) ->
   exit({shutdown, tcp_closed});
-handle_msg({tcp_error, _Sock, Reason}, _State, _) ->
+handle_msg({ssl_closed, Sock}, #state{sock = Sock}, _) ->
+  exit({shutdown, ssl_closed});
+handle_msg({tcp_error, Sock, Reason}, #state{sock = Sock}, _) ->
   exit({tcp_error, Reason});
+handle_msg({ssl_error, Sock, Reason}, #state{sock = Sock}, _) ->
+  exit({ssl_error, Reason});
 handle_msg({From, {send, Request}},
            #state{ client_id = ClientId
+                 , mod       = Mod
                  , sock      = Sock
                  , requests  = Requests
                  } = State, Debug) ->
   {Caller, _Ref} = From,
   {CorrId, NewRequests} = brod_kafka_requests:add(Requests, Caller),
   RequestBin = kpro:encode_request(ClientId, CorrId, Request),
-  ok = gen_tcp:send(Sock, RequestBin),
+  ok = Mod:send(Sock, RequestBin),
   reply(From, {ok, CorrId}),
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
   _ = reply(From, {ok, State#state.sock}),
   ?MODULE:loop(State, Debug);
-handle_msg({From, stop}, #state{sock = Sock}, _Debug) ->
-  gen_tcp:close(Sock),
+handle_msg({From, stop}, #state{mod = Mod, sock = Sock}, _Debug) ->
+  Mod:close(Sock),
   _ = reply(From, ok),
   ok;
 handle_msg(Msg, State, Debug) ->
