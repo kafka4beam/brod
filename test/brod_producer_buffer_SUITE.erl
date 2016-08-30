@@ -66,10 +66,12 @@ all() -> [F || {F, _A} <- module_info(exports),
 %%%_* Test functions ===========================================================
 
 t_no_ack(Config) when is_list(Config) ->
-  ?assert(proper:quickcheck(prop_no_ack_run(), 1000)).
+  Opts = [{numtests, 1000}, {to_file, user}],
+  ?assert(proper:quickcheck(prop_no_ack_run(), Opts)).
 
 t_random_latency_ack(Config) when is_list(Config) ->
-  ?assert(proper:quickcheck(prop_random_latency_ack_run(), 500)).
+  Opts = [{numtests, 500}, {to_file, user}],
+  ?assert(proper:quickcheck(prop_random_latency_ack_run(), Opts)).
 
 t_nack(Config) when is_list(Config) ->
   SendFun =

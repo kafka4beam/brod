@@ -39,7 +39,7 @@
 -include("brod_int.hrl").
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> kafka_kv()).
+-type data() :: fun(() -> {key(), value()}).
 
 -record(req,
         { call_ref :: brod_call_ref()
@@ -48,7 +48,7 @@
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
 
--type send_fun() :: fun((pid(), [{binary(), binary()}]) ->
+-type send_fun() :: fun((pid(), [{key(), value()}]) ->
                         ok |
                         {ok, corr_id()} |
                         {error, any()}).
@@ -90,11 +90,11 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry, SendFun) ->
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
 %% @end
--spec add(buf(), brod_call_ref(), binary(), binary()) -> {ok, buf()}.
+-spec add(buf(), brod_call_ref(), key(), value()) -> {ok, buf()}.
 add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
-            , bytes    = size(Key) + size(Value)
+            , bytes    = data_size(Key) + data_size(Value)
             , failures = 0
             },
   maybe_buffer(Buf#buf{pending = Pending ++ [Req]}).
@@ -314,6 +314,14 @@ cast(Pid, Msg) ->
   catch _ : _ ->
     ok
   end.
+
+-spec data_size(key() | value()) -> non_neg_integer().
+data_size([]) -> 0;
+data_size(undefined) -> 0;
+data_size(B) when is_binary(B) -> size(B);
+data_size(I) when is_integer(I) andalso I < 256 andalso I >= 0 -> 1;
+data_size({K, V}) -> data_size(K) + data_size(V);
+data_size([H | T]) -> data_size(H) + data_size(T).
 
 %%%_* Tests ====================================================================
 
