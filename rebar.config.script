@@ -1,0 +1,12 @@
+IsRebar3 = erlang:function_exported(rebar3, main, 1),
+Rebar2Deps = [
+           {supervisor3, ".*", {git, "https://github.com/klarna/supervisor3", {tag, "1.1.1"}}},
+           {kafka_protocol, ".*", {git, "https://github.com/klarna/kafka_protocol.git", {tag, "0.4.0"}}}
+       ],
+
+case IsRebar3 of                                                                                                                                                          
+    true ->                                                                                                                                                               
+        CONFIG;                                                                                                                                                           
+    false ->                                                                                                                                                              
+        lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
+end.
