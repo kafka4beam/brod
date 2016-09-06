@@ -149,8 +149,8 @@ nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
                   },
   {ok, rebuffer_or_crash(lists:append(AllOnWireReqs), NewBuf, Reason)}.
 
-%% @hidden Return true if there is no message pending,
-%% buffered or waiting for ack. Used in test only so far.
+%% @doc Return true if there is no message pending,
+%% buffered or waiting for ack.
 %% @end
 is_empty(#buf{ pending = []
              , buffer  = []
@@ -169,8 +169,10 @@ is_empty(#buf{}) -> false.
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
   true;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
-  not is_later_corr_id(CorrId, CorrIdReceived) orelse
-    exit({bad_order, CorrId, CorrIdReceived}).
+  case is_later_corr_id(CorrId, CorrIdReceived) of
+    true  -> exit({bad_order, CorrId, CorrIdReceived});
+    false -> true
+  end.
 
 %% @private Compare two corr-ids, return true if ID-2 is considered a 'later'
 %% one comparing to ID1.
