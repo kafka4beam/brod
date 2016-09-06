@@ -167,7 +167,8 @@ init(Parent, Host, Port, ClientId, Options) ->
                 [] ->
                   State0#state{mod = gen_tcp, sock = Sock};
                 SslOpts ->
-                  error_logger:info_msg("Trying to establish ssl connection with options: ~p\n", [SslOpts]),
+                  error_logger:info_msg("Trying to establish ssl connection "
+                                        "with options: ~p\n", [SslOpts]),
                   case ssl:connect(Sock, SslOpts, Timeout) of
                     {ok, SslSock} ->
                       State0#state{mod = ssl, sock = SslSock};
