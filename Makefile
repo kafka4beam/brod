@@ -4,7 +4,7 @@ PROJECT_VERSION = 2.1.9
 
 DEPS = supervisor3 kafka_protocol
 
-dep_supervisor_commit = 1.1.1
+dep_supervisor3_commit = 1.1.2
 dep_kafka_protocol_commit = 0.4.0
 
 TEST_DEPS = meck proper
