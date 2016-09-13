@@ -165,7 +165,7 @@ Otherwise brod:sync_produce_request/1 can be used to block-wait for acks.
 NOTE: The replies are only strictly ordered per-partition. 
 i.e. if the caller is producing to two or more partitions, 
 it may receive replies ordered differently than in which order 
-bord:produce API was called.
+brod:produce API was called.
 
 ## Consumer
 Find more examples in test/ (brod\_demo\_*).

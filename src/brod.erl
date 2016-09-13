@@ -400,9 +400,9 @@ consume_ack(ConsumerPid, Offset) ->
         client(), group_id(), [topic()],
         group_config(), consumer_config(), module(), term()) ->
           {ok, pid()} | {error, any()}.
-start_link_group_subscriber(Client, GroupId, Topics, GroupCofnig,
+start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
                             ConsumerConfig, CbModule, CbInitArg) ->
-  brod_group_subscriber:start_link(Client, GroupId, Topics, GroupCofnig,
+  brod_group_subscriber:start_link(Client, GroupId, Topics, GroupConfig,
                                    ConsumerConfig, CbModule, CbInitArg).
 
 %% @equiv start_link_topic_subscriber(Client, Topic, 'all', ConsumerConfig,
