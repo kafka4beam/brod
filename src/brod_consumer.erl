@@ -299,13 +299,14 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                                          }, CorrId, State) ->
   CorrId = State#state.last_corr_id, %% assert
   #kpro_FetchResponseTopic{ topicName = Topic
-                          , fetchResponsePartition_L = [PM]
+                          , fetchResponsePartition_L = [PartitionResponse]
                           } = TopicData,
   #kpro_FetchResponsePartition{ partition           = Partition
                               , errorCode           = ErrorCode
                               , highWatermarkOffset = HighWmOffset
-                              , message_L           = Messages0} = PM,
-  Messages = map_messages(Messages0),
+                              , message_L           = Messages0
+                              } = PartitionResponse,
+  Messages = map_messages(State#state.begin_offset, Messages0),
   case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       Error = #kafka_fetch_error{ topic      = Topic
@@ -359,13 +360,17 @@ err_op(_)                              -> restart.
 
 %% @private Map message to brod's format.
 %% incomplete message indicator is kept when the only one message is incomplete.
+%% Messages having offset earlier than the requested offset are discarded.
+%% this might happen for compressed message sets
 %% @end
--spec map_messages([?incomplete_message | kpro_Message()]) ->
+-spec map_messages(offset(), [?incomplete_message | kpro_Message()]) ->
         [?incomplete_message | #kafka_message{}].
-map_messages([?incomplete_message]) ->
+map_messages(_BeginOffset, [?incomplete_message]) ->
   [?incomplete_message];
-map_messages(Messages) ->
-  [brod_utils:kafka_message(M) || M <- Messages, M =/= ?incomplete_message].
+map_messages(BeginOffset, Messages) ->
+  [brod_utils:kafka_message(M) || M <- Messages,
+   M =/= ?incomplete_message andalso
+   M#kpro_Message.offset >= BeginOffset].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic
