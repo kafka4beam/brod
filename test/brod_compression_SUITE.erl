@@ -194,17 +194,19 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   {ok, [Offset1]} = brod:get_offsets(?HOSTS, Topic, 0),
   ct:pal("offset after batch: ~p", [Offset1]),
   ?assertEqual(Offset1, Offset0 + BatchCount),
-  BatchMiddle = BatchCount div 2,
+  HalfBatch = BatchCount div 2,
+  BatchMiddle = Offset0 + HalfBatch,
   %% kafka should decompress the compressed message set,
-  %% and assign offsets to each and every messages in the batch
-  %% compress, then write to disk. fetching from an offset in
-  %% the middle of a compressed batch should result in a full
-  %% delivery of the compressed batch.
-  ok = brod:start_consumer(Client, Topic,
-                           [{begin_offset, Offset0 + BatchMiddle}]),
+  %% and assign offsets to each and every messages in the batch,
+  %% compress it back, then write to disk. fetching from an offset in
+  %% the middle of a compressed batch will result in a full
+  %% delivery of the compressed batch, but brod_consumer should
+  %% filter out the ones before the requested offset.
+  ok = brod:start_consumer(Client, Topic, [{begin_offset, BatchMiddle}]),
   {ok, _ConsumerPid} = brod:subscribe(Client, self(), ?TOPIC, 0, []),
-  Messages = receive_messages(BatchCount, []),
-  Expected = lists:zip(lists:seq(Offset0, Offset1-1), KvList),
+  Messages  = receive_messages(BatchCount - HalfBatch, []),
+  Expected0 = lists:zip(lists:seq(Offset0, Offset1-1), KvList),
+  Expected  = lists:sublist(Expected0, HalfBatch+1, BatchCount-HalfBatch),
   lists:foreach(
     fun({{Offset, {K, V}}, Message}) ->
       ?assertMatch(#kafka_message{ offset = Offset
