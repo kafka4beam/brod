@@ -144,16 +144,17 @@ start_link(ClientPid, Topic, Partition, Config) ->
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
-                          , ref    = make_ref()
+                          , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  ok = gen_server:cast(Pid, {produce, CallRef, Key, Value}),
-  ExpectedReply = #brod_produce_reply{ call_ref = CallRef
-                                     , result   = brod_produce_req_buffered
-                                     },
-  %% Wait until the request is buffered
-  case sync_produce_request(ExpectedReply) of
-    ok              -> {ok, CallRef};
-    {error, Reason} -> {error, Reason}
+  Pid ! {produce, CallRef, Key, Value},
+  receive
+    #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
+                       , result   = brod_produce_req_buffered
+                       } ->
+      erlang:demonitor(Mref, [flush]),
+      {ok, CallRef};
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}}
   end.
 
 %% @doc Block calling process until it receives ExpectedReply.
@@ -234,6 +235,11 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
   {ok, NewState} = schedule_retry(State, Reason),
   {noreply, NewState#state{sock_pid = ?undef}};
+handle_info({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
+  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  State1 = State#state{buffer = NewBuffer},
+  {ok, NewState} = maybe_produce(State1),
+  {noreply, NewState};
 handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -280,11 +286,6 @@ handle_call(stop, _From, State) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
-  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
-  State1 = State#state{buffer = NewBuffer},
-  {ok, NewState} = maybe_produce(State1),
-  {noreply, NewState};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
