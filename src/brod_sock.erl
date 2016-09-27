@@ -225,7 +225,12 @@ handle_msg({From, {send, Request}},
                  , requests  = Requests
                  } = State, Debug) ->
   {Caller, _Ref} = From,
-  {CorrId, NewRequests} = brod_kafka_requests:add(Requests, Caller),
+  {CorrId, NewRequests} = case Request of
+      #kpro_ProduceRequest{requiredAcks = 0} ->
+        brod_kafka_requests:increment_corr_id(Requests);
+      _ ->
+        brod_kafka_requests:add(Requests, Caller)
+  end,
   RequestBin = kpro:encode_request(ClientId, CorrId, Request),
   ok = gen_tcp:send(Sock, RequestBin),
   reply(From, {ok, CorrId}),
