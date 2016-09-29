@@ -144,16 +144,17 @@ start_link(ClientPid, Topic, Partition, Config) ->
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
-                          , ref    = make_ref()
+                          , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  ok = gen_server:cast(Pid, {produce, CallRef, Key, Value}),
-  ExpectedReply = #brod_produce_reply{ call_ref = CallRef
-                                     , result   = brod_produce_req_buffered
-                                     },
-  %% Wait until the request is buffered
-  case sync_produce_request(ExpectedReply) of
-    ok              -> {ok, CallRef};
-    {error, Reason} -> {error, Reason}
+  Pid ! {produce, CallRef, Key, Value},
+  receive
+    #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
+                       , result   = brod_produce_req_buffered
+                       } ->
+      erlang:demonitor(Mref, [flush]),
+      {ok, CallRef};
+    {'DOWN', Mref, process, _Pid, Reason} ->
+      {error, {producer_down, Reason}}
   end.
 
 %% @doc Block calling process until it receives ExpectedReply.
@@ -235,6 +236,24 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {ok, NewState} = schedule_retry(State, Reason),
       {noreply, NewState#state{sock_pid = ?undef}}
   end;
+handle_info({produce, CallRef, Key, Value},
+            #state{buffer = Buffer, sock_pid = SockPid} = State) ->
+  case not brod_utils:is_pid_alive(SockPid) andalso
+       brod_producer_buffer:is_empty(Buffer) of
+    true ->
+      %% this is the first request after fresh boot or socket death
+      case init_socket(State) of
+        {ok, NewState} ->
+          handle_produce(CallRef, Key, Value, NewState);
+        {error, _} ->
+          %% failed to initialize payload socket
+          %% call handle_produce, let the send fun fail
+          %% retry should take care of socket re-init
+          handle_produce(CallRef, Key, Value, State)
+      end;
+    false ->
+      handle_produce(CallRef, Key, Value, State)
+  end;
 handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -281,24 +300,6 @@ handle_call(stop, _From, State) ->
 handle_call(_Call, _From, State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast({produce, CallRef, Key, Value},
-            #state{buffer = Buffer, sock_pid = SockPid} = State) ->
-  case not brod_utils:is_pid_alive(SockPid) andalso
-       brod_producer_buffer:is_empty(Buffer) of
-    true ->
-      %% this is the first request after fresh boot or socket death
-      case init_socket(State) of
-        {ok, NewState} ->
-          handle_produce(CallRef, Key, Value, NewState);
-        {error, _} ->
-          %% failed to initialize payload socket
-          %% call handle_produce, let the send fun fail
-          %% retry should take care of socket re-init
-          handle_produce(CallRef, Key, Value, State)
-      end;
-    false ->
-      handle_produce(CallRef, Key, Value, State)
-  end;
 handle_cast(_Cast, State) ->
   {noreply, State}.
 

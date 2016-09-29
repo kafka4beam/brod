@@ -34,6 +34,7 @@
         , del/2
         , get_caller/2
         , get_corr_id/1
+	, increment_corr_id/1
         ]).
 
 -export_type([requests/0]).
@@ -87,6 +88,13 @@ get_caller(#requests{sent = Sent}, CorrId) ->
 -spec get_corr_id(requests()) -> corr_id().
 get_corr_id(#requests{ corr_id = CorrId }) ->
   CorrId.
+
+%% @doc Fetch and increment the correlation ID
+%% This is used if we don't want a response from the broker
+%% @end
+-spec increment_corr_id(requests()) -> {corr_id(), requests()}.
+increment_corr_id(#requests{corr_id = CorrId} = Requests) ->
+  {CorrId, Requests#requests{ corr_id = kpro:next_corr_id(CorrId) }}.
 
 %%%_* Internal function ========================================================
 
