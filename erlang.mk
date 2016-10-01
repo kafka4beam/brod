@@ -3467,6 +3467,14 @@ pkg_smother_fetch = git
 pkg_smother_repo = https://github.com/ramsay-t/Smother
 pkg_smother_commit = master
 
+PACKAGES += snappyer
+pkg_snappyer_name = snappyer
+pkg_snappyer_description = Snappy as nif for Erlang
+pkg_snappyer_homepage = https://github.com/zmstone/snappyer
+pkg_snappyer_fetch = git
+pkg_snappyer_repo = https://github.com/zmstone/snappyer.git
+pkg_snappyer_commit = master
+
 PACKAGES += social
 pkg_social_name = social
 pkg_social_description = Cowboy handler for social login via OAuth2 providers
