@@ -23,7 +23,8 @@
 -module(brod_utils).
 
 %% Exports
--export([ find_leader_in_metadata/3
+-export([ bytes/1
+        , find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
         , is_normal_reason/1
@@ -190,6 +191,16 @@ do_find_leader_in_metadata(Metadata, Topic, Partition) ->
   Host = Broker#kpro_Broker.host,
   Port = Broker#kpro_Broker.port,
   {binary_to_list(Host), Port}.
+
+-define(IS_BYTE(I), (I>=0 andalso I<256)).
+
+-spec bytes(key() | value() | kv_list()) -> non_neg_integer().
+bytes([]) -> 0;
+bytes(undefined) -> 0;
+bytes(I) when ?IS_BYTE(I) -> 1;
+bytes(B) when is_binary(B) -> erlang:size(B);
+bytes({K, V}) -> bytes(K) + bytes(V);
+bytes([H | T]) -> bytes(H) + bytes(T).
 
 %%%_* Tests ====================================================================
 

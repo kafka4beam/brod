@@ -339,12 +339,7 @@ cast(Pid, Msg) ->
   end.
 
 -spec data_size(key() | value()) -> non_neg_integer().
-data_size([]) -> 0;
-data_size(undefined) -> 0;
-data_size(B) when is_binary(B) -> size(B);
-data_size(I) when is_integer(I) andalso I < 256 andalso I >= 0 -> 1;
-data_size({K, V}) -> data_size(K) + data_size(V);
-data_size([H | T]) -> data_size(H) + data_size(T).
+data_size(Data) -> brod_utils:bytes(Data).
 
 %%%_* Tests ====================================================================
 
