@@ -192,7 +192,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   MaybeCompress =
     fun(KafkaKvList) ->
       case Compression =/= no_compression andalso
-           batch_size(KafkaKvList) >= MinCompressBatchSize of
+           brod_utils:bytes(KafkaKvList) >= MinCompressBatchSize of
         true  -> Compression;
         false -> no_compression
       end
@@ -371,9 +371,6 @@ is_retriable(_) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
-
-batch_size([]) -> 0;
-batch_size([{K,V} | T]) -> size(K) + size(V) + batch_size(T).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
