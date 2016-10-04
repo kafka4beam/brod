@@ -145,45 +145,10 @@ produce(Config) when is_list(Config) ->
   end,
   ok.
 
-produce_compressed_batch_consume_from_middle({init, Config}) ->
-  BatchCount = 10, %% any value >= 2
-  %% mock brod_producer_buffer:maybe_send to simply return the buffer
-  %% for the first 9 calls, then passthrough from the 10th call
-  %% hence the 10th call will produce a batch
-  SendFun = fun(Buf, Pid) ->
-              NthCall = case get(nth_call) of
-                          undefined -> 1;
-                          N         -> N+1
-                        end,
-              put(nth_call, NthCall),
-              case NthCall >= BatchCount of
-                true  -> meck:passthrough([Buf, Pid]);
-                false -> {ok, Buf}
-              end
-            end,
-  %% hijack kpro:produce_request/6 to verify if the args are as expected
-  MakeRequestFun =
-    fun(T, P, KVL, RequiredAcks, AckTimeout, Compression) ->
-      ?assertEqual(?config(compression), Compression),
-      ?assertEqual(BatchCount, length(KVL)),
-      meck:passthrough([T, P, KVL, RequiredAcks, AckTimeout, Compression])
-    end,
-  meck:new(brod_producer_buffer,
-           [passthrough, no_passthrough_cover, no_history]),
-  meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(brod_producer_buffer, maybe_send, 2, SendFun),
-  meck:expect(kpro, produce_request, 6, MakeRequestFun),
-  [{batch_count, BatchCount} | Config];
-produce_compressed_batch_consume_from_middle({'end', Config}) ->
-  meck:validate(brod_producer_buffer),
-  meck:unload(brod_producer_buffer),
-  meck:validate(kpro),
-  meck:unload(kpro),
-  Config;
 produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   Topic = ?TOPIC,
   Client = ?config(client),
-  BatchCount = ?config(batch_count),
+  BatchCount = 100,
   %% get the latest offset before producing the batch
   {ok, [Offset0]} = brod:get_offsets(?HOSTS, Topic, 0),
   ct:pal("offset before batch: ~p", [Offset0]),
@@ -192,12 +157,7 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
                    ],
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   KvList = [make_unique_kv() || _ <- lists:seq(1, BatchCount)],
-  RefList =
-    lists:map(fun({K, V}) ->
-                {ok, Ref} = brod:produce(Client, Topic, 0, K, V),
-                Ref
-              end, KvList),
-  ok = lists:foreach(fun brod:sync_produce_request/1, RefList),
+  ok = brod:produce_sync(Client, Topic, 0, <<>>, KvList),
   %% Get the latest offset after the batch is produced
   {ok, [Offset1]} = brod:get_offsets(?HOSTS, Topic, 0),
   ct:pal("offset after batch: ~p", [Offset1]),
