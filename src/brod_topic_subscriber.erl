@@ -41,6 +41,11 @@
 
 -include("brod_int.hrl").
 
+-type cb_state() :: term().
+-type cb_ret() :: {ok, cb_state()} | {ok, ack, cb_state()}.
+-type committed_offsets() :: [{partition(), offset()}].
+-type ack_ref()  :: {partition(), offset()}.
+
 %%%_* behaviour callbacks ======================================================
 
 %% Initialize the callback modules state.
@@ -52,7 +57,7 @@
 %%      e.g. CommittedOffsets = [], the consumer will use 'latest' by default,
 %%      or 'begin_offset' in consumer config (if found) to start fetching.
 %% CbState is the user's looping state for message processing.
--callback init(topic(), term()) -> {ok, [{partition(), offset()}], cb_state()}.
+-callback init(topic(), term()) -> {ok, committed_offsets(), cb_state()}.
 
 %% Handle a message. Return one of:
 %%
@@ -66,14 +71,9 @@
 %% NOTE: While this callback function is being evaluated, the fetch-ahead
 %%       partition-consumers are polling for more messages behind the scene
 %%       unless prefetch_count is set to 0 in consumer config.
--callback handle_message(partition(), #kafka_message{}, cb_state()) ->
-            {ok, cb_state()} | {ok, ack, cb_state()}.
+-callback handle_message(partition(), #kafka_message{}, cb_state()) -> cb_ret().
 
 %%%_* Types and macros =========================================================
-
--type cb_state() :: term().
--type cb_fun()   :: fun((cb_state()) -> {AckNow :: boolean(), cb_state()}).
--type ack_ref()  :: {partition(), offset()}.
 
 -record(consumer,
         { partition     :: partition()
@@ -83,13 +83,11 @@
         }).
 
 -record(state,
-        { client                :: client()
-        , topic                 :: topic()
-        , consumers = []        :: [#consumer{}]
-        , cb_module             :: module()
-        , cb_state              :: cb_state()
-        , pending_ack = ?undef  :: ?undef | ack_ref()
-        , pending_messages = [] :: [{ack_ref(), cb_fun()}]
+        { client         :: client()
+        , topic          :: topic()
+        , consumers = [] :: [#consumer{}]
+        , cb_module      :: module()
+        , cb_state       :: cb_state()
         }).
 
 %% delay 2 seconds retry the failed subscription to partiton consumer process
@@ -98,7 +96,6 @@
 -define(LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
         {'$start_consumer', ConsumerConfig, CommittedOffsets, Partitions}).
 -define(LO_CMD_SUBSCRIBE_PARTITIONS, '$subscribe_partitions').
--define(LO_CMD_PROCESS_MESSAGE, '$process_message').
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
@@ -106,7 +103,7 @@
 
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages from the given partition set. Use atom 'all' to subscribe to all
-%% partitions.
+%% partitions. Messages are handled by calling CbModule:handle_message
 %% @end
 -spec start_link(client(), topic(), all | [partition()],
                  consumer_config(), module(), term()) ->
@@ -144,35 +141,12 @@ init({Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg}) ->
   {ok, State}.
 
 handle_info({_ConsumerPid,
-             #kafka_message_set{ partition = Partition
+             #kafka_message_set{ topic     = Topic
+                               , partition = Partition
                                , messages  = Messages
                                }},
-             #state{ cb_module        = CbModule
-                   , pending_messages = Pendings
-                   } = State) ->
-  MapFun =
-    fun(#kafka_message{offset = Offset} = Msg) ->
-      AckRef = {Partition, Offset},
-      CbFun =
-        fun(CbState) ->
-          case CbModule:handle_message(Partition, Msg, CbState) of
-            {ok, NewCbState} ->
-              {_AckNow = false, NewCbState};
-            {ok, ack, NewCbState} ->
-              {_AckNow = true, NewCbState};
-            Unknown ->
-              erlang:error({bad_return_value,
-                           {CbModule, handle_message, Unknown}})
-          end
-        end,
-      {AckRef, CbFun}
-    end,
-  NewPendings = Pendings ++ lists:map(MapFun, Messages),
-  NewState = State#state{pending_messages = NewPendings},
-  _ = send_lo_cmd(?LO_CMD_PROCESS_MESSAGE),
-  {noreply, NewState};
-handle_info(?LO_CMD_PROCESS_MESSAGE, State) ->
-  {ok, NewState} = maybe_process_message(State),
+             #state{topic = Topic} = State) ->
+  NewState = handle_messages(Partition, Messages, State),
   {noreply, NewState};
 handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
                                    Partitions0),
@@ -233,7 +207,7 @@ handle_call(Call, _From, State) ->
 
 handle_cast({ack, Partition, Offset}, State) ->
   AckRef = {Partition, Offset},
-  {ok, NewState} = handle_ack(AckRef, State),
+  NewState = handle_ack(AckRef, State),
   {noreply, NewState};
 handle_cast(stop, State) ->
   {stop, normal, State};
@@ -289,55 +263,49 @@ subscribe_partition(Client, Topic, Consumer) ->
       end
   end.
 
--spec maybe_process_message(#state{}) -> {ok, #state{}}.
-maybe_process_message(#state{ pending_ack      = ?undef
-                            , pending_messages = [{AckRef, F} | Rest]
-                            , cb_state         = CbState
-                            } = State) ->
-  %% process new message only when there is no pending ack
-  {AckNow, NewCbState} = F(CbState),
-  NewState =
-    State#state{ pending_ack      = AckRef
-               , pending_messages = Rest
-               , cb_state         = NewCbState
-               },
-  case AckNow of
-    true  -> handle_ack(AckRef, NewState);
-    false -> {ok, NewState}
-  end;
-maybe_process_message(State) ->
-  {ok, State}.
-
-handle_ack(AckRef, #state{ pending_ack      = AckRef
-                         , pending_messages = Messages
-                         , consumers        = Consumers
-                         } = State0) ->
-  {Partition, Offset} = AckRef,
-  State1 =
-    case lists:keyfind(Partition, #consumer.partition, Consumers) of
-      #consumer{consumer_pid = ConsumerPid} = Consumer ->
-        ok = brod:consume_ack(ConsumerPid, Offset),
-        NewConsumer = Consumer#consumer{acked_offset = Offset},
-        NewConsumers = lists:keyreplace(Partition,
-                                        #consumer.partition,
-                                        Consumers, NewConsumer),
-      State0#state{consumers = NewConsumers};
-    false ->
-      %% stale ack, ignore.
-      State0
+handle_messages(_Partition, [], State) ->
+  State;
+handle_messages(Partition, [Msg | Rest], State) ->
+  #kafka_message{offset = Offset} = Msg,
+  #state{cb_module = CbModule, cb_state = CbState} = State,
+  AckRef = {Partition, Offset},
+  {AckNow, NewCbState} =
+    case CbModule:handle_message(Partition, Msg, CbState) of
+      {ok, NewCbState_} ->
+        {true, NewCbState_};
+      {ok, ack, NewCbState_} ->
+        {false, NewCbState_};
+      Unknown ->
+        erlang:error({bad_return_value,
+                     {CbModule, handle_message, Unknown}})
     end,
-  Messages =/= [] andalso send_lo_cmd(?LO_CMD_PROCESS_MESSAGE),
-  State = State1#state{pending_ack = ?undef},
-  {ok, State};
-handle_ack(_AckRef, State) ->
-  %% stale ack, ignore.
-  {ok, State}.
+  State1 = State#state{cb_state = NewCbState},
+  NewState =
+    case AckNow of
+      true  -> handle_ack(AckRef, State1);
+      false -> State1
+    end,
+  handle_messages(Partition, Rest, NewState).
+
+-spec handle_ack(ack_ref(), #state{}) -> #state{}.
+handle_ack(AckRef, #state{consumers = Consumers} = State) ->
+  {Partition, Offset} = AckRef,
+  case lists:keyfind(Partition, #consumer.partition, Consumers) of
+    #consumer{consumer_pid = ConsumerPid} = Consumer ->
+      ok = brod:consume_ack(ConsumerPid, Offset),
+      NewConsumer = Consumer#consumer{acked_offset = Offset},
+      NewConsumers = lists:keyreplace(Partition,
+                                      #consumer.partition,
+                                      Consumers, NewConsumer),
+      State#state{consumers = NewConsumers};
+    false ->
+      State
+  end.
 
 send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 
 send_lo_cmd(CMD, 0)       -> self() ! CMD;
 send_lo_cmd(CMD, DelayMS) -> erlang:send_after(DelayMS, self(), CMD).
-
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
