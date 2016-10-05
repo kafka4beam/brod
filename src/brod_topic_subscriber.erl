@@ -28,6 +28,7 @@
 
 -export([ ack/3
         , start_link/6
+        , start_link/7
         , stop/1
         ]).
 
@@ -43,6 +44,7 @@
 
 -type cb_state() :: term().
 -type cb_ret() :: {ok, cb_state()} | {ok, ack, cb_state()}.
+-type cb_fun() :: fun((partition(), kafka_message(), cb_state()) -> cb_ret()).
 -type committed_offsets() :: [{partition(), offset()}].
 -type ack_ref()  :: {partition(), offset()}.
 
@@ -86,7 +88,7 @@
         { client         :: client()
         , topic          :: topic()
         , consumers = [] :: [#consumer{}]
-        , cb_module      :: module()
+        , cb_fun         :: cb_fun()
         , cb_state       :: cb_state()
         }).
 
@@ -112,6 +114,20 @@ start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
   Args = {Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
 
+%% @doc Start (link) a topic subscriber which receives and processes the
+%% messages from the given partition set. Use atom 'all' to subscribe to all
+%% partitions. Messages are handled by calling the callback function.
+%% @end
+-spec start_link(client(), topic(), all | [partition()],
+                 consumer_config(), committed_offsets(), cb_fun(), cb_state()) ->
+        {ok, pid()} | {error, any()}.
+start_link(Client, Topic, Partitions, ConsumerConfig,
+           CommittedOffsets, CbFun, CbInitialState) ->
+  Args = {Client, Topic, Partitions, ConsumerConfig,
+          CommittedOffsets, CbFun, CbInitialState},
+  gen_server:start_link(?MODULE, Args, []).
+
+
 %% @doc Stop topic subscriber.
 -spec stop(pid()) -> ok.
 stop(Pid) ->
@@ -131,11 +147,18 @@ ack(Pid, Partition, Offset) ->
 
 init({Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg}) ->
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, CbInitArg),
+  CbFun = fun(Partition, Msg, CbStateIn) ->
+                CbModule:handle_message(Partition, Msg, CbStateIn)
+          end,
+  init({Client, Topic, Partitions, ConsumerConfig,
+        CommittedOffsets, CbFun, CbState});
+init({Client, Topic, Partitions, ConsumerConfig,
+      CommittedOffsets, CbFun, CbState}) ->
   self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
     #state{ client    = Client
           , topic     = Topic
-          , cb_module = CbModule
+          , cb_fun    = CbFun
           , cb_state  = CbState
           },
   {ok, State}.
@@ -267,17 +290,16 @@ handle_messages(_Partition, [], State) ->
   State;
 handle_messages(Partition, [Msg | Rest], State) ->
   #kafka_message{offset = Offset} = Msg,
-  #state{cb_module = CbModule, cb_state = CbState} = State,
+  #state{cb_fun = CbFun, cb_state = CbState} = State,
   AckRef = {Partition, Offset},
   {AckNow, NewCbState} =
-    case CbModule:handle_message(Partition, Msg, CbState) of
+    case CbFun(Partition, Msg, CbState) of
       {ok, NewCbState_} ->
         {true, NewCbState_};
       {ok, ack, NewCbState_} ->
         {false, NewCbState_};
       Unknown ->
-        erlang:error({bad_return_value,
-                     {CbModule, handle_message, Unknown}})
+        erlang:error({bad_return_value, handle_message, Unknown})
     end,
   State1 = State#state{cb_state = NewCbState},
   NewState =
