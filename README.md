@@ -183,8 +183,8 @@ Find more examples in test/ (brod\_demo\_*).
 
 ### Implement your own group consumer
 
-brod_group_subscriber supports only serialized message processing, i.e. no async parallel processing + delayed acking.
-Implement brod_group_member behaviour for better flexibility.
+brod_group_subscriber is one gen_server which subscribes to all assigned partitions.
+Implement brod_group_member behaviour for better flexibility, e.g. spawn one subscriber for each aissgned partition.
 
 ## Other API to play with/inspect kafka
 

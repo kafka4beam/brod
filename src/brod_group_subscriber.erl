@@ -74,11 +74,11 @@
 %%   It should call brod_group_subscriber:ack/4 to acknowledge later.
 %%
 %% {ok, ack, NewCallbackState}
-%%   The subscriber has completed processing the message
+%%   The subscriber has completed processing the message.
 %%
-%% NOTE: While this callback function is being evaluated, the fetch-ahead
-%%       partition-consumers are fetching more messages behind the scene
-%%       unless prefetch_count is set to 0 in consumer config.
+%% While this callback function is being evaluated, the fetch-ahead
+%% partition-consumers are fetching more messages behind the scene
+%% unless prefetch_count is set to 0 in consumer config.
 %%
 -callback handle_message(topic(), partition(), #kafka_message{}, cb_state()) ->
             {ok, cb_state()} | {ok, ack, cb_state()}.
@@ -177,7 +177,12 @@ stop(Pid) ->
       ok
   end.
 
-%% @doc Acknowledge a message.
+%% @doc Acknowledge an offset.
+%% The subscriber may ack a later (greater) offset which will be considered
+%% as multi-acking the earlier (smaller) offsets. This also means that
+%% disordered acks may overwrite offset commits and lead to unnecessary
+%% message re-delivery in case of restart.
+%% @end
 -spec ack(pid(), topic(), partition(), offset()) -> ok.
 ack(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Topic, Partition, Offset}).
