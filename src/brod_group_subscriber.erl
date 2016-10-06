@@ -74,11 +74,11 @@
 %%   It should call brod_group_subscriber:ack/4 to acknowledge later.
 %%
 %% {ok, ack, NewCallbackState}
-%%   The subscriber has completed processing the message
+%%   The subscriber has completed processing the message.
 %%
-%% NOTE: While this callback function is being evaluated, the fetch-ahead
-%%       partition-consumers are fetching more messages behind the scene
-%%       unless prefetch_count is set to 0 in consumer config.
+%% While this callback function is being evaluated, the fetch-ahead
+%% partition-consumers are fetching more messages behind the scene
+%% unless prefetch_count is set to 0 in consumer config.
 %%
 -callback handle_message(topic(), partition(), #kafka_message{}, cb_state()) ->
             {ok, cb_state()} | {ok, ack, cb_state()}.
@@ -116,30 +116,25 @@
                   , acked_offset    :: offset()
                   }).
 
--type cb_fun() :: fun((cb_state()) -> {AckNow :: boolean(), cb_state()}).
-
 -type ack_ref() :: {topic(), partition(), offset()}.
 
 -record(state,
-        { client                :: client()
-        , groupId               :: group_id()
-        , memberId              :: member_id()
-        , generationId          :: integer()
-        , coordinator           :: pid()
-        , consumers = []        :: [#consumer{}]
-        , consumer_config       :: consumer_config()
-        , is_blocked = false    :: boolean()
-        , cb_module             :: module()
-        , cb_state              :: cb_state()
-        , pending_ack = ?undef  :: ?undef | ack_ref()
-        , pending_messages = [] :: [{ack_ref(), cb_fun()}]
+        { client             :: client()
+        , groupId            :: group_id()
+        , memberId           :: member_id()
+        , generationId       :: integer()
+        , coordinator        :: pid()
+        , consumers = []     :: [#consumer{}]
+        , consumer_config    :: consumer_config()
+        , is_blocked = false :: boolean()
+        , cb_module          :: module()
+        , cb_state           :: cb_state()
         }).
 
 %% delay 2 seconds retry the failed subscription to partiton consumer process
 -define(RESUBSCRIBE_DELAY, 2000).
 
 -define(LO_CMD_SUBSCRIBE_PARTITIONS, '$subscribe_partitions').
--define(LO_CMD_PROCESS_MESSAGE, '$process_message').
 
 %%%_* APIs =====================================================================
 
@@ -182,7 +177,12 @@ stop(Pid) ->
       ok
   end.
 
-%% @doc Acknowledge a message.
+%% @doc Acknowledge an offset.
+%% The subscriber may ack a later (greater) offset which will be considered
+%% as multi-acking the earlier (smaller) offsets. This also means that
+%% disordered acks may overwrite offset commits and lead to unnecessary
+%% message re-delivery in case of restart.
+%% @end
 -spec ack(pid(), topic(), partition(), offset()) -> ok.
 ack(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Topic, Partition, Offset}).
@@ -244,30 +244,8 @@ handle_info({_ConsumerPid,
              #kafka_message_set{ topic     = Topic
                                , partition = Partition
                                , messages  = Messages
-                               }},
-            #state{ cb_module        = CbModule
-                  , pending_messages = Pendings
-                  } = State) ->
-  MapFun =
-    fun(#kafka_message{offset = Offset} = Msg) ->
-      AckRef = {Topic, Partition, Offset},
-      CbFun =
-        fun(CbState) ->
-          case CbModule:handle_message(Topic, Partition, Msg, CbState) of
-            {ok, NewCbState} ->
-              {_AckNow = false, NewCbState};
-            {ok, ack, NewCbState} ->
-              {_AckNow = true, NewCbState};
-            Unknown ->
-              erlang:error({bad_return_value,
-                           {CbModule, handle_message, Unknown}})
-          end
-        end,
-      {AckRef, CbFun}
-    end,
-  NewPendings = Pendings ++ lists:map(MapFun, Messages),
-  NewState = State#state{pending_messages = NewPendings},
-  _ = send_lo_cmd(?LO_CMD_PROCESS_MESSAGE),
+                               }}, State) ->
+  NewState = handle_messages(Topic, Partition, Messages, State),
   {noreply, NewState};
 handle_info({'DOWN', _Mref, process, Pid, Reason},
             #state{consumers = Consumers} = State) ->
@@ -283,9 +261,6 @@ handle_info({'DOWN', _Mref, process, Pid, Reason},
     false ->
       {noreply, State}
   end;
-handle_info(?LO_CMD_PROCESS_MESSAGE, State) ->
-  {ok, NewState} = maybe_process_message(State),
-  {noreply, NewState};
 handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
   NewState =
     case State#state.is_blocked of
@@ -333,15 +308,13 @@ handle_call(unsubscribe_all_partitions, _From,
     end, Consumers),
   {reply, ok, State#state{ consumers        = []
                          , is_blocked       = true
-                         , pending_ack      = ?undef
-                         , pending_messages = []
                          }};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast({ack, Topic, Partition, Offset}, State) ->
   AckRef = {Topic, Partition, Offset},
-  {ok, NewState} = handle_ack(AckRef, State),
+  NewState = handle_ack(AckRef, State),
   {noreply, NewState};
 handle_cast(commit_offsets, State) ->
   ok = brod_group_coordinator:commit_offsets(State#state.coordinator),
@@ -389,55 +362,51 @@ terminate(_Reason, #state{}) ->
 
 %%%_* Internal Functions =======================================================
 
--spec maybe_process_message(#state{}) -> {ok, #state{}}.
-maybe_process_message(#state{ pending_ack      = ?undef
-                            , pending_messages = [{AckRef, F} | Rest]
-                            , cb_state         = CbState
-                            } = State) ->
-  %% process new message only when there is no pending ack
-  {AckNow, NewCbState} = F(CbState),
+handle_messages(_Topic, _Partition, [], State) ->
+  State;
+handle_messages(Topic, Partition, [Msg | Rest], State) ->
+  #kafka_message{offset = Offset} = Msg,
+  #state{cb_module = CbModule, cb_state = CbState} = State,
+  AckRef = {Topic, Partition, Offset},
+  {AckNow, NewCbState} =
+    case CbModule:handle_message(Topic, Partition, Msg, CbState) of
+      {ok, NewCbState_} ->
+        {true, NewCbState_};
+      {ok, ack, NewCbState_} ->
+        {false, NewCbState_};
+      Unknown ->
+        erlang:error({bad_return_value,
+                     {CbModule, handle_message, Unknown}})
+    end,
+  State1 = State#state{cb_state = NewCbState},
   NewState =
-    State#state{ pending_ack      = AckRef
-               , pending_messages = Rest
-               , cb_state         = NewCbState
-               },
-  case AckNow of
-    true  -> handle_ack(AckRef, NewState);
-    false -> {ok, NewState}
-  end;
-maybe_process_message(State) ->
-  {ok, State}.
+    case AckNow of
+      true  -> handle_ack(AckRef, State1);
+      false -> State1
+    end,
+  handle_messages(Topic, Partition, Rest, NewState).
 
--spec handle_ack(ack_ref(), #state{}) -> {ok, #state{}}.
-handle_ack(AckRef, #state{ pending_ack      = AckRef
-                         , pending_messages = Messages
-                         , generationId     = GenerationId
-                         , consumers        = Consumers
-                         , coordinator      = Coordinator
-                         } = State0) ->
+-spec handle_ack(ack_ref(), #state{}) -> #state{}.
+handle_ack(AckRef, #state{ generationId = GenerationId
+                         , consumers    = Consumers
+                         , coordinator  = Coordinator
+                         } = State) ->
   {Topic, Partition, Offset} = AckRef,
-  State1 =
-    case lists:keyfind({Topic, Partition},
-                       #consumer.topic_partition, Consumers) of
-      #consumer{consumer_pid = ConsumerPid} = Consumer ->
-        ok = brod:consume_ack(ConsumerPid, Offset),
-        ok = brod_group_coordinator:ack(Coordinator, GenerationId,
-                                        Topic, Partition, Offset),
-        NewConsumer = Consumer#consumer{acked_offset = Offset},
-        NewConsumers = lists:keyreplace({Topic, Partition},
-                                        #consumer.topic_partition,
-                                        Consumers, NewConsumer),
-      State0#state{consumers = NewConsumers};
+  case lists:keyfind({Topic, Partition},
+                     #consumer.topic_partition, Consumers) of
+    #consumer{consumer_pid = ConsumerPid} = Consumer ->
+      ok = brod:consume_ack(ConsumerPid, Offset),
+      ok = brod_group_coordinator:ack(Coordinator, GenerationId,
+                                      Topic, Partition, Offset),
+      NewConsumer = Consumer#consumer{acked_offset = Offset},
+      NewConsumers = lists:keyreplace({Topic, Partition},
+                                      #consumer.topic_partition,
+                                      Consumers, NewConsumer),
+      State#state{consumers = NewConsumers};
     false ->
       %% stale ack, ignore.
-      State0
-    end,
-  Messages =/= [] andalso send_lo_cmd(?LO_CMD_PROCESS_MESSAGE),
-  State = State1#state{pending_ack = ?undef},
-  {ok, State};
-handle_ack(_AckRef, State) ->
-  %% stale ack, ignore.
-  {ok, State}.
+      State
+  end.
 
 send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 
