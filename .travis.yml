@@ -20,7 +20,9 @@ otp_release:
   - 17.5
 
 script:
+  - set -e
   - make vsn-check
+  - scripts/line-width-check.sh
   - make test-env
   - make deps
   - make t
