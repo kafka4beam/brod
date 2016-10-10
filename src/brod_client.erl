@@ -235,7 +235,7 @@ get_partitions_count(Client, Topic) when is_pid(Client) ->
 
 %% @doc Get the endpoint of the group coordinator broker.
 -spec get_group_coordinator(client(), group_id()) ->
-        {ok, endpoint()} | {error, any()}.
+        {ok, {endpoint(), client_config()}} | {error, any()}.
 get_group_coordinator(Client, GroupId) ->
   safe_gen_call(Client, {get_group_coordinator, GroupId}, infinity).
 
@@ -351,7 +351,7 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
                                          }} ->
         case kpro_ErrorCode:is_error(EC) of
           true  -> {error, EC}; %% OBS: {error, EC} is used by group coordinator
-          false -> {ok, {binary_to_list(Host), Port}}
+          false -> {ok, {{binary_to_list(Host), Port},Config}}
         end;
       {error, Reason} ->
         {error, Reason}
