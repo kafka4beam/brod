@@ -16,16 +16,22 @@ notifications:
   email: false
 
 otp_release:
-  - 18.1
-  - 17.4
-  - R16B03-1
+  - 18.2.1
+  - 17.5
 
 script:
   - make test-env
   - make deps
   - make t
-  - ERLVSN="$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt().')"; if [[ $ERLVSN = R* ]]; then echo 'skipping xref'; else make xref; fi
+  - make xref
   - make edoc
   - make escript
   - scripts/cli-produce-test.sh
+  - make distclean
+  - rebar get-deps
+  - rebar compile
+  - make distclean
+  - wget https://s3.amazonaws.com/rebar3/rebar3
+  - chmod +x rebar3
+  - ./rebar3 compile
 

@@ -1,6 +1,6 @@
 IsRebar3 = erlang:function_exported(rebar3, main, 1),
 
-case IsRebar3 of                                                                                                                                                          
+case IsRebar3 of
     true ->
         CONFIG;
     false ->
