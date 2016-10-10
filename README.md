@@ -20,7 +20,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Missing features
 
-* snappy/lz4 compression & decompression
+* lz4 compression & decompression
 
 # Building and testing
 
