@@ -18,6 +18,5 @@ brod
 brod.plt
 _build/
 _rel/
-rebar.lock
 .eunit/
 .rebar/
