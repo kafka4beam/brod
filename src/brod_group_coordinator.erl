@@ -387,7 +387,8 @@ discover_coordinator(#state{ client      = Client
                            , sock_pid    = SockPid
                            , groupId     = GroupId
                            } = State) ->
-  {Host, Port} = ?ESCALATE(brod_client:get_group_coordinator(Client, GroupId)),
+  {{Host, Port}, Config} =
+    ?ESCALATE(brod_client:get_group_coordinator(Client, GroupId)),
   HasConnectionToCoordinator = Coordinator =:= {Host, Port}
     andalso brod_utils:is_pid_alive(SockPid),
   case HasConnectionToCoordinator of
@@ -398,7 +399,7 @@ discover_coordinator(#state{ client      = Client
       _ = brod_sock:stop(SockPid),
       ClientId = make_group_connection_client_id(),
       NewSockPid =
-        ?ESCALATE(brod_sock:start_link(self(), Host, Port, ClientId, [])),
+        ?ESCALATE(brod_sock:start_link(self(), Host, Port, ClientId, Config)),
       log(State, info, "connected to group coordinator ~s:~p",
           [Host, Port]),
       NewState =

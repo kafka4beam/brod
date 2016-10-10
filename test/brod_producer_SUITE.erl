@@ -39,6 +39,7 @@
         , t_producer_topic_not_found/1
         , t_producer_partition_not_found/1
         , t_produce_partitioner/1
+        , t_produce_batch/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -234,6 +235,29 @@ t_produce_partitioner(Config) when is_list(Config) ->
   ReceiveFun(0, K1, V1),
   ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun(1, K2, V2).
+
+t_produce_batch(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Partition = 0,
+  {K1, V1} = make_unique_kv(),
+  {K2, V2} = make_unique_kv(),
+  {K3, V3} = make_unique_kv(),
+  Batch = [{K1, V1}, {K2, V2}, {<<>>, [{K3, V3}]}],
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, undefined, Batch),
+  ReceiveFun =
+    fun(ExpectedK, ExpectedV) ->
+      receive
+        {_, K, V} ->
+          ?assertEqual(ExpectedK, K),
+          ?assertEqual(ExpectedV, V)
+        after 5000 ->
+          ct:fail({?MODULE, ?LINE, timeout, ExpectedK, ExpectedV})
+      end
+    end,
+  ReceiveFun(K1, V1),
+  ReceiveFun(K2, V2),
+  ReceiveFun(K3, V3).
+
 
 %%%_* Help functions ===========================================================
 

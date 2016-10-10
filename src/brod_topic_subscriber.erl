@@ -118,8 +118,8 @@ start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
 %% messages from the given partition set. Use atom 'all' to subscribe to all
 %% partitions. Messages are handled by calling the callback function.
 %% @end
--spec start_link(client(), topic(), all | [partition()],
-                 consumer_config(), committed_offsets(), cb_fun(), cb_state()) ->
+-spec start_link(client(), topic(), all | [partition()], consumer_config(),
+                 committed_offsets(), cb_fun(), cb_state()) ->
         {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
            CommittedOffsets, CbFun, CbInitialState) ->

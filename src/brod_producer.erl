@@ -139,7 +139,7 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
--spec produce(pid(), binary(), binary()) ->
+-spec produce(pid(), key(), value()) ->
         {ok, brod_call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
@@ -192,7 +192,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   MaybeCompress =
     fun(KafkaKvList) ->
       case Compression =/= no_compression andalso
-           batch_size(KafkaKvList) >= MinCompressBatchSize of
+           brod_utils:bytes(KafkaKvList) >= MinCompressBatchSize of
         true  -> Compression;
         false -> no_compression
       end
@@ -207,20 +207,15 @@ init({ClientPid, Topic, Partition, Config}) ->
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                     MaxBatchSize, MaxRetries, SendFun),
 
-  State0 = #state{ client_pid       = ClientPid
-                 , topic            = Topic
-                 , partition        = Partition
-                 , buffer           = Buffer
-                 , retry_backoff_ms = RetryBackoffMs
-                 },
-
-  State = case init_socket(State0) of
-            {ok, NewState} ->
-              NewState;
-            {error, Error} ->
-              {ok, NewState} = schedule_retry(State0, Error),
-              NewState
-          end,
+  State = #state{ client_pid       = ClientPid
+                , topic            = Topic
+                , partition        = Partition
+                , buffer           = Buffer
+                , retry_backoff_ms = RetryBackoffMs
+                , sock_pid         = ?undef
+                },
+  %% Register self() to client.
+  ok = brod_client:register_producer(ClientPid, Topic, Partition),
   {ok, State}.
 
 handle_info(?RETRY_MSG, State0) ->
@@ -233,13 +228,32 @@ handle_info(?RETRY_MSG, State0) ->
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
             #state{sock_pid = Pid} = State) ->
-  {ok, NewState} = schedule_retry(State, Reason),
-  {noreply, NewState#state{sock_pid = ?undef}};
-handle_info({produce, CallRef, Key, Value}, #state{buffer = Buffer} = State) ->
-  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
-  State1 = State#state{buffer = NewBuffer},
-  {ok, NewState} = maybe_produce(State1),
-  {noreply, NewState};
+  case brod_producer_buffer:is_empty(State#state.buffer) of
+    true ->
+      %% no socket restart in case of empty request buffer
+      {noreply, State#state{sock_pid = ?undef}};
+    false ->
+      {ok, NewState} = schedule_retry(State, Reason),
+      {noreply, NewState#state{sock_pid = ?undef}}
+  end;
+handle_info({produce, CallRef, Key, Value},
+            #state{buffer = Buffer, sock_pid = SockPid} = State) ->
+  case not brod_utils:is_pid_alive(SockPid) andalso
+       brod_producer_buffer:is_empty(Buffer) of
+    true ->
+      %% this is the first request after fresh boot or socket death
+      case init_socket(State) of
+        {ok, NewState} ->
+          handle_produce(CallRef, Key, Value, NewState);
+        {error, _} ->
+          %% failed to initialize payload socket
+          %% call handle_produce, let the send fun fail
+          %% retry should take care of socket re-init
+          handle_produce(CallRef, Key, Value, State)
+      end;
+    false ->
+      handle_produce(CallRef, Key, Value, State)
+  end;
 handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -297,6 +311,12 @@ terminate(_Reason, _State) ->
 
 %%%_* Internal Functions =======================================================
 
+handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
+  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  State1 = State#state{buffer = NewBuffer},
+  {ok, NewState} = maybe_produce(State1),
+  {noreply, NewState}.
+
 init_socket(#state{ client_pid = ClientPid
                   , sock_mref  = OldSockMref
                   , topic      = Topic
@@ -307,9 +327,7 @@ init_socket(#state{ client_pid = ClientPid
     {ok, SockPid} ->
       ok = maybe_demonitor(OldSockMref),
       SockMref = erlang:monitor(process, SockPid),
-      %% 2. Register self() to client.
-      ok = brod_client:register_producer(ClientPid, Topic, Partition),
-      %% 3. Update state.
+      %% 2. Update state.
       {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
     {error, Error} ->
       {error, Error}
@@ -353,9 +371,6 @@ is_retriable(_) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
-
-batch_size([]) -> 0;
-batch_size([{K,V} | T]) -> size(K) + size(V) + batch_size(T).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

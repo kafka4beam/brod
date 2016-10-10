@@ -20,19 +20,27 @@ otp_release:
   - 17.5
 
 script:
+  - set -e
   - make vsn-check
-  - make test-env
+  - scripts/line-width-check.sh
   - make deps
-  - make t
+  - make app
   - make xref
   - make edoc
-  - make escript
-  - scripts/cli-produce-test.sh
   - make distclean
+  - echo "verifying rebar compilation"
   - rebar get-deps
   - rebar compile
+  - rm rebar.lock # delete rebar.lock so it gets re-created, expecting no diff
   - make distclean
+  - echo "verifying rebar3 compilation"
   - wget https://s3.amazonaws.com/rebar3/rebar3
   - chmod +x rebar3
   - ./rebar3 compile
+  - DIFF=$(git diff rebar.lock); if [ -n "$DIFF" ]; then echo 'rebar.lock discrepancy'; exit 1; fi;
+  - make distclean
+  - make escript
+  - make test-env
+  - scripts/cli-produce-test.sh
+  - make t
 

@@ -32,13 +32,19 @@
 -type portnum()          :: pos_integer().
 -type endpoint()         :: {hostname(), portnum()}.
 -type leader_id()        :: non_neg_integer().
--type kafka_kv()         :: {binary(), binary()}.
 -type client_config()    :: brod_client_config().
 -type producer_config()  :: brod_producer_config().
 -type consumer_config()  :: brod_consumer_config().
 -type consumer_options() :: [{consumer_option(), integer()}].
 -type client()           :: brod_client_id() | pid().
 -type required_acks()    :: -1..1.
+-type key()              :: kafka_key().
+-type value()            :: kafka_value().
+-type kv_list()          :: kafka_kv_list().
+-type offset()           :: kafka_offset().
+-type partition()        :: kafka_partition().
+-type topic()            :: kafka_topic().
+-type corr_id()          :: kpro:corr_id().
 
 %% consumer groups
 -type group_id()             :: kafka_group_id().

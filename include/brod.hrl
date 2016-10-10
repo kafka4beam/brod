@@ -17,10 +17,13 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_topic()               :: binary().
--type kafka_partition()           :: non_neg_integer().
--type kafka_offset()              :: integer().
--type kafka_error_code()          :: atom() | integer().
+-type kafka_key()                 :: kpro:key().
+-type kafka_value()               :: kpro:value().
+-type kafka_kv_list()             :: kpro:kv_list().
+-type kafka_topic()               :: kpro:topic().
+-type kafka_partition()           :: kpro:partition().
+-type kafka_offset()              :: kpro:offset().
+-type kafka_error_code()          :: kpro:error_code().
 -type kafka_group_id()            :: binary().
 -type kafka_group_member_id()     :: binary().
 -type kafka_group_generation_id() :: non_neg_integer().
