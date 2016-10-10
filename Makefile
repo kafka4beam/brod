@@ -1,11 +1,11 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.2.0
+PROJECT_VERSION = 2.2.1
 
 DEPS = supervisor3 kafka_protocol
 
-dep_supervisor3_commit = 1.1.2
-dep_kafka_protocol_commit = 0.7.0
+dep_supervisor3_commit = 1.1.3
+dep_kafka_protocol_commit = 0.7.2
 
 TEST_DEPS = meck proper
 
@@ -24,5 +24,8 @@ test-env:
 
 t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
+
+vsn-check:
+	$(verbose) ./scripts/vsn-check.sh $(PROJECT_VERSION)
 
 ESCRIPT_FILE = scripts/$(PROJECT)
