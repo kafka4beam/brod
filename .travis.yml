@@ -20,6 +20,7 @@ otp_release:
   - 17.5
 
 script:
+  - make vsn-check
   - make test-env
   - make deps
   - make t
