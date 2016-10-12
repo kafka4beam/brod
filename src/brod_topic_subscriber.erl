@@ -295,9 +295,9 @@ handle_messages(Partition, [Msg | Rest], State) ->
   {AckNow, NewCbState} =
     case CbFun(Partition, Msg, CbState) of
       {ok, NewCbState_} ->
-        {true, NewCbState_};
-      {ok, ack, NewCbState_} ->
         {false, NewCbState_};
+      {ok, ack, NewCbState_} ->
+        {true, NewCbState_};
       Unknown ->
         erlang:error({bad_return_value, handle_message, Unknown})
     end,
