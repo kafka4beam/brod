@@ -17,10 +17,13 @@
 %%%=============================================================================
 %%% @doc
 %%% This is a topic subscriber example
-%%% The subscriber subscribes to all partition of the consumer offset topic
+%%% The subscriber subscribes to all partitions of the consumer offset topic
 %%% (by default __consumer_offsets), decode the messages and put the values
 %%% to an ETS table.
 %%% see kpro_consumer_group.erl for details about data schema
+%%%
+%%% This can be useful to build your own consumer lagging monitoring or
+%%% dashboarding tools.
 %%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
