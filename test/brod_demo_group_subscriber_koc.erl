@@ -163,9 +163,9 @@ producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
   timer:sleep(timer:seconds(DelaySeconds)),
   producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno+1).
 
-%% @private Spawn one message handler per pratition. Some of them may sit
+%% @private Spawn one message handler per partition. Some of them may sit
 %% idle if the partition is assigned to another group member.
-%% Perhaps hibernate if idel for a certain minutes.
+%% Perhaps hibernate if idel for certain minutes.
 %% Or even spawn dynamically in `handle_message` callback and
 %% `exit(normal)` when idel for long.
 %% @end
