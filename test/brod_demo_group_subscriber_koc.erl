@@ -165,9 +165,9 @@ producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
 
 %% @private Spawn one message handler per partition. Some of them may sit
 %% idle if the partition is assigned to another group member.
-%% Perhaps hibernate if idel for certain minutes.
+%% Perhaps hibernate if idle for certain minutes.
 %% Or even spawn dynamically in `handle_message` callback and
-%% `exit(normal)` when idel for long.
+%% `exit(normal)` when idle for long.
 %% @end
 -spec spawn_message_handlers(client_id(), [topic()]) ->
         [{{topic(), partition()}, pid()}].

@@ -179,9 +179,9 @@ filename(Dir, GroupId, Topic, Partition) ->
 
 %% @private Offsets are committed locally in files for demo.
 %% Due to the fact that a partition can be assigned to any group member,
-%% in a real use case when group members are distributed among Erlang nodes
+%% in a real use case, when group members are distributed among Erlang nodes
 %% (or even hosts), the offsets should be committed to a place where all
-%% members can access. e.g. a database.
+%% members have access to. e.g. a database.
 %% @end
 commit_offset(Dir, GroupId, Topic, Partition, Offset) ->
   Filename = filename(Dir, GroupId, Topic, Partition),
