@@ -38,20 +38,22 @@
         , get_committed_offsets/3
         ]).
 
-
 -include_lib("brod/include/brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+
 -record(state, { group_id :: binary()
                , offset_dir :: file:fd()
+               , handlers = [] :: [{{topic(), partition()}, pid()}]
                }).
 
-%% @doc This function bootstraps everything to demo of group subscriber.
+%% @doc This function bootstraps everything to demo group subscribers.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
 %%   - kafka topic named <<"brod-demo-group-subscriber-loc">>
-%%     having two or more partitions.
 %% Processes to spawn:
 %%   - A brod client
 %%   - A producer which produces sequence numbers to each partition
@@ -60,30 +62,53 @@
 %% * consumed sequence numbers are printed to console
 %% * consumed offsets are written to file /tmp/T/P.offset
 %%   where T is the topic name and X is the partition number
+%%
+%% NOTE: Here we spawn two clients in one Erlang node just to demo how
+%% group subscribers work.
+%% Please keep in mind that a group subscriber requires one dedicated
+%% TCP connection for group leader election, heartbeats and state syncing etc.
+%% It is a good practice to limit the number of group members per Erlang
+%% node for each group. One group member per Erlang node should be enough
+%% for most of the use cases.
+%% A group subscriber may receive messages from all topic-partitions assigned,
+%% in its handle_message callback function, it may process the message
+%% synchronously, or dispatch it to any number of worker processes for
+%% concurrent processing, acks can be sent from the worker processes
+%% by calling brod_group_subscriber:ack/4
 %% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
   bootstrap(?PRODUCE_DELAY_SECONDS).
 
 bootstrap(DelaySeconds) ->
-  ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
-  ClientConfig = [],
   Topic = <<"brod-demo-group-subscriber-loc">>,
-  GroupId = iolist_to_binary([Topic, "-group-id"]),
   {ok, _} = application:ensure_all_started(brod),
-  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
-  ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
-  {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),
-  Partitions = lists:seq(0, PartitionCount - 1),
-  %% spawn N + 1 consumers, one of them will have no assignment
-  %% it should work as a 'standing-by' consumer.
-  ok = spawn_consumers(GroupId, ClientId, Topic, PartitionCount + 1),
-  ok = spawn_producers(ClientId, Topic, DelaySeconds, Partitions),
+
+  %% A group ID is to be shared between the members (which often run in
+  %% different Erlang nodes or even hosts).
+  GroupId = <<"brod-demo-group-subscriber-loc-consumer-group">>,
+  %% Different members may subscribe to identical or different set of topics.
+  %% In the assignments, a member receives only the partitions from the
+  %% subscribed topic set.
+  TopicSet = [Topic],
+  %% In this demo, we spawn two members in the same Erlang node.
+  MemberClients = [ 'brod-demo-group-subscriber-loc-client-1'
+                  , 'brod-demo-group-subscriber-loc-client-2'
+                  ],
+  ok = bootstrap_subscribers(MemberClients, BootstrapHosts, GroupId, TopicSet),
+
+  %% start one producer process for each partition to feed sequence numbers
+  %% to kafka, then consumed by the group subscribers.
+  ProducerClientId = ?MODULE,
+  ok = brod:start_client(BootstrapHosts, ProducerClientId, _ClientConfig = []),
+  ok = brod:start_producer(ProducerClientId, Topic, _ProducerConfig = []),
+  {ok, PartitionCount} = brod:get_partitions_count(ProducerClientId, Topic),
+  ok = spawn_producers(ProducerClientId, Topic, DelaySeconds, PartitionCount),
   ok.
 
 %% @doc Initialize nothing in our case.
-init(GroupId, []) ->
+init(GroupId, _CallbackInitArg = []) ->
   OffsetDir = "/tmp",
   {ok, #state{ group_id   = GroupId
              , offset_dir = OffsetDir
@@ -94,6 +119,12 @@ handle_message(Topic, Partition, Message,
                #state{ offset_dir = Dir
                      , group_id   = GroupId
                      } = State) ->
+  %% Process the message synchronously here.
+  %% Depending on the use case:
+  %% It might be a good idea to spawn worker processes for each partition
+  %% for concurrent message processing e.g. see brod_demo_group_subscriber_koc
+  %% Or there could be a pool of handlers if the messages can be processed
+  %% in arbitrary order.
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
@@ -106,7 +137,7 @@ handle_message(Topic, Partition, Message,
 
 %% @doc This callback is called whenever there is a new assignment received.
 %% e.g. when joining the group after restart, or group assigment rebalance
-%% was triggered if other memgers join or leave the group
+%% was triggered if other members join or leave the group
 %% NOTE: A subscriber may get assigned with a random set of topic-partitions
 %%       (unless some 'sticky' protocol is introduced to group controller),
 %%       meaning, if group members are running in different hosts they may
@@ -129,34 +160,44 @@ get_committed_offsets(GroupId, TopicPartitions,
 
 %%%_* Internal Functions =======================================================
 
+bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics) -> ok;
+bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
+  ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
+  %% commit offsets to kafka every 5 seconds
+  GroupConfig = [{offset_commit_policy, consumer_managed}
+                ],
+  {ok, _Subscriber} =
+    brod:start_link_group_subscriber(
+      ClientId, GroupId, Topics, GroupConfig,
+      _ConsumerConfig  = [{begin_offset, earliest}],
+      _CallbackModule  = ?MODULE,
+      _CallbackInitArg = []),
+  bootstrap_subscribers(Rest, BootstrapHosts, GroupId, Topics).
+
 filename(Dir, GroupId, Topic, Partition) ->
   filename:join([Dir, GroupId, Topic, integer_to_list(Partition)]).
 
+%% @private Offsets are committed locally in files for demo.
+%% Due to the fact that a partition can be assigned to any group member,
+%% in a real use case, when group members are distributed among Erlang nodes
+%% (or even hosts), the offsets should be committed to a place where all
+%% members have access to. e.g. a database.
+%% @end
 commit_offset(Dir, GroupId, Topic, Partition, Offset) ->
   Filename = filename(Dir, GroupId, Topic, Partition),
   ok = filelib:ensure_dir(Filename),
   ok = file:write_file(Filename, [integer_to_list(Offset), $\n]).
 
-spawn_consumers(GroupId, ClientId, Topic, ConsumerCount) ->
-  %% commit offsets to kafka every 10 seconds
-  GroupConfig = [{offset_commit_policy, consumer_managed}],
-  lists:foreach(
-    fun(_I) ->
-      {ok, _Subscriber} =
-        brod_group_subscriber:start_link(ClientId, GroupId, [Topic],
-                                         GroupConfig,
-                                         _ConsumerConfig  = [],
-                                         _CallbackModule  = ?MODULE,
-                                         _CallbackInitArg = [])
-    end, lists:seq(1, ConsumerCount)).
-
-spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok;
+spawn_producers(ClientId, Topic, DelaySeconds, P) when is_integer(P) ->
+  Partitions = lists:seq(0, P-1),
+  spawn_producers(ClientId, Topic, DelaySeconds, Partitions);
 spawn_producers(ClientId, Topic, DelaySeconds, [Partition | Partitions]) ->
   erlang:spawn_link(
     fun() ->
       producer_loop(ClientId, Topic, Partition, DelaySeconds, 0)
     end),
-  spawn_producers(ClientId, Topic, DelaySeconds, Partitions).
+  spawn_producers(ClientId, Topic, DelaySeconds, Partitions);
+spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok.
 
 producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
   KafkaValue = iolist_to_binary(integer_to_list(Seqno)),
