@@ -34,14 +34,14 @@
 
 -include("brod_int.hrl").
 
--define(SUP, brod_producers_sup).
--define(SUP2, brod_producers_sup2).
+-define(PRODUCERS_SUP, brod_producers_sup).
+-define(PRODUCER_SUP, brod_producers_sup2).
 
 %% Minimum delay seconds to work with supervisor3
 -define(MIN_SUPERVISOR3_DELAY_SECS, 1).
 
-%% By default, restart sup2 after a 10-seconds delay
--define(DEFAULT_SUP2_RESTART_DELAY, 10).
+%% By default, restart ?PRODUCER_SUP after a 10-seconds delay
+-define(DEFAULT_PRODUCER_SUP_RESTART_DELAY, 10).
 
 %% By default, restart partition producer worker process after a 5-seconds delay
 -define(DEFAULT_PRODUCER_RESTART_DELAY, 5).
@@ -53,7 +53,7 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link(?MODULE, ?SUP).
+  supervisor3:start_link(?MODULE, ?PRODUCERS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor
 -spec start_producer(pid(), pid(), topic(), producer_config()) ->
@@ -67,7 +67,7 @@ start_producer(SupPid, ClientPid, TopicName, Config) ->
 stop_producer(SupPid, TopicName) ->
   supervisor3:terminate_child(SupPid, TopicName).
 
-%% @doc Find a brod_producer process pid running under sup2.
+%% @doc Find a brod_producer process pid running under ?PRODUCER_SUP.
 -spec find_producer(pid(), topic(), partition()) ->
                        {ok, pid()} | {error, Reason} when
         Reason :: {producer_not_found, topic()}
@@ -79,9 +79,9 @@ find_producer(SupPid, Topic, Partition) ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
       {error, {producer_not_found, Topic}};
-    [Sup2Pid] ->
+    [ProducerSupPid] ->
       try
-        case supervisor3:find_child(Sup2Pid, Partition) of
+        case supervisor3:find_child(ProducerSupPid, Partition) of
           [] ->
             %% no such partition?
             {error, {producer_not_found, Topic, Partition}};
@@ -94,12 +94,12 @@ find_producer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init(?SUP) ->
+init(?PRODUCERS_SUP) ->
   {ok, {{one_for_one, 0, 1}, []}};
-init({?SUP2, _ClientPid, _Topic, _Config}) ->
+init({?PRODUCER_SUP, _ClientPid, _Topic, _Config}) ->
   post_init.
 
-post_init({?SUP2, ClientPid, Topic, Config}) ->
+post_init({?PRODUCER_SUP, ClientPid, Topic, Config}) ->
   case brod_client:get_partitions_count(ClientPid, Topic) of
     {ok, PartitionsCnt} ->
       Children = [ producer_spec(ClientPid, Topic, Partition, Config)
@@ -117,8 +117,8 @@ post_init({?SUP2, ClientPid, Topic, Config}) ->
 producers_sup_spec(ClientPid, TopicName, Config0) ->
   {Config, DelaySecs} =
     take_delay_secs(Config0, topic_restart_delay_seconds,
-                    ?DEFAULT_SUP2_RESTART_DELAY),
-  Args = [?MODULE, {?SUP2, ClientPid, TopicName, Config}],
+                    ?DEFAULT_PRODUCER_SUP_RESTART_DELAY),
+  Args = [?MODULE, {?PRODUCER_SUP, ClientPid, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
