@@ -31,13 +31,10 @@ script:
   - echo "verifying rebar compilation"
   - rebar get-deps
   - rebar compile
-  - rm rebar.lock # delete rebar.lock so it gets re-created, expecting no diff
   - make distclean
   - echo "verifying rebar3 compilation"
-  - wget https://s3.amazonaws.com/rebar3/rebar3
-  - chmod +x rebar3
-  - ./rebar3 compile
-  - DIFF=$(git diff rebar.lock); if [ -n "$DIFF" ]; then echo 'rebar.lock discrepancy'; exit 1; fi;
+  - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; cd ..
+  - ./rebar3/rebar3 compile
   - make distclean
   - make escript
   - make test-env
