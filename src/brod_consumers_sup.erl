@@ -34,11 +34,11 @@
 
 -include("brod_int.hrl").
 
--define(SUP, brod_consumers_sup).
--define(SUP2, brod_consumers_sup2).
+-define(CONSUMERS_SUP, brod_consumers_sup).
+-define(CONSUMER_SUP, brod_consumers_sup2).
 
-%% By default, restart sup2 after a 10-seconds delay
--define(DEFAULT_SUP2_RESTART_DELAY, 10).
+%% By default, restart ?CONSUMER_SUP after a 10-seconds delay
+-define(DEFAULT_CONSUMER_SUP_RESTART_DELAY, 10).
 
 %% By default, restart partition consumer worker process after a 2-seconds delay
 -define(DEFAULT_CONSUMER_RESTART_DELAY, 2).
@@ -49,7 +49,7 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link(?MODULE, ?SUP).
+  supervisor3:start_link(?MODULE, ?CONSUMERS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor.
 -spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
@@ -64,7 +64,7 @@ start_consumer(SupPid, ClientPid, TopicName, Config) ->
 stop_consumer(SupPid, TopicName) ->
   supervisor3:terminate_child(SupPid, TopicName).
 
-%% @doc Find a brod_consumer process pid running under sup2
+%% @doc Find a brod_consumer process pid running under ?CONSUMER_SUP
 %% @end
 -spec find_consumer(pid(), topic(), partition()) ->
                        {ok, pid()} | {error, Reason} when
@@ -77,9 +77,9 @@ find_consumer(SupPid, Topic, Partition) ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
       {error, {consumer_not_found, Topic}};
-    [Sup2Pid] ->
+    [ConsumerSupPid] ->
       try
-        case supervisor3:find_child(Sup2Pid, Partition) of
+        case supervisor3:find_child(ConsumerSupPid, Partition) of
           [] ->
             %% no such partition?
             {error, {consumer_not_found, Topic, Partition}};
@@ -92,12 +92,12 @@ find_consumer(SupPid, Topic, Partition) ->
   end.
 
 %% @doc supervisor3 callback.
-init(?SUP) ->
+init(?CONSUMERS_SUP) ->
   {ok, {{one_for_one, 0, 1}, []}};
-init({?SUP2, _ClientPid, _Topic, _Config}) ->
+init({?CONSUMER_SUP, _ClientPid, _Topic, _Config}) ->
   post_init.
 
-post_init({?SUP2, ClientPid, Topic, Config}) ->
+post_init({?CONSUMER_SUP, ClientPid, Topic, Config}) ->
   %% spawn consumer process for every partition
   %% in a topic if partitions are not set explicitly
   %% in the config
@@ -131,9 +131,9 @@ get_all_partitions(ClientPid, Topic) ->
 
 consumers_sup_spec(ClientPid, TopicName, Config0) ->
   DelaySecs = proplists:get_value(topic_restart_delay_seconds, Config0,
-                                  ?DEFAULT_SUP2_RESTART_DELAY),
+                                  ?DEFAULT_CONSUMER_SUP_RESTART_DELAY),
   Config    = proplists:delete(topic_restart_delay_seconds, Config0),
-  Args      = [?MODULE, {?SUP2, ClientPid, TopicName, Config}],
+  Args      = [?MODULE, {?CONSUMER_SUP, ClientPid, TopicName, Config}],
   { _Id       = TopicName
   , _Start    = {supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}

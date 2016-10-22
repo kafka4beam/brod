@@ -55,7 +55,7 @@
 %% @doc This function bootstraps everything to demo group subscribers.
 %% Prerequisites:
 %%   - bootstrap docker host at {"localhost", 9092}
-%%   - kafka topic named <<"brod-group-subscriber-demo-koc">>
+%%   - kafka topic named <<"brod-demo-group-subscriber-koc">>
 %% Processes to spawn:
 %%   - A brod client
 %%   - A producer which produces sequence numbers to each partition
