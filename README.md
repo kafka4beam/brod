@@ -8,7 +8,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Features
 
-* Supports Apache Kafka v0.8.\*, 0.9.\*
+* Supports Apache Kafka v0.8+
 * Robust producer implementation supporting in-flight requests and asynchronous acknowledgements
 * Both consumer and producer handle leader re-election and other cluster disturbances internally
 * Opens max 1 tcp connection to a broker per "brod_client", one can create more clients if needed
@@ -21,6 +21,9 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Missing features
 
 * lz4 compression & decompression
+* new 0.10 on-wire message format
+* new 0.10.1.0 create/delete topic api
+* SASL authentication
 
 # Building and testing
 
