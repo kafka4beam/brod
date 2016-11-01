@@ -153,10 +153,12 @@ debug(Pid, File) when is_list(File) ->
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
   Timeout = proplists:get_value(timeout, Options, ?CONNECT_TIMEOUT),
-  SockOpts = [{active, true}, {packet, raw}, binary, {nodelay, true}],
+  SockOpts = [{active, once}, {packet, raw}, binary, {nodelay, true}],
   case gen_tcp:connect(Host, Port, SockOpts, Timeout) of
     {ok, Sock} ->
-      State0 = #state{client_id = ClientId, parent = Parent},
+      State0 = #state{ client_id = ClientId
+                     , parent    = Parent
+                     },
       %% adjusting buffer size as per recommendation at
       %% http://erlang.org/doc/man/inet.html#setopts-2
       %% idea is from github.com/epgsql/epgsql
@@ -231,6 +233,7 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
                                  , tail     = Tail0
                                  , requests = Requests
                                  } = State, Debug) ->
+  ok = inet:setopts(Sock, [{active, once}]),
   {Responses, Tail} = kpro:decode_response(<<Tail0/binary, Bin/binary>>),
   NewRequests =
     lists:foldl(
