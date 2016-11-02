@@ -20,3 +20,4 @@ _build/
 _rel/
 .eunit/
 .rebar/
+rebar.lock
