@@ -10,12 +10,20 @@ services:
     container_name: kafka_1
     ports:
       - "9092:9092"
+      - "9192:9192"
+    environment:
+      BROKER_ID: 0
+      PLAINTEXT_PORT: 9092
+      SSL_PORT: 9192
   kafka_2:
     image: docker_kafka
     container_name: kafka_2
     ports:
       - "9093:9093"
+      - "9193:9193"
     environment:
       BROKER_ID: 1
-      KAFKA_PORT: 9093
+      PLAINTEXT_PORT: 9093
+      SSL_PORT: 9193
+
 

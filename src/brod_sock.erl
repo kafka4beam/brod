@@ -169,8 +169,6 @@ init(Parent, Host, Port, ClientId, Options) ->
                 [] ->
                   State0#state{mod = gen_tcp, sock = Sock};
                 SslOpts ->
-                  error_logger:info_msg("Trying to establish ssl connection "
-                                        "with options: ~p\n", [SslOpts]),
                   case ssl:connect(Sock, SslOpts, Timeout) of
                     {ok, SslSock} ->
                       State0#state{mod = ssl, sock = SslSock};
@@ -232,8 +230,12 @@ decode_msg(Msg, State, Debug0) ->
 handle_msg({_, Sock, Bin}, #state{ sock     = Sock
                                  , tail     = Tail0
                                  , requests = Requests
+                                 , mod      = Mod
                                  } = State, Debug) ->
-  ok = inet:setopts(Sock, [{active, once}]),
+  case Mod of
+    gen_tcp -> ok = inet:setopts(Sock, [{active, once}]);
+    ssl     -> ok = ssl:setopts(Sock, [{active, once}])
+  end,
   {Responses, Tail} = kpro:decode_response(<<Tail0/binary, Bin/binary>>),
   NewRequests =
     lists:foldl(

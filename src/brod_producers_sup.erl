@@ -110,8 +110,8 @@ post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
       %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
       %% before supervisor tries to restart it.
       {ok, {{one_for_one, 0, 1}, Children}};
-    Error ->
-      Error
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 producers_sup_spec(ClientPid, TopicName, Config0) ->
