@@ -40,6 +40,7 @@
         , t_payload_socket_restart/1
         , t_auto_start_producers/1
         , t_auto_start_producer_for_unknown_topic/1
+        , t_ssl/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -47,8 +48,8 @@
 -include_lib("brod/src/brod_int.hrl").
 
 -define(HOST, "localhost").
--define(PORT, 9092).
--define(HOSTS, [{?HOST, ?PORT}]).
+-define(HOSTS, [{?HOST, 9092}]).
+-define(HOSTS_SSL, [{?HOST, 9192}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
 -define(WAIT(PATTERN, RESULT, TIMEOUT),
@@ -246,6 +247,34 @@ t_auto_start_producer_for_unknown_topic(Config) when is_list(Config) ->
   %% this error should hit the cache
   ?assertEqual({error, 'UnknownTopicOrPartition'},
                brod:produce_sync(Client, Topic1, 0, <<>>, <<"v">>)),
+  ok.
+
+t_ssl({init, Config}) ->
+  Config;
+t_ssl({'end', Config}) ->
+  brod:stop_client(t_ssl),
+  Config;
+t_ssl(Config) when is_list(Config) ->
+  Client = t_ssl,
+  PrivDir = code:priv_dir(brod),
+  Fname = fun(Name) -> filename:join([PrivDir, ssl, Name]) end,
+  SslOptions = [ {cacertfile, Fname("ca.crt")}
+               , {keyfile,    Fname("client.key")}
+               , {certfile,   Fname("client.crt")}
+               ],
+  ClientConfig = [{ssl, SslOptions}, {get_metadata_timout_seconds, 10}],
+  K = term_to_binary(make_ref()),
+  ok = brod:start_client(?HOSTS_SSL, Client, ClientConfig),
+  ok = brod:start_consumer(Client, ?TOPIC, []),
+  {ok, ConsumerPid} =
+    brod:subscribe(Client, self(), ?TOPIC, 0, [{begin_offset, latest}]),
+  ok = brod:start_producer(Client, ?TOPIC, []),
+  ?assertEqual(ok, brod:produce_sync(Client, ?TOPIC, 0, K, <<"v">>)),
+  ?WAIT({ConsumerPid,
+         #kafka_message_set{ topic = ?TOPIC
+                           , partition = 0
+                           , messages = [#kafka_message{key = K}]
+                           }}, ok, 5000),
   ok.
 
 %%%_* Help functions ===========================================================

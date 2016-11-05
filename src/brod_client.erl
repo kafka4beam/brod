@@ -533,7 +533,8 @@ do_validate_topic_existence(Topic0, #state{config = Config} = State) ->
 
 -spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
         when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
-do_get_metadata(Topic, #state{ config      = Config
+do_get_metadata(Topic, #state{ client_id   = ClientId
+                             , config      = Config
                              , workers_tab = Ets
                              } = State) ->
   Topics = case Topic of
@@ -544,6 +545,14 @@ do_get_metadata(Topic, #state{ config      = Config
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
+  case Result of
+    {error, Reason} ->
+      error_logger:error_msg("~p failed to fetch metadata for topics: ~p\n"
+                             "reason=~p",
+                             [ClientId, Topics, Reason]);
+    _ ->
+      ok
+  end,
   ok = maybe_update_partitions_count_cache(Ets, Result),
   {Result, NewState}.
 
