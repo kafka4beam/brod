@@ -160,7 +160,7 @@ ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
-%%      debug(Pid, pring) prints debug info on stdout
+%%      debug(Pid, print) prints debug info on stdout
 %%      debug(Pid, File) prints debug info into a File
 debug(Pid, none) ->
   do_debug(Pid, no_debug);
