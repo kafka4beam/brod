@@ -1,11 +1,11 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.2.7
+PROJECT_VERSION = 2.2.8
 
 DEPS = supervisor3 kafka_protocol
 
-dep_supervisor3_commit = 1.1.4
-dep_kafka_protocol_commit = 0.7.6
+dep_supervisor3_commit = 1.1.5
+dep_kafka_protocol_commit = 0.7.7
 
 TEST_DEPS = meck proper
 
@@ -29,3 +29,7 @@ vsn-check:
 	$(verbose) ./scripts/vsn-check.sh $(PROJECT_VERSION)
 
 ESCRIPT_FILE = scripts/$(PROJECT)
+
+hex-publish: distclean
+	$(verbose) rebar3 hex publish
+
