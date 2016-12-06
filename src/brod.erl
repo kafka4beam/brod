@@ -276,9 +276,13 @@ produce(ProducerPid, Key, Value) ->
 -spec produce(client(), topic(), partition() | brod_partition_fun(),
               key(), value()) -> {ok, brod_call_ref()} | {error, any()}.
 produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
-  {ok, PartitionsCnt} = brod_client:get_partitions_count(Client, Topic),
-  {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
-  produce(Client, Topic, Partition, Key, Value);
+  case brod_client:get_partitions_count(Client, Topic) of
+    {ok, PartitionsCnt} ->
+      {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
+      produce(Client, Topic, Partition, Key, Value);
+    {error, Reason} ->
+      {error, Reason}
+  end;
 produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
   case get_producer(Client, Topic, Partition) of
     {ok, Pid}       -> produce(Pid, Key, Value);
