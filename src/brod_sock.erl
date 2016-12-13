@@ -269,8 +269,12 @@ handle_msg({From, {send, Request}},
         brod_kafka_requests:add(Requests, Caller)
   end,
   RequestBin = kpro:encode_request(ClientId, CorrId, Request),
-  ok = Mod:send(Sock, RequestBin),
-  reply(From, {ok, CorrId}),
+  case Mod:send(Sock, RequestBin) of
+    ok ->
+      reply(From, {ok, CorrId});
+    {error, Reason} ->
+      exit({send_error, Reason})
+  end,
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
   _ = reply(From, {ok, State#state.sock}),
