@@ -1,9 +1,9 @@
 %% -*- mode:erlang -*-
 {application,brod,
  [{description,"Apache Kafka Erlang client library"},
-  {vsn,"2.2.8"},
+  {vsn,"2.2.9"},
   {registered,[]},
-  {applications,[kernel,stdlib,ssl]},
+  {applications,[kernel,stdlib,ssl,kafka_protocol,supervisor3]},
   {env,[]},
   {mod, {brod, []}},
   {modules,[]},
