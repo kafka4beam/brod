@@ -114,10 +114,15 @@
 %%%_* APIs =====================================================================
 
 %% @doc Start brod application.
-start() -> application:start(brod).
+-spec start() -> ok | no_return().
+start() ->
+  {ok, _Apps} = application:ensure_all_started(brod),
+  ok.
 
 %% @doc Stop brod application.
-stop() -> application:stop(brod).
+-spec stop() -> ok.
+stop() ->
+  application:stop(brod).
 
 %% @doc Application behaviour callback
 start(_StartType, _StartArgs) -> brod_sup:start_link().
