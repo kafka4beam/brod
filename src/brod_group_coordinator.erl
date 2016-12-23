@@ -682,19 +682,32 @@ do_commit_offsets_(#state{ groupId                  = GroupId
       },
   Rsp = send_sync(SockPid, Req),
   #kpro_OffsetCommitResponse{oCRspTopic_L = Topics} = Rsp,
-  lists:foreach(
-    fun(#kpro_OCRspTopic{topicName = Topic, oCRspPartition_L = Partitions}) ->
-      lists:foreach(
-        fun(#kpro_OCRspPartition{partition = Partition, errorCode = EC}) ->
-          kpro_ErrorCode:is_error(EC) andalso
-            begin
+  ErrorSet = lists:foldl(
+    fun(#kpro_OCRspTopic{topicName = Topic, oCRspPartition_L = Partitions},
+        Acc1) ->
+      lists:foldl(
+        fun(#kpro_OCRspPartition{partition = Partition, errorCode = EC},
+            Acc2) ->
+          case kpro_ErrorCode:is_error(EC) of
+            true -> 
               log(State, error,
-                  "failed to commit offset for topic=~s, partition=~p\n"
-                  "~p:~s", [Topic, Partition, EC, kpro_ErrorCode:desc(EC)]),
-              erlang:error(EC)
-            end
-        end, Partitions)
-    end, Topics),
+                "failed to commit offset for topic=~s, partition=~p\n"
+                "~p:~s", [Topic, Partition, EC, kpro_ErrorCode:desc(EC)]),
+              gb_sets:add_element(EC, Acc2);
+            false -> Acc2
+          end
+        end, Acc1, Partitions)
+    end, gb_sets:new(), Topics),
+  %% if all error codes are the same, raise throw, otherwise error
+  case gb_sets:size(ErrorSet) of
+    0 -> ok;
+    1 -> 
+      [EC | _] = gb_sets:to_list(ErrorSet),
+      erlang:throw(EC);
+    _ -> 
+      [EC | _] = gb_sets:to_list(ErrorSet),
+      erlang:error(EC)
+  end,
   NewState = State#state{acked_offsets = []},
   {ok, NewState}.
 
