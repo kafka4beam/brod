@@ -290,6 +290,7 @@ for example.
 -module(my_subscriber).
 
 -export([start/1]).
+-export([init/2, handle_message/4]). % callback api
 
 %% brod_group_subscriber behaviour callback
 init(_GroupId, _Arg) -> {ok, []}.
