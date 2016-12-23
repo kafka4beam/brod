@@ -288,6 +288,7 @@ for example.
 
 ```elang
 -module(my_subscriber).
+-include_lib("brod/include/brod.hrl"). %% needed for the #kafka_message record definition
 
 -export([start/1]).
 -export([init/2, handle_message/4]). % callback api
