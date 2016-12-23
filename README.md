@@ -291,7 +291,7 @@ for example.
 -include_lib("brod/include/brod.hrl"). %% needed for the #kafka_message record definition
 
 -export([start/1]).
--export([init/2, handle_message/4]). % callback api
+-export([init/2, handle_message/4]). %% callback api
 
 %% brod_group_subscriber behaviour callback
 init(_GroupId, _Arg) -> {ok, []}.
