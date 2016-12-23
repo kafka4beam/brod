@@ -33,7 +33,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Quick Demo
 
 Assuming kafka is running at `localhost:9092` 
-and there is a topic named `bord-test`.
+and there is a topic named `brod-test`.
 
 Below code snippet is copied from Erlang shell 
 with some non-important printouts trimmed.
