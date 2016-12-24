@@ -33,7 +33,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Quick Demo
 
 Assuming kafka is running at `localhost:9092` 
-and there is a topic named `bord-test`.
+and there is a topic named `brod-test`.
 
 Below code snippet is copied from Erlang shell 
 with some non-important printouts trimmed.
@@ -125,82 +125,93 @@ ok = brod:start_client([{"localhost", 9092}], brod_client_1, ClientConfig).
 
 Put below configs to client config in sys.config or app env:
 
-    {auto_start_producers, true}
-    {default_producer_config, []}
-
+```erlang
+{auto_start_producers, true}
+{default_producer_config, []}
+```
 
 ## Start a producer on demand
 
-    brod:start_producer(_Client         = brod_client_1,
-                        _Topic          = <<"brod-test-topic-1">>,
-                        _ProducerConfig = []).
+```erlang
+brod:start_producer(_Client         = brod_client_1,
+                    _Topic          = <<"brod-test-topic-1">>,
+                    _ProducerConfig = []).
+```
 
 ## Produce to a known topic-partition:
 
-    {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1,
-                   _Topic     = <<"brod-test-topic-1">>,
-                   _Partition = 0
-                   _Key       = <<"some-key">>
-                   _Value     = <<"some-value">>),
+```erlang
+{ok, CallRef} =
+  brod:produce(_Client    = brod_client_1,
+               _Topic     = <<"brod-test-topic-1">>,
+               _Partition = 0
+               _Key       = <<"some-key">>
+               _Value     = <<"some-value">>),
 
-    %% just to illustrate what message to expect
-    receive
-      #brod_produce_reply{ call_ref = CallRef
-                         , result   = brod_produce_req_acked
-                         } ->
-        ok
-    after 5000 ->
-      erlang:exit(timeout)
-    end.
-
+%% just to illustrate what message to expect
+receive
+  #brod_produce_reply{ call_ref = CallRef
+                     , result   = brod_produce_req_acked
+                     } ->
+    ok
+after 5000 ->
+  erlang:exit(timeout)
+end.
+```
 
 ## Synchronized produce request
 
 Block calling process until Kafka confirmed the message:
 
-    {ok, CallRef} =
-      brod:produce(_Client    = brod_client_1,
-                   _Topic     = <<"brod-test-topic-1">>,
-                   _Partition = 0
-                   _Key       = <<"some-key">>
-                   _Value     = <<"some-value">>),
-    brod:sync_produce_request(CallRef).
+```erlang
+{ok, CallRef} =
+  brod:produce(_Client    = brod_client_1,
+               _Topic     = <<"brod-test-topic-1">>,
+               _Partition = 0
+               _Key       = <<"some-key">>
+               _Value     = <<"some-value">>),
+brod:sync_produce_request(CallRef).
+```
 
 or the same in one call:
 
-    brod:produce_sync(_Client    = brod_client_1,
-                      _Topic     = <<"brod-test-topic-1">>,
-                      _Partition = 0
-                      _Key       = <<"some-key">>
-                      _Value     = <<"some-value">>).
+```erlang
+brod:produce_sync(_Client    = brod_client_1,
+                  _Topic     = <<"brod-test-topic-1">>,
+                  _Partition = 0
+                  _Key       = <<"some-key">>
+                  _Value     = <<"some-value">>).
+```
 
 ## Produce with random partitioner
 
-    Client = brod_client_1,
-    Topic  = <<"brod-test-topic-1">>,
-    PartitionFun = fun(_Topic, PartitionsCount, _Key, _Value) ->
-                       {ok, crypto:rand_uniform(0, PartitionsCount)}
-                   end,
-    {ok, CallRef} = brod:produce(Client, Topic, PartitionFun, Key, Value).
-
+```erlang
+Client = brod_client_1,
+Topic  = <<"brod-test-topic-1">>,
+PartitionFun = fun(_Topic, PartitionsCount, _Key, _Value) ->
+                   {ok, crypto:rand_uniform(0, PartitionsCount)}
+               end,
+{ok, CallRef} = brod:produce(Client, Topic, PartitionFun, Key, Value).
+```
 
 ## Produce a batch of (maybe nested) Key-Value list
 
-    %% The top-level key is used for partitioning
-    %% and nested keys are discarded.
-    %% Nested messages are serialized into a message set to the same partition.
-    brod:produce(_Client    = brod_client_1,
-                 _Topic     = <<"brod-test-topic-1">>,
-                 _Partition = MyPartitionerFun
-                 _Key       = KeyUsedForPartitioning
-                 _Value     = [ {<<"k1", <<"v1">>}
-                              , {<<"k2", <<"v2">>}
-                              , { _KeyDiscarded = <<>>
-                                , [ {<<"k3">>, <<"v3">>}
-                                  , {<<"k4">>, <<"v4">>}
-                                  ]}
-                              ]).
+```erlang
+%% The top-level key is used for partitioning
+%% and nested keys are discarded.
+%% Nested messages are serialized into a message set to the same partition.
+brod:produce(_Client    = brod_client_1,
+             _Topic     = <<"brod-test-topic-1">>,
+             _Partition = MyPartitionerFun
+             _Key       = KeyUsedForPartitioning
+             _Value     = [ {<<"k1", <<"v1">>}
+                          , {<<"k2", <<"v2">>}
+                          , { _KeyDiscarded = <<>>
+                            , [ {<<"k3">>, <<"v3">>}
+                              , {<<"k4">>, <<"v4">>}
+                              ]}
+                          ]).
+```
 
 ## Handle acks from kafka
 
@@ -208,9 +219,11 @@ Unless brod:produce_sync was called, callers of brod:produce should
 expect a message of below pattern for each produce call. 
 Add `-include_lib("brod/include/brod.hrl").` to use the record.
 
-    #brod_produce_reply{ call_ref = CallRef %% returned from brod:produce
-                       , result   = brod_produce_req_acked
-                       }
+```erlang
+#brod_produce_reply{ call_ref = CallRef %% returned from brod:produce
+                   , result   = brod_produce_req_acked
+                   }
+```
 
 NOTE: If required_acks is set to 0 in producer config, 
 kafka will NOT ack the requests, and the reply message is sent back 
@@ -286,10 +299,12 @@ for example.
 
 ### Example of group consumer which commits offsets to Kafka
 
-```elang
+```erlang
 -module(my_subscriber).
+-include_lib("brod/include/brod.hrl"). %% needed for the #kafka_message record definition
 
 -export([start/1]).
+-export([init/2, handle_message/4]). %% callback api
 
 %% brod_group_subscriber behaviour callback
 init(_GroupId, _Arg) -> {ok, []}.
@@ -328,17 +343,20 @@ start(ClientId) ->
 These functions open a connetion to kafka cluster, send a request,
 await response and then close the connection.
 
-    Hosts = [{"localhost", 9092}].
-    Topic = <<"topic">>.
-    Partition = 0.
-    brod:get_metadata(Hosts).
-    brod:get_metadata(Hosts, [Topic]).
-    brod:get_offsets(Hosts, Topic, Partition).
-    brod:fetch(Hosts, Topic, Partition, 1).
+```erlang
+Hosts = [{"localhost", 9092}].
+Topic = <<"topic">>.
+Partition = 0.
+brod:get_metadata(Hosts).
+brod:get_metadata(Hosts, [Topic]).
+brod:get_offsets(Hosts, Topic, Partition).
+brod:fetch(Hosts, Topic, Partition, 1).
+```
 
 # Self-contained binary (needs erlang runtime)
 This will build a self-contained binary with brod application
 
-    make escript
-    ./brod help
-
+```shell
+make escript
+./brod help
+```
