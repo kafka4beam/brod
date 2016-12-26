@@ -682,34 +682,34 @@ do_commit_offsets_(#state{ groupId                  = GroupId
       },
   Rsp = send_sync(SockPid, Req),
   #kpro_OffsetCommitResponse{oCRspTopic_L = Topics} = Rsp,
-  ErrorSet = lists:foldl(
-    fun(#kpro_OCRspTopic{topicName = Topic, oCRspPartition_L = Partitions},
-        Acc1) ->
-      lists:foldl(
-        fun(#kpro_OCRspPartition{partition = Partition, errorCode = EC},
-            Acc2) ->
-          case kpro_ErrorCode:is_error(EC) of
-            true -> 
-              log(State, error,
-                "failed to commit offset for topic=~s, partition=~p\n"
-                "~p:~s", [Topic, Partition, EC, kpro_ErrorCode:desc(EC)]),
-              gb_sets:add_element(EC, Acc2);
-            false -> Acc2
-          end
-        end, Acc1, Partitions)
-    end, gb_sets:new(), Topics),
-  %% if all error codes are the same, raise throw, otherwise error
-  case gb_sets:size(ErrorSet) of
-    0 -> ok;
-    1 -> 
-      [EC | _] = gb_sets:to_list(ErrorSet),
-      erlang:throw(EC);
-    _ -> 
-      [EC | _] = gb_sets:to_list(ErrorSet),
-      erlang:error(EC)
-  end,
+  ok = assert_commit_response(Topics),
   NewState = State#state{acked_offsets = []},
   {ok, NewState}.
+
+%% @private Check commit response. If no error returns ok,
+%% if all error codes are the same, raise throw, otherwise error.
+-spec assert_commit_response([kpro_OffsetCommitResponse()]) -> ok.
+assert_commit_response(Topics) ->
+  ErrorSet = collect_commit_response_error_codes(Topics),
+  case gb_sets:to_list(ErrorSet) of
+    [] -> ok;
+    [EC] -> ?ESCALATE_EC(EC);
+    _ -> erlang:error({commit_offset_failed, Topics})
+  end.
+
+-spec collect_commit_response_error_codes([kpro_OffsetCommitResponse()]) -> 
+      gb_sets:set().
+collect_commit_response_error_codes(Topics) ->
+  lists:foldl(
+    fun(#kpro_OCRspTopic{oCRspPartition_L = Partitions}, Acc1) ->
+        lists:foldl(
+          fun(#kpro_OCRspPartition{errorCode = EC}, Acc2) ->
+            case kpro_ErrorCode:is_error(EC) of
+              true -> gb_sets:add_element(EC, Acc2);
+              false -> Acc2
+            end
+          end, Acc1, Partitions)
+      end, gb_sets:new(), Topics).
 
 -spec assign_partitions(#state{}) -> [kpro_GroupAssignment()].
 assign_partitions(State) when ?IS_LEADER(State) ->
