@@ -688,7 +688,8 @@ do_commit_offsets_(#state{ groupId                  = GroupId
 
 %% @private Check commit response. If no error returns ok,
 %% if all error codes are the same, raise throw, otherwise error.
--spec assert_commit_response([kpro_OffsetCommitResponse()]) -> ok.
+%% %% @end
+-spec assert_commit_response([kpro_OffsetCommitResponse()]) -> ok | no_return().
 assert_commit_response(Topics) ->
   ErrorSet = collect_commit_response_error_codes(Topics),
   case gb_sets:to_list(ErrorSet) of
@@ -697,7 +698,7 @@ assert_commit_response(Topics) ->
     _ -> erlang:error({commit_offset_failed, Topics})
   end.
 
--spec collect_commit_response_error_codes([kpro_OffsetCommitResponse()]) -> 
+-spec collect_commit_response_error_codes([kpro_OffsetCommitResponse()]) ->
       gb_sets:set().
 collect_commit_response_error_codes(Topics) ->
   lists:foldl(
