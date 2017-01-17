@@ -180,7 +180,11 @@ start_client(BootstrapEndpoints, ClientId) ->
 -spec start_client([endpoint()], brod_client_id(), client_config()) ->
                       ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId, Config) ->
-  brod_sup:start_client(BootstrapEndpoints, ClientId, Config).
+  case brod_sup:start_client(BootstrapEndpoints, ClientId, Config) of
+    ok                               -> ok;
+    {error, {already_started, _Pid}} -> ok;
+    {error, Reason}                  -> {error, Reason}
+  end.
 
 %% @equiv stat_link_client(BootstrapEndpoints, brod_default_client)
 -spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
