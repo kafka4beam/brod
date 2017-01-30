@@ -189,39 +189,16 @@ is_later_corr_id(Id1, Id2) ->
     false -> Id1 > Id2
   end.
 
-%% @private Get the failure count of the first item in the buffer
--spec buffer_head_failures(queue:queue(#req{})) -> integer().
-buffer_head_failures(Buffer) ->
-    case queue:peek(Buffer) of
-        {value, #req{failures = F}} -> F;
-        empty                       -> 0
-    end.
-
+%% @private
 -spec take_reqs_to_send(buf()) -> {[#req{}], buf()}.
 take_reqs_to_send(#buf{ onwire_count = OnWireCount
                       , onwire_limit = OnWireLimit
                       } = Buf) when OnWireCount >= OnWireLimit ->
   {[], Buf};
-take_reqs_to_send(#buf{ buffer       = Buffer
-                      , buffer_count = BufferCount
-                      , onwire_count = OnWireCount
-                      } = Buf) ->
-  BufferHeadFailures = buffer_head_failures(Buffer),
-  case {BufferHeadFailures > 0, OnWireCount > 0} of
-    {true, true} ->
-      %% do not retry if there is one on wire
-      {[], Buf};
-    {true, false} ->
-      %% always retry only one message at a time, i.e. no batch
-      {{value, Req}, Reqs} = queue:out(Buffer),
-      NewBuf = Buf#buf{ buffer       = Reqs
-                      , buffer_count = BufferCount - 1
-                      },
-      {[Req], NewBuf};
-    {false, _} ->
-      take_reqs_to_send(Buf, _Acc = [], _AccBytes = 0)
-  end.
+take_reqs_to_send(#buf{} = Buf) ->
+  take_reqs_to_send(Buf, _Acc = [], _AccBytes = 0).
 
+%% @private
 -spec take_reqs_to_send(buf(), [#req{}], integer()) -> {[#req{}], buf()}.
 take_reqs_to_send(#buf{ pending = ?EMPTY_QUEUE
                       , buffer  = ?EMPTY_QUEUE
