@@ -128,19 +128,15 @@ t_nack(Config) when is_list(Config) ->
   Buf2 = AddFun(Buf1, 1),
   Buf3 = AddFun(AddFun(Buf2, 2), 3),
   Buf4 = MaybeSend(Buf3),
-  CorrId1 = ReceiveFun([0, 1]),
-  Buf5 = NackFun(Buf4, CorrId1),
-  Buf6 = MaybeSend(Buf5),
-  CoorId2 = ReceiveFun([0]),
-  ?assertEqual(Buf6, MaybeSend(Buf6)), %% no new request before last is acked
-  Buf7 = AckFun(Buf6, CoorId2),
-  Buf8 = MaybeSend(Buf7),
-  Buf9 = MaybeSend(Buf8), %% allow sending another one now
-  CorrId3 = ReceiveFun([1]),
-  CorrId4 = ReceiveFun([2, 3]),
-  BufA = AckFun(Buf9, CorrId3),
-  BufB = AckFun(BufA, CorrId4),
-  ?assert(brod_producer_buffer:is_empty(BufB)).
+  CorrId1 = ReceiveFun([0, 1]),  %% max batch size
+  Buf5 = NackFun(Buf4, CorrId1), %% re-queue 0 and 1
+  Buf6 = MaybeSend(Buf5),        %% retry
+  CorrId2 = ReceiveFun([0, 1]),  %% receive a max batch
+  Buf7 = MaybeSend(Buf6),        %% keep sending
+  CorrId3 = ReceiveFun([2, 3]),  %% receive another max batch (max onwire is 2)
+  Buf8 = AckFun(Buf7, CorrId2),
+  Buf9 = AckFun(Buf8, CorrId3),
+  ?assert(brod_producer_buffer:is_empty(Buf9)).
 
 t_send_fun_error(Config) when is_list(Config) ->
   SendFun =
