@@ -65,7 +65,7 @@
                , max_bytes_orig      :: bytes()
                , sleep_timeout       :: integer()
                , prefetch_count      :: integer()
-               , last_corr_id        :: corr_id()
+               , last_corr_id        :: ?undef | corr_id()
                , subscriber          :: ?undef | pid()
                , subscriber_mref     :: ?undef | reference()
                , pending_acks = []   :: [offset()]
@@ -293,16 +293,18 @@ do_debug(Pid, Debug) ->
   ok.
 
 handle_fetch_response(_Response, _CorrId,
-                      #state{subscriber = ?undef} = State) ->
+                      #state{subscriber = ?undef} = State0) ->
   %% discard fetch response when there is no (dead?) subscriber
+  State = State0#state{last_corr_id = ?undef},
   {noreply, State};
 handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
                             } = State) when CorrId1 =/= CorrId2 ->
   {noreply, State};
 handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
-                                         }, CorrId, State) ->
-  CorrId = State#state.last_corr_id, %% assert
+                                         }, CorrId, State0) ->
+  CorrId = State0#state.last_corr_id, %% assert
+  State = State0#state{last_corr_id = ?undef},
   #kpro_FetchResponseTopic{ topicName = Topic
                           , fetchResponsePartition_L = [PartitionResponse]
                           } = TopicData,
@@ -478,6 +480,9 @@ maybe_send_fetch_request(#state{socket_pid = ?undef} = State) ->
 maybe_send_fetch_request(#state{is_suspended = true} = State) ->
   %% waiting for subscriber to re-subscribe
   State;
+maybe_send_fetch_request(#state{last_corr_id = I} = State) when is_integer(I) ->
+  %% Waiting for the last request
+  State;
 maybe_send_fetch_request(#state{ pending_acks   = PendingAcks
                                , prefetch_count = PrefetchCount
                                } = State) ->
@@ -575,13 +580,15 @@ fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) ->
 
 %% @private Reset fetch buffer, use the last unacked offset as the next begin
 %% offset to fetch data from.
+%% Discard onwire fetch responses by setting last_corr_id to undefined.
 %% @end
 -spec reset_buffer(#state{}) -> #state{}.
 reset_buffer(#state{pending_acks = []} = State) ->
-  State;
+  State#state{last_corr_id = ?undef};
 reset_buffer(#state{pending_acks = [Offset | _]} = State) ->
   State#state{ begin_offset = Offset
              , pending_acks = []
+             , last_corr_id = ?undef
              }.
 
 %% @private Catch noproc exit exception when making gen_server:call.
