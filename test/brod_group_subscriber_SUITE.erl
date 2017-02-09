@@ -185,7 +185,7 @@ t_async_acks(Config) when is_list(Config) ->
       ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, Value)
     end,
   RecvFun =
-    fun(Timeout, {ContinueFun, Acc}) ->
+    fun Continue(Timeout, Acc) ->
       receive
         ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
           ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1,
@@ -193,11 +193,11 @@ t_async_acks(Config) when is_list(Config) ->
           ok = brod_group_subscriber:commit(SubscriberPid),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
-          ContinueFun(0, {ContinueFun, NewAcc});
+          Continue(0, NewAcc);
         Msg ->
           erlang:error({unexpected_msg, Msg})
       after Timeout ->
-        {ContinueFun, Acc}
+        Acc
       end
     end,
   ok = SendFun(0),
@@ -205,12 +205,12 @@ t_async_acks(Config) when is_list(Config) ->
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, {RecvFun, []}),
+  _ = RecvFun(2000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
   Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
+  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
   ?assertEqual(L, lists:reverse(ReceivedL)),
   ok = brod_group_subscriber:stop(SubscriberPid),
   ok.
@@ -247,7 +247,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       ok = brod:produce_sync(?CLIENT_ID, Topic, Partitioner, <<>>, Value)
     end,
   RecvFun =
-    fun(Timeout, {ContinueFun, Acc}) ->
+    fun Continue(Timeout, Acc) ->
       receive
         ?MSG(CaseRef, SubscriberPid, Topic, _Partition, _Offset, Value) ->
           %% assert subscribers assigned with only topics in subscription list
@@ -256,11 +256,11 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
                   (SubscriberPid =:= SubscriberPid2 andalso Topic =:= ?TOPIC3)),
           I = binary_to_list(Value),
           NewAcc = [list_to_integer(I) | Acc],
-          ContinueFun(0, {ContinueFun, NewAcc});
+          Continue(0, NewAcc);
         Msg ->
           erlang:error({unexpected_msg, Msg})
       after Timeout ->
-        {ContinueFun, Acc}
+        Acc
       end
     end,
   ok = SendFun(0),
@@ -268,12 +268,12 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, {RecvFun, []}),
+  _ = RecvFun(2000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
   Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
+  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
   %% since the nubmers are produced to different partitions and collected
   %% by different consumers, they have a very good chance to go out of the
   %% original order, hence we do not verify the order here
