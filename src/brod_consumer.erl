@@ -615,7 +615,11 @@ maybe_init_socket(#state{ client_pid = ClientPid
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
     {ok, SocketPid} ->
       _ = erlang:monitor(process, SocketPid),
-      State = State0#state{socket_pid = SocketPid},
+      %% Switching to a new socket
+      %% the response for last_coor_id will be lost forever
+      State = State0#state{ last_corr_id = ?undef
+                          , socket_pid   = SocketPid
+                          },
       {ok, State};
     {error, Reason} ->
       {{error, Reason}, State0}
