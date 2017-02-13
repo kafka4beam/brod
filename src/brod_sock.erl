@@ -139,6 +139,7 @@ get_tcp_sock(Pid) ->
 %%      debug(Pid, pring) prints debug info on stdout
 %%      debug(Pid, File) prints debug info into a File
 %%      debug(Pid, none) stops debugging
+%% @end
 debug(Pid, none) ->
   system_call(Pid, {debug, no_debug});
 debug(Pid, print) ->
@@ -231,7 +232,7 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
                                  , tail     = Tail0
                                  , requests = Requests
                                  , mod      = Mod
-                                 } = State, Debug) ->
+                                 } = State, Debug) when is_binary(Bin) ->
   case Mod of
     gen_tcp -> ok = inet:setopts(Sock, [{active, once}]);
     ssl     -> ok = ssl:setopts(Sock, [{active, once}])
