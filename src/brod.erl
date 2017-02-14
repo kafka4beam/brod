@@ -136,8 +136,7 @@ start_client(BootstrapEndpoints) ->
   start_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
 %% @equiv stat_client(BootstrapEndpoints, ClientId, [])
--spec start_client([endpoint()], brod_client_id()) ->
-                           ok | {error, any()}.
+-spec start_client([endpoint()], brod_client_id()) -> ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId) ->
   start_client(BootstrapEndpoints, ClientId, []).
 
@@ -173,9 +172,15 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       user is trying to call 'produce' but did not call
 %%       brod:start_producer explicitly. Can be useful for applications
 %%       which don't know beforehand which topics they will be working with.
-%%     default_producer_config (optional, default [])
+%%     default_producer_config (optional, default=[])
 %%       Producer configuration to use when auto_start_producers is true.
 %%       @see brod_client:start_producer/3. for more details.
+%%     ssl (optional, default=[])
+%%       [{certfile, ...},{keyfiel, ...},{cacertfile, ...}]
+%%     connect_timeout (optional, default=5000)
+%%       Timeout when trying to connect to one endpoint.
+%%     request_timeout (optional, default=120000, constraint: >= 1000)
+%%       Timeout when waiting for a response, socket restart when timedout.
 %% @end
 -spec start_client([endpoint()], brod_client_id(), client_config()) ->
                       ok | {error, any()}.

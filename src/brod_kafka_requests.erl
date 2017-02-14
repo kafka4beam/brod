@@ -35,6 +35,7 @@
         , get_caller/2
         , get_corr_id/1
         , increment_corr_id/1
+        , scan_for_max_age/1
         ]).
 
 -export_type([requests/0]).
@@ -46,6 +47,7 @@
 
 -opaque requests() :: #requests{}.
 
+-define(REQ(Caller, Ts), {Caller, Ts}).
 -define(MAX_CORR_ID_WINDOW_SIZE, (?MAX_CORR_ID div 2)).
 
 %%%_* Includes =================================================================
@@ -64,7 +66,7 @@ add(#requests{ corr_id = CorrId
              , sent    = Sent
              } = Requests, Caller) ->
   ok = assert_corr_id(Sent),
-  NewSent = gb_trees:insert(CorrId, Caller, Sent),
+  NewSent = gb_trees:insert(CorrId, ?REQ(Caller, os:timestamp()), Sent),
   NewRequests = Requests#requests{ corr_id = kpro:next_corr_id(CorrId)
                                  , sent    = NewSent
                                  },
@@ -82,7 +84,8 @@ del(#requests{sent = Sent} = Requests, CorrId) ->
 %% @end
 -spec get_caller(requests(), corr_id()) -> pid().
 get_caller(#requests{sent = Sent}, CorrId) ->
-  gb_trees:get(CorrId, Sent).
+  ?REQ(Caller, _Ts) = gb_trees:get(CorrId, Sent),
+  Caller.
 
 %% @doc Get the correction to be sent for the next request.
 -spec get_corr_id(requests()) -> corr_id().
@@ -95,6 +98,18 @@ get_corr_id(#requests{ corr_id = CorrId }) ->
 -spec increment_corr_id(requests()) -> {corr_id(), requests()}.
 increment_corr_id(#requests{corr_id = CorrId} = Requests) ->
   {CorrId, Requests#requests{ corr_id = kpro:next_corr_id(CorrId) }}.
+
+%% @doc Scan the gb_tree to get oldest sent request.
+%% Age is in milli-seconds.
+%% 0 is returned if there is no pending response.
+%% @end
+-spec scan_for_max_age(requests()) -> timeout().
+scan_for_max_age(#requests{sent = Sent}) ->
+  Now = os:timestamp(),
+  MinTs = lists:foldl(fun({_, ?REQ(_Caller, Ts)}, Min) ->
+                          min(Ts, Min)
+                      end, Now, gb_trees:to_list(Sent)),
+  timer:now_diff(Now, MinTs) div 1000.
 
 %%%_* Internal function ========================================================
 
