@@ -47,26 +47,31 @@
         , format_status/2
         ]).
 
--define(CONNECT_TIMEOUT, timer:seconds(5)).
+-define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
+-define(DEFAULT_REQUEST_TIMEOUT, timer:seconds(120)).
 
 %%%_* Includes =================================================================
 -include("brod_int.hrl").
 
-%%%_* Records ==================================================================
+-type options() :: proplists:proplist().
+-type requests() :: brod_kafka_requests:requests().
+
 -record(state, { client_id   :: binary()
                , parent      :: pid()
                , sock        :: port()
                , tail = <<>> :: binary() %% leftover of last data stream
-               , requests    :: brod_kafka_requests:requests()
+               , requests    :: requests()
                , mod         :: gen_tcp | ssl
+               , req_timeout :: timeout()
                }).
 
 %%%_* API ======================================================================
+
 %% @equiv start_link(Parent, Host, Port, ClientId, [])
 start_link(Parent, Host, Port, ClientId) ->
   start_link(Parent, Host, Port, ClientId, []).
 
--spec start_link(pid(), string(), integer(),
+-spec start_link(pid(), hostname(), portnum(),
                  brod_client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
@@ -79,7 +84,8 @@ start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
 start(Parent, Host, Port, ClientId) ->
   start(Parent, Host, Port, ClientId, []).
 
--spec start(pid(), string(), integer(), brod_client_id() | binary(), term()) ->
+-spec start(pid(), hostname(), portnum(),
+            brod_client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
 start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
@@ -99,7 +105,7 @@ request_async(Pid, Request) ->
       {error, Reason}
   end.
 
--spec request_sync(pid(), term(), integer()) ->
+-spec request_sync(pid(), term(), timeout()) ->
         {ok, term()} | ok | {error, any()}.
 request_sync(Pid, Request, Timeout) ->
   case request_async(Pid, Request) of
@@ -108,7 +114,7 @@ request_sync(Pid, Request, Timeout) ->
     {error, Reason} -> {error, Reason}
   end.
 
--spec wait_for_resp(pid(), term(), integer(), timeout()) ->
+-spec wait_for_resp(pid(), term(), corr_id(), timeout()) ->
         {ok, term()} | {error, any()}.
 wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),
@@ -153,7 +159,7 @@ debug(Pid, File) when is_list(File) ->
         no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
-  Timeout = proplists:get_value(timeout, Options, ?CONNECT_TIMEOUT),
+  Timeout = get_connect_timeout(Options),
   SockOpts = [{active, once}, {packet, raw}, binary, {nodelay, true}],
   case gen_tcp:connect(Host, Port, SockOpts, Timeout) of
     {ok, Sock} ->
@@ -178,9 +184,11 @@ init(Parent, Host, Port, ClientId, Options) ->
                   end
               end,
       proc_lib:init_ack(Parent, {ok, self()}),
+      ReqTimeout = get_request_timeout(Options),
+      ok = send_assert_max_req_age(self(), ReqTimeout),
       try
         Requests = brod_kafka_requests:new(),
-        loop(State#state{requests = Requests}, Debug)
+        loop(State#state{requests = Requests, req_timeout = ReqTimeout}, Debug)
       catch error : E ->
         Stack = erlang:get_stacktrace(),
         exit({E, Stack})
@@ -248,6 +256,15 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
         brod_kafka_requests:del(Reqs, CorrId)
       end, Requests, Responses),
   ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
+handle_msg(assert_max_req_age, #state{ requests = Requests
+                                     , req_timeout = ReqTimeout
+                                     } = State, Debug) ->
+  SockPid = self(),
+  erlang:spawn_link(fun() ->
+                        ok = assert_max_req_age(Requests, ReqTimeout),
+                        ok = send_assert_max_req_age(SockPid, ReqTimeout)
+                    end),
+  ?MODULE:loop(State, Debug);
 handle_msg({tcp_closed, Sock}, #state{sock = Sock}, _) ->
   exit({shutdown, tcp_closed});
 handle_msg({ssl_closed, Sock}, #state{sock = Sock}, _) ->
@@ -270,11 +287,13 @@ handle_msg({From, {send, Request}},
         brod_kafka_requests:add(Requests, Caller)
   end,
   RequestBin = kpro:encode_request(ClientId, CorrId, Request),
-  case Mod:send(Sock, RequestBin) of
-    ok ->
-      reply(From, {ok, CorrId});
-    {error, Reason} ->
-      exit({send_error, Reason})
+  Res = case Mod of
+          gen_tcp -> gen_tcp:send(Sock, RequestBin);
+          ssl     -> ssl:send(Sock, RequestBin)
+        end,
+  case Res of
+    ok              -> reply(From, {ok, CorrId});
+    {error, Reason} -> exit({send_error, Reason})
   end,
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
@@ -335,6 +354,41 @@ ts() ->
   {{Y,M,D}, {HH,MM,SS}} = calendar:now_to_local_time(Now),
   lists:flatten(io_lib:format("~.4.0w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w.~w",
                               [Y, M, D, HH, MM, SS, MicroSec])).
+
+%% @private This is to be backward compatible for
+%% 'timeout' as connect timeout option name
+%% TODO: change to support 'connect_timeout' only for 2.3
+%% @end
+-spec get_connect_timeout(options()) -> timeout().
+get_connect_timeout(Options) ->
+  case {proplists:get_value(connect_timeout, Options),
+        proplists:get_value(timeout, Options)} of
+    {T, _} when is_integer(T) -> T;
+    {_, T} when is_integer(T) -> T;
+    _                         -> ?DEFAULT_CONNECT_TIMEOUT
+  end.
+
+%% @private Get request timeout from options.
+-spec get_request_timeout(options()) -> timeout().
+get_request_timeout(Options) ->
+  proplists:get_value(request_timeout, Options, ?DEFAULT_REQUEST_TIMEOUT).
+
+-spec assert_max_req_age(requests(), timeout()) -> ok | no_return().
+assert_max_req_age(Requests, Timeout) ->
+  case brod_kafka_requests:scan_for_max_age(Requests) of
+    Age when Age > Timeout ->
+      erlang:exit(request_timeout);
+    _ ->
+      ok
+  end.
+
+%% @private Send the 'assert_max_req_age' message to brod_sock process.
+%% The send interval is set to a half of configured timeout.
+%% @end
+-spec send_assert_max_req_age(pid(), timeout()) -> ok.
+send_assert_max_req_age(Pid, Timeout) when Timeout >= 1000 ->
+  _ = erlang:send_after(Timeout div 2, Pid, assert_max_req_age),
+  ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
