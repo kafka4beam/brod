@@ -54,7 +54,12 @@
                              | reset_to_latest.
 
 -type bytes() :: non_neg_integer().
-
+-type offset_range() :: {offset(),offset()}.
+-type offsets_queue() :: queue:queue(offset_range()).
+-record(pending_acks, { count         = 0            :: integer()
+                      , queue_rear                   :: ?undef | offset_range()
+                      , offsets_queue = queue:new()  :: offsets_queue()
+                      }).
 -record(state, { client_pid          :: pid()
                , socket_pid          :: pid()
                , topic               :: binary()
@@ -68,7 +73,7 @@
                , last_corr_id        :: ?undef | corr_id()
                , subscriber          :: ?undef | pid()
                , subscriber_mref     :: ?undef | reference()
-               , pending_acks = []   :: [offset()]
+               , pending_acks = #pending_acks{} :: #pending_acks{}
                , is_suspended        :: boolean()
                , offset_reset_policy :: offset_reset_policy()
                , avg_bytes           :: number()
@@ -88,6 +93,7 @@
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 -define(INIT_SOCKET, init_socket).
 -define(DEFAULT_AVG_WINDOW, 5).
+-define(EMPTY_QUEUE, {[],[]}).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -352,12 +358,40 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
   MapFun = fun(#kafka_message{offset = Offset}) -> Offset end,
   Offsets = lists:map(MapFun, Messages),
   LastOffset = lists:last(Offsets),
-  State = State0#state{ pending_acks = PendingAcks ++ Offsets
+  NewPendingAcks = handle_add_offset(PendingAcks, Offsets),
+  State = State0#state{ pending_acks = NewPendingAcks
                       , begin_offset = LastOffset + 1
                       },
   State1 = maybe_shrink_max_bytes(State, MsgSet#kafka_message_set.messages),
   NewState = maybe_send_fetch_request(State1),
   {noreply, NewState}.
+
+handle_add_offset(#pending_acks{ queue_rear = {Begin, End}
+                               , count = Count
+                               , offsets_queue = Queue
+                               } = PendingAcks, [Offset|Offsets]) ->
+  if
+    Offset == End + 1 ->
+      handle_add_offset(PendingAcks#pending_acks{ queue_rear = {Begin, Offset}
+                                                , count = Count + 1
+                                                }, Offsets);
+    Offset > End + 1 ->
+      NewQueue = queue:in({Begin, End}, Queue),
+      handle_add_offset(PendingAcks#pending_acks{ queue_rear = {Offset, Offset}
+                                                , count = Count + 1
+                                                , offsets_queue = NewQueue
+                                                }, Offsets);
+    true ->
+      handle_add_offset(PendingAcks, Offsets)
+  end;
+handle_add_offset(#pending_acks{ queue_rear = ?undef
+                               , count = Count
+                               } = PendingAcks, [Offset|Offsets]) ->
+  handle_add_offset(PendingAcks#pending_acks{ queue_rear = {Offset, Offset}
+                                            , count = Count + 1
+                                            }, Offsets);
+handle_add_offset(PendingAcks, []) ->
+  PendingAcks.
 
 maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
                              , max_bytes_orig = MaxBytesOrig
@@ -442,17 +476,50 @@ handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
                   reset_to_latest   -> ?OFFSET_LATEST
                 end,
   State1 = State#state{ begin_offset = BeginOffset
-                      , pending_acks = []
+                      , pending_acks = #pending_acks{}
                       },
   {ok, State2} = resolve_begin_offset(State1),
   NewState = maybe_send_fetch_request(State2),
   {noreply, NewState}.
 
-handle_ack([], _Offset) -> [];
-handle_ack([H | Offsets], Offset) ->
-  case H =< Offset of
-    true  -> handle_ack(Offsets, Offset);
-    false -> [H | Offsets]
+handle_ack(#pending_acks{ offsets_queue = ?EMPTY_QUEUE
+                        , queue_rear = {Begin, End}
+                        , count = Count} = PendingAcks, Offset) ->
+  if
+    Offset >= End ->
+      NewCount = Count - (End - Begin + 1),
+      PendingAcks#pending_acks{ queue_rear = ?undef
+                              , count = NewCount
+                             };
+    Offset >= Begin ->
+      NewCount = Count - (Offset - Begin + 1),
+      PendingAcks#pending_acks{ queue_rear = {Offset+1, End}
+                              , count = NewCount
+                              };
+    true ->
+      PendingAcks
+  end;
+handle_ack(#pending_acks{ offsets_queue = ?EMPTY_QUEUE
+                        , queue_rear = ?undef
+                        } = PendingAcks, _Offset) ->
+  PendingAcks;
+handle_ack(#pending_acks{ offsets_queue = Queue
+                        , count = Count} = PendingAcks, Offset) ->
+  {{value,{Begin,End}}, Queue1} = queue:out(Queue),
+  if
+    Offset >= End ->
+      NewCount = Count - (End - Begin + 1),
+      handle_ack(PendingAcks#pending_acks{ offsets_queue = Queue1
+                                         , count = NewCount
+                                         }, Offset);
+    Offset >= Begin ->
+      NewCount = Count - (Offset - Begin + 1),
+      Queue2 = queue:in_r({Offset+1, End}, Queue1),
+      PendingAcks#pending_acks{ offsets_queue = Queue2
+                              , count = NewCount
+                              };
+    true ->
+      PendingAcks
   end.
 
 cast_to_subscriber(Pid, Msg) ->
@@ -483,10 +550,10 @@ maybe_send_fetch_request(#state{is_suspended = true} = State) ->
 maybe_send_fetch_request(#state{last_corr_id = I} = State) when is_integer(I) ->
   %% Waiting for the last request
   State;
-maybe_send_fetch_request(#state{ pending_acks   = PendingAcks
+maybe_send_fetch_request(#state{ pending_acks   = #pending_acks{count = Count}
                                , prefetch_count = PrefetchCount
                                } = State) ->
-  case length(PendingAcks) =< PrefetchCount of
+  case Count =< PrefetchCount of
     true ->
       case send_fetch_request(State) of
         {ok, CorrId} ->
@@ -551,7 +618,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     case NewBeginOffset =/= OldBeginOffset of
       true ->
         %% reset buffer in case subscriber wants to fetch from a new offset
-        State1#state{pending_acks = []};
+        State1#state{pending_acks = #pending_acks{}};
       false ->
         State1
     end,
@@ -583,11 +650,22 @@ fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) ->
 %% Discard onwire fetch responses by setting last_corr_id to undefined.
 %% @end
 -spec reset_buffer(#state{}) -> #state{}.
-reset_buffer(#state{pending_acks = []} = State) ->
+reset_buffer(#state{pending_acks = #pending_acks{ queue_rear = ?undef
+                                                , offsets_queue = ?EMPTY_QUEUE
+                                                }} = State) ->
   State#state{last_corr_id = ?undef};
-reset_buffer(#state{pending_acks = [Offset | _]} = State) ->
-  State#state{ begin_offset = Offset
-             , pending_acks = []
+reset_buffer(#state{pending_acks = #pending_acks{ queue_rear = {Begin, _}
+                                                , offsets_queue = ?EMPTY_QUEUE
+                                                }} = State) ->
+  State#state{ begin_offset = Begin
+             , pending_acks = #pending_acks{}
+             , last_corr_id = ?undef
+             };
+reset_buffer(#state{pending_acks = #pending_acks{ offsets_queue = Queue
+                                                }} = State) ->
+  {value, {Begin,_}} = queue:out(Queue),
+  State#state{ begin_offset = Begin
+             , pending_acks = #pending_acks{}
              , last_corr_id = ?undef
              }.
 
