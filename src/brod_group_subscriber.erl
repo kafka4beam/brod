@@ -109,12 +109,15 @@
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
--record(consumer, { topic_partition :: {topic(), partition()}
-                  , consumer_pid    :: pid() | {down, string(), any()}
-                  , consumer_mref   :: reference()
-                  , begin_offset    :: offset()
-                  , acked_offset    :: offset()
-                  }).
+-record(consumer,
+        { topic_partition :: {topic(), partition()}
+        , consumer_pid    :: ?undef                  %% initial state
+                           | pid()                   %% normal state
+                           | {down, string(), any()} %% consumer restarting
+        , consumer_mref   :: reference()
+        , begin_offset    :: offset()
+        , acked_offset    :: offset()
+        }).
 
 -type ack_ref() :: {topic(), partition(), offset()}.
 
@@ -303,8 +306,13 @@ handle_call(unsubscribe_all_partitions, _From,
     fun(#consumer{ consumer_pid  = ConsumerPid
                  , consumer_mref = ConsumerMref
                  }) ->
-      _ = brod:unsubscribe(ConsumerPid, self()),
-      _ = erlang:demonitor(ConsumerMref, [flush])
+        case is_pid(ConsumerPid) of
+          true ->
+            _ = brod:unsubscribe(ConsumerPid, self()),
+            _ = erlang:demonitor(ConsumerMref, [flush]);
+          false ->
+            ok
+        end
     end, Consumers),
   {reply, ok, State#state{ consumers        = []
                          , is_blocked       = true
@@ -395,9 +403,8 @@ handle_ack(AckRef, #state{ generationId = GenerationId
   case lists:keyfind({Topic, Partition},
                      #consumer.topic_partition, Consumers) of
     #consumer{consumer_pid = ConsumerPid} = Consumer ->
-      ok = brod:consume_ack(ConsumerPid, Offset),
-      ok = brod_group_coordinator:ack(Coordinator, GenerationId,
-                                      Topic, Partition, Offset),
+      ok = consume_ack(ConsumerPid, Offset),
+      ok = commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
       NewConsumer = Consumer#consumer{acked_offset = Offset},
       NewConsumers = lists:keyreplace({Topic, Partition},
                                       #consumer.topic_partition,
@@ -407,6 +414,17 @@ handle_ack(AckRef, #state{ generationId = GenerationId
       %% stale ack, ignore.
       State
   end.
+
+%% @private Tell consumer process to fetch more (if pre-fetch count allows).
+consume_ack(Pid, Offset) when is_pid(Pid) ->
+  ok = brod:consume_ack(Pid, Offset);
+consume_ack(_Down, _Offset) ->
+  %% consumer is down, should be restarted by its supervisor
+  ok.
+
+%% @private Send an async message to group coordinator for offset commit.
+commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
+  ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
 send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 

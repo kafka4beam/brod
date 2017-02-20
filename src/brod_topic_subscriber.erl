@@ -314,7 +314,7 @@ handle_ack(AckRef, #state{consumers = Consumers} = State) ->
   {Partition, Offset} = AckRef,
   case lists:keyfind(Partition, #consumer.partition, Consumers) of
     #consumer{consumer_pid = ConsumerPid} = Consumer ->
-      ok = brod:consume_ack(ConsumerPid, Offset),
+      ok = consume_ack(ConsumerPid, Offset),
       NewConsumer = Consumer#consumer{acked_offset = Offset},
       NewConsumers = lists:keyreplace(Partition,
                                       #consumer.partition,
@@ -323,6 +323,13 @@ handle_ack(AckRef, #state{consumers = Consumers} = State) ->
     false ->
       State
   end.
+
+%% @private Tell consumer process to fetch more (if pre-fetch count allows).
+consume_ack(Pid, Offset) when is_pid(Pid) ->
+  ok = brod:consume_ack(Pid, Offset);
+consume_ack(_Down, _Offset) ->
+  %% consumer is down, should be restarted by its supervisor
+  ok.
 
 send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 
