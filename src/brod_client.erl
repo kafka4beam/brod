@@ -77,14 +77,6 @@
 
 -define(UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS, 120).
 
--define(TRY_CLIENT_ETS_LOOKUP(Expr),
-        try
-          Expr
-        catch
-          error : badarg ->
-            {error, client_down}
-        end).
-
 -type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
                               | ?CONSUMER_KEY(topic(), partition()).
 
@@ -455,20 +447,22 @@ get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
 -spec lookup_partition_worker(client(), ets:tab(), partition_worker_key()) ->
         {ok, pid()} | { error, get_worker_error()}.
 lookup_partition_worker(Client, Ets, Key) ->
-  ?TRY_CLIENT_ETS_LOOKUP(
-    case ets:lookup(Ets, Key) of
-      [] ->
-        %% not yet registered, 2 possible reasons:
-        %% 1. caller is too fast, producers/consumers are starting up
-        %%    make a synced call all the way down the supervision tree
-        %%    to the partition producer sup should resolve the race
-        %% 2. bad argument, no such worker started, supervisors should know
-        find_partition_worker(Client, Key);
-      [?PRODUCER(_Topic, _Partition, Pid)] ->
-        {ok, Pid};
-      [?CONSUMER(_Topic, _Partition, Pid)] ->
-        {ok, Pid}
-    end).
+  try ets:lookup(Ets, Key) of
+    [] ->
+      %% not yet registered, 2 possible reasons:
+      %% 1. caller is too fast, producers/consumers are starting up
+      %%    make a synced call all the way down the supervision tree
+      %%    to the partition producer sup should resolve the race
+      %% 2. bad argument, no such worker started, supervisors should know
+      find_partition_worker(Client, Key);
+    [?PRODUCER(_Topic, _Partition, Pid)] ->
+      {ok, Pid};
+    [?CONSUMER(_Topic, _Partition, Pid)] ->
+      {ok, Pid}
+  catch
+    error : badarg ->
+      {error, client_down}
+  end.
 
 -spec find_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
@@ -743,19 +737,21 @@ get_partitions_count(Client, Ets, Topic) ->
         {ok, pos_integer()} | {error, any()} | false.
 lookup_partitions_count_cache(_Ets, ?undef) -> false;
 lookup_partitions_count_cache(Ets, Topic) ->
-  ?TRY_CLIENT_ETS_LOOKUP(
-    case ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
-      [{_, Count, _Ts}] when is_integer(Count) ->
-        {ok, Count};
-      [{_, {error, Reason}, Ts}] ->
-        case timer:now_diff(os:timestamp(), Ts) =<
-              ?UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS * 1000000 of
-          true  -> {error, Reason};
-          false -> false
-        end;
-      [] ->
-        false
-    end).
+  try ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
+    [{_, Count, _Ts}] when is_integer(Count) ->
+      {ok, Count};
+    [{_, {error, Reason}, Ts}] ->
+      case timer:now_diff(os:timestamp(), Ts) =<
+            ?UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS * 1000000 of
+        true  -> {error, Reason};
+        false -> false
+      end;
+    [] ->
+      false
+  catch
+    error : badarg ->
+      {error, client_down}
+  end.
 
 -spec do_get_partitions_count(kpro_TopicMetadata()) ->
         {ok, pos_integer()} | {error, any()}.
