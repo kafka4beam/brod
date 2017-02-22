@@ -303,7 +303,7 @@ handle_msg({From, stop}, #state{mod = Mod, sock = Sock}, _Debug) ->
   Mod:close(Sock),
   _ = reply(From, ok),
   ok;
-handle_msg(Msg, State, Debug) ->
+handle_msg(Msg, #state{} = State, Debug) ->
   error_logger:warning_msg("[~p] ~p got unrecognized message: ~p",
                           [?MODULE, self(), Msg]),
   ?MODULE:loop(State, Debug).
