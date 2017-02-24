@@ -48,7 +48,7 @@
         ]).
 
 -define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
--define(DEFAULT_REQUEST_TIMEOUT, timer:seconds(120)).
+-define(DEFAULT_REQUEST_TIMEOUT, timer:minutes(4)).
 
 %%%_* Includes =================================================================
 -include("brod_int.hrl").
@@ -387,7 +387,10 @@ assert_max_req_age(Requests, Timeout) ->
 %% @end
 -spec send_assert_max_req_age(pid(), timeout()) -> ok.
 send_assert_max_req_age(Pid, Timeout) when Timeout >= 1000 ->
-  _ = erlang:send_after(Timeout div 2, Pid, assert_max_req_age),
+  %% Check every 1 minute
+  %% or every half of the timeout value if it's less than 2 minute
+  SendAfter = erlang:min(Timeout div 2, timer:minutes(1)),
+  _ = erlang:send_after(SendAfter, Pid, assert_max_req_age),
   ok.
 
 %%%_* Emacs ====================================================================

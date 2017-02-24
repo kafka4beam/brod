@@ -392,7 +392,7 @@ handle_add_offset(#pending_acks{ offsets_queue = Queue
     _ ->
       handle_add_offset(PendingAcks, Offsets)
   end;
-handle_add_offset(PendingAcks, []) ->
+handle_add_offset(#pending_acks{} = PendingAcks, []) ->
   PendingAcks.
 
 maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
