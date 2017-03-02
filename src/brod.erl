@@ -179,6 +179,9 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       true | false | [{certfile, ...},{keyfile, ...},{cacertfile, ...}]
 %%       When true, brod will try to upgrade tcp connection to ssl using default
 %%       ssl options. List of ssl options implies ssl=true.
+%%     sasl (optional, default=undefined)
+%%       Credentials for SASL/Plain authentication.
+%%       {plain, "username", "password"}
 %%     connect_timeout (optional, default=5000)
 %%       Timeout when trying to connect to one endpoint.
 %%     request_timeout (optional, default=120000, constraint: >= 1000)

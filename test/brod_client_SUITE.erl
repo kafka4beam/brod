@@ -41,6 +41,7 @@
         , t_auto_start_producers/1
         , t_auto_start_producer_for_unknown_topic/1
         , t_ssl/1
+        , t_sasl_ssl/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -50,6 +51,7 @@
 -define(HOST, "localhost").
 -define(HOSTS, [{?HOST, 9092}]).
 -define(HOSTS_SSL, [{?HOST, 9192}]).
+-define(HOSTS_SASL_SSL, [{?HOST, 9292}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
 -define(WAIT(PATTERN, RESULT, TIMEOUT),
@@ -255,17 +257,34 @@ t_ssl({'end', Config}) ->
   brod:stop_client(t_ssl),
   Config;
 t_ssl(Config) when is_list(Config) ->
-  Client = t_ssl,
+  ClientConfig = [ {ssl, ssl_options()}
+                 , {get_metadata_timout_seconds, 10}],
+  produce_and_consume_message(?HOSTS_SSL, t_ssl, ClientConfig).
+
+t_sasl_ssl({init, Config}) ->
+  Config;
+t_sasl_ssl({'end', Config}) ->
+  brod:stop_client(t_sasl_ssl),
+  Config;
+t_sasl_ssl(Config) when is_list(Config) ->
+  ClientConfig = [ {ssl, ssl_options()}
+                 , {get_metadata_timout_seconds, 10}
+                 , {sasl, {plain, "alice", "alice-secret"}}],
+  produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_ssl, ClientConfig).
+
+%%%_* Help functions ===========================================================
+
+ssl_options() ->
   PrivDir = code:priv_dir(brod),
   Fname = fun(Name) -> filename:join([PrivDir, ssl, Name]) end,
-  SslOptions = [ {cacertfile, Fname("ca.crt")}
-               , {keyfile,    Fname("client.key")}
-               , {certfile,   Fname("client.crt")}
-               ],
-  ClientConfig = [ {ssl, SslOptions}
-                 , {get_metadata_timout_seconds, 10}],
+  [ {cacertfile, Fname("ca.crt")}
+  , {keyfile,    Fname("client.key")}
+  , {certfile,   Fname("client.crt")}
+  ].
+
+produce_and_consume_message(Host, Client, ClientConfig) ->
   K = term_to_binary(make_ref()),
-  ok = brod:start_client(?HOSTS_SSL, Client, ClientConfig),
+  ok = brod:start_client(Host, Client, ClientConfig),
   ok = brod:start_consumer(Client, ?TOPIC, []),
   {ok, ConsumerPid} =
     brod:subscribe(Client, self(), ?TOPIC, 0, [{begin_offset, latest}]),
@@ -277,8 +296,6 @@ t_ssl(Config) when is_list(Config) ->
                            , messages = [#kafka_message{key = K}]
                            }}, ok, 5000),
   ok.
-
-%%%_* Help functions ===========================================================
 
 retry_writer_loop(Parent, ProduceFun, LastResult) ->
   Result = ProduceFun(),
