@@ -11,8 +11,10 @@ services:
     ports:
       - "9092:9092"
       - "9192:9192"
+      - "9292:9292"
     environment:
       BROKER_ID: 0
       PLAINTEXT_PORT: 9092
       SSL_PORT: 9192
+      SASL_SSL_PORT: 9292
 

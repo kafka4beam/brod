@@ -175,6 +175,8 @@ init(Parent, Host, Port, ClientId, Options) ->
       SslOpts = proplists:get_value(ssl, Options, false),
       Mod = get_tcp_mod(SslOpts),
       {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
+      ok = maybe_sasl_auth(NewSock, Mod, ClientId, Timeout,
+                           proplists:get_value(sasl, Options)),
       State = State0#state{mod = Mod, sock = NewSock},
       proc_lib:init_ack(Parent, {ok, self()}),
       ReqTimeout = get_request_timeout(Options),
@@ -202,6 +204,40 @@ maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts = [_|_], Timeout) ->
   ssl:connect(Sock, SslOpts, Timeout);
 maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
   {ok, Sock}.
+
+maybe_sasl_auth(_Sock, _Mod, _ClientId, _Timeout, _SaslOpts = undefined) -> ok;
+maybe_sasl_auth(Sock, Mod, ClientId, Timeout,
+                _SaslOpts = {_Method = plain, SaslUser, SaslPassword}) ->
+  ok = setopts(Sock, Mod, [{active, false}]),
+  HandshakeRequest = #kpro_SaslHandshakeRequest{mechanism="PLAIN"},
+  HandshakeRequestBin = kpro:encode_request(ClientId, 0, HandshakeRequest),
+  ok = Mod:send(Sock, HandshakeRequestBin),
+  {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
+  {ok, HandshakeResponseBin} = Mod:recv(Sock, Len, Timeout),
+  {[ #kpro_Response{ responseMessage = #kpro_SaslHandshakeResponse{
+                                          errorCode = ErrorCode }}],
+    <<>>} = kpro:decode_response(<<Len:32, HandshakeResponseBin/binary>>),
+  case ErrorCode of
+    no_error ->
+      ok = Mod:send(Sock, sasl_plain_token(SaslUser, SaslPassword)),
+      case Mod:recv(Sock, 4, Timeout) of
+        {ok, <<0:32>>} ->
+          ok = setopts(Sock, Mod, [{active, once}]);
+        {error, closed} ->
+          exit({sasl_auth_error, bad_credentials});
+        Unexpected ->
+          exit({sasl_auth_error, Unexpected})
+      end;
+    _ -> exit({sasl_auth_error, ErrorCode})
+  end.
+
+sasl_plain_token(User, Password) ->
+  Message = list_to_binary([0, unicode:characters_to_binary(User),
+                            0, unicode:characters_to_binary(Password)]),
+  <<(byte_size(Message)):32, Message/binary>>.
+
+setopts(Sock, _Mod = gen_tcp, Opts) -> inet:setopts(Sock, Opts);
+setopts(Sock, _Mod = ssl, Opts)     ->  ssl:setopts(Sock, Opts).
 
 system_call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
