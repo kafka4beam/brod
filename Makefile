@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.2.15
+PROJECT_VERSION = 2.2.16
 
 DEPS = supervisor3 kafka_protocol
 

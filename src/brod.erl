@@ -175,8 +175,10 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     default_producer_config (optional, default=[])
 %%       Producer configuration to use when auto_start_producers is true.
 %%       @see brod_client:start_producer/3. for more details.
-%%     ssl (optional, default=[])
-%%       [{certfile, ...},{keyfiel, ...},{cacertfile, ...}]
+%%     ssl (optional, default=false)
+%%       true | false | [{certfile, ...},{keyfile, ...},{cacertfile, ...}]
+%%       When true, brod will try to upgrade tcp connection to ssl using default
+%%       ssl options. List of ssl options implies ssl=true.
 %%     connect_timeout (optional, default=5000)
 %%       Timeout when trying to connect to one endpoint.
 %%     request_timeout (optional, default=120000, constraint: >= 1000)

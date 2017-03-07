@@ -262,7 +262,8 @@ t_ssl(Config) when is_list(Config) ->
                , {keyfile,    Fname("client.key")}
                , {certfile,   Fname("client.crt")}
                ],
-  ClientConfig = [{ssl, SslOptions}, {get_metadata_timout_seconds, 10}],
+  ClientConfig = [ {ssl, SslOptions}
+                 , {get_metadata_timout_seconds, 10}],
   K = term_to_binary(make_ref()),
   ok = brod:start_client(?HOSTS_SSL, Client, ClientConfig),
   ok = brod:start_consumer(Client, ?TOPIC, []),

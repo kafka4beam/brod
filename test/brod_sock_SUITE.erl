@@ -77,7 +77,7 @@ t_request_timeout(Config) when is_list(Config) ->
       fun() ->
           {ok, SockPid} =
             brod_sock:start_link(self(), "localhost", 9092, client_id,
-                                [{ssl, ignore}, {request_timeout, 1000}]),
+                                [{ssl, true}, {request_timeout, 1000}]),
           TesterPid ! {sock, SockPid},
           receive  Msg -> exit({<<"unexpected message">>, Msg})
           after 10000  -> exit(<<"test timeout">>)
