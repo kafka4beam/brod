@@ -172,17 +172,10 @@ init(Parent, Host, Port, ClientId, Options) ->
       {ok, [{recbuf, RecBufSize}, {sndbuf, SndBufSize}]} =
         inet:getopts(Sock, [recbuf, sndbuf]),
       ok = inet:setopts(Sock, [{buffer, max(RecBufSize, SndBufSize)}]),
-      State = case proplists:get_value(ssl, Options, []) of
-                [] ->
-                  State0#state{mod = gen_tcp, sock = Sock};
-                SslOpts ->
-                  case ssl:connect(Sock, SslOpts, Timeout) of
-                    {ok, SslSock} ->
-                      State0#state{mod = ssl, sock = SslSock};
-                    {error, Reason} ->
-                      exit({ssl_negotiation_failure, Reason})
-                  end
-              end,
+      SslOpts = proplists:get_value(ssl, Options, false),
+      Mod = get_tcp_mod(SslOpts),
+      {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
+      State = State0#state{mod = Mod, sock = NewSock},
       proc_lib:init_ack(Parent, {ok, self()}),
       ReqTimeout = get_request_timeout(Options),
       ok = send_assert_max_req_age(self(), ReqTimeout),
@@ -198,6 +191,17 @@ init(Parent, Host, Port, ClientId, Options) ->
       %% otherwise exit reason will be 'normal'
       exit({connection_failure, Reason})
   end.
+
+get_tcp_mod(_SslOpts = true)  -> ssl;
+get_tcp_mod(_SslOpts = [_|_]) -> ssl;
+get_tcp_mod(_)                -> gen_tcp.
+
+maybe_upgrade_to_ssl(Sock, _Mod = ssl, _SslOpts = true, Timeout) ->
+  ssl:connect(Sock, [], Timeout);
+maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts = [_|_], Timeout) ->
+  ssl:connect(Sock, SslOpts, Timeout);
+maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
+  {ok, Sock}.
 
 system_call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
@@ -280,12 +284,13 @@ handle_msg({From, {send, Request}},
                  , requests  = Requests
                  } = State, Debug) ->
   {Caller, _Ref} = From,
-  {CorrId, NewRequests} = case Request of
+  {CorrId, NewRequests} =
+    case Request of
       #kpro_ProduceRequest{requiredAcks = 0} ->
         brod_kafka_requests:increment_corr_id(Requests);
       _ ->
         brod_kafka_requests:add(Requests, Caller)
-  end,
+    end,
   RequestBin = kpro:encode_request(ClientId, CorrId, Request),
   Res = case Mod of
           gen_tcp -> gen_tcp:send(Sock, RequestBin);
