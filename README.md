@@ -119,13 +119,61 @@ ClientConfig = [{reconnect_cool_down_seconds, 10}],
 ok = brod:start_client([{"localhost", 9092}], brod_client_1, ClientConfig).
 ```
 
-## Automatic handling of connection errors
+## Handling of connection errors
 
-You may use a supervisor to start, e.g., a group subscriber by calling `brod:start_link_group_subscriber` in the module's `start_link` method. In the same method, you should make sure the respective brod client instance is running already using `brod:start_link_client`. The linking will cause your supervisor to go down in case the brod client fails (so you should put the starting supervisor under supervision itself), but it will allow for a clean restart of both client and subscriber.
+Usually you would have a supervisor that starts your worker module. In the worker's `start_link` method, you should do two things:
 
-One thing to note is that the brod client doesn't die in case the connection goes down. ~~By default, it is configured to reconnect to the brokers automatically~~ AUTOMATIC RECONNECT DOESN'T WORK THAT WAY.... WHY?
+1. Make sure the Brod client you're going to use is running by calling `brod:start_client`. That will start the client under Brod's supervisor, if a client with the given name does not already exist. Afterwards, Brod will automatically recover from connection issues.
+1. Start, e.g., a group subscriber by calling `brod:start_link_group_subscriber`, and return the pid for your supervisor to monitor.
 
-Another thing worth mentioning is that the subscriber will fail very quickly in case the brod client can't connect, which causes the supervisor to give up and potentially bring down the VM. Consequently one has to implement an exponential back-off strategy, or at least a delay, for the call to `brod:start_link_group_subscriber`. IS THERE A BETTER WAY?
+(Note that using `brod:start_link_client` to link the client to your supervisor is deprecated. Using it, a connection loss won't trigger a reconnect, even though the process linked to stays alive.)
+
+Also, the subscriber will fail very quickly in case the brod client can't connect, which causes the supervisor to give up and potentially bring down the VM. In order to mitigate this, an exponential back-off strategy is needed, or at least a delay, between calls to `brod:start_link_group_subscriber`. In Elixir this may look like this:
+
+```Elixir
+defmodule MyGroupSubscriber do
+  @doc """
+  Makes sure the Brod client is running and starts the group subscriber.
+  """
+  def start_link do
+    brod_client_id = :my_brod_client
+    :ok = :brod.start_client([localhost: 9092], brod_client_id)
+    safely_start_group_subscriber(brod_client_id, "my-consumer-group", ["some-topic"])
+  end
+
+  # Starts the group subscriber, using exponential back-off if the brod client is down.
+  defp safely_start_group_subscriber(
+      brod_client_id, consumer_group_id, topics,
+      restart_delay_ms \\ 100, max_restart_delay_ms \\ 10_000
+  ) do
+    result = start_group_subscriber(brod_client_id, consumer_group_id, topics)
+    case result do
+      {:ok, _} ->
+        result
+      {:error, err} ->
+        Logger.warn "Starting group subscriber failed (retrying in #{restart_delay_ms} ms): #{inspect err}"
+        :timer.sleep restart_delay_ms
+        next_delay_ms = (min(restart_delay_ms * 2, max_restart_delay_ms) * (:rand.uniform() + 0.5)) |> round
+        safely_start_group_subscriber(brod_client_id, consumer_group_id, topics, next_delay_ms)
+    end
+  end
+
+  # Starts the group subscriber. Returns immediately if the brod client is down.
+  defp start_group_subscriber(brod_client_id, consumer_group_id, topics) do
+    :brod.start_link_group_subscriber(
+      brod_client_id,
+      consumer_group_id,
+      topics,
+      _group_config = [rejoin_delay_seconds: 2],
+      _consumer_config = [begin_offset: :earliest],
+      _callback_module = __MODULE__,
+      _callback_init_args = {brod_client_id, topics}
+    )
+  end
+  
+  ...
+end
+```
 
 # Producers
 
