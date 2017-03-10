@@ -119,6 +119,14 @@ ClientConfig = [{reconnect_cool_down_seconds, 10}],
 ok = brod:start_client([{"localhost", 9092}], brod_client_1, ClientConfig).
 ```
 
+## Automatic handling of connection errors
+
+You may use a supervisor to start, e.g., a group subscriber by calling `brod:start_link_group_subscriber` in the module's `start_link` method. In the same method, you should make sure the respective brod client instance is running already using `brod:start_link_client`. The linking will cause your supervisor to go down in case the brod client fails (so you should put the starting supervisor under supervision itself), but it will allow for a clean restart of both client and subscriber.
+
+One thing to note is that the brod client doesn't die in case the connection goes down. ~~By default, it is configured to reconnect to the brokers automatically~~ AUTOMATIC RECONNECT DOESN'T WORK THAT WAY.... WHY?
+
+Another thing worth mentioning is that the subscriber will fail very quickly in case the brod client can't connect, which causes the supervisor to give up and potentially bring down the VM. Consequently one has to implement an exponential back-off strategy, or at least a delay, for the call to `brod:start_link_group_subscriber`. IS THERE A BETTER WAY?
+
 # Producers
 
 ## Auto start producer with default producer config
