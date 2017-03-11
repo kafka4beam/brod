@@ -319,7 +319,16 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                               , highWatermarkOffset = HighWmOffset
                               , message_L           = Messages0
                               } = PartitionResponse,
-  Messages = map_messages(State#state.begin_offset, Messages0),
+  %% Since kafka_protocol 0.9, message sets are no longer decoded in brod_sock
+  %% The second case clause here is only for backward compatibility when
+  %% performing hot code upgrade. i.e. There might be already decoded message
+  %% sets delivered to self()'s mailbox before new beam is loaded.
+  %% TODO: remove the second clause in the next major release
+  Messages1 = case is_binary(Messages0) of
+                true  -> kpro:decode_message_set(Messages0);
+                false -> Messages0
+              end,
+  Messages = map_messages(State#state.begin_offset, Messages1),
   case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       Error = #kafka_fetch_error{ topic      = Topic
