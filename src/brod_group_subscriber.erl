@@ -123,6 +123,7 @@
 
 -record(state,
         { client             :: client()
+        , client_mref        :: reference()
         , groupId            :: group_id()
         , memberId           :: member_id()
         , generationId       :: integer()
@@ -235,6 +236,7 @@ init({Client, GroupId, Topics, GroupConfig,
   {ok, Pid} = brod_group_coordinator:start_link(Client, GroupId, Topics,
                                                 GroupConfig, ?MODULE, self()),
   State = #state{ client          = Client
+                , client_mref     = erlang:monitor(process, Client)
                 , groupId         = GroupId
                 , coordinator     = Pid
                 , consumer_config = ConsumerConfig
@@ -250,6 +252,12 @@ handle_info({_ConsumerPid,
                                }}, State) ->
   NewState = handle_messages(Topic, Partition, Messages, State),
   {noreply, NewState};
+handle_info({'DOWN', Mref, process, _Pid, _Reason},
+            #state{client_mref = Mref} = State) ->
+  %% restart, my supervisor should restart me
+  %% brod_client DOWN reason is discarded as it should have logged
+  %% in its crash log
+  {stop, client_down, State};
 handle_info({'DOWN', _Mref, process, Pid, Reason},
             #state{consumers = Consumers} = State) ->
   case lists:keyfind(Pid, #consumer.consumer_pid, Consumers) of

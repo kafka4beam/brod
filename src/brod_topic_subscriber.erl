@@ -86,6 +86,7 @@
 
 -record(state,
         { client         :: client()
+        , client_mref    :: reference()
         , topic          :: topic()
         , consumers = [] :: [#consumer{}]
         , cb_fun         :: cb_fun()
@@ -156,10 +157,11 @@ init({Client, Topic, Partitions, ConsumerConfig,
       CommittedOffsets, CbFun, CbState}) ->
   self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
-    #state{ client    = Client
-          , topic     = Topic
-          , cb_fun    = CbFun
-          , cb_state  = CbState
+    #state{ client      = Client
+          , client_mref = erlang:monitor(process, Client)
+          , topic       = Topic
+          , cb_fun      = CbFun
+          , cb_state    = CbState
           },
   {ok, State}.
 
@@ -208,6 +210,12 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
   {ok, #state{} = NewState} = subscribe_partitions(State),
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
   {noreply, NewState};
+handle_info({'DOWN', Mref, process, _Pid, _Reason},
+            #state{client_mref = Mref} = State) ->
+  %% restart, my supervisor should restart me
+  %% brod_client DOWN reason is discarded as it should have logged
+  %% in its crash log
+  {stop, client_down, State};
 handle_info({'DOWN', _Mref, process, Pid, Reason},
             #state{consumers = Consumers} = State) ->
   case lists:keyfind(Pid, #consumer.consumer_pid, Consumers) of
