@@ -107,8 +107,9 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     Minimal bytes to fetch in a batch of messages
 %%   max_bytes (optional default = 1MB):
 %%     Maximum bytes to fetch in a batch of messages
-%%     NOTE: this value might be doubled in each retry when it is not enough
-%%           to fetch even one single message.
+%%     NOTE: this value might be expanded to retry when it is not enough
+%%           to fetch even one single message, then slowly shrinked back
+%%           to this given value.
 %%  max_wait_time (optional, default = 10000 ms):
 %%     Max number of seconds allowd for the broker to collect min_bytes of
 %%     messages in fetch response
@@ -346,18 +347,14 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
       handle_message_set(MsgSet, State)
   end.
 
+handle_message_set(#kafka_message_set{messages = {?incomplete_message, Size}},
+                   #state{ max_bytes = MaxBytes} = State0) ->
+  %% max_bytes is too small to fetch ONE complete message
+  State1 = State0#state{max_bytes = Size},
+  State = maybe_send_fetch_request(State1),
+  {noreply, State};
 handle_message_set(#kafka_message_set{messages = []}, State0) ->
   State = maybe_delay_fetch_request(State0),
-  {noreply, State};
-handle_message_set(#kafka_message_set{messages = [?incomplete_message]},
-                   #state{ max_bytes = MaxBytes} = State0) ->
-  %% max_bytes is too small to fetch ONE complete message, double it.
-  NewMaxBytes = MaxBytes * 2,
-  NewMaxBytes >= (1 bsl 31) andalso
-      erlang:error({max_bytes_overflow,
-                   <<"perhaps message corruption in broker?">>}),
-  State1 = State0#state{max_bytes = NewMaxBytes},
-  State = maybe_send_fetch_request(State1),
   {noreply, State};
 handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                    #state{ subscriber    = Subscriber
@@ -420,8 +417,9 @@ maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
                              , avg_bytes      = AvgBytes
                              } = State,
                        [#kafka_message{key = Key, value = Value} | Rest]) ->
-  %% kafka adds 26 bytes of overhead (metadata) for each message
-  MsgBytes = bytes(Key) + bytes(Value) + 30,
+  %% kafka adds 34 bytes of overhead (metadata) for each message
+  %% use 30 to give some room for future kafka protocol versions
+  MsgBytes = bytes(Key) + bytes(Value) + 40,
   %% See https://en.wikipedia.org/wiki/Moving_average
   WindowSize = erlang:max(PrefetchCount, ?DEFAULT_AVG_WINDOW),
   NewAvgBytes = ((WindowSize - 1) * AvgBytes + MsgBytes) / WindowSize,
@@ -441,13 +439,21 @@ err_op(_)                              -> restart.
 %% Messages having offset earlier than the requested offset are discarded.
 %% this might happen for compressed message sets
 %% @end
--spec map_messages(offset(), [?incomplete_message | kpro_Message()]) ->
-        [?incomplete_message | #kafka_message{}].
+-spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
+                             | kpro_Message()
+                             ]) ->
+       {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
 map_messages(_BeginOffset, [?incomplete_message]) ->
-  [?incomplete_message];
+  %% This clause is kept for backward combatibility
+  %% When performing hot code upgrade, the old messages might
+  %% have been delivered to self()'s mailbox
+  %% TODO: remove thie clause in the next major release
+  {?incomplete_message, 12};
+map_messages(_BeginOffset, [{?incomplete_message, Size}]) ->
+  {?incomplete_message, Size};
 map_messages(BeginOffset, Messages) ->
   [brod_utils:kafka_message(M) || M <- Messages,
-   M =/= ?incomplete_message andalso
+   is_record(M, kpro_Message) andalso
    M#kpro_Message.offset >= BeginOffset].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
@@ -606,6 +612,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     , sleep_timeout       = F(sleep_timeout, State#state.sleep_timeout)
     , prefetch_count      = F(prefetch_count, State#state.prefetch_count)
     , offset_reset_policy = OffsetResetPolicy
+    , max_bytes           = F(max_bytes, State#state.max_bytes)
     },
   NewState =
     case NewBeginOffset =/= OldBeginOffset of
