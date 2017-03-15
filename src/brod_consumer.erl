@@ -350,7 +350,7 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
 handle_message_set(#kafka_message_set{messages = {?incomplete_message, Size}},
                    #state{ max_bytes = MaxBytes} = State0) ->
   %% max_bytes is too small to fetch ONE complete message
-  true = Size < MaxBytes, %% assert
+  true = Size > MaxBytes, %% assert
   State1 = State0#state{max_bytes = Size},
   State = maybe_send_fetch_request(State1),
   {noreply, State};
