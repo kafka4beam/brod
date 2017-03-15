@@ -23,7 +23,6 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * lz4 compression & decompression
 * new 0.10 on-wire message format
 * new 0.10.1.0 create/delete topic api
-* SASL authentication
 
 # Building and testing
 

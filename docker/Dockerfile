@@ -17,6 +17,7 @@ COPY docker-entrypoint.sh /docker-entrypoint.sh
 COPY server.properties /etc/kafka/server.properties
 COPY server.jks /etc/kafka/server.jks
 COPY truststore.jks /etc/kafka/truststore.jks
+COPY jaas.conf /etc/kafka/jaas.conf
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 

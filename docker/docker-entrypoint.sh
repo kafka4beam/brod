@@ -28,8 +28,10 @@ fi
 ipwithnetmask="$(ip -f inet addr show dev eth0 | awk '/inet / { print $2 }')"
 ipaddress="${ipwithnetmask%/*}"
 
-sed -r -i "s/^(advertised.listeners)=(.*)/\1=PLAINTEXT:\/\/$ipaddress:$PLAINTEXT_PORT,SSL:\/\/$ipaddress:$SSL_PORT/g" $prop_file
-sed -r -i "s/^(listeners)=(.*)/\1=PLAINTEXT:\/\/:$PLAINTEXT_PORT,SSL:\/\/:$SSL_PORT/g" $prop_file
+sed -r -i "s/^(advertised.listeners)=(.*)/\1=PLAINTEXT:\/\/$ipaddress:$PLAINTEXT_PORT,SSL:\/\/$ipaddress:$SSL_PORT,SASL_SSL:\/\/$ipaddress:$SASL_SSL_PORT/g" $prop_file
+sed -r -i "s/^(listeners)=(.*)/\1=PLAINTEXT:\/\/:$PLAINTEXT_PORT,SSL:\/\/:$SSL_PORT,SASL_SSL:\/\/:$SASL_SSL_PORT/g" $prop_file
+echo "sasl.enabled.mechanisms=PLAIN" >> $prop_file
 
-/opt/kafka/bin/kafka-server-start.sh $prop_file
+KAFKA_HEAP_OPTS="-Xmx1G -Xms1G -Djava.security.auth.login.config=/etc/kafka/jaas.conf" \
+  /opt/kafka/bin/kafka-server-start.sh $prop_file
 
