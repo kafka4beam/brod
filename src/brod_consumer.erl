@@ -419,7 +419,7 @@ maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
                              } = State,
                        [#kafka_message{key = Key, value = Value} | Rest]) ->
   %% kafka adds 34 bytes of overhead (metadata) for each message
-  %% use 30 to give some room for future kafka protocol versions
+  %% use 40 to give some room for future kafka protocol versions
   MsgBytes = bytes(Key) + bytes(Value) + 40,
   %% See https://en.wikipedia.org/wiki/Moving_average
   WindowSize = erlang:max(PrefetchCount, ?DEFAULT_AVG_WINDOW),
