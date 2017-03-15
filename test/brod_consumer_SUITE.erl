@@ -456,8 +456,7 @@ make_bytes(Bytes) ->
 
 %% Wait in a loop for the max_bytes to be tried in brod_consumer
 %% The trigger of sending fetch request is non-deterministic
-%% but the retry sequence is known to be:
-%% N, N ... N*2 ... N*4
+%% but the retry sequence should be at most 3 elements and monotonic
 wait_for_max_bytes_sequence([], _Cnt) ->
   %% all expected max_bytes have been tried
   ok;
