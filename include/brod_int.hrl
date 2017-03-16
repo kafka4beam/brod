@@ -17,39 +17,14 @@
 -ifndef(__BROD_INT_HRL).
 -define(__BROD_INT_HRL, true).
 
--include("brod.hrl").
--include_lib("kafka_protocol/include/kpro.hrl").
+-define(undef, undefined).
 
--type consumer_option() :: begin_offset
-                         | min_bytes
-                         | max_bytes
-                         | max_wait_time
-                         | sleep_timeout
-                         | prefetch_count.
-
-%% common
--type hostname()         :: string().
--type portnum()          :: pos_integer().
--type endpoint()         :: {hostname(), portnum()}.
--type leader_id()        :: non_neg_integer().
--type client_config()    :: brod_client_config().
--type producer_config()  :: brod_producer_config().
--type consumer_config()  :: brod_consumer_config().
--type consumer_options() :: [{consumer_option(), integer()}].
--type client()           :: brod_client_id() | pid().
--type required_acks()    :: -1..1.
--type key()              :: kafka_key().
--type value()            :: kafka_value().
--type kv_list()          :: kafka_kv_list().
--type offset()           :: kafka_offset().
--type partition()        :: kafka_partition().
--type topic()            :: kafka_topic().
--type corr_id()          :: kpro:corr_id().
-
-%% consumer groups
--type group_id()             :: kafka_group_id().
--type member_id()            :: kafka_group_member_id().
--type group_config()         :: brod_group_config().
+-define(OFFSET_EARLIEST, earliest).
+-define(OFFSET_LATEST, latest).
+-define(IS_SPECIAL_OFFSET(O), (O =:= ?OFFSET_EARLIEST orelse
+                               O =:= ?OFFSET_LATEST orelse
+                               O =:= -2 orelse
+                               O =:= -1)).
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
@@ -57,21 +32,7 @@
                 , node_id :: integer()
                 }).
 
--define(undef, undefined).
-
--define(OFFSET_EARLIEST, earliest).
--define(OFFSET_LATEST, latest).
-
--define(IS_SPECIAL_OFFSET(O), (O =:= ?OFFSET_EARLIEST orelse
-                               O =:= ?OFFSET_LATEST orelse
-                               O =:= -2 orelse
-                               O =:= -1)).
-
--type offset_time() :: integer()
-                     | ?OFFSET_EARLIEST
-                     | ?OFFSET_LATEST.
-
--endif. % include brod_int.hrl
+-endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
