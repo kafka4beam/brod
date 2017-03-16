@@ -39,14 +39,13 @@
         , crc        :: integer()
         }).
 
--type kafka_message() :: kafka_message()
-                       | incomplete_message. %% brod internal only
+-type kafka_message() :: kafka_message().
 
 -record(kafka_message_set,
         { topic          :: kafka_topic()
         , partition      :: kafka_partition()
         , high_wm_offset :: integer() %% max offset of the partition
-        , messages       :: [kafka_message()]
+        , messages       :: kpro:incomplete_message() | [kafka_message()]
         }).
 
 -record(kafka_fetch_error,

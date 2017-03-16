@@ -1,11 +1,11 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.3.0
+PROJECT_VERSION = 2.3.1
 
 DEPS = supervisor3 kafka_protocol
 
 dep_supervisor3_commit = 1.1.5
-dep_kafka_protocol_commit = 0.9.0
+dep_kafka_protocol_commit = 0.9.1
 
 TEST_DEPS = meck proper
 

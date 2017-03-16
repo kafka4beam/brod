@@ -51,6 +51,20 @@
 
 -define(config(Name), proplists:get_value(Name, Config)).
 
+-define(WAIT(Pattern, Expr),
+        fun() ->
+          receive
+            Pattern ->
+              Expr;
+            _Msg ->
+              ct:pal("exp: ~s\ngot: ~p\n", [??Pattern, _Msg]),
+              erlang:error(unexpected_msg)
+          after
+            3000 ->
+              erlang:error({timeout, ??Pattern})
+          end
+        end()).
+
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -61,7 +75,7 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-init_per_testcase(Case, Config) ->
+init_per_testcase(Case, Config0) ->
   ct:pal("=== ~p begin ===", [Case]),
   Client = Case,
   Topic = ?TOPIC,
@@ -74,9 +88,22 @@ init_per_testcase(Case, Config) ->
   ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   ok = brod:start_consumer(Client, Topic, []),
+  Config =
+    try
+      ?MODULE:Case({init, Config0})
+    catch
+      error : function_clause ->
+        Config0
+    end,
   [{client, Client} | Config].
 
 end_per_testcase(Case, Config) ->
+  try
+    ?MODULE:Case({'end', Config})
+  catch
+    error : function_clause ->
+      ok
+  end,
   ct:pal("=== ~p end ===", [Case]),
   Client = ?config(client),
   try
@@ -101,22 +128,43 @@ all() -> [F || {F, _A} <- module_info(exports),
 %% @doc Consumer should be smart enough to try greater max_bytes
 %% when it's not great enough to fetch one single message
 %% @end
+t_consumer_max_bytes_too_small({init, Config}) ->
+  meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
+  Config;
+t_consumer_max_bytes_too_small({'end', _Config}) ->
+  meck:unload(kpro);
 t_consumer_max_bytes_too_small(Config) ->
   Client = ?config(client),
   Partition = 0,
+  brod:unsubscribe(Client, ?TOPIC, Partition),
   Key = make_unique_key(),
-  Value = make_bytes(2000),
-  Options = [{max_bytes, 1500}],
+  ValueBytes = 2000,
+  MaxBytes1 = 8, %% too small for even the header
+  MaxBytes2 = 12, %% too small but message size is fetched
+  %% use the message size
+  %% 34 is the magic number for kafka 0.10
+  MaxBytes3 = size(Key) + ValueBytes + 34,
+  Tester = self(),
+  F = fun(Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
+        Tester ! {max_bytes, MaxBytes},
+        meck:passthrough([Topic, Partition1, BeginOffset,
+                          MaxWait, MinBytes, MaxBytes])
+      end,
+  %% Expect the fetch_request construction function called twice
+  meck:expect(kpro, fetch_request, F),
+  Value = make_bytes(ValueBytes),
+  Options = [{max_bytes, MaxBytes1}],
   {ok, ConsumerPid} =
     brod:subscribe(Client, self(), ?TOPIC, Partition, Options),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
-  receive
-    {ConsumerPid, #kafka_message_set{messages = Messages}} ->
-      [#kafka_message{key = KeyReceived}] = Messages,
-      ?assertEqual(Key, KeyReceived);
-    Msg ->
-      ct:fail("unexpected message received:\n~p", [Msg])
-  end.
+  ok = wait_for_max_bytes_sequence([MaxBytes1, MaxBytes2, MaxBytes3],
+                                   _TriedCount = 0),
+  ?WAIT({ConsumerPid, #kafka_message_set{messages = Messages}},
+        begin
+          [#kafka_message{key = KeyReceived, value = ValueReceived}] = Messages,
+          ?assertEqual(Key, KeyReceived),
+          ?assertEqual(Value, ValueReceived)
+        end).
 
 %% @doc Consumer shoud auto recover from socket down, subscriber should not
 %% notice a thing except for a few seconds of break in data streaming
@@ -405,6 +453,29 @@ make_ts_str() ->
 
 make_bytes(Bytes) ->
   iolist_to_binary(lists:duplicate(Bytes, 0)).
+
+%% Wait in a loop for the max_bytes to be tried in brod_consumer
+%% The trigger of sending fetch request is non-deterministic
+%% but the retry sequence should be at most 3 elements and monotonic
+wait_for_max_bytes_sequence([], _Cnt) ->
+  %% all expected max_bytes have been tried
+  ok;
+wait_for_max_bytes_sequence(_, 10) ->
+  %% default sleep is 1 second, makes no sese to wait longer
+  erlang:error(timeout);
+wait_for_max_bytes_sequence([MaxBytes | Rest] = Waiting, Cnt) ->
+  receive
+    {max_bytes, MaxBytes} ->
+      wait_for_max_bytes_sequence(Rest, 0);
+    {max_bytes, Old} when Old < MaxBytes ->
+      %% still trying the old amx_bytes
+      wait_for_max_bytes_sequence(Waiting, Cnt + 1);
+    {max_bytes, Other} ->
+      ct:fail("unexpected ~p", [Other])
+  after
+    3000 ->
+      ct:fail("timeout", [])
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
