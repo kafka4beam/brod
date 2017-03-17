@@ -155,6 +155,8 @@ init({Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg}) ->
         CommittedOffsets, CbFun, CbState});
 init({Client, Topic, Partitions, ConsumerConfig,
       CommittedOffsets, CbFun, CbState}) ->
+  ok = brod_utils:assert_client(Client),
+  ok = brod_utils:assert_topic(Topic),
   self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
     #state{ client      = Client

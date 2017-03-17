@@ -343,7 +343,7 @@ handle_info({msg, _Pid, HbCorrId, #kpro_HeartbeatResponse{errorCode = EC}},
     false ->
       {noreply, State}
   end;
-handle_info(_Info, State) ->
+handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
 handle_call({commit_offsets, ExtraOffsets}, From, State) ->
@@ -359,10 +359,10 @@ handle_call({commit_offsets, ExtraOffsets}, From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast(_Cast, State) ->
+handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
-code_change(_OldVsn, State, _Extra) ->
+code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
 terminate(Reason, #state{ sock_pid = SockPid
