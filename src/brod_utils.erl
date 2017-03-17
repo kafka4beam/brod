@@ -23,7 +23,11 @@
 -module(brod_utils).
 
 %% Exports
--export([ bytes/1
+-export([ assert_client/1
+        , assert_group_id/1
+        , assert_topics/1
+        , assert_topic/1
+        , bytes/1
         , find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
@@ -147,7 +151,35 @@ kafka_message(#kpro_Message{ offset     = Offset
 kafka_message(?incomplete_message) ->
   ?incomplete_message.
 
+-spec assert_client(brod:client_id() | pid()) -> ok | no_return().
+assert_client(Client) ->
+  ok_when(is_atom(Client) orelse is_pid(Client),
+          {bad_client, Client}).
+
+-spec assert_group_id(brod:group_id()) -> ok | no_return().
+assert_group_id(GroupId) ->
+  ok_when(is_binary(GroupId) andalso size(GroupId) > 0,
+          {bad_group_id, GroupId}).
+
+-spec assert_topics([brod:topic()]) -> ok | no_return().
+assert_topics(Topics) ->
+  Pred = fun(Topic) -> ok =:= assert_topic(Topic) end,
+  ok_when(is_list(Topics) andalso Topics =/= [] andalso lists:all(Pred, Topics),
+          {bad_topics, Topics}).
+
+-spec assert_topic(brod:topic()) -> ok | no_return().
+assert_topic(Topic) ->
+  ok_when(is_binary(Topic) andalso size(Topic) > 0,
+          {bad_topic, Topic}).
+
 %%%_* Internal Functions =======================================================
+
+%% @private Raise an 'error' exception when first argument is not 'true'.
+%% The second argument is used as error reason.
+%% @end
+-spec ok_when(boolean(), any()) -> ok | no_return().
+ok_when(true, _) -> ok;
+ok_when(_, Reason) -> erlang:error(Reason).
 
 %% @private Make a 'OffsetRequest' request message for fetching offsets.
 %% In kafka protocol, -2 and -1 are semantic 'time' to request for

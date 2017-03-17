@@ -232,6 +232,9 @@ get_committed_offsets(Pid, TopicPartitions) ->
 
 init({Client, GroupId, Topics, GroupConfig,
       ConsumerConfig, CbModule, CbInitArg}) ->
+  ok = brod_utils:assert_client(Client),
+  ok = brod_utils:assert_group_id(GroupId),
+  ok = brod_utils:assert_topics(Topics),
   {ok, CbState} = CbModule:init(GroupId, CbInitArg),
   {ok, Pid} = brod_group_coordinator:start_link(Client, GroupId, Topics,
                                                 GroupConfig, ?MODULE, self()),
