@@ -177,34 +177,34 @@
              ]).
 
 %% consumer groups
--type group_id()             :: kafka_group_id().
--type member_id()            :: kafka_group_member_id().
--type group_config()         :: brod_group_config().
+-type group_id()     :: kafka_group_id().
+-type member_id()    :: kafka_group_member_id().
+-type group_config() :: brod_group_config().
 
 -export_type([ group_id/0
              , member_id/0
              , group_config/0
              ]).
 
--type brod_produce_reply()                          :: #brod_produce_reply{}.
--type brod_client_config()                          :: proplists:proplist().
--type brod_producer_config()                        :: proplists:proplist().
--type brod_consumer_config()                        :: proplists:proplist().
--type brod_group_config()                           :: proplists:proplist().
--type brod_offset_commit_policy()                   :: commit_to_kafka_v2 % default
-                                                     | consumer_managed.
--type brod_partition_assignment_strategy()          :: roundrobin
-                                                     | callback_implemented.
--type brod_partition_assignment()                   :: {kafka_topic(), [kafka_partition()]}.
--type brod_received_assignments()                   :: [#brod_received_assignment{}].
--type brod_partition_fun()                          :: fun(( Topic         :: kafka_topic()
-                                                           , PartitionsCnt   :: integer()
-                                                           , Key             :: binary()
-                                                           , Value           :: binary()) ->
-                                                              {ok, Partition :: integer()}).
--type brod_call_ref()                               :: #brod_call_ref{}.
--type brod_produce_result()                         :: brod_produce_req_buffered
-                                                     | brod_produce_req_acked.
+-type brod_produce_reply()                 :: #brod_produce_reply{}.
+-type brod_client_config()                 :: proplists:proplist().
+-type brod_producer_config()               :: proplists:proplist().
+-type brod_consumer_config()               :: proplists:proplist().
+-type brod_group_config()                  :: proplists:proplist().
+-type brod_offset_commit_policy()          :: commit_to_kafka_v2 % default
+                                            | consumer_managed.
+-type brod_partition_assignment_strategy() :: roundrobin
+                                            | callback_implemented.
+-type brod_partition_assignment()          :: {kafka_topic(), [kafka_partition()]}.
+-type brod_received_assignments()          :: [#brod_received_assignment{}].
+-type brod_partition_fun()                 :: fun(( Topic           :: kafka_topic()
+                                                  , PartitionsCnt   :: integer()
+                                                  , Key             :: binary()
+                                                  , Value           :: binary()) ->
+                                                     {ok, Partition :: integer()}).
+-type brod_call_ref()                      :: #brod_call_ref{}.
+-type brod_produce_result()                :: brod_produce_req_buffered
+                                            | brod_produce_req_acked.
 
 -export_type([ brod_produce_reply/0
              , brod_client_config/0
