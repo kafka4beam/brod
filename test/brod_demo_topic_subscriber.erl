@@ -33,7 +33,7 @@
         , bootstrap/1
         ]).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 

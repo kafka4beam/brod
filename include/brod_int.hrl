@@ -17,6 +17,9 @@
 -ifndef(__BROD_INT_HRL).
 -define(__BROD_INT_HRL, true).
 
+-include("brod.hrl").
+-include_lib("kafka_protocol/include/kpro.hrl").
+
 -define(undef, undefined).
 
 -define(OFFSET_EARLIEST, earliest).

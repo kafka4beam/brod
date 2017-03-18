@@ -89,6 +89,7 @@
 
 -deprecated([{start_link_client, '_', next_version}]).
 
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 %%%_* Types ====================================================================
