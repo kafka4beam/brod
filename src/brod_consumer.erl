@@ -48,13 +48,13 @@
 -include("brod.hrl").
 -include("brod_int.hrl").
 
--type options() :: consumer_options().
+-type options() :: brod:consumer_options().
 -type offset_reset_policy() :: reset_by_subscriber
                              | reset_to_earliest
                              | reset_to_latest.
 
 -type bytes() :: non_neg_integer().
--type offset_range() :: {offset(),offset()}.
+-type offset_range() :: {brod:offset(),brod:offset()}.
 -type offsets_queue() :: queue:queue(offset_range()).
 -record(pending_acks, { count         = 0            :: integer()
                       , offsets_queue = queue:new()  :: offsets_queue()
@@ -63,13 +63,13 @@
                , socket_pid          :: pid()
                , topic               :: binary()
                , partition           :: integer()
-               , begin_offset        :: offset_time()
+               , begin_offset        :: brod:offset_time()
                , max_wait_time       :: integer()
                , min_bytes           :: bytes()
                , max_bytes_orig      :: bytes()
                , sleep_timeout       :: integer()
                , prefetch_count      :: integer()
-               , last_corr_id        :: ?undef | corr_id()
+               , last_corr_id        :: ?undef | brod:corr_id()
                , subscriber          :: ?undef | pid()
                , subscriber_mref     :: ?undef | reference()
                , pending_acks        :: #pending_acks{}
@@ -96,8 +96,8 @@
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
--spec start_link(pid(), topic(), partition(),
-                 consumer_config()) -> {ok, pid()} | {error, any()}.
+-spec start_link(pid(), brod:topic(), brod:partition(),
+                 brod:consumer_config()) -> {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   start_link(ClientPid, Topic, Partition, Config, []).
 
@@ -128,8 +128,8 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     reset_to_earliest: consume from the earliest offset.
 %%     reset_to_latest: consume from the last available offset.
 %% @end
--spec start_link(pid(), topic(), partition(),
-                 consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
+-spec start_link(pid(), brod:topic(), brod:partition(),
+                 brod:consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config, Debug) ->
   Args = {ClientPid, Topic, Partition, Config},
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
@@ -161,7 +161,7 @@ unsubscribe(Pid, SubscriberPid) ->
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
 %% @end
--spec ack(pid(), offset()) -> ok.
+-spec ack(pid(), brod:offset()) -> ok.
 ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
@@ -440,7 +440,7 @@ err_op(_)                              -> restart.
 %% Messages having offset earlier than the requested offset are discarded.
 %% this might happen for compressed message sets
 %% @end
--spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
+-spec map_messages(brod:offset(), [ {?incomplete_message, non_neg_integer()}
                              | kpro_Message()
                              ]) ->
        {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
