@@ -52,7 +52,7 @@ start_link() ->
   supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor.
--spec start_consumer(pid(), pid(), topic(), consumer_config()) ->
+-spec start_consumer(pid(), pid(), brod:topic(), brod:consumer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(SupPid, ClientPid, TopicName, Config) ->
   Spec = consumers_sup_spec(ClientPid, TopicName, Config),
@@ -60,16 +60,16 @@ start_consumer(SupPid, ClientPid, TopicName, Config) ->
 
 
 %% @doc Dynamically stop a per-topic supervisor.
--spec stop_consumer(pid(), topic()) -> ok | {error, any()}.
+-spec stop_consumer(pid(), brod:topic()) -> ok | {error, any()}.
 stop_consumer(SupPid, TopicName) ->
   supervisor3:terminate_child(SupPid, TopicName).
 
 %% @doc Find a brod_consumer process pid running under ?PARTITIONS_SUP
 %% @end
--spec find_consumer(pid(), topic(), partition()) ->
+-spec find_consumer(pid(), brod:topic(), brod:partition()) ->
                        {ok, pid()} | {error, Reason} when
-        Reason :: {consumer_not_found, topic()}
-                | {consumer_not_found, topic(), partition()}
+        Reason :: {consumer_not_found, brod:topic()}
+                | {consumer_not_found, brod:topic(), brod:partition()}
                 | {consumer_down, noproc}.
 find_consumer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
