@@ -444,8 +444,10 @@ get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
 get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
   lookup_partition_worker(ClientId, ?ETS(ClientId), Key).
 
--spec lookup_partition_worker(brod:client(), ets:tab(), partition_worker_key()) ->
-        {ok, pid()} | { error, get_worker_error()}.
+-spec lookup_partition_worker(brod:client(),
+                              ets:tab(),
+                              partition_worker_key()) ->
+                                 {ok, pid()} | { error, get_worker_error()}.
 lookup_partition_worker(Client, Ets, Key) ->
   try ets:lookup(Ets, Key) of
     [] ->
@@ -667,7 +669,9 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
--spec start_metadata_socket(brod:brod_client_id(), [brod:endpoint()], brod:client_config()) ->
+-spec start_metadata_socket(brod:brod_client_id(),
+                            [brod:endpoint()],
+                            brod:client_config()) ->
                                {ok, pid(),  [brod:endpoint()]}.
 start_metadata_socket(ClientId, [_|_] = Endpoints, Config) ->
   start_metadata_socket(ClientId, Endpoints, Config,
@@ -764,8 +768,10 @@ do_get_partitions_count(TopicMetadata) ->
     false -> {ok, erlang:length(Partitions)}
   end.
 
--spec maybe_start_producer(brod:client(), brod:topic(), brod:partition(), {error, any()}) ->
-        ok | {error, any()}.
+-spec maybe_start_producer(brod:client(),
+                           brod:topic(),
+                           brod:partition(),
+                           {error, any()}) -> ok | {error, any()}.
 maybe_start_producer(Client, Topic, Partition, Error) ->
   case safe_gen_call(Client, {auto_start_producer, Topic}, infinity) of
     ok ->

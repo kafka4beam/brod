@@ -80,8 +80,11 @@
 %% partition-consumers are fetching more messages behind the scene
 %% unless prefetch_count is set to 0 in consumer config.
 %%
--callback handle_message(brod:topic(), brod:partition(), #kafka_message{}, cb_state()) ->
-            {ok, cb_state()} | {ok, ack, cb_state()}.
+-callback handle_message(brod:topic(),
+                         brod:partition(),
+                         brod:kafka_message(),
+                         cb_state()) -> {ok, cb_state()} |
+                                        {ok, ack, cb_state()}.
 
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
@@ -164,8 +167,8 @@
 %%   initializing the subscriger.
 %% @end
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
-                 brod:group_config(), brod:consumer_config(), module(), term()) ->
-                    {ok, pid()} | {error, any()}.
+                 brod:group_config(), brod:consumer_config(),
+                 module(), term()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, GroupConfig,
            ConsumerConfig, CbModule, CbInitArg) ->
   Args = {Client, GroupId, Topics, GroupConfig,

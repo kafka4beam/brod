@@ -130,7 +130,8 @@
           %% i.e. the offsets that are ready for commit.
           %% NOTE: this field is not used if offset_commit_policy is
           %% 'consumer_managed'
-        , acked_offsets = [] :: [{{brod:topic(), brod:partition()}, brod:offset()}]
+        , acked_offsets = [] :: [{{brod:topic(), brod:partition()}
+                                 , brod:offset()}]
           %% The referece of the timer which triggers offset commit
         , offset_commit_timer :: reference()
 
@@ -203,8 +204,8 @@
 %%      topic retention policy is used.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
 %% @end
--spec start_link(brod:client(), brod:group_id(), [brod:topic()], config(), module(), pid()) ->
-        {ok, pid()} | {error, any()}.
+-spec start_link(brod:client(), brod:group_id(), [brod:topic()],
+                 config(), module(), pid()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, Config, CbModule, MemberPid) ->
   Args = {Client, GroupId, Topics, Config, CbModule, MemberPid},
   gen_server:start_link(?MODULE, Args, []).
@@ -226,8 +227,9 @@ commit_offsets(CoordinatorPid) ->
 %%       meaning if two or more offsets for the same topic-partition exist
 %%       in the list, only the one that is closer the head of the list is kept
 %% @end
--spec commit_offsets(pid(), [{{brod:topic(), brod:partition()}, brod:offset()}]) ->
-        ok | {error, any()}.
+-spec commit_offsets(pid(),
+                     [{{brod:topic(), brod:partition()}, brod:offset()}]) ->
+                        ok | {error, any()}.
 commit_offsets(CoordinatorPid, Offsets0) ->
   %% OBS: do not use 'infinity' timeout here.
   %% There is a risk of getting into a dead-lock state e.g. when
@@ -583,7 +585,8 @@ sync_group(#state{ groupId       = GroupId
       [format_assignments(TopicAssignments)]),
   start_offset_commit_timer(NewState).
 
--spec handle_ack(#state{}, brod:topic(), brod:partition(), brod:offset()) -> {ok, #state{}}.
+-spec handle_ack(#state{}, brod:topic(), brod:partition(), brod:offset()) ->
+                    {ok, #state{}}.
 handle_ack(#state{ acked_offsets = AckedOffsets
                  } = State, Topic, Partition, Offset) ->
   NewAckedOffsets =
@@ -611,7 +614,8 @@ format_assignments(Assignments) ->
       ["\n", Topic, ":", format_partition_assignments(Partitions) ]
     end, Groupped).
 
--spec format_partition_assignments([{brod:partition(), brod:offset()}]) -> iodata().
+-spec format_partition_assignments([{brod:partition(), brod:offset()}]) ->
+                                      iodata().
 format_partition_assignments([]) -> [];
 format_partition_assignments([{Partition, BeginOffset} | Rest]) ->
   [ io_lib:format("~n    partition=~p begin_offset=~p",

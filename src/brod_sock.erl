@@ -93,7 +93,8 @@ start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
 start(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
 
--spec request_async(pid(), term()) -> {ok, brod:corr_id()} | ok | {error, any()}.
+-spec request_async(pid(), term()) ->
+                       {ok, brod:corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
   case call(Pid, {send, Request}) of
     {ok, CorrId} ->
@@ -155,8 +156,8 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* Internal functions =======================================================
 
--spec init(pid(), brod:hostname(), brod:portnum(), brod:brod_client_id(), [any()]) ->
-        no_return().
+-spec init(pid(), brod:hostname(), brod:portnum(),
+           brod:brod_client_id(), [any()]) -> no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
   Timeout = get_connect_timeout(Options),

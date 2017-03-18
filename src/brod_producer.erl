@@ -127,8 +127,8 @@
 %%   min_compression_batch_size (in bytes, optional, default = 1K):
 %%     Only try to compress when batch size is greater than this value.
 %% @end
--spec start_link(pid(), brod:topic(), brod:partition(), brod:producer_config()) ->
-        {ok, pid()}.
+-spec start_link(pid(), brod:topic(),
+                 brod:partition(), brod:producer_config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 

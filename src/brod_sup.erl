@@ -105,8 +105,9 @@
 start_link() ->
   supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
 
--spec start_client([brod:endpoint()], brod:brod_client_id(), brod:client_config()) ->
-                      ok | {error, any()}.
+-spec start_client([brod:endpoint()],
+                   brod:brod_client_id(),
+                   brod:client_config()) -> ok | {error, any()}.
 start_client(Endpoints, ClientId, Config) ->
   ClientSpec = client_spec(Endpoints, ClientId, Config),
   case supervisor3:start_child(?SUP, ClientSpec) of
