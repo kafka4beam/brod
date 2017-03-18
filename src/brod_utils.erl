@@ -88,8 +88,10 @@ shutdown_pid(Pid) ->
 %% @doc Find leader broker ID for the given topic-partiton in
 %% the metadata response received from socket.
 %% @end
--spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
-        {ok, endpoint()} | {error, any()}.
+-spec find_leader_in_metadata(kpro_MetadataResponse(),
+                              brod:topic(),
+                              brod:partition()) ->
+                                     {ok, brod:endpoint()} | {error, any()}.
 find_leader_in_metadata(Metadata, Topic, Partition) ->
   try
     {ok, do_find_leader_in_metadata(Metadata, Topic, Partition)}
@@ -117,8 +119,8 @@ log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
 log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
 
 %% @doc Request (sync) for topic-partition offsets.
--spec fetch_offsets(pid(), topic(), partition(),
-                    offset_time(), pos_integer()) -> {ok, [offset()]}.
+-spec fetch_offsets(pid(), brod:topic(), brod:partition(),
+                    brod:offset_time(), pos_integer()) -> {ok, [brod:offset()]}.
 fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
   Request = offset_request(Topic, Partition, TimeOrSemanticOffset, NrOfOffsets),
   {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
@@ -188,8 +190,8 @@ ok_when(_, Reason) -> erlang:error(Reason).
 %% are semantic 'offset', this is why often a variable named
 %% Offset is used as the Time argument.
 %% @end
--spec offset_request(topic(), partition(),
-                     offset_time(), pos_integer()) -> kpro_OffsetRequest().
+-spec offset_request(brod:topic(), brod:partition(),
+                     brod:offset_time(), pos_integer()) -> kpro_OffsetRequest().
 offset_request(Topic, Partition, TimeOrSemanticOffset, MaxOffsets) ->
   Time = ensure_integer_offset_time(TimeOrSemanticOffset),
   kpro:offset_request(Topic, Partition, Time, MaxOffsets).
@@ -199,7 +201,7 @@ ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
 ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 -spec do_find_leader_in_metadata(kpro_MetadataResponse(),
-                                 topic(), partition()) -> endpoint().
+                                 brod:topic(), brod:partition()) -> brod:endpoint().
 do_find_leader_in_metadata(Metadata, Topic, Partition) ->
   #kpro_MetadataResponse{ broker_L        = Brokers
                         , topicMetadata_L = [TopicMetadata]
@@ -226,7 +228,7 @@ do_find_leader_in_metadata(Metadata, Topic, Partition) ->
 
 -define(IS_BYTE(I), (I>=0 andalso I<256)).
 
--spec bytes(key() | value() | kv_list()) -> non_neg_integer().
+-spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
 bytes([]) -> 0;
 bytes(undefined) -> 0;
 bytes(I) when ?IS_BYTE(I) -> 1;
