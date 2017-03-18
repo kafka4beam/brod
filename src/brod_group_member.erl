@@ -50,23 +50,23 @@
 %% NOTE: this function is called only when 'offset_commit_policy' is
 %% 'consumer_managed' in group config.
 %% see brod_group_coordinator:start_link/6. for more group config details.
--callback get_committed_offsets(pid(), [{topic(), partition()}]) ->
-            {ok, [{{topic(), partition()}, offset()}]}.
+-callback get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
+            {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
 
 %% Called when the member is elected as the consumer group leader.
 %% NOTE: this function is called only when 'partition_assignment_strategy' is
 %% 'callback_implemented' in group config.
 %% see brod_group_coordinator:start_link/6. for more group config details.
--callback assign_partitions(pid(), [kafka_group_member()],
-                            [{topic(), partition()}]) ->
-                                  [{kafka_group_member_id(),
-                                    [brod_partition_assignment()]}].
+-callback assign_partitions(pid(), [brod:kafka_group_member()],
+                            [{brod:topic(), brod:partition()}]) ->
+                                  [{brod:kafka_group_member_id(),
+                                    [brod:brod_partition_assignment()]}].
 
 %% Called when assignments are received from group leader.
 %% the member process should now call brod:subscribe/5
 %% to start receiving message from kafka.
--callback assignments_received(pid(), member_id(), kafka_group_generation_id(),
-                               brod_received_assignments()) -> ok.
+-callback assignments_received(pid(), brod:member_id(), kafka_group_brod:generation_id(),
+                               brod:brod_received_assignments()) -> ok.
 
 %% Called before group re-balancing, the member should call
 %% brod:unsubscribe/3 to unsubscribe from all currently subscribed partitions.
