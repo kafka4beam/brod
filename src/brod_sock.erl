@@ -71,8 +71,8 @@
 start_link(Parent, Host, Port, ClientId) ->
   start_link(Parent, Host, Port, ClientId, []).
 
--spec start_link(pid(), hostname(), portnum(),
-                 brod_client_id() | binary(), term()) ->
+-spec start_link(pid(), brod:hostname(), brod:portnum(),
+                 brod:brod_client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
@@ -84,8 +84,8 @@ start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
 start(Parent, Host, Port, ClientId) ->
   start(Parent, Host, Port, ClientId, []).
 
--spec start(pid(), hostname(), portnum(),
-            brod_client_id() | binary(), term()) ->
+-spec start(pid(), brod:hostname(), brod:portnum(),
+            brod:brod_client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
 start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
   BinClientId = list_to_binary(atom_to_list(ClientId)),
@@ -93,7 +93,7 @@ start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
 start(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
 
--spec request_async(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
+-spec request_async(pid(), term()) -> {ok, brod:corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
   case call(Pid, {send, Request}) of
     {ok, CorrId} ->
@@ -114,7 +114,7 @@ request_sync(Pid, Request, Timeout) ->
     {error, Reason} -> {error, Reason}
   end.
 
--spec wait_for_resp(pid(), term(), corr_id(), timeout()) ->
+-spec wait_for_resp(pid(), term(), brod:corr_id(), timeout()) ->
         {ok, term()} | {error, any()}.
 wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),
@@ -155,7 +155,7 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* Internal functions =======================================================
 
--spec init(pid(), hostname(), portnum(), brod_client_id(), [any()]) ->
+-spec init(pid(), brod:hostname(), brod:portnum(), brod:brod_client_id(), [any()]) ->
         no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
@@ -228,7 +228,7 @@ maybe_sasl_auth(Sock, Mod, ClientId, Timeout,
         Unexpected ->
           exit({sasl_auth_error, Unexpected})
       end;
-    _ -> exit({sasl_auth_error, ErrorCode})
+    _ -> exit({sasl_auth_error, ErrorCode})%
   end.
 
 sasl_plain_token(User, Password) ->
