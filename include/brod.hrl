@@ -21,7 +21,7 @@
 -define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 
 -record(kafka_message,
-        { offset     :: kafka_offset()
+        { offset     :: brod:kafka_offset()
         , magic_byte :: integer()
         , attributes :: integer()
         , key        :: binary()
@@ -30,16 +30,16 @@
         }).
 
 -record(kafka_message_set,
-        { topic          :: kafka_topic()
-        , partition      :: kafka_partition()
+        { topic          :: brod:kafka_topic()
+        , partition      :: brod:kafka_partition()
         , high_wm_offset :: integer() %% max offset of the partition
-        , messages       :: kpro:incomplete_message() | [kafka_message()]
+        , messages       :: kpro:incomplete_message() | [brod:kafka_message()]
         }).
 
 -record(kafka_fetch_error,
-        { topic      :: kafka_topic()
-        , partition  :: kafka_partition()
-        , error_code :: kafka_error_code()
+        { topic      :: brod:kafka_topic()
+        , partition  :: brod:kafka_partition()
+        , error_code :: brod:kafka_error_code()
         , error_desc :: binary()
         }).
 
@@ -48,20 +48,20 @@
                        , ref    :: reference()
                        }).
 
--record(brod_produce_reply, { call_ref :: brod_call_ref()
-                            , result   :: brod_produce_result()
+-record(brod_produce_reply, { call_ref :: brod:brod_call_ref()
+                            , result   :: brod:brod_produce_result()
                             }).
 
 -record(kafka_group_member_metadata,
         { version   :: non_neg_integer()
-        , topics    :: [kafka_topic()]
+        , topics    :: [brod:kafka_topic()]
         , user_data :: binary()
         }).
 
 -record(brod_received_assignment,
-        { topic        :: kafka_topic()
-        , partition    :: kafka_partition()
-        , begin_offset :: undefined | kafka_offset()
+        { topic        :: brod:kafka_topic()
+        , partition    :: brod:kafka_partition()
+        , begin_offset :: undefined | brod:kafka_offset()
         }).
 
 -endif.
