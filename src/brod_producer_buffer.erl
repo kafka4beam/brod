@@ -39,18 +39,18 @@
 -include("brod_int.hrl").
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> {key(), value()}).
+-type data() :: fun(() -> {brod:key(), brod:value()}).
 
 -record(req,
-        { call_ref :: brod_call_ref()
+        { call_ref :: brod:brod_call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
 
--type send_fun() :: fun((pid(), [{key(), value()}]) ->
+-type send_fun() :: fun((pid(), [{brod:key(), brod:value()}]) ->
                         ok |
-                        {ok, corr_id()} |
+                        {ok, brod:corr_id()} |
                         {error, any()}).
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
@@ -66,7 +66,7 @@
         , onwire_count   = 0            :: non_neg_integer()
         , pending        = ?EMPTY_QUEUE :: queue:queue(#req{})
         , buffer         = ?EMPTY_QUEUE :: queue:queue(#req{})
-        , onwire         = []           :: [{corr_id(), [#req{}]}]
+        , onwire         = []           :: [{brod:corr_id(), [#req{}]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -93,7 +93,7 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry, SendFun) ->
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
 %% @end
--spec add(buf(), brod_call_ref(), key(), value()) -> {ok, buf()}.
+-spec add(buf(), brod:brod_call_ref(), brod:key(), brod:value()) -> {ok, buf()}.
 add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
@@ -114,7 +114,7 @@ maybe_send(#buf{} = Buf, SockPid) ->
   end.
 
 %% @doc Reply 'acked' to callers.
--spec ack(buf(), corr_id()) -> {ok, buf()} | {error, ignored}.
+-spec ack(buf(), brod:corr_id()) -> {ok, buf()} | {error, ignored}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
         } = Buf, CorrId) ->
@@ -132,7 +132,7 @@ ack(#buf{onwire = OnWire}, CorrIdReceived) ->
 %% reached maximum retry limit.
 %% Unknown corr-id:s are ignored.
 %% @end
--spec nack(buf(), corr_id(), any()) -> {ok, buf()} | {error, ignored}.
+-spec nack(buf(), brod:corr_id(), any()) -> {ok, buf()} | {error, ignored}.
 nack(#buf{onwire = [{CorrId, _Reqs} | _]} = Buf, CorrId, Reason) ->
   nack_all(Buf, Reason);
 nack(#buf{onwire = OnWire}, CorrIdReceived, _Reason) ->
@@ -168,7 +168,7 @@ is_empty(#buf{}) -> false.
 %% guarantees the produce responses are replied in the order the corresponding
 %% produce requests were received from clients.
 %% @end
--spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true.
+-spec assert_corr_id([{brod:corr_id(), [#req{}]}], brod:corr_id()) -> true.
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
   true;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
@@ -181,7 +181,7 @@ assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
 %% one comparing to ID1.
 %% Assuming that no clients would send up to 2^26 messages asynchronously.
 %% @end
--spec is_later_corr_id(corr_id(), corr_id()) -> boolean().
+-spec is_later_corr_id(brod:corr_id(), brod:corr_id()) -> boolean().
 is_later_corr_id(Id1, Id2) ->
   Diff = abs(Id1 - Id2),
   case Diff < (?MAX_CORR_ID div 2) of
@@ -315,7 +315,7 @@ cast(Pid, Msg) ->
     ok
   end.
 
--spec data_size(key() | value()) -> non_neg_integer().
+-spec data_size(brod:key() | brod:value()) -> non_neg_integer().
 data_size(Data) -> brod_utils:bytes(Data).
 
 %%%_* Tests ====================================================================
