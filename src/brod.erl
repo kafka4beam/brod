@@ -497,9 +497,13 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
   #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
   #kpro_FetchResponsePartition{ errorCode  = ErrorCode
-                              , message_L  = Messages
+                              , message_L  = Messages0
                               } = PM,
   ok = brod_sock:stop(Pid),
+  Messages = case is_binary(Messages0) of
+               true  -> kpro:decode_message_set(Messages0);
+               false -> Messages0
+             end,
   case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       {error, kpro_ErrorCode:desc(ErrorCode)};
