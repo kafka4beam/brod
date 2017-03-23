@@ -42,12 +42,9 @@
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
--type topic() :: brod:topic().
--type partition() :: brod:partition().
-
 -record(state, { group_id :: binary()
                , offset_dir :: file:fd()
-               , handlers = [] :: [{{topic(), partition()}, pid()}]
+               , handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
                }).
 
 %% @doc This function bootstraps everything to demo group subscribers.
@@ -219,4 +216,3 @@ os_time_utc_str() ->
 %%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
-

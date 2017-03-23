@@ -44,12 +44,8 @@
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
--type topic() :: brod:topic().
--type partition() :: brod:partition().
--type client_id() :: brod:client_id().
-
 -record(callback_state,
-        { handlers = [] :: [{{topic(), partition()}, pid()}]
+        { handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
         }).
 
 %% @doc This function bootstraps everything to demo group subscribers.
@@ -169,8 +165,8 @@ producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
 %% Or even spawn dynamically in `handle_message` callback and
 %% `exit(normal)` when idle for long.
 %% @end
--spec spawn_message_handlers(client_id(), [topic()]) ->
-        [{{topic(), partition()}, pid()}].
+-spec spawn_message_handlers(brod:client_id(), [brod:topic()]) ->
+        [{{brod:topic(), brod:partition()}, pid()}].
 spawn_message_handlers(_ClientId, []) -> [];
 spawn_message_handlers(ClientId, [Topic | Rest]) ->
   {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),
