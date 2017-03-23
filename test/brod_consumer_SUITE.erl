@@ -33,7 +33,8 @@
         ]).
 
 %% Test cases
--export([ t_consumer_max_bytes_too_small/1
+-export([ t_direct_fetch/1
+        , t_consumer_max_bytes_too_small/1
         , t_consumer_socket_restart/1
         , t_consumer_resubscribe/1
         , t_subscriber_restart/1
@@ -124,6 +125,19 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 
 %%%_* Test functions ===========================================================
+
+t_direct_fetch(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key = make_unique_key(),
+  Value = <<>>,
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
+  {ok, [Offset]} = brod:get_offsets(?HOSTS, Topic, Partition,
+                                    ?OFFSET_LATEST, 1),
+  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1),
+  ?assertEqual(Key, Msg#kafka_message.key),
+  ok.
 
 %% @doc Consumer should be smart enough to try greater max_bytes
 %% when it's not great enough to fetch one single message
