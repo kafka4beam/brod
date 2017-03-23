@@ -130,7 +130,7 @@ fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
   {ok, Offsets}.
 
 %% @doc Convert a `kpro_Message' to a `kafka_message'.
--spec kafka_message(#kpro_Message{})     -> #kafka_message{};
+-spec kafka_message(kpro_Message())      -> brod:kafka_message();
                    (?incomplete_message) -> ?incomplete_message.
 kafka_message(#kpro_Message{ offset     = Offset
                            , magicByte  = MagicByte
