@@ -191,10 +191,6 @@
 -type brod_producer_config()               :: proplists:proplist().
 -type brod_consumer_config()               :: proplists:proplist().
 -type brod_group_config()                  :: proplists:proplist().
--type brod_offset_commit_policy()          :: commit_to_kafka_v2 % default
-                                            | consumer_managed.
--type brod_partition_assignment_strategy() :: roundrobin
-                                            | callback_implemented.
 -type brod_partition_assignment()          :: {kafka_topic(), [kafka_partition()]}.
 -type brod_received_assignments()          :: [#brod_received_assignment{}].
 -type brod_partition_fun()                 :: fun(( Topic           :: kafka_topic()
@@ -211,8 +207,6 @@
              , brod_producer_config/0
              , brod_consumer_config/0
              , brod_group_config/0
-             , brod_offset_commit_policy/0
-             , brod_partition_assignment_strategy/0
              , brod_partition_assignment/0
              , brod_received_assignments/0
              , brod_partition_fun/0

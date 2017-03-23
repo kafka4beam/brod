@@ -44,7 +44,11 @@
 
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
 
--type partition_assignment_strategy() :: brod:brod_partition_assignment_strategy().
+-type brod_offset_commit_policy()          :: commit_to_kafka_v2 % default
+                                            | consumer_managed.
+-type brod_partition_assignment_strategy() :: roundrobin
+                                            | callback_implemented.
+-type partition_assignment_strategy() :: brod_partition_assignment_strategy().
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 10).
@@ -75,7 +79,7 @@
 -type config() :: brod:group_config().
 -type ts() :: erlang:timestamp().
 -type member() :: brod:kafka_group_member().
--type offset_commit_policy() :: brod:brod_offset_commit_policy().
+-type offset_commit_policy() :: brod_offset_commit_policy().
 
 -record(state,
         { client :: brod:client()
