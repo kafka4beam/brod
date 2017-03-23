@@ -65,7 +65,7 @@
 -type cb_state() :: term().
 
 %% Initialize the callback module s state.
--callback init(group_id(), term()) -> {ok, cb_state()}.
+-callback init(brod:group_id(), term()) -> {ok, cb_state()}.
 
 %% Handle a message. Return one of:
 %%
@@ -80,8 +80,11 @@
 %% partition-consumers are fetching more messages behind the scene
 %% unless prefetch_count is set to 0 in consumer config.
 %%
--callback handle_message(topic(), partition(), #kafka_message{}, cb_state()) ->
-            {ok, cb_state()} | {ok, ack, cb_state()}.
+-callback handle_message(brod:topic(),
+                         brod:partition(),
+                         brod:kafka_message(),
+                         cb_state()) -> {ok, cb_state()} |
+                                        {ok, ack, cb_state()}.
 
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
@@ -93,43 +96,47 @@
 %% default value -1 (latest) is used.
 %
 % commented out as it's an optional callback
-%-callback get_committed_offsets(group_id(), [{topic(), partition()}],
-%                                cb_state()) ->
-%            {ok, [{{topic(), partition()}, offset()}], cb_state()}.
-
-
+%-callback get_committed_offsets(brod:group_id(),
+%                                [{brod:topic(), brod:partition()}],
+%                                cb_state()) ->  {ok,
+%                                                 [{{brod:topic()
+%                                                   , brod:partition()}
+%                                                  , brod:offset()}],
+%                                                 cb_state()}.
+%
 %% This function is called only when 'partition_assignment_strategy' is
 %% 'callback_implemented' in group config.
 %
 % commented out as it's an optional callback
-%-callback assign_partitions([kafka_group_member()],
-%                            [{topic(), partition()}]
-%                            cb_state()) -> [{kafka_group_member_id(),
-%                                            [brod_partition_assignment()]}].
+%-callback assign_partitions([brod:kafka_group_member()],
+%                            [{brod:topic(), brod:partition()}],
+%                            cb_state()) -> [{kafka_group_brod:member_id(),
+%                                             [brod:brod_partition_assignment()]
+%                                            }].
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
 -record(consumer,
-        { topic_partition :: {topic(), partition()}
+        { topic_partition :: {brod:topic(), brod:partition()}
         , consumer_pid    :: ?undef                  %% initial state
                            | pid()                   %% normal state
                            | {down, string(), any()} %% consumer restarting
         , consumer_mref   :: reference()
-        , begin_offset    :: offset()
-        , acked_offset    :: offset()
+        , begin_offset    :: brod:offset()
+        , acked_offset    :: brod:offset()
         }).
 
--type ack_ref() :: {topic(), partition(), offset()}.
+-type ack_ref() :: {brod:topic(), brod:partition(), brod:offset()}.
 
 -record(state,
-        { client             :: client()
+        { client             :: brod:client()
         , client_mref        :: reference()
-        , groupId            :: group_id()
-        , memberId           :: member_id()
+        , groupId            :: brod:group_id()
+        , memberId           :: brod:member_id()
         , generationId       :: integer()
         , coordinator        :: pid()
         , consumers = []     :: [#consumer{}]
-        , consumer_config    :: consumer_config()
+        , consumer_config    :: brod:consumer_config()
         , is_blocked = false :: boolean()
         , cb_module          :: module()
         , cb_state           :: cb_state()
@@ -163,9 +170,9 @@
 %%   The term() that is going to be passed to CbModule:init/1 when
 %%   initializing the subscriger.
 %% @end
--spec start_link(client(), group_id(), [topic()],
-                 group_config(), consumer_config(), module(), term()) ->
-                    {ok, pid()} | {error, any()}.
+-spec start_link(brod:client(), brod:group_id(), [brod:topic()],
+                 brod:group_config(), brod:consumer_config(),
+                 module(), term()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, GroupConfig,
            ConsumerConfig, CbModule, CbInitArg) ->
   Args = {Client, GroupId, Topics, GroupConfig,
@@ -187,7 +194,7 @@ stop(Pid) ->
 %% disordered acks may overwrite offset commits and lead to unnecessary
 %% message re-delivery in case of restart.
 %% @end
--spec ack(pid(), topic(), partition(), offset()) -> ok.
+-spec ack(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
 ack(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Topic, Partition, Offset}).
 
@@ -199,8 +206,8 @@ commit(Pid) ->
 %%%_* APIs for group coordinator ===============================================
 
 %% @doc Called by group coordinator when there is new assignemnt received.
--spec assignments_received(pid(), member_id(), integer(),
-                           brod_received_assignments()) -> ok.
+-spec assignments_received(pid(), brod:member_id(), integer(),
+                           brod:brod_received_assignments()) -> ok.
 assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
   gen_server:cast(Pid, {new_assignments, MemberId,
                         GenerationId, TopicAssignments}).
@@ -211,9 +218,9 @@ assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
 
 -spec assign_partitions(pid(), [kpro_GroupMemberMetadata()],
-                        [{topic(), partition()}]) ->
-                            [{kafka_group_member_id(),
-                              [brod_partition_assignment()]}].
+                        [{brod:topic(), brod:partition()}]) ->
+                            [{kafka_group_brod:member_id(),
+                              [brod:brod_partition_assignment()]}].
 assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
   Call = {assign_partitions, MemberMetadataList, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
@@ -223,8 +230,8 @@ assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
 %% NOTE: this function is called only when it is DISABLED to commit offsets
 %%       to kafka.
 %% @end
--spec get_committed_offsets(pid(), [{topic(), partition()}]) ->
-        {ok, [{{topic(), partition()}, offset()}]}.
+-spec get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
+        {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
 get_committed_offsets(Pid, TopicPartitions) ->
   gen_server:call(Pid, {get_committed_offsets, TopicPartitions}, infinity).
 

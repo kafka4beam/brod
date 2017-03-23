@@ -44,6 +44,10 @@
 
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
 
+-type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
+                                   | consumer_managed.
+-type brod_partition_assignment_strategy() :: roundrobin
+                                            | callback_implemented.
 -type partition_assignment_strategy() :: brod_partition_assignment_strategy().
 
 %% default configs
@@ -72,34 +76,34 @@
 -define(LO_CMD_STABILIZE(AttemptCount, Reason),
         {lo_cmd_stabilize, AttemptCount, Reason}).
 
--type config() :: group_config().
+-type config() :: brod:group_config().
 -type ts() :: erlang:timestamp().
--type member() :: kafka_group_member().
+-type member() :: brod:kafka_group_member().
 -type offset_commit_policy() :: brod_offset_commit_policy().
 
 -record(state,
-        { client :: client()
-        , groupId :: group_id()
+        { client :: brod:client()
+        , groupId :: brod:group_id()
           %% Group member ID, which should be set to empty in the first
           %% join group request, then a new member id is assigned by the
           %% group coordinator and in join group response.
           %% This field may change if the member has lost connection
           %% to the coordinator and received 'UnknownMemberId' exception
           %% in response messages.
-        , memberId = <<"">> :: member_id()
+        , memberId = <<"">> :: brod:member_id()
           %% State#state.memberId =:= State#state.leaderId if
           %% elected as group leader by the coordinator.
-        , leaderId :: member_id()
+        , leaderId :: brod:member_id()
           %% Generation ID is used by the group coordinator to sync state
           %% of the group members, e.g. kick out stale members who have not
           %% kept up with the latest generation ID bumps.
         , generationId = 0 :: integer()
           %% A set of topic names where the group members consumes from
-        , topics = [] :: [topic()]
+        , topics = [] :: [brod:topic()]
           %% This is the result of group coordinator discovery.
           %% It may change when the coordinator is down then a new one
           %% is elected among the kafka cluster members.
-        , coordinator :: endpoint()
+        , coordinator :: brod:endpoint()
           %% The socket pid to the group coordinator broker.
           %% This socket is dedicated for group management and
           %% offset commit requests.
@@ -109,7 +113,7 @@
           %% distinguished by connections to coordinator
         , sock_pid  :: pid()
           %% heartbeat reference, to discard stale responses
-        , hb_ref :: {corr_id(), ts()}
+        , hb_ref :: {brod:corr_id(), ts()}
           %% all group members received in the join group response
           %% this field is currently not used, but the binary encoded
           %% kpro_GroupMemberMetadata.protocolMetadata.userData field
@@ -130,7 +134,8 @@
           %% i.e. the offsets that are ready for commit.
           %% NOTE: this field is not used if offset_commit_policy is
           %% 'consumer_managed'
-        , acked_offsets = [] :: [{{topic(), partition()}, offset()}]
+        , acked_offsets = [] :: [{{brod:topic(), brod:partition()}
+                                 , brod:offset()}]
           %% The referece of the timer which triggers offset commit
         , offset_commit_timer :: reference()
 
@@ -203,14 +208,15 @@
 %%      topic retention policy is used.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
 %% @end
--spec start_link(client(), group_id(), [topic()], config(), module(), pid()) ->
-        {ok, pid()} | {error, any()}.
+-spec start_link(brod:client(), brod:group_id(), [brod:topic()],
+                 config(), module(), pid()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, Config, CbModule, MemberPid) ->
   Args = {Client, GroupId, Topics, Config, CbModule, MemberPid},
   gen_server:start_link(?MODULE, Args, []).
 
 %% @doc For group member to call to acknowledge a consumed message offset.
--spec ack(pid(), integer(), topic(), partition(), offset()) -> ok.
+-spec ack(pid(), integer(), brod:topic(), brod:partition(), brod:offset()) ->
+             ok.
 ack(Pid, GenerationId, Topic, Partition, Offset) ->
   Pid ! {ack, GenerationId, Topic, Partition, Offset},
   ok.
@@ -226,8 +232,9 @@ commit_offsets(CoordinatorPid) ->
 %%       meaning if two or more offsets for the same topic-partition exist
 %%       in the list, only the one that is closer the head of the list is kept
 %% @end
--spec commit_offsets(pid(), [{{topic(), partition()}, offset()}]) ->
-        ok | {error, any()}.
+-spec commit_offsets(pid(),
+                     [{{brod:topic(), brod:partition()}, brod:offset()}]) ->
+                        ok | {error, any()}.
 commit_offsets(CoordinatorPid, Offsets0) ->
   %% OBS: do not use 'infinity' timeout here.
   %% There is a risk of getting into a dead-lock state e.g. when
@@ -583,7 +590,8 @@ sync_group(#state{ groupId       = GroupId
       [format_assignments(TopicAssignments)]),
   start_offset_commit_timer(NewState).
 
--spec handle_ack(#state{}, topic(), partition(), offset()) -> {ok, #state{}}.
+-spec handle_ack(#state{}, brod:topic(), brod:partition(), brod:offset()) ->
+                    {ok, #state{}}.
 handle_ack(#state{ acked_offsets = AckedOffsets
                  } = State, Topic, Partition, Offset) ->
   NewAckedOffsets =
@@ -592,11 +600,11 @@ handle_ack(#state{ acked_offsets = AckedOffsets
 
 %% @private Add new offsets to be acked into the acked offsets collection.
 -spec merge_acked_offsets(Offsets, Offsets) -> Offsets when
-        Offsets :: [{{topic(), partition()}, offset()}].
+        Offsets :: [{{brod:topic(), brod:partition()}, brod:offset()}].
 merge_acked_offsets(AckedOffsets, OffsetsToAck) ->
   lists:ukeymerge(1, OffsetsToAck, AckedOffsets).
 
--spec format_assignments(brod_received_assignments()) -> iodata().
+-spec format_assignments(brod:brod_received_assignments()) -> iodata().
 format_assignments(Assignments) ->
   Groupped =
     lists:foldl(
@@ -611,7 +619,8 @@ format_assignments(Assignments) ->
       ["\n", Topic, ":", format_partition_assignments(Partitions) ]
     end, Groupped).
 
--spec format_partition_assignments([{partition(), offset()}]) -> iodata().
+-spec format_partition_assignments([{brod:partition(), brod:offset()}]) ->
+                                      iodata().
 format_partition_assignments([]) -> [];
 format_partition_assignments([{Partition, BeginOffset} | Rest]) ->
   [ io_lib:format("~n    partition=~p begin_offset=~p",
@@ -774,7 +783,7 @@ translate_members(Members) ->
     end, Members).
 
 %% collect topics from all members
--spec all_topics([member()]) -> [topic()].
+-spec all_topics([member()]) -> [brod:topic()].
 all_topics(Members) ->
   lists:usort(
     lists:append(
@@ -783,14 +792,15 @@ all_topics(Members) ->
           M#kafka_group_member_metadata.topics
         end, Members))).
 
--spec get_partitions(client(), topic()) -> [partition()].
+-spec get_partitions(brod:client(), brod:topic()) -> [brod:partition()].
 get_partitions(Client, Topic) ->
   Count = ?ESCALATE(brod_client:get_partitions_count(Client, Topic)),
   lists:seq(0, Count-1).
 
 -spec do_assign_partitions(roundrobin, [member()],
-                           [{topic(), partition()}]) ->
-                              [{member_id(), [brod_partition_assignment()]}].
+                           [{brod:topic(), brod:partition()}]) ->
+                              [{ brod:member_id()
+                               , [brod:brod_partition_assignment()]}].
 do_assign_partitions(roundrobin, Members, AllPartitions) ->
   F = fun({MemberId, M}) ->
         SubscribedTopics = M#kafka_group_member_metadata.topics,
@@ -829,7 +839,7 @@ roundrobin_assign_loop([{Topic, Partition} | Rest] = TopicPartitions,
 %% then fetch the committed offsets of each partition.
 %% @end
 -spec get_topic_assignments(#state{}, kpro_ConsumerGroupMemberAssignment()) ->
-        brod_received_assignments().
+        brod:brod_received_assignments().
 get_topic_assignments(#state{}, <<>>) -> [];
 get_topic_assignments(#state{} = State, Assignment) ->
   #kpro_ConsumerGroupMemberAssignment
@@ -850,8 +860,8 @@ get_topic_assignments(#state{} = State, Assignment) ->
 %% @private Fetch committed offsets from kafka,
 %% or call the consumer callback to read committed offsets.
 %% @end
--spec get_committed_offsets(#state{}, [{topic(), partition()}]) ->
-        [{{topic(), partition()}, offset()}].
+-spec get_committed_offsets(#state{}, [{brod:topic(), brod:partition()}]) ->
+        [{{brod:topic(), brod:partition()}, brod:offset()}].
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , member_pid           = MemberPid
                             , member_module        = MemberModule
@@ -907,10 +917,10 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
       end, TopicOffsets),
   lists:append(CommittedOffsets0).
 
--spec resolve_begin_offsets(
-        TopicPartitions  :: [{topic(), partition()}],
-        CommittedOffsets :: [{{topic(), partition()}, offset()}]) ->
-            brod_received_assignments().
+-spec resolve_begin_offsets([{brod:topic(), brod:partition()}],
+                            [{{brod:topic(), brod:partition()},
+                              brod:offset()}]) ->
+                               brod:brod_received_assignments().
 resolve_begin_offsets([], _) -> [];
 resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets) ->
   Offset =

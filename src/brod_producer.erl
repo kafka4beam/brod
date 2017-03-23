@@ -64,8 +64,8 @@
 
 -record(state,
         { client_pid        :: pid()
-        , topic             :: topic()
-        , partition         :: partition()
+        , topic             :: brod:topic()
+        , partition         :: brod:partition()
         , sock_pid          :: pid()
         , sock_mref         :: reference()
         , buffer            :: brod_producer_buffer:buf()
@@ -127,20 +127,20 @@
 %%   min_compression_batch_size (in bytes, optional, default = 1K):
 %%     Only try to compress when batch size is greater than this value.
 %% @end
--spec start_link(pid(), topic(), partition(), producer_config()) ->
-        {ok, pid()}.
+-spec start_link(pid(), brod:topic(),
+                 brod:partition(), brod:producer_config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
-%% The function returns a call reference of type brod_call_ref() to the
+%% The function returns a call reference of type brod:brod_call_ref() to the
 %% caller so the caller can used it to expect (match) a brod_produce_req_acked
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
--spec produce(pid(), key(), value()) ->
-        {ok, brod_call_ref()} | {error, any()}.
+-spec produce(pid(), brod:key(), brod:value()) ->
+        {ok, brod:brod_call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
@@ -368,7 +368,7 @@ is_retriable(_) ->
   false.
 
 -spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
-        ok | {ok, corr_id()} | {error, any()}.
+        ok | {ok, brod:corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
 

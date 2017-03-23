@@ -48,7 +48,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
 -define(TOPIC1, <<"brod-group-subscriber-1">>).
