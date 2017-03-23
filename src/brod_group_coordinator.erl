@@ -44,8 +44,8 @@
 
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
 
--type brod_offset_commit_policy()          :: commit_to_kafka_v2 % default
-                                            | consumer_managed.
+-type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
+                                   | consumer_managed.
 -type brod_partition_assignment_strategy() :: roundrobin
                                             | callback_implemented.
 -type partition_assignment_strategy() :: brod_partition_assignment_strategy().
@@ -215,7 +215,8 @@ start_link(Client, GroupId, Topics, Config, CbModule, MemberPid) ->
   gen_server:start_link(?MODULE, Args, []).
 
 %% @doc For group member to call to acknowledge a consumed message offset.
--spec ack(pid(), integer(), brod:topic(), brod:partition(), brod:offset()) -> ok.
+-spec ack(pid(), integer(), brod:topic(), brod:partition(), brod:offset()) ->
+             ok.
 ack(Pid, GenerationId, Topic, Partition, Offset) ->
   Pid ! {ack, GenerationId, Topic, Partition, Offset},
   ok.
@@ -798,7 +799,8 @@ get_partitions(Client, Topic) ->
 
 -spec do_assign_partitions(roundrobin, [member()],
                            [{brod:topic(), brod:partition()}]) ->
-                              [{brod:member_id(), [brod:brod_partition_assignment()]}].
+                              [{ brod:member_id()
+                               , [brod:brod_partition_assignment()]}].
 do_assign_partitions(roundrobin, Members, AllPartitions) ->
   F = fun({MemberId, M}) ->
         SubscribedTopics = M#kafka_group_member_metadata.topics,
@@ -915,10 +917,10 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
       end, TopicOffsets),
   lists:append(CommittedOffsets0).
 
--spec resolve_begin_offsets(
-        TopicPartitions  :: [{brod:topic(), brod:partition()}],
-        CommittedOffsets :: [{{brod:topic(), brod:partition()}, brod:offset()}]) ->
-            brod:brod_received_assignments().
+-spec resolve_begin_offsets([{brod:topic(), brod:partition()}],
+                            [{{brod:topic(), brod:partition()},
+                              brod:offset()}]) ->
+                               brod:brod_received_assignments().
 resolve_begin_offsets([], _) -> [];
 resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets) ->
   Offset =

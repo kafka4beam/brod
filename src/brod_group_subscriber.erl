@@ -96,19 +96,23 @@
 %% default value -1 (latest) is used.
 %
 % commented out as it's an optional callback
-%-callback get_committed_offsets(brod:group_id(), [{brod:topic(), brod:partition()}],
-%                                cb_state()) ->
-%            {ok, [{{brod:topic(), brod:partition()}, brod:offset()}], cb_state()}.
-
-
+%-callback get_committed_offsets(brod:group_id(),
+%                                [{brod:topic(), brod:partition()}],
+%                                cb_state()) ->  {ok,
+%                                                 [{{brod:topic()
+%                                                   , brod:partition()}
+%                                                  , brod:offset()}],
+%                                                 cb_state()}.
+%
 %% This function is called only when 'partition_assignment_strategy' is
 %% 'callback_implemented' in group config.
 %
 % commented out as it's an optional callback
-%-callback assign_partitions([kafka_group_member()],
-%                            [{brod:topic(), brod:partition()}]
+%-callback assign_partitions([brod:kafka_group_member()],
+%                            [{brod:topic(), brod:partition()}],
 %                            cb_state()) -> [{kafka_group_brod:member_id(),
-%                                            [brod:brod_partition_assignment()]}].
+%                                             [brod:brod_partition_assignment()]
+%                                            }].
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 

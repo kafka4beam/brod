@@ -191,13 +191,14 @@
 -type brod_producer_config()               :: proplists:proplist().
 -type brod_consumer_config()               :: proplists:proplist().
 -type brod_group_config()                  :: proplists:proplist().
--type brod_partition_assignment()          :: {kafka_topic(), [kafka_partition()]}.
+-type brod_partition_assignment()          :: {kafka_topic()
+                                              , [kafka_partition()]}.
 -type brod_received_assignments()          :: [#brod_received_assignment{}].
--type brod_partition_fun()                 :: fun(( Topic           :: kafka_topic()
-                                                  , PartitionsCnt   :: integer()
-                                                  , Key             :: binary()
-                                                  , Value           :: binary()) ->
-                                                     {ok, Partition :: integer()}).
+-type brod_partition_fun()                 :: fun(( kafka_topic()
+                                                  , partition()
+                                                  , key()
+                                                  , value()) ->
+                                                     {ok, partition()}).
 -type brod_call_ref()                      :: #brod_call_ref{}.
 -type brod_produce_result()                :: brod_produce_req_buffered
                                             | brod_produce_req_acked.

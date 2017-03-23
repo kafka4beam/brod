@@ -129,7 +129,8 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     reset_to_latest: consume from the last available offset.
 %% @end
 -spec start_link(pid(), brod:topic(), brod:partition(),
-                 brod:consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
+                 brod:consumer_config(), [any()]) ->
+                    {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config, Debug) ->
   Args = {ClientPid, Topic, Partition, Config},
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).

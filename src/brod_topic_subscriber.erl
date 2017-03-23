@@ -44,7 +44,9 @@
 
 -type cb_state() :: term().
 -type cb_ret() :: {ok, cb_state()} | {ok, ack, cb_state()}.
--type cb_fun() :: fun((brod:partition(), brod:kafka_message(), cb_state()) -> cb_ret()).
+-type cb_fun() :: fun(( brod:partition()
+                      , brod:kafka_message()
+                      , cb_state()) -> cb_ret()).
 -type committed_offsets() :: [{brod:partition(), brod:offset()}].
 -type ack_ref()  :: {brod:partition(), brod:offset()}.
 
@@ -73,7 +75,9 @@
 %% NOTE: While this callback function is being evaluated, the fetch-ahead
 %%       partition-consumers are polling for more messages behind the scene
 %%       unless prefetch_count is set to 0 in consumer config.
--callback handle_message(brod:partition(), #kafka_message{}, cb_state()) -> cb_ret().
+-callback handle_message(brod:partition(),
+                         #kafka_message{},
+                         cb_state()) -> cb_ret().
 
 %%%_* Types and macros =========================================================
 

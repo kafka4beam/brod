@@ -83,12 +83,16 @@
 -type get_producer_error() :: client_down
                             | {producer_down, noproc}
                             | {producer_not_found, brod:topic()}
-                            | {producer_not_found, brod:topic(), brod:partition()}.
+                            | { producer_not_found
+                              , brod:topic()
+                              , brod:partition()}.
 
 -type get_consumer_error() :: client_down
                             | {consumer_down, noproc}
                             | {consumer_not_found, brod:topic()}
-                            | {consumer_not_found, brod:topic(), brod:partition()}.
+                            | { consumer_not_found
+                              , brod:topic()
+                              , brod:partition()}.
 
 -type get_worker_error() :: get_producer_error()
                           | get_consumer_error().
