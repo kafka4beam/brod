@@ -47,6 +47,7 @@
         , bytes    :: non_neg_integer()
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
+-type req() :: #req{}.
 
 -type send_fun() :: fun((pid(), [{key(), value()}]) ->
                         ok |
@@ -54,19 +55,19 @@
                         {error, any()}).
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
--define(EMPTY_QUEUE, {[],[]}).
+-define(NEW_QUEUE, queue:new()).
 
 -record(buf,
-        { buffer_limit   = 1            :: pos_integer()
-        , onwire_limit   = 1            :: pos_integer()
-        , max_batch_size = 1            :: pos_integer()
-        , max_retries    = 0            :: integer()
-        , send_fun       = ?ERR_FUN     :: send_fun()
-        , buffer_count   = 0            :: non_neg_integer()
-        , onwire_count   = 0            :: non_neg_integer()
-        , pending        = ?EMPTY_QUEUE :: queue:queue(#req{})
-        , buffer         = ?EMPTY_QUEUE :: queue:queue(#req{})
-        , onwire         = []           :: [{corr_id(), [#req{}]}]
+        { buffer_limit   = 1          :: pos_integer()
+        , onwire_limit   = 1          :: pos_integer()
+        , max_batch_size = 1          :: pos_integer()
+        , max_retries    = 0          :: integer()
+        , send_fun       = ?ERR_FUN   :: send_fun()
+        , buffer_count   = 0          :: non_neg_integer()
+        , onwire_count   = 0          :: non_neg_integer()
+        , pending        = ?NEW_QUEUE :: queue:queue(#req{})
+        , buffer         = ?NEW_QUEUE :: queue:queue(#req{})
+        , onwire         = []         :: [{corr_id(), [#req{}]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -82,7 +83,6 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry, SendFun) ->
   true = (BufferLimit > 0), %% assert
   true = (OnWireLimit > 0), %% assert
   true = (MaxBatchSize > 0), %% assert
-  ?EMPTY_QUEUE = queue:new(), %% assert
   #buf{ buffer_limit   = BufferLimit
       , onwire_limit   = OnWireLimit
       , max_batch_size = MaxBatchSize
@@ -155,11 +155,13 @@ nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
 %% @doc Return true if there is no message pending,
 %% buffered or waiting for ack.
 %% @end
-is_empty(#buf{ pending = ?EMPTY_QUEUE
-             , buffer  = ?EMPTY_QUEUE
-             , onwire  = []
-             }) -> true;
-is_empty(#buf{}) -> false.
+is_empty(#buf{ pending = Pending
+             , buffer  = Buffer
+             , onwire  = Onwire
+             }) ->
+  queue:is_empty(Pending) andalso
+  queue:is_empty(Buffer) andalso
+  Onwire =:= [].
 
 %%%_* Internal functions =======================================================
 
@@ -190,7 +192,7 @@ is_later_corr_id(Id1, Id2) ->
   end.
 
 %% @private
--spec take_reqs_to_send(buf()) -> {[#req{}], buf()}.
+-spec take_reqs_to_send(buf()) -> {[req()], buf()}.
 take_reqs_to_send(#buf{ onwire_count = OnWireCount
                       , onwire_limit = OnWireLimit
                       } = Buf) when OnWireCount >= OnWireLimit ->
@@ -199,38 +201,49 @@ take_reqs_to_send(#buf{} = Buf) ->
   take_reqs_to_send(Buf, _Acc = [], _AccBytes = 0).
 
 %% @private
--spec take_reqs_to_send(buf(), [#req{}], integer()) -> {[#req{}], buf()}.
-take_reqs_to_send(#buf{ pending = ?EMPTY_QUEUE
-                      , buffer  = ?EMPTY_QUEUE
-                      } = Buf, Acc, _AccBytes) ->
-  %% no more requests in buffer & pending
-  {lists:reverse(Acc), Buf};
-take_reqs_to_send(#buf{buffer = ?EMPTY_QUEUE} = Buf, Acc, AccBytes) ->
-  %% no more requests in buffer, take more from pending
-  {ok, NewBuf} = maybe_buffer(Buf),
-  take_reqs_to_send(NewBuf, Acc, AccBytes);
-take_reqs_to_send(#buf{max_batch_size = MaxBatchSize} = Buf, Acc, AccBytes)
-  when AccBytes >= MaxBatchSize ->
-  %% reached max bytes in one message set
-  {ok, NewBuf} = maybe_buffer(Buf),
-  {lists:reverse(Acc), NewBuf};
-take_reqs_to_send(#buf{ buffer_count = BufferCount
-                      , buffer       = Buffer
-                      } = Buf, _Acc = [], _AccBytes = 0) ->
-  %% always send at least one message one time regardless of size
-  {{value, Req}, Rest} = queue:out(Buffer),
-  NewBuf = Buf#buf{ buffer_count = BufferCount - 1
-                  , buffer       = Rest
-                  },
-  take_reqs_to_send(NewBuf, [Req], Req#req.bytes);
-take_reqs_to_send(#buf{ buffer_count = BufferCount
-                      , buffer       = Buffer
+-spec take_reqs_to_send(buf(), [req()], integer()) ->
+        {[req()], buf()}.
+take_reqs_to_send(#buf{ buffer_count = 0
+                      , pending = Pending
                       } = Buf, Acc, AccBytes) ->
-  {{value, Req}, Rest} = queue:out(Buffer),
-  NewBuf = Buf#buf{ buffer_count = BufferCount - 1
-                  , buffer       = Rest
-                  },
-  take_reqs_to_send(NewBuf, [Req | Acc], AccBytes + Req#req.bytes).
+  %% no more requests in buffer
+  case queue:is_empty(Pending) of
+    true ->
+      %% no more requests in pending either
+      {lists:reverse(Acc), Buf};
+    false ->
+      %% Take requests from pending to buffer
+      {ok, NewBuf} = maybe_buffer(Buf),
+      %% and continue accumulate the batch
+      do_take_reqs_to_send(NewBuf, Acc, AccBytes)
+  end;
+take_reqs_to_send(Buf, Acc, AccBytes) ->
+  do_take_reqs_to_send(Buf, Acc, AccBytes).
+
+%% @private
+-spec do_take_reqs_to_send(buf(), [req()], non_neg_integer()) ->
+        {[req()], buf()}.
+do_take_reqs_to_send(#buf{ buffer_count   = BufferCount
+                         , buffer         = Buffer
+                         , max_batch_size = MaxBatchSize
+                         } = Buf, Acc, AccBytes) ->
+  {value, Req} = queue:peek(Buffer),
+  BatchSize = AccBytes + Req#req.bytes,
+  %% Alway take at least one message to send regardless of its size
+  %% Otherwise try not to exceed the max batch size limit.
+  case Acc =/= [] andalso BatchSize > MaxBatchSize of
+    true ->
+      %% finished accumulating the batch
+      %% take more pending ones into buffer
+      {ok, NewBuf} = maybe_buffer(Buf),
+      {lists:reverse(Acc), NewBuf};
+    false ->
+      {_, Rest} = queue:out(Buffer),
+      NewBuf = Buf#buf{ buffer_count = BufferCount - 1
+                      , buffer       = Rest
+                      },
+      take_reqs_to_send(NewBuf, [Req | Acc], BatchSize)
+  end.
 
 %% @private Send produce request to kafka.
 -spec do_send([#req{}], buf(), pid()) -> {ok, buf()} | {retry, buf()}.
@@ -277,20 +290,22 @@ rebuffer_or_crash(Reqs0, #buf{ buffer       = Buffer
 
 %% @private Take pending requests into buffer and reply 'buffered' to caller.
 -spec maybe_buffer(buf()) -> {ok, buf()}.
-maybe_buffer(#buf{ pending      = ?EMPTY_QUEUE } = Buf) ->
-  {ok, Buf};
 maybe_buffer(#buf{ buffer_limit = BufferLimit
                  , buffer_count = BufferCount
                  , pending      = Pending
                  , buffer       = Buffer
                  } = Buf) when BufferCount < BufferLimit ->
-  {{value, Req}, NewPending} = queue:out(Pending),
-  ok = reply_buffered(Req),
-  NewBuf = Buf#buf{ buffer_count = BufferCount + 1
-                  , pending      = NewPending
-                  , buffer       = queue:in(Req, Buffer)
-                  },
-  maybe_buffer(NewBuf);
+  case queue:out(Pending) of
+    {{value, Req}, NewPending} ->
+      ok = reply_buffered(Req),
+      NewBuf = Buf#buf{ buffer_count = BufferCount + 1
+                      , pending      = NewPending
+                      , buffer       = queue:in(Req, Buffer)
+                      },
+      maybe_buffer(NewBuf);
+    {empty, _} ->
+      {ok, Buf}
+  end;
 maybe_buffer(#buf{} = Buf) ->
   {ok, Buf}.
 
