@@ -212,7 +212,8 @@ take_reqs_to_send(#buf{buffer = ?EMPTY_QUEUE} = Buf, Acc, AccBytes) ->
 take_reqs_to_send(#buf{max_batch_size = MaxBatchSize} = Buf, Acc, AccBytes)
   when AccBytes >= MaxBatchSize ->
   %% reached max bytes in one message set
-  {lists:reverse(Acc), Buf};
+  {ok, NewBuf} = maybe_buffer(Buf),
+  {lists:reverse(Acc), NewBuf};
 take_reqs_to_send(#buf{ buffer_count = BufferCount
                       , buffer       = Buffer
                       } = Buf, _Acc = [], _AccBytes = 0) ->
