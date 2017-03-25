@@ -23,7 +23,7 @@
 %% @private
 -module(brod_producer_buffer).
 
--export([ new/5
+-export([ new/7
         , add/4
         , ack/2
         , nack/3
@@ -40,11 +40,15 @@
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
 -type data() :: fun(() -> {key(), value()}).
+-type milli_ts() :: pos_integer().
+-type milli_sec() :: pos_integer().
+-type count() :: non_neg_integer().
 
 -record(req,
         { call_ref :: brod_call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
+        , ctime    :: milli_ts() %% time when request was created
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
 -type req() :: #req{}.
@@ -58,16 +62,18 @@
 -define(NEW_QUEUE, queue:new()).
 
 -record(buf,
-        { buffer_limit   = 1          :: pos_integer()
-        , onwire_limit   = 1          :: pos_integer()
-        , max_batch_size = 1          :: pos_integer()
-        , max_retries    = 0          :: integer()
-        , send_fun       = ?ERR_FUN   :: send_fun()
-        , buffer_count   = 0          :: non_neg_integer()
-        , onwire_count   = 0          :: non_neg_integer()
-        , pending        = ?NEW_QUEUE :: queue:queue(#req{})
-        , buffer         = ?NEW_QUEUE :: queue:queue(#req{})
-        , onwire         = []         :: [{corr_id(), [#req{}]}]
+        { buffer_limit      = 1          :: pos_integer()
+        , onwire_limit      = 1          :: pos_integer()
+        , max_batch_size    = 1          :: pos_integer()
+        , max_retries       = 0          :: integer()
+        , max_linger_time   = 0          :: milli_sec()
+        , max_linger_count  = 0          :: count()
+        , send_fun          = ?ERR_FUN   :: send_fun()
+        , buffer_count      = 0          :: non_neg_integer()
+        , onwire_count      = 0          :: non_neg_integer()
+        , pending           = ?NEW_QUEUE :: queue:queue(#req{})
+        , buffer            = ?NEW_QUEUE :: queue:queue(#req{})
+        , onwire            = []         :: [{corr_id(), [#req{}]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -77,17 +83,23 @@
 %% @doc Create a new buffer
 %% For more details: @see brod_producer:start_link/4
 %% @end
--spec new(pos_integer(), pos_integer(),
-          pos_integer(), integer(), send_fun()) -> buf().
-new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry, SendFun) ->
+-spec new(pos_integer(), pos_integer(), pos_integer(),
+          integer(), milli_sec(), count(), send_fun()) -> buf().
+new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
+    MaxLingerTime, MaxLingerCount0, SendFun) ->
   true = (BufferLimit > 0), %% assert
   true = (OnWireLimit > 0), %% assert
   true = (MaxBatchSize > 0), %% assert
-  #buf{ buffer_limit   = BufferLimit
-      , onwire_limit   = OnWireLimit
-      , max_batch_size = MaxBatchSize
-      , max_retries    = MaxRetry
-      , send_fun       = SendFun
+  true = (MaxLingerCount0 >= 0), %% assert
+  %% makes no sense to allow lingering messages more than buffer limit
+  MaxLingerCount = erlang:min(BufferLimit, MaxLingerCount0),
+  #buf{ buffer_limit     = BufferLimit
+      , onwire_limit     = OnWireLimit
+      , max_batch_size   = MaxBatchSize
+      , max_retries      = MaxRetry
+      , max_linger_time  = MaxLingerTime
+      , max_linger_count = MaxLingerCount
+      , send_fun         = SendFun
       }.
 
 %% @doc Buffer a produce request.
@@ -98,6 +110,7 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
             , bytes    = data_size(Key) + data_size(Value)
+            , ctime    = now_milli()
             , failures = 0
             },
   maybe_buffer(Buf#buf{pending = queue:in(Req, Pending)}).
@@ -106,11 +119,13 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
 %% request to kafka. In case a request has been tried for more than limited
 %% times, and 'exit' exception is raised.
 %% @end
--spec maybe_send(buf(), pid()) -> {ok, buf()} | {retry, buf()}.
+-spec maybe_send(buf(), pid()) ->
+        {ok, buf()} | {retry, buf()} | {{delay, milli_sec()}, buf()}.
 maybe_send(#buf{} = Buf, SockPid) ->
-  case take_reqs_to_send(Buf) of
-    {[], NewBuf}   -> {ok, NewBuf};
-    {Reqs, NewBuf} -> do_send(Reqs, NewBuf, SockPid)
+  case take_reqs(Buf) of
+    {[], NewBuf}                   -> {ok, NewBuf};
+    {T, NewBuf} when is_integer(T) -> {{delay, T}, NewBuf};
+    {Reqs, NewBuf}                 -> do_send(Reqs, NewBuf, SockPid)
   end.
 
 %% @doc Reply 'acked' to callers.
@@ -192,20 +207,49 @@ is_later_corr_id(Id1, Id2) ->
   end.
 
 %% @private
--spec take_reqs_to_send(buf()) -> {[req()], buf()}.
-take_reqs_to_send(#buf{ onwire_count = OnWireCount
-                      , onwire_limit = OnWireLimit
-                      } = Buf) when OnWireCount >= OnWireLimit ->
+-spec take_reqs(buf()) -> {milli_sec() | [req()], buf()}.
+take_reqs(#buf{ onwire_count = OnWireCount
+              , onwire_limit = OnWireLimit
+              } = Buf) when OnWireCount >= OnWireLimit ->
   {[], Buf};
-take_reqs_to_send(#buf{} = Buf) ->
-  take_reqs_to_send(Buf, _Acc = [], _AccBytes = 0).
+take_reqs(#buf{ buffer = Buffer, pending = Pending} = Buf) ->
+  case queue:is_empty(Buffer) andalso queue:is_empty(Pending) of
+    true ->
+      %% no buffer, no pending
+      {[], Buf};
+    false ->
+      %% ensure buffer is not empty before calling do_take_reqs/1
+      {ok, NewBuf} = maybe_buffer(Buf),
+      do_take_reqs(NewBuf)
+  end.
 
 %% @private
--spec take_reqs_to_send(buf(), [req()], integer()) ->
-        {[req()], buf()}.
-take_reqs_to_send(#buf{ buffer_count = 0
-                      , pending = Pending
-                      } = Buf, Acc, AccBytes) ->
+-spec do_take_reqs(buf()) -> {milli_sec() | [req()], buf()}.
+do_take_reqs(#buf{ max_linger_count = MaxLingerCount
+                 , buffer_count     = BufferCount
+                 }= Buf) when BufferCount >= MaxLingerCount ->
+  %% there is alredy encough messages lingering around
+  take_reqs_loop(Buf, _Acc = [], _AccBytes = 0);
+do_take_reqs(#buf{ max_linger_time = MaxLingerTime
+                 , buffer          = Buffer
+                 } = Buf) ->
+  %% buffer should not be empty
+  %% ensured by take_reqs/1
+  {value, Req} = queue:peek(Buffer),
+  Age = now_milli() - Req#req.ctime,
+  case Age < MaxLingerTime of
+    true ->
+      %% the buffer is still too young
+      {MaxLingerTime - Age, Buf};
+    false ->
+      take_reqs_loop(Buf, _Acc = [], _AccBytes = 0)
+  end.
+
+%% @private
+-spec take_reqs_loop(buf(), [req()], integer()) -> {[req()], buf()}.
+take_reqs_loop(#buf{ buffer_count = 0
+                   , pending = Pending
+                   } = Buf, Acc, AccBytes) ->
   %% no more requests in buffer
   case queue:is_empty(Pending) of
     true ->
@@ -215,18 +259,17 @@ take_reqs_to_send(#buf{ buffer_count = 0
       %% Take requests from pending to buffer
       {ok, NewBuf} = maybe_buffer(Buf),
       %% and continue accumulate the batch
-      do_take_reqs_to_send(NewBuf, Acc, AccBytes)
+      take_reqs_loop_2(NewBuf, Acc, AccBytes)
   end;
-take_reqs_to_send(Buf, Acc, AccBytes) ->
-  do_take_reqs_to_send(Buf, Acc, AccBytes).
+take_reqs_loop(Buf, Acc, AccBytes) ->
+  take_reqs_loop_2(Buf, Acc, AccBytes).
 
 %% @private
--spec do_take_reqs_to_send(buf(), [req()], non_neg_integer()) ->
-        {[req()], buf()}.
-do_take_reqs_to_send(#buf{ buffer_count   = BufferCount
-                         , buffer         = Buffer
-                         , max_batch_size = MaxBatchSize
-                         } = Buf, Acc, AccBytes) ->
+-spec take_reqs_loop_2(buf(), [req()], non_neg_integer()) -> {[req()], buf()}.
+take_reqs_loop_2(#buf{ buffer_count   = BufferCount
+                     , buffer         = Buffer
+                     , max_batch_size = MaxBatchSize
+                     } = Buf, Acc, AccBytes) ->
   {value, Req} = queue:peek(Buffer),
   BatchSize = AccBytes + Req#req.bytes,
   %% Alway take at least one message to send regardless of its size
@@ -242,7 +285,7 @@ do_take_reqs_to_send(#buf{ buffer_count   = BufferCount
       NewBuf = Buf#buf{ buffer_count = BufferCount - 1
                       , buffer       = Rest
                       },
-      take_reqs_to_send(NewBuf, [Req | Acc], BatchSize)
+      take_reqs_loop(NewBuf, [Req | Acc], BatchSize)
   end.
 
 %% @private Send produce request to kafka.
@@ -333,6 +376,11 @@ cast(Pid, Msg) ->
 
 -spec data_size(key() | value()) -> non_neg_integer().
 data_size(Data) -> brod_utils:bytes(Data).
+
+-spec now_milli() -> milli_ts().
+now_milli() ->
+  {M, S, Micro} = os:timestamp(),
+  ((M * 1000000) + S) * 1000 + Micro div 1000.
 
 %%%_* Tests ====================================================================
 

@@ -57,8 +57,14 @@
 -define(DEFAULT_COMPRESSION, no_compression).
 %% by default, only compress if batch size is >= 1k
 -define(DEFAULT_MIN_COMPRESSION_BATCH_SIZE, 1024).
+%% by default, messages never linger around in buffer
+%% should be sent immediately when onwire-limit allows
+-define(DEFAULT_MAX_LINGER_TIME, 0).
+%% by default, messages never linger around in buffer
+-define(DEFAULT_MAX_LINGER_COUNT, 0).
 
 -define(RETRY_MSG, retry).
+-define(DELAYED_SEND_MSG(REF), {delayed_send, REF}).
 
 -define(config(Key, Default), proplists:get_value(Key, Config, Default)).
 
@@ -72,6 +78,7 @@
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: timer:tref()
         , reconnect_timeout :: non_neg_integer()
+        , delay_send_ref    :: ?undef | {timer:tref(), reference()}
         }).
 
 %%%_* APIs =====================================================================
@@ -100,8 +107,8 @@
 %%     How many requests (per-partition) can be buffered without blocking the
 %%     caller. The callers are released (by receiving the
 %%     'brod_produce_req_buffered' reply) once the request is taken into buffer
-%%     or when the request has been put on wire, then the caller may expect
-%%     a reply 'brod_produce_req_acked' if the request is accepted by kafka
+%%     and after the request has been put on wire, then the caller may expect
+%%     a reply 'brod_produce_req_acked' when the request is accepted by kafka.
 %%   partition_onwire_limit(optional, default = 1):
 %%     How many message sets (per-partition) can be sent to kafka broker
 %%     asynchronously before receiving ACKs from broker.
@@ -126,6 +133,19 @@
 %%     'gzip' or 'snappy' to enable compression
 %%   min_compression_batch_size (in bytes, optional, default = 1K):
 %%     Only try to compress when batch size is greater than this value.
+%%   max_linger_time(optional, default = 0):
+%%     Messages are allowed to 'linger' in buffer for this amount of
+%%     milli-seconds before being sent.
+%%     Definition of 'linger': A message is in 'linger' state when it is allowed
+%%     to be sent on-wire, but chosen not to (for better batching).
+%%     The default value in 2.x release is set to 0 for backward compatibility.
+%%     May change it the next major release.
+%%   max_linger_count(optional, default = 0):
+%%     At most this amount (count not size) of messages messages are allowed
+%%     to 'linger' in buffer. Messages will be sent regardless of 'linger' age
+%%     when this the threshold is hit.
+%%     NOTE: It does not make sense to have this value set larger than
+%%           `partition_buffer_limit`
 %% @end
 -spec start_link(pid(), topic(), partition(), producer_config()) ->
         {ok, pid()}.
@@ -189,6 +209,8 @@ init({ClientPid, Topic, Partition, Config}) ->
   Compression = ?config(compression, ?DEFAULT_COMPRESSION),
   MinCompressBatchSize = ?config(min_compression_batch_size,
                                  ?DEFAULT_MIN_COMPRESSION_BATCH_SIZE),
+  MaxLingerTime = ?config(max_linger_time, ?DEFAULT_MAX_LINGER_TIME),
+  MaxLingerCount = ?config(max_linger_count, ?DEFAULT_MAX_LINGER_COUNT),
   MaybeCompress =
     fun(KafkaKvList) ->
       case Compression =/= no_compression andalso
@@ -204,8 +226,9 @@ init({ClientPid, Topic, Partition, Config}) ->
                                               MaybeCompress(KafkaKvList)),
         sock_send(SockPid, ProduceRequest)
     end,
-  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit,
-                                    MaxBatchSize, MaxRetries, SendFun),
+  Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
+                                    MaxRetries, MaxLingerTime, MaxLingerCount,
+                                    SendFun),
 
   State = #state{ client_pid       = ClientPid
                 , topic            = Topic
@@ -218,6 +241,14 @@ init({ClientPid, Topic, Partition, Config}) ->
   ok = brod_client:register_producer(ClientPid, Topic, Partition),
   {ok, State}.
 
+handle_info(?DELAYED_SEND_MSG(MsgRef),
+            #state{delay_send_ref = {Tref, MsgRef}} = State0) ->
+  State1 = State0#state{delay_send_ref = ?undef},
+  State = maybe_produce(State1),
+  {noreply, State};
+handle_info(?DELAYED_SEND_MSG(_MsgRef), State) ->
+  %% stale delay-send timer expiration, discard
+  {noreply, State};
 handle_info(?RETRY_MSG, State0) ->
   State1 = State0#state{retry_tref = ?undef},
   {ok, State} =
@@ -292,18 +323,18 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
         end
     end,
   {noreply, NewState};
-handle_info(_Info, State) ->
+handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
-handle_call(stop, _From, State) ->
+handle_call(stop, _From, #state{} = State) ->
   {stop, normal, ok, State};
-handle_call(_Call, _From, State) ->
+handle_call(_Call, _From, #state{} = State) ->
   {reply, {error, {unsupported_call, _Call}}, State}.
 
-handle_cast(_Cast, State) ->
+handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
-code_change(_OldVsn, State, _Extra) ->
+code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
 terminate(_Reason, _State) ->
@@ -333,29 +364,63 @@ init_socket(#state{ client_pid = ClientPid
       {error, Error}
   end.
 
-maybe_produce(#state{buffer = Buffer0, sock_pid = SockPid} = State) ->
+%% @private
+maybe_produce(#state{retry_tref = Ref} = State) when is_reference(Ref) ->
+  %% pending on retry after failure
+  {ok, State};
+maybe_produce(#state{ buffer = Buffer0
+                    , sock_pid = SockPid
+                    , delay_send_ref = DelaySendRef
+                    } = State) ->
   case brod_producer_buffer:maybe_send(Buffer0, SockPid) of
-    {ok, Buffer}    -> {ok, State#state{buffer = Buffer}};
-    {retry, Buffer} -> schedule_retry(State#state{buffer = Buffer})
+    {ok, Buffer} ->
+      %% maybe send before delay-send timer expiration
+      %% try to cancel the timer, but do NOT flush the message
+      %% in case the timer is already expired by now, the stale
+      %% message should be discarded in handle_info
+      case DelaySendRef of
+        {Tref, _MsgRef} -> _ = erlang:cancel_timer(Tref);
+        ?undef          -> ok
+      end,
+      {ok, State#state{buffer = Buffer, delay_send_ref = ?undef}};
+    {{delay, Timeout}, Buffer} when DelaySendRef =:= ?undef ->
+      MsgRef = make_ref(),
+      TRef = erlang:send_after(Timeout, self(), ?DELAYED_SEND_MSG(MsgRef)),
+      {ok, State#state{ buffer         = Buffer
+                      , delay_send_ref = {TRef, MsgRef}
+                      }};
+    {{delay, _Timeout}, Buffer} ->
+      %% delay-send timer already started, don't start again
+      {ok, State#state{buffer = Buffer}};
+    {retry, Buffer} ->
+      %% failed to send, e.g. due to socket down
+      %% maybe retry later
+      schedule_retry(State#state{buffer = Buffer})
   end.
 
+%% @private
 maybe_demonitor(?undef) ->
   ok;
 maybe_demonitor(Mref) ->
   true = erlang:demonitor(Mref, [flush]),
   ok.
 
+%% @private
 schedule_retry(#state{buffer = Buffer} = State, Reason) ->
   {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
   schedule_retry(State#state{buffer = NewBuffer}).
 
-schedule_retry(#state{retry_tref = ?undef} = State) ->
-  {ok, TRef} = timer:send_after(State#state.retry_backoff_ms, ?RETRY_MSG),
+%% @private
+schedule_retry(#state{ retry_tref = ?undef
+                     , retry_backoff_ms = Timeout
+                     } = State) ->
+  TRef = erlang:send_after(Timeout, self(), ?RETRY_MSG),
   {ok, State#state{retry_tref = TRef}};
 schedule_retry(State) ->
   %% retry timer has been already activated
   {ok, State}.
 
+%% @private
 is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
                       EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
                       EC =:= ?EC_LEADER_NOT_AVAILABLE;
@@ -367,6 +432,7 @@ is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
 is_retriable(_) ->
   false.
 
+%% @private
 -spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
