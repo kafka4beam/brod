@@ -381,11 +381,11 @@ handle_add_offset(#pending_acks{ offsets_queue = Queue
   NewQueue =
     case queue:out_r(Queue) of
       {{value, {Begin, End}}, Queue1} when End =:= Offset + 1 ->
-        %% the incoming offset is sucessive to the offset rage at queue rear
+        %% the incoming offset is successive to the offset range at queue rear
         %% expand the range
         queue:in({Begin, Offset}, Queue1);
       _ ->
-        %% either the queue is empty or non-sucessive offset
+        %% either the queue is empty or non-successive offset
         queue:in({Offset, Offset}, Queue)
     end,
   handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue

@@ -44,6 +44,13 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("brod/src/brod_int.hrl").
 
+%% producer state
+-record(state, { buffered  = []
+               , acked     = []
+               , delay_ref = ?undef :: ?undef | {timer:tref() | reference()}
+               , buf
+               }).
+
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -74,9 +81,14 @@ t_random_latency_ack(Config) when is_list(Config) ->
   ?assert(proper:quickcheck(prop_random_latency_ack_run(), Opts)).
 
 t_nack(Config) when is_list(Config) ->
+  UnknownCorrId = 0,
   SendFun =
     fun(SockPid, KvList) ->
-      CorrId = make_ref(),
+      CorrId = case get(<<"t_nack_corr_id">>) of
+                 undefined -> UnknownCorrId + 1;
+                 N         -> N + 1
+               end,
+      put(<<"t_nack_corr_id">>, CorrId),
       NumList = lists:map(fun({Bin, Bin}) ->
                             list_to_integer(binary_to_list(Bin))
                           end, KvList),
@@ -87,6 +99,8 @@ t_nack(Config) when is_list(Config) ->
                                   _OnWireLimit = 2,
                                   _MaxBatchSize = 4, %% 4 bytes, 2 messages
                                   _MaxRetry = 1,
+                                  _MaxLingerTime = 0,
+                                  _MaxLingerCount = 0,
                                   SendFun),
   AddFun =
     fun(BufIn, Num) ->
@@ -110,33 +124,38 @@ t_nack(Config) when is_list(Config) ->
     end,
   NackFun =
     fun(BufIn, CorrId) ->
-      {ok, BufOut} = brod_producer_buffer:nack(BufIn, CorrId, test),
-      BufOut
+      brod_producer_buffer:nack(BufIn, CorrId, test)
     end,
   ReceiveFun =
-    fun(ExpectedNums) ->
+    fun(Line, ExpectedNums) ->
       receive
         {produce, CorrId_, NumList} ->
-          ExpectedNums =:= NumList orelse
-            erlang:error({ExpectedNums, NumList}),
+          case ExpectedNums =:= NumList of
+            true ->
+              ok;
+            false ->
+              ct:fail("~p\nexp=~p\ngot=~p\n", [Line, ExpectedNums, NumList])
+          end,
           CorrId_
       after 1000 ->
-        erlang:error("timed out receiving produce message")
+        erlang:error({Line, "timed out receiving produce message"})
       end
     end,
   Buf1 = AddFun(Buf0, 0),
   Buf2 = AddFun(Buf1, 1),
   Buf3 = AddFun(AddFun(Buf2, 2), 3),
   Buf4 = MaybeSend(Buf3),
-  CorrId1 = ReceiveFun([0, 1]),  %% max batch size
-  Buf5 = NackFun(Buf4, CorrId1), %% re-queue 0 and 1
-  Buf6 = MaybeSend(Buf5),        %% retry
-  CorrId2 = ReceiveFun([0, 1]),  %% receive a max batch
-  Buf7 = MaybeSend(Buf6),        %% keep sending
-  CorrId3 = ReceiveFun([2, 3]),  %% receive another max batch (max onwire is 2)
-  Buf8 = AckFun(Buf7, CorrId2),
-  Buf9 = AckFun(Buf8, CorrId3),
-  ?assert(brod_producer_buffer:is_empty(Buf9)).
+  CorrId1 = ReceiveFun(?LINE, [0, 1]), %% max batch size
+  CorrId2 = ReceiveFun(?LINE, [2, 3]), %% max onwire is 2
+  ?assertEqual({error, CorrId1}, NackFun(Buf4, UnknownCorrId)),
+  ?assertException(exit, {bad_order, _, _}, NackFun(Buf4, CorrId2)),
+  {ok, Buf5} = NackFun(Buf4, CorrId1), %% re-queue all
+  Buf6 = MaybeSend(Buf5),              %% as if a sheduled retry
+  CorrId3 = ReceiveFun(?LINE, [0, 1]), %% receive a max batch
+  CorrId4 = ReceiveFun(?LINE, [2, 3]), %% another max batch (max onwire is 2)
+  Buf7 = AckFun(Buf6, CorrId3),
+  Buf8 = AckFun(Buf7, CorrId4),
+  ?assert(brod_producer_buffer:is_empty(Buf8)).
 
 t_send_fun_error(Config) when is_list(Config) ->
   SendFun =
@@ -147,6 +166,8 @@ t_send_fun_error(Config) when is_list(Config) ->
                                   _OnWireLimit = 1,
                                   _MaxBatchSize = 10000,
                                   _MaxRetry = 1,
+                                  _MaxLingerTime = 0,
+                                  _MaxLingerCount = 0,
                                   SendFun),
   AddFun =
     fun(BufIn, Num) ->
@@ -175,6 +196,8 @@ t_send_fun_error(Config) when is_list(Config) ->
 prop_buffer_limit() -> proper_types:pos_integer().
 prop_onwire_limit() -> proper_types:pos_integer().
 prop_msgset_bytes() -> proper_types:pos_integer().
+prop_linger_time() -> proper_types:integer(0, 10).
+prop_linger_count() -> proper_types:integer(0, 100).
 prop_value_list() -> proper_types:list(proper_types:binary()).
 
 %% latency in milliseconds for fake kafka to process a key-value pair
@@ -195,6 +218,7 @@ prop_no_ack_run() ->
       KvList = lists:zip(KeyList, ValueList),
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,
+                                     _MaxLingerTime = 0, _MaxLingerCount = 0,
                                      SendFun),
       no_ack_produce(Buf, KvList)
     end).
@@ -212,9 +236,11 @@ prop_random_latency_ack_run() ->
       {ok, CorrId}
     end,
   ?FORALL(
-    {BufferLimit, OnWireLimit, MsgSetBytes, ValueList},
+    {BufferLimit, OnWireLimit, MsgSetBytes,
+     MaxLingerTime, MaxLingerCount, ValueList},
     {prop_buffer_limit(), prop_onwire_limit(),
-     prop_msgset_bytes(), prop_value_with_processing_latency_list()},
+     prop_msgset_bytes(), prop_linger_time(), prop_linger_count(),
+     prop_value_with_processing_latency_list()},
     begin
       KeyList = lists:seq(1, length(ValueList)),
       KvList = lists:zip(KeyList, ValueList),
@@ -222,7 +248,7 @@ prop_random_latency_ack_run() ->
       SendFun = fun(_SockPid, KvList_) -> SendFun0(FakeKafka, KvList_) end,
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,
-                                     SendFun),
+                                     MaxLingerTime, MaxLingerCount, SendFun),
       random_latency_ack_produce(FakeKafka, Buf, KvList)
     end).
 
@@ -259,55 +285,93 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   no_ack_produce(NewBuf, Rest).
 
 random_latency_ack_produce(FakeKafka, Buf, KvList) ->
-  {Buffered, Acked} =
-    produce_loop(FakeKafka, Buf, KvList, _Buffered = [], _Acked = []),
+  State0 = #state{buf = Buf, buffered = [], acked = []},
+  #state{buffered = Buffered, acked = Acked} =
+    produce_loop(FakeKafka, KvList, State0),
   N = length(KvList),
   ok = assert_reply_sequence(Buffered, N),
   ok = assert_reply_sequence(Acked, N),
   ok = stop_fake_kafka(FakeKafka),
   true.
 
-produce_loop(FakeKafka, Buf, [], Buffered, Acked) ->
+produce_loop(FakeKafka, [], #state{buf = Buf} = State) ->
   case brod_producer_buffer:is_empty(Buf) of
     true ->
-      {Buffered, Acked};
+      State;
     false ->
-      {NewBuffered, NewAcked, NewBuf} =
-        collect_replies(Buffered, Acked, Buf, ?MAX_DELAY),
-      produce_loop(FakeKafka, NewBuf, [], NewBuffered, NewAcked)
+      NewState = collect_replies(State, ?MAX_DELAY),
+      produce_loop(FakeKafka, [], NewState)
   end;
-produce_loop(FakeKafka, Buf0, [{Key, Value} | Rest], Buffered, Acked) ->
+produce_loop(FakeKafka, [{Key, Value} | Rest], State0) ->
+  #state{buf = Buf0} = State0,
   CallRef = #brod_call_ref{ caller = self()
                           , callee = ignore
                           , ref    = Key
                           },
   BinKey = list_to_binary(integer_to_list(Key)),
-  FakeSockPid = self(),
   {ok, Buf1} = brod_producer_buffer:add(Buf0, CallRef, BinKey, Value),
-  {ok, Buf2} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
-  {NewBuffered, NewAcked, Buf} = collect_replies(Buffered, Acked, Buf2, 0),
-  produce_loop(FakeKafka, Buf, Rest, NewBuffered, NewAcked).
+  State1 = State0#state{buf = Buf1},
+  State2 = maybe_send(State1),
+  State = collect_replies(State2, _Delay = 0),
+  produce_loop(FakeKafka, Rest, State).
 
-collect_replies(Buffered, Acked, Buf0, Timeout) ->
+collect_replies(#state{ buffered  = Buffered
+                      , acked     = Acked
+                      , buf       = Buf0
+                      , delay_ref = DelayRef
+                      } = State0, Timeout) ->
   receive
+    {delayed_send, Ref} when is_tuple(DelayRef) andalso
+                             Ref =:= element(2, DelayRef) ->
+      State = maybe_send(State0#state{delay_ref = ?undef}),
+      collect_replies(State, Timeout);
+    {delayed_send, _} ->
+      %% stale message
+      collect_replies(State0, Timeout);
     #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
                        , result   = brod_produce_req_buffered
                        } ->
-      collect_replies([Key | Buffered], Acked, Buf0, Timeout);
+      State = State0#state{buffered = [Key | Buffered]},
+      collect_replies(State, Timeout);
     {ack_from_kafka, CorrId} ->
-      FakeSockPid = self(), %% any pid should work
       {ok, Buf1} = brod_producer_buffer:ack(Buf0, CorrId),
-      {ok, Buf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
-      collect_replies(Buffered, Acked, Buf, Timeout);
+      State1 = State0#state{buf = Buf1},
+      State = maybe_send(State1),
+      collect_replies(State, Timeout);
     #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
                        , result   = brod_produce_req_acked
                        } ->
-      collect_replies(Buffered, [Key | Acked], Buf0, Timeout);
+      State = State0#state{acked = [Key | Acked]},
+      collect_replies(State, Timeout);
     Msg ->
       erlang:error({unexpected, Msg})
   after Timeout ->
-    {Buffered, Acked, Buf0}
+    State0
   end.
+
+maybe_send(#state{buf = Buf0, delay_ref = DelayRef} = State) ->
+  SendTo = self(),
+  _ = cancel_delay_send_timer(DelayRef),
+  case brod_producer_buffer:maybe_send(Buf0, SendTo) of
+    {ok, Buf} ->
+      State#state{buf = Buf};
+    {{delay, Timeout}, Buf} ->
+      NewDelayRef = start_delay_send_timer(Timeout),
+      State#state{buf = Buf, delay_ref = NewDelayRef}
+  end.
+
+%% @private Start delay send timer.
+start_delay_send_timer(Timeout) ->
+  MsgRef = make_ref(),
+  TRef = erlang:send_after(Timeout, self(), {delayed_send, MsgRef}),
+  {TRef, MsgRef}.
+
+%% @private Ensure delay send timer is canceled.
+%% But not flushing the possibly already sent (stale) message
+%% Stale message should be discarded in handle_info
+%% @end
+cancel_delay_send_timer(?undef) -> ok;
+cancel_delay_send_timer({Tref, _Msg}) -> _ = erlang:cancel_timer(Tref).
 
 %% reply collection was accumulated in reversed order.
 assert_reply_sequence([], 0) -> ok;
