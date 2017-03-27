@@ -59,7 +59,8 @@
 
 -record(brod_call_ref, { caller :: pid()
                        , callee :: pid()
-                       , ref    :: reference()
+                       , ref    :: reference() %% brod:produce
+                                 | integer()   %% brod:produce_cast
                        }).
 
 -type brod_call_ref() :: #brod_call_ref{}.

@@ -40,6 +40,7 @@
         , t_producer_partition_not_found/1
         , t_produce_partitioner/1
         , t_produce_batch/1
+        , t_produce_cast/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -48,6 +49,7 @@
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
+-define(MSG(Partition, K, V), {Partition, K, V}).
 
 -define(config(Name), proplists:get_value(Name, Config)).
 
@@ -57,7 +59,7 @@ subscriber_loop(Client, TesterPid) ->
       #kafka_message_set{ messages = Messages
                         , partition = Partition} = KMS,
       lists:foreach(fun(#kafka_message{offset = Offset, key = K, value = V}) ->
-                      TesterPid ! {Partition, K, V},
+                      TesterPid ! ?MSG(Partition, K, V),
                       ok = brod:consume_ack(ConsumerPid, Offset)
                     end, Messages),
       subscriber_loop(Client, TesterPid);
@@ -128,7 +130,7 @@ t_produce_sync(Config) when is_list(Config) ->
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
-        {_, K, V} ->
+        ?MSG(_Partition, K, V) ->
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
         after 5000 ->
@@ -166,7 +168,7 @@ t_produce_no_ack(Config) when is_list(Config) ->
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
-        {_, K, V} ->
+        ?MSG(_Partition, K, V) ->
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
         after 5000 ->
@@ -190,7 +192,7 @@ t_produce_async(Config) when is_list(Config) ->
     ct:fail({?MODULE, ?LINE, timeout})
   end,
   receive
-    {_, K, V} ->
+    ?MSG(_, K, V) ->
       ?assertEqual(Key, K),
       ?assertEqual(Value, V)
   after 5000 ->
@@ -223,7 +225,7 @@ t_produce_partitioner(Config) when is_list(Config) ->
   ReceiveFun =
     fun(ExpectedP, ExpectedK, ExpectedV) ->
       receive
-        {P, K, V} ->
+        ?MSG(P, K, V) ->
           ?assertEqual(ExpectedP, P),
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
@@ -247,7 +249,7 @@ t_produce_batch(Config) when is_list(Config) ->
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
-        {_, K, V} ->
+        ?MSG(_, K, V) ->
           ?assertEqual(ExpectedK, K),
           ?assertEqual(ExpectedV, V)
         after 5000 ->
@@ -258,6 +260,36 @@ t_produce_batch(Config) when is_list(Config) ->
   ReceiveFun(K2, V2),
   ReceiveFun(K3, V3).
 
+t_produce_cast(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Partition = 0,
+  {K1, V1} = make_unique_kv(),
+  {K2, V2} = make_unique_kv(),
+  {K3, V3} = make_unique_kv(),
+  Batch = [{K1, V1}, {K2, V2}, {<<>>, [{K3, V3}]}],
+  {ok, Ref} = brod:produce_cast(Client, ?TOPIC, Partition, Batch),
+  receive
+    #brod_produce_reply{ call_ref = Ref
+                       , result   = brod_produce_req_acked
+                       } ->
+      ok
+  after
+    5000 ->
+      ct:fail({?MODULE, ?LINE, timeout})
+  end,
+  ReceiveFun =
+    fun(ExpectedK, ExpectedV) ->
+      receive
+        ?MSG(_, K, V) ->
+          ?assertEqual(ExpectedK, K),
+          ?assertEqual(ExpectedV, V)
+        after 5000 ->
+          ct:fail({?MODULE, ?LINE, timeout, ExpectedK, ExpectedV})
+      end
+    end,
+  ReceiveFun(K1, V1),
+  ReceiveFun(K2, V2),
+  ReceiveFun(K3, V3).
 
 %%%_* Help functions ===========================================================
 

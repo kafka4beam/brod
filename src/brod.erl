@@ -51,6 +51,8 @@
         , produce/2
         , produce/3
         , produce/5
+        , produce_cast/2
+        , produce_cast/4
         , produce_sync/2
         , produce_sync/3
         , produce_sync/5
@@ -307,6 +309,35 @@ produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
     {ok, Pid}       -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
   end.
+
+%% @private Cast the key-value pairs to brod producer process wihtout any
+%% back-pressure. Assuming the caller should stop and sync acks by calling
+%% `sync_produce_request/1' when there are certain number un-acked messages
+%% pending.
+%% @end
+-spec produce_cast(client(), topic(), partition(), kv_list()) ->
+        {ok, brod_call_ref()} | {error, Reason}
+          when Reason :: client_down
+                       | {producer_down, noproc}
+                       | {producer_not_found, topic()}
+                       | {producer_not_found, topic(), partition()}.
+produce_cast(Client, Topic, Partition, KvList) ->
+  case get_producer(Client, Topic, Partition) of
+    {ok, Pid}       -> produce_cast(Pid, KvList);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @private Cast the key-value pairs to brod producer process wihtout any
+%% back-pressure. Assuming the caller should stop and sync acks by calling
+%% `sync_produce_request/1' when there are certain number un-acked messages
+%% pending.
+%% `{error, producer_down}' is returned immediately if the producer process
+%% is not alive.
+%% @end
+-spec produce_cast(pid(), kv_list()) ->
+        {ok, brod_call_ref()} | {error, {producer_down, noproc}}.
+produce_cast(Producer, KvList) ->
+  brod_producer:produce_cast(Producer, KvList).
 
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
 -spec produce_sync(pid(), value()) -> ok.

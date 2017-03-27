@@ -54,7 +54,7 @@
                              | reset_to_latest.
 
 -type bytes() :: non_neg_integer().
--type offset_range() :: {offset(),offset()}.
+-type offset_range() :: {offset(), offset()}.
 -type offsets_queue() :: queue:queue(offset_range()).
 -record(pending_acks, { count         = 0            :: integer()
                       , offsets_queue = queue:new()  :: offsets_queue()
@@ -92,7 +92,6 @@
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 -define(INIT_SOCKET, init_socket).
 -define(DEFAULT_AVG_WINDOW, 5).
--define(EMPTY_QUEUE, {[],[]}).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -373,35 +372,27 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
   NewState = maybe_send_fetch_request(State1),
   {noreply, NewState}.
 
-
-handle_add_offset(#pending_acks{ offsets_queue = ?EMPTY_QUEUE = Queue
-                               , count = Count
-                               } = PendingAcks, [Offset|Offsets]) ->
-  NewQueue = queue:in({Offset,Offset}, Queue),
-  handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue
-                                            , count = Count + 1
-                                            }, Offsets);
+%% @private Add received offsets to offset range queue.
+handle_add_offset(#pending_acks{} = PendingAcks, []) ->
+  PendingAcks;
 handle_add_offset(#pending_acks{ offsets_queue = Queue
                                , count = Count
-                               } = PendingAcks, [Offset|Offsets]) ->
-  {{value,{Begin,End}}, Queue1} = queue:out_r(Queue),
-  case Offset of
-    _ when Offset == End + 1 ->
-      NewQueue = queue:in({Begin, Offset}, Queue1),
-      handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue
-                                                , count = Count + 1
-                                                }, Offsets);
-    _ when Offset > End + 1 ->
-      NewQueue = queue:in({Offset, Offset}, Queue),
-      handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue
-                                                , count = Count + 1
-                                                }, Offsets);
-    _ ->
-      handle_add_offset(PendingAcks, Offsets)
-  end;
-handle_add_offset(#pending_acks{} = PendingAcks, []) ->
-  PendingAcks.
+                               } = PendingAcks, [Offset | Offsets]) ->
+  NewQueue =
+    case queue:out_r(Queue) of
+      {{value, {Begin, End}}, Queue1} when End =:= Offset + 1 ->
+        %% the incoming offset is sucessive to the offset rage at queue rear
+        %% expand the range
+        queue:in({Begin, Offset}, Queue1);
+      _ ->
+        %% either the queue is empty or non-sucessive offset
+        queue:in({Offset, Offset}, Queue)
+    end,
+  handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue
+                                            , count = Count + 1
+                                            }, Offsets).
 
+%% @private
 maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
                              , max_bytes_orig = MaxBytesOrig
                              , max_bytes      = MaxBytes
@@ -500,21 +491,19 @@ handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
   NewState = maybe_send_fetch_request(State2),
   {noreply, NewState}.
 
-handle_ack(#pending_acks{ offsets_queue = ?EMPTY_QUEUE
-                        } = PendingAcks, _Offset) ->
-  PendingAcks;
+%% @private
 handle_ack(#pending_acks{ offsets_queue = Queue
-                        , count = Count} = PendingAcks, Offset) ->
-  {{value,{Begin,End}}, Queue1} = queue:out(Queue),
-  case Offset of
-    _ when Offset >= End ->
+                        , count = Count
+                        } = PendingAcks, Offset) ->
+  case queue:out(Queue) of
+    {{value, {Begin, End}}, Queue1} when Offset >= End ->
       NewCount = Count - (End - Begin + 1),
       handle_ack(PendingAcks#pending_acks{ offsets_queue = Queue1
                                          , count = NewCount
                                          }, Offset);
-    _ when Offset >= Begin ->
+    {{value, {Begin, End}}, Queue1} when Offset >= Begin ->
       NewCount = Count - (Offset - Begin + 1),
-      NewQueue = queue:in_r({Offset+1, End}, Queue1),
+      NewQueue = queue:in_r({Offset + 1, End}, Queue1),
       PendingAcks#pending_acks{ offsets_queue = NewQueue
                               , count = NewCount
                               };
@@ -651,13 +640,14 @@ fetch_valid_offset(SocketPid, BeginOffset, Topic, Partition) ->
 %% Discard onwire fetch responses by setting last_corr_id to undefined.
 %% @end
 -spec reset_buffer(#state{}) -> #state{}.
-reset_buffer(#state{pending_acks = #pending_acks{ offsets_queue = ?EMPTY_QUEUE
-                                                }} = State) ->
-  State#state{last_corr_id = ?undef};
-reset_buffer(#state{pending_acks = #pending_acks{ offsets_queue = Queue
-                                                }} = State) ->
-  {value, {Begin,_}} = queue:peek(Queue),
-  State#state{ begin_offset = Begin
+reset_buffer(#state{ pending_acks = #pending_acks{offsets_queue = Queue}
+                   , begin_offset = BeginOffset0
+                   } = State) ->
+  BeginOffset = case queue:peek(Queue) of
+                  {value, {Begin, _}} -> Begin;
+                  empty               -> BeginOffset0
+                end,
+  State#state{ begin_offset = BeginOffset
              , pending_acks = #pending_acks{}
              , last_corr_id = ?undef
              }.
