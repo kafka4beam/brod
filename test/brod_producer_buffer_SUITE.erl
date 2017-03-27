@@ -51,6 +51,9 @@
                , buf
                }).
 
+%% Fake the reference
+-define(REF(Ref), {ref, Ref}).
+
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -101,7 +104,7 @@ t_nack(Config) when is_list(Config) ->
     fun(BufIn, Num) ->
       CallRef = #brod_call_ref{ caller = self()
                               , callee = ignore
-                              , ref    = Num
+                              , ref    = ?REF(Num)
                               },
       Bin = list_to_binary(integer_to_list(Num)),
       {ok, BufOut} = brod_producer_buffer:add(BufIn, CallRef, Bin, Bin),
@@ -163,7 +166,7 @@ t_send_fun_error(Config) when is_list(Config) ->
     fun(BufIn, Num) ->
       CallRef = #brod_call_ref{ caller = self()
                               , callee = ignore
-                              , ref    = Num
+                              , ref    = ?REF(Num)
                               },
       Bin = list_to_binary(integer_to_list(Num)),
       {ok, BufOut} = brod_producer_buffer:add(BufIn, CallRef, Bin, Bin),
@@ -248,7 +251,7 @@ no_ack_produce(Buf, []) ->
 no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = ignore
-                          , ref    = Key
+                          , ref    = ?REF(Key)
                           },
   BinKey = list_to_binary(integer_to_list(Key)),
   {ok, Buf1} = brod_producer_buffer:add(Buf, CallRef, BinKey, Value),
@@ -256,7 +259,7 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
   %% in case of no ack required, expect 'buffered' immediately
   receive
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
+    #brod_produce_reply{ call_ref = #brod_call_ref{ref = ?REF(Key)}
                        , result   = brod_produce_req_buffered
                        } ->
       ok
@@ -265,7 +268,7 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   end,
   %% in case of no ack required, expect 'acked' immediately
   receive
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
+    #brod_produce_reply{ call_ref = #brod_call_ref{ref = ?REF(Key)}
                        , result   = brod_produce_req_acked
                        } ->
       ok
@@ -296,7 +299,7 @@ produce_loop(FakeKafka, [{Key, Value} | Rest], State0) ->
   #state{buf = Buf0} = State0,
   CallRef = #brod_call_ref{ caller = self()
                           , callee = ignore
-                          , ref    = Key
+                          , ref    = ?REF(Key)
                           },
   BinKey = list_to_binary(integer_to_list(Key)),
   {ok, Buf1} = brod_producer_buffer:add(Buf0, CallRef, BinKey, Value),
@@ -318,7 +321,7 @@ collect_replies(#state{ buffered  = Buffered
     {delayed_send, _} ->
       %% stale message
       collect_replies(State0, Timeout);
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
+    #brod_produce_reply{ call_ref = #brod_call_ref{ref = ?REF(Key)}
                        , result   = brod_produce_req_buffered
                        } ->
       State = State0#state{buffered = [Key | Buffered]},
@@ -328,7 +331,7 @@ collect_replies(#state{ buffered  = Buffered
       State1 = State0#state{buf = Buf1},
       State = maybe_send(State1),
       collect_replies(State, Timeout);
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
+    #brod_produce_reply{ call_ref = #brod_call_ref{ref = ?REF(Key)}
                        , result   = brod_produce_req_acked
                        } ->
       State = State0#state{acked = [Key | Acked]},

@@ -340,7 +340,7 @@ maybe_buffer(#buf{ buffer_limit = BufferLimit
                  } = Buf) when BufferCount < BufferLimit ->
   case queue:out(Pending) of
     {{value, Req}, NewPending} ->
-      ok = reply_buffered(Req),
+      ok = maybe_reply_buffered(Req),
       NewBuf = Buf#buf{ buffer_count = BufferCount + 1
                       , pending      = NewPending
                       , buffer       = queue:in(Req, Buffer)
@@ -352,12 +352,29 @@ maybe_buffer(#buf{ buffer_limit = BufferLimit
 maybe_buffer(#buf{} = Buf) ->
   {ok, Buf}.
 
--spec reply_buffered(#req{}) -> ok.
-reply_buffered(#req{call_ref = CallRef}) ->
-  Reply = #brod_produce_reply{ call_ref = CallRef
-                             , result   = brod_produce_req_buffered
-                             },
-  cast(CallRef#brod_call_ref.caller, Reply).
+%% @private Send 'brod_produce_req_buffered' reply to caller when
+%% it is not a cast request.
+%% @end
+-spec maybe_reply_buffered(#req{}) -> ok.
+maybe_reply_buffered(#req{call_ref = CallRef}) ->
+  case is_cast_ref(CallRef) of
+    true ->
+      %% When it was brod:produce_cast called
+      %% the caller is not expecting a 'buffered' reply
+      ok;
+    false ->
+      Reply = #brod_produce_reply{ call_ref = CallRef
+                                 , result   = brod_produce_req_buffered
+                                 },
+      cast(CallRef#brod_call_ref.caller, Reply)
+  end.
+
+%% @private Return 'true' if it the call reference was created in
+%% brod:produce_cast called.
+%% @end
+-spec is_cast_ref(brod_call_ref()) -> boolean().
+is_cast_ref(#brod_call_ref{ref = Ref}) ->
+  is_integer(Ref).
 
 -spec reply_acked(#req{}) -> ok.
 reply_acked(#req{call_ref = CallRef}) ->

@@ -38,4 +38,5 @@ create_topic "brod-demo-topic-subscriber"     3 2
 create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
 create_topic "brod_compression_SUITE"
+create_topic "test-topic" 1 1
 

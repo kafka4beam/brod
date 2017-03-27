@@ -25,6 +25,7 @@
 
 -export([ start_link/4
         , produce/3
+        , produce_cast/2
         , sync_produce_request/1
         ]).
 
@@ -175,6 +176,35 @@ produce(Pid, Key, Value) ->
       {ok, CallRef};
     {'DOWN', Mref, process, _Pid, Reason} ->
       {error, {producer_down, Reason}}
+  end.
+
+%% @doc Cast a list of messages to partition asynchronizely.
+%% `{ok, brod_call_ref()}' is returned for the caller to match on received
+%% acks.  `{error, producer_down}' is returned if the producer process is down.
+%% This call is not blocked. The caller should stop and sync acks when there
+%% are certain number of un-acked messages pending.
+%% @end
+-spec produce_cast(pid(), [{key(), value()}]) ->
+        {ok, brod_call_ref()} | {error, {producer_down, noproc}}.
+produce_cast(Pid, KvList) ->
+  %% NOTE: Although the references are generated sequential,
+  %%       the caller should not expect the replies to be ordered
+  %%       when it produces messages to two or more partitions.
+  Ref = case erlang:get(brod_producer_cast_ref) of
+          undefined -> 0;
+          N         -> N + 1
+        end,
+  erlang:put(brod_producer_cast_ref, Ref),
+  CallRef = #brod_call_ref{ caller = self()
+                          , callee = Pid
+                          , ref    = Ref
+                          },
+  case is_process_alive(Pid) of
+    true ->
+      Pid ! {produce, CallRef, <<>>, KvList},
+      {ok, CallRef};
+    false ->
+      {error, {producer_down, noproc}}
   end.
 
 %% @doc Block calling process until it receives ExpectedReply.
