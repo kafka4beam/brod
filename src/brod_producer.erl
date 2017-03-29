@@ -305,24 +305,24 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
   {ok, NewState} =
     case kpro_ErrorCode:is_error(ErrorCode) of
       true ->
-        error_logger:error_msg(
-          "Error in produce response\n"
-          "Topic: ~s\n"
-          "Partition: ~B\n"
-          "Offset: ~B\n"
-          "Error: ~p",
-          [Topic, Partition, Offset, ErrorCode]),
+        _ = log_error_code(Topic, Partition, Offset, ErrorCode),
         Error = {produce_response_error, Topic, Partition,
                  Offset, ErrorCode},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
         case brod_producer_buffer:nack(Buffer, CorrId, Error) of
-          {ok, NewBuffer}  -> schedule_retry(State#state{buffer = NewBuffer});
-          {error, ignored} -> maybe_produce(State)
+          {ok, NewBuffer}  ->
+            schedule_retry(State#state{buffer = NewBuffer});
+          {error, CorrIdExpected} ->
+            _ = log_discarded_corr_id(CorrId, CorrIdExpected),
+            maybe_produce(State)
         end;
       false ->
         case brod_producer_buffer:ack(Buffer, CorrId) of
-          {ok, NewBuffer}  -> maybe_produce(State#state{buffer = NewBuffer});
-          {error, ignored} -> maybe_produce(State)
+          {ok, NewBuffer}  ->
+            maybe_produce(State#state{buffer = NewBuffer});
+          {error, CorrIdExpected} ->
+            _ = log_discarded_corr_id(CorrId, CorrIdExpected),
+            maybe_produce(State)
         end
     end,
   {noreply, NewState};
@@ -344,6 +344,21 @@ terminate(_Reason, _State) ->
   ok.
 
 %%%_* Internal Functions =======================================================
+
+%% @private
+-spec log_error_code(topic(), partition(), offset(), kafka_error_code()) -> _.
+log_error_code(Topic, Partition, Offset, ErrorCode) ->
+  brod_utils:log(error,
+                 "Error in produce response\n"
+                 "Topic: ~s Partition: ~B Offset: ~B Error: ~p",
+                 [Topic, Partition, Offset, ErrorCode]).
+
+%% @private
+-spec log_discarded_corr_id(corr_id(), none | corr_id()) -> _.
+log_discarded_corr_id(CorrIdReceived, CorrIdExpected) ->
+  brod_utils:log(warning,
+                 "Correlation ID discarded:~p, expecting: ~p",
+                 [CorrIdReceived, CorrIdExpected]).
 
 handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
   {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
