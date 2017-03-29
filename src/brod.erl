@@ -174,7 +174,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       which don't know beforehand which topics they will be working with.
 %%     default_producer_config (optional, default=[])
 %%       Producer configuration to use when auto_start_producers is true.
-%%       @see brod_client:start_producer/3. for more details.
+%%       @see brod_producer:start_link/4. for details about producer config
 %%     ssl (optional, default=false)
 %%       true | false | [{certfile, ...},{keyfile, ...},{cacertfile, ...}]
 %%       When true, brod will try to upgrade tcp connection to ssl using default
@@ -223,7 +223,7 @@ stop_client(Client) when is_pid(Client) ->
   brod_client:stop(Client).
 
 %% @doc Dynamically start a per-topic producer.
-%% @see brod_client:start_producer/3. for more details.
+%% @see brod_producer:start_link/4. for details about producer config.
 %% @end
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
@@ -231,7 +231,7 @@ start_producer(Client, TopicName, ProducerConfig) ->
   brod_client:start_producer(Client, TopicName, ProducerConfig).
 
 %% @doc Dynamically start a topic consumer.
-%% @see brod_client:start_consumer/3. for more details.
+%% @see brod_consumer:start_link/5. for details about consumer config.
 %% @end
 -spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
