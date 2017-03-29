@@ -139,7 +139,8 @@ maybe_send(#buf{} = Buf, SockPid) ->
   end.
 
 %% @doc Reply 'acked' to callers.
--spec ack(buf(), corr_id()) -> {ok, buf()} | {error, ignored}.
+-spec ack(buf(), corr_id()) ->
+        {ok, buf()} | {error, none | corr_id()}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
         } = Buf, CorrId) ->
@@ -149,21 +150,21 @@ ack(#buf{ onwire_count = OnWireCount
               }};
 ack(#buf{onwire = OnWire}, CorrIdReceived) ->
   %% unkonwn corr-id, ignore
-  true = assert_corr_id(OnWire, CorrIdReceived),
-  {error, ignored}.
+  CorrIdExpected = assert_corr_id(OnWire, CorrIdReceived),
+  {error, CorrIdExpected}.
 
 %% @doc 'Negative' ack, put all sent requests back to the head of buffer.
 %% An 'exit' exception is raised if any of the negative-acked requests
 %% reached maximum retry limit.
-%% Unknown corr-id:s are ignored.
+%% Unknown correlation IDs are discarded.
 %% @end
--spec nack(buf(), corr_id(), any()) -> {ok, buf()} | {error, ignored}.
+-spec nack(buf(), corr_id(), any()) ->
+        {ok, buf()} | {error, none | corr_id()}.
 nack(#buf{onwire = [{CorrId, _Reqs} | _]} = Buf, CorrId, Reason) ->
   nack_all(Buf, Reason);
 nack(#buf{onwire = OnWire}, CorrIdReceived, _Reason) ->
-  true = assert_corr_id(OnWire, CorrIdReceived),
-  %% unknown corr-id, ignore.
-  {error, ignored}.
+  CorrIdExpected = assert_corr_id(OnWire, CorrIdReceived),
+  {error, CorrIdExpected}.
 
 %% @doc 'Negative' ack, put all sent requests back to the head of buffer.
 %% An 'exit' exception is raised if any of the negative-acked requests
@@ -194,14 +195,15 @@ is_empty(#buf{ pending = Pending
 %% responses, the assumption made in brod implementation is that kafka broker
 %% guarantees the produce responses are replied in the order the corresponding
 %% produce requests were received from clients.
+%% Return expected correlation ID, or otherwise raise an 'exit' exception.
 %% @end
--spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> true.
+-spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> none | corr_id().
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
-  true;
+  none;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
   case is_later_corr_id(CorrId, CorrIdReceived) of
     true  -> exit({bad_order, CorrId, CorrIdReceived});
-    false -> true
+    false -> CorrId
   end.
 
 %% @private Compare two corr-ids, return true if ID-2 is considered a 'later'
