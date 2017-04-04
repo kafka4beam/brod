@@ -10,7 +10,7 @@ brod.d
 scripts/brod
 .brod.plt
 .erlang.mk
-eunit.coverdata
+*.coverdata
 ct.coverdata
 sys.config
 xrefr
