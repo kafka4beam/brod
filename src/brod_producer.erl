@@ -80,7 +80,6 @@
         , buffer            :: brod_producer_buffer:buf()
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: timer:tref()
-        , reconnect_timeout :: non_neg_integer()
         , delay_send_ref    :: delay_send_ref()
         }).
 
@@ -249,10 +248,10 @@ handle_info(?DELAYED_SEND_MSG(MsgRef),
   State1 = State0#state{delay_send_ref = ?undef},
   {ok, State} = maybe_produce(State1),
   {noreply, State};
-handle_info(?DELAYED_SEND_MSG(_MsgRef), State) ->
+handle_info(?DELAYED_SEND_MSG(_MsgRef), #state{} = State) ->
   %% stale delay-send timer expiration, discard
   {noreply, State};
-handle_info(?RETRY_MSG, State0) ->
+handle_info(?RETRY_MSG, #state{} = State0) ->
   State1 = State0#state{retry_tref = ?undef},
   {ok, State} =
     case init_socket(State1) of
@@ -311,7 +310,7 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
         case brod_producer_buffer:nack(Buffer, CorrId, Error) of
           {ok, NewBuffer}  ->
-            schedule_retry(State#state{buffer = NewBuffer});
+            do_schedule_retry(State#state{buffer = NewBuffer});
           {error, CorrIdExpected} ->
             _ = log_discarded_corr_id(CorrId, CorrIdExpected),
             maybe_produce(State)
@@ -367,17 +366,26 @@ handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
   {noreply, NewState}.
 
 init_socket(#state{ client_pid = ClientPid
+                  , sock_pid   = OldSockPid
                   , sock_mref  = OldSockMref
                   , topic      = Topic
                   , partition  = Partition
+                  , buffer     = Buffer0
                   } = State) ->
-  %% 1. Lookup, or maybe (re-)establish a connection to partition leader
+  %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, OldSockPid} ->
+      %% Still the old socket
+      {ok, State};
     {ok, SockPid} ->
       ok = maybe_demonitor(OldSockMref),
       SockMref = erlang:monitor(process, SockPid),
-      %% 2. Update state.
-      {ok, State#state{sock_pid = SockPid, sock_mref = SockMref}};
+      %% Make sure the sent but not acked ones are put back to buffer
+      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, new_leader),
+      {ok, State#state{ sock_pid  = SockPid
+                      , sock_mref = SockMref
+                      , buffer    = Buffer
+                      }};
     {error, Error} ->
       {error, Error}
   end.
@@ -406,7 +414,7 @@ maybe_produce(#state{ buffer = Buffer0
       {ok, NewState};
     {retry, Buffer} ->
       %% Failed to send, e.g. due to socket error, retry later
-      schedule_retry(State#state{buffer = Buffer})
+      do_schedule_retry(State#state{buffer = Buffer})
   end.
 
 %% @private Start delay send timer.
@@ -434,15 +442,15 @@ maybe_demonitor(Mref) ->
 %% @private
 schedule_retry(#state{buffer = Buffer} = State, Reason) ->
   {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
-  schedule_retry(State#state{buffer = NewBuffer}).
+  do_schedule_retry(State#state{buffer = NewBuffer}).
 
 %% @private
-schedule_retry(#state{ retry_tref = ?undef
-                     , retry_backoff_ms = Timeout
-                     } = State) ->
+do_schedule_retry(#state{ retry_tref = ?undef
+                        , retry_backoff_ms = Timeout
+                        } = State) ->
   TRef = erlang:send_after(Timeout, self(), ?RETRY_MSG),
   {ok, State#state{retry_tref = TRef}};
-schedule_retry(State) ->
+do_schedule_retry(State) ->
   %% retry timer has been already activated
   {ok, State}.
 

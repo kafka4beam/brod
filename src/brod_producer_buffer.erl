@@ -324,6 +324,12 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       %% continue try next batch
       maybe_send(NewBuf, SockPid);
     {error, Reason} ->
+      %% The requests sent on-wire are not re-buffered here
+      %% because there are still chances to receive acks for them.
+      %% brod_producer should call nack_all to put all sent requests
+      %% back to buffer for retry in any of the cases below:
+      %% 1. Socket pid monitoring 'DOWN' message is received
+      %% 2. Discovered a new leader (a new socket pid)
       NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
       {retry, NewBuf}
   end.
