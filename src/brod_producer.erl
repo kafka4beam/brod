@@ -16,7 +16,7 @@
 
 %%%=============================================================================
 %%% @doc
-%%% @copyright 2014-2016 Klarna AB
+%%% @copyright 2014-2017 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -25,6 +25,7 @@
 
 -export([ start_link/4
         , produce/3
+        , stop/1
         , sync_produce_request/1
         ]).
 
@@ -184,6 +185,8 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
+-spec sync_produce_request(brod_produce_reply()) ->
+        ok | {error, {producer_down, any()}}.
 sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
@@ -197,6 +200,9 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
     {'DOWN', Mref, process, _Pid, Reason} ->
       {error, {producer_down, Reason}}
   end.
+
+-spec stop(pid()) -> ok.
+stop(Pid) -> ok = gen_server:call(Pid, stop).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -284,7 +290,7 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
                             , produceResponsePartition_L = [ProduceOffset]
                             } = ProduceTopic,
   #kpro_ProduceResponsePartition{ partition  = Partition
-                                , errorCode = ErrorCode
+                                , errorCode  = ErrorCode
                                 , offset     = Offset
                                 } = ProduceOffset,
   Topic = State#state.topic, %% assert
