@@ -253,40 +253,28 @@ handle_info(?DELAYED_SEND_MSG(_MsgRef), #state{} = State) ->
   {noreply, State};
 handle_info(?RETRY_MSG, #state{} = State0) ->
   State1 = State0#state{retry_tref = ?undef},
-  {ok, State} =
-    case init_socket(State1) of
-      {ok, State2}   -> maybe_produce(State2);
-      {error, Error} -> schedule_retry(State1, Error)
-    end,
+  {ok, State2} = maybe_reinit_socket(State1),
+  %% For retry-interval deterministic, produce regardless of socket state.
+  %% In case it has failed to find a new socket in maybe_reinit_socket/1
+  %% the produce call should fail immediately with {error, no_leader}
+  %% and a new retry should be scheduled (if not reached max_retries yet)
+  {ok, State} = maybe_produce(State2),
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
-            #state{sock_pid = Pid} = State) ->
-  case brod_producer_buffer:is_empty(State#state.buffer) of
+            #state{sock_pid = Pid, buffer = Buffer0} = State) ->
+  case brod_producer_buffer:is_empty(Buffer0) of
     true ->
       %% no socket restart in case of empty request buffer
       {noreply, State#state{sock_pid = ?undef}};
     false ->
-      {ok, NewState} = schedule_retry(State, Reason),
+      %% put sent requests back to buffer immediately after socket down
+      %% to fail fast if retry is not allowed (reaching max_retries).
+      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, Reason),
+      {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
       {noreply, NewState#state{sock_pid = ?undef}}
   end;
-handle_info({produce, CallRef, Key, Value},
-            #state{buffer = Buffer, sock_pid = SockPid} = State) ->
-  case not brod_utils:is_pid_alive(SockPid) andalso
-       brod_producer_buffer:is_empty(Buffer) of
-    true ->
-      %% this is the first request after fresh boot or socket death
-      case init_socket(State) of
-        {ok, NewState} ->
-          handle_produce(CallRef, Key, Value, NewState);
-        {error, _} ->
-          %% failed to initialize payload socket
-          %% call handle_produce, let the send fun fail
-          %% retry should take care of socket re-init
-          handle_produce(CallRef, Key, Value, State)
-      end;
-    false ->
-      handle_produce(CallRef, Key, Value, State)
-  end;
+handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
+  handle_produce(CallRef, Key, Value, State);
 handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
@@ -310,7 +298,7 @@ handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
         case brod_producer_buffer:nack(Buffer, CorrId, Error) of
           {ok, NewBuffer}  ->
-            do_schedule_retry(State#state{buffer = NewBuffer});
+            schedule_retry(State#state{buffer = NewBuffer});
           {error, CorrIdExpected} ->
             _ = log_discarded_corr_id(CorrId, CorrIdExpected),
             maybe_produce(State)
@@ -359,19 +347,36 @@ log_discarded_corr_id(CorrIdReceived, CorrIdExpected) ->
                  "Correlation ID discarded:~p, expecting: ~p",
                  [CorrIdReceived, CorrIdExpected]).
 
-handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
+%% @private
+handle_produce(CallRef, Key, Value,
+               #state{retry_tref = Ref} = State) when is_reference(Ref) ->
+  %% pending on retry, add to buffer regardless of socket state
+  do_handle_produce(CallRef, Key, Value, State);
+handle_produce(CallRef, Key, Value,
+               #state{sock_pid = Pid} = State) when is_pid(Pid) ->
+  %% Socket is alive, add to buffer, and try send produce request
+  do_handle_produce(CallRef, Key, Value, State);
+handle_produce(CallRef, Key, Value, #state{} = State) ->
+  %% this is the first request after fresh start/restart or socket death
+  {ok, NewState} = maybe_reinit_socket(State),
+  do_handle_produce(CallRef, Key, Value, NewState).
+
+%% @private
+do_handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
   {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
   State1 = State#state{buffer = NewBuffer},
   {ok, NewState} = maybe_produce(State1),
   {noreply, NewState}.
 
-init_socket(#state{ client_pid = ClientPid
-                  , sock_pid   = OldSockPid
-                  , sock_mref  = OldSockMref
-                  , topic      = Topic
-                  , partition  = Partition
-                  , buffer     = Buffer0
-                  } = State) ->
+%% @private
+-spec maybe_reinit_socket(#state{}) -> #state{}.
+maybe_reinit_socket(#state{ client_pid = ClientPid
+                          , sock_pid   = OldSockPid
+                          , sock_mref  = OldSockMref
+                          , topic      = Topic
+                          , partition  = Partition
+                          , buffer     = Buffer0
+                          } = State) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
     {ok, OldSockPid} ->
@@ -386,8 +391,16 @@ init_socket(#state{ client_pid = ClientPid
                       , sock_mref = SockMref
                       , buffer    = Buffer
                       }};
-    {error, Error} ->
-      {error, Error}
+    {error, Reason} ->
+      ok = maybe_demonitor(OldSockMref),
+      %% Make sure the sent but not acked ones are put back to buffer
+      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, no_leader),
+      brod_utils:log(warning, "Failed to (re)init socket, reason:\n~p",
+                     [Reason]),
+      {ok, State#state{ sock_pid  = ?undef
+                      , sock_mref = ?undef
+                      , buffer    = Buffer
+                      }}
   end.
 
 %% @private
@@ -414,7 +427,7 @@ maybe_produce(#state{ buffer = Buffer0
       {ok, NewState};
     {retry, Buffer} ->
       %% Failed to send, e.g. due to socket error, retry later
-      do_schedule_retry(State#state{buffer = Buffer})
+      schedule_retry(State#state{buffer = Buffer})
   end.
 
 %% @private Start delay send timer.
@@ -440,17 +453,12 @@ maybe_demonitor(Mref) ->
   ok.
 
 %% @private
-schedule_retry(#state{buffer = Buffer} = State, Reason) ->
-  {ok, NewBuffer} = brod_producer_buffer:nack_all(Buffer, Reason),
-  do_schedule_retry(State#state{buffer = NewBuffer}).
-
-%% @private
-do_schedule_retry(#state{ retry_tref = ?undef
-                        , retry_backoff_ms = Timeout
-                        } = State) ->
+schedule_retry(#state{ retry_tref = ?undef
+                     , retry_backoff_ms = Timeout
+                     } = State) ->
   TRef = erlang:send_after(Timeout, self(), ?RETRY_MSG),
   {ok, State#state{retry_tref = TRef}};
-do_schedule_retry(State) ->
+schedule_retry(State) ->
   %% retry timer has been already activated
   {ok, State}.
 
@@ -469,7 +477,7 @@ is_retriable(_) ->
 %% @private
 -spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
         ok | {ok, corr_id()} | {error, any()}.
-sock_send(?undef, _KafkaReq) -> {error, sock_down};
+sock_send(?undef, _KafkaReq) -> {error, no_leader};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
 
 %%%_* Emacs ====================================================================
