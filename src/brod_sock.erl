@@ -47,6 +47,9 @@
         , format_status/2
         ]).
 
+-epxort_type([ options/0
+             ]).
+
 -define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
 -define(DEFAULT_REQUEST_TIMEOUT, timer:minutes(4)).
 -define(SIZE_HEAD_BYTES, 4).
@@ -54,7 +57,11 @@
 %%%_* Includes =================================================================
 -include("brod_int.hrl").
 
--type options() :: proplists:proplist().
+-type opt_key() :: connect_timeout
+                 | request_timeout
+                 | ssl.
+-type opt_val() :: term().
+-type options() :: [{opt_key(), opt_val()}].
 -type requests() :: brod_kafka_requests:requests().
 -type byte_count() :: non_neg_integer().
 

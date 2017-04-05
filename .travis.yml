@@ -21,6 +21,7 @@ otp_release:
 
 script:
   - set -e
+  - export BROD_CLI=true
   - make vsn-check
   - scripts/line-width-check.sh
   - make deps

@@ -4,15 +4,23 @@ PROJECT_VERSION = 2.3.6
 
 DEPS = supervisor3 kafka_protocol
 
+## BROD_CLI=true make escript
+ifeq ($(BROD_CLI),true)
+	DEPS += docopt jsone
+	ERLC_OPTS += -DBROD_CLI
+endif
+
 dep_supervisor3_commit = 1.1.5
 dep_kafka_protocol_commit = 0.9.1
+
+dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.2
 
 TEST_DEPS = meck proper
 
 COVER = true
 
 EUNIT_OPTS = verbose
-ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
+ERLC_OPTS += -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
 CT_OPTS = -ct_use_short_names true
 
 include erlang.mk
