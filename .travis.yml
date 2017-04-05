@@ -38,6 +38,5 @@ script:
   - make distclean
   - make escript
   - make test-env
-  - scripts/cli-produce-test.sh
   - make t
 

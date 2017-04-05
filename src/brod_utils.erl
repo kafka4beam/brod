@@ -31,44 +31,63 @@
         , find_leader_in_metadata/3
         , get_metadata/1
         , get_metadata/2
+        , get_metadata/3
         , is_normal_reason/1
         , is_pid_alive/1
         , log/3
         , os_time_utc_str/0
         , shutdown_pid/1
         , try_connect/1
+        , try_connect/2
         , fetch_offsets/5
         , map_messages/2
+        , fetch/4
         ]).
 
 -include("brod_int.hrl").
 
 %%%_* APIs =====================================================================
 
-%% try to connect to any of bootstrapped nodes and fetch metadata
+%% @doc Try to connect to any of the bootstrap nodes and fetch metadata
+%% for all topics
+%% @end
+-spec get_metadata([endpoint()]) ->
+        {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Hosts) ->
   get_metadata(Hosts, []).
 
+%% @doc Try to connect to any of the bootstrap nodes and fetch metadata
+%% for the given topics
+%% @end
+-spec get_metadata([endpoint()], [topic()]) ->
+        {ok, kpro_MetadataResponse()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
-  {ok, Pid} = try_connect(Hosts),
-  Request = #kpro_MetadataRequest{topicName_L = Topics},
-  Response = brod_sock:request_sync(Pid, Request, 10000),
-  ok = brod_sock:stop(Pid),
-  Response.
+  get_metadata(Hosts, Topics, _Options = []).
 
-try_connect(Hosts) ->
-  try_connect(Hosts, []).
-
-try_connect([], LastError) ->
-  LastError;
-try_connect([{Host, Port} | Hosts], _) ->
-  %% Do not 'start_link' to avoid unexpected 'EXIT' message.
-  %% Should be ok since we're using a single blocking request which
-  %% monitors the process anyway.
-  case brod_sock:start(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []) of
-    {ok, Pid} -> {ok, Pid};
-    Error     -> try_connect(Hosts, Error)
+%% @doc Try to connect to any of the bootstrap nodes using the given
+%% connection options and fetch metadata for the given topics.
+%% @end
+-spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
+        {ok, kpro_MetadataResponse()} | {error, any()}.
+get_metadata(Hosts, Topics, Options) ->
+  {ok, Pid} = try_connect(Hosts, Options),
+  try
+    Request = #kpro_MetadataRequest{topicName_L = Topics},
+    brod_sock:request_sync(Pid, Request, 10000)
+  after
+    _ = brod_sock:stop(Pid)
   end.
+
+%% @doc Try connect to any of the given bootstrap nodes.
+-spec try_connect([endpoint()]) -> {ok, pid()} | {error, any()}.
+try_connect(Hosts) ->
+  try_connect(Hosts, [], ?undef).
+
+%% @doc Try connect to any of the given bootstrap nodes using
+%% the given connect options.
+%% @end
+try_connect(Hosts, Options) ->
+  try_connect(Hosts, Options, ?undef).
 
 %% @doc Check terminate reason for a gen_server implementation
 is_normal_reason(normal)        -> true;
@@ -166,8 +185,45 @@ map_messages(BeginOffset, Messages) when is_list(Messages) ->
    is_record(M, kpro_Message) andalso
    M#kpro_Message.offset >= BeginOffset].
 
+%% @doc For brod_cli (or Erlang shell debugging) to fetch one message-set.
+-spec fetch(pid(), fun((non_neg_integer()) -> kpro_FetchRequest()),
+            non_neg_integer(), offset()) ->
+               {ok, [#kafka_message{}]} | {error, any()}.
+fetch(SockPid, ReqFun, MaxBytes, Offset) ->
+  Request = ReqFun(MaxBytes),
+  %% infinity here because brod_sock has a global 'request_timeout' option
+  {ok, Response} = brod_sock:request_sync(SockPid, Request, infinity),
+  #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
+  #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
+  #kpro_FetchResponsePartition{ errorCode  = ErrorCode
+                              , message_L  = Messages0
+                              } = PM,
+  case kpro_ErrorCode:is_error(ErrorCode) of
+    true ->
+      {error, kpro_ErrorCode:desc(ErrorCode)};
+    false ->
+      case brod_utils:map_messages(Offset, Messages0) of
+        {?incomplete_message, Size} ->
+          fetch(SockPid, ReqFun, Size, Offset);
+        Messages ->
+          {ok, Messages}
+      end
+  end.
 
 %%%_* Internal Functions =======================================================
+
+%% @private
+try_connect([], _Options, LastError) ->
+  LastError;
+try_connect([{Host, Port} | Hosts], Options, _) ->
+  %% Do not 'start_link' to avoid unexpected 'EXIT' message.
+  %% Should be ok since we're using a single blocking request which
+  %% monitors the process anyway.
+  case brod_sock:start(self(), Host, Port,
+                       ?BROD_DEFAULT_CLIENT_ID, Options) of
+    {ok, Pid} -> {ok, Pid};
+    Error     -> try_connect(Hosts, Options, Error)
+  end.
 
 %% @private Convert a `kpro_Message' to a `kafka_message'.
 -spec kafka_message(#kpro_Message{}) -> #kafka_message{}.

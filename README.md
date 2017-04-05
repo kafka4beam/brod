@@ -355,7 +355,18 @@ brod:fetch(Hosts, Topic, Partition, 1).
 # Self-contained binary (needs erlang runtime)
 This will build a self-contained binary with brod application
 
-```shell
-make escript
-./brod help
+```bash
+make rel
+./_rel/brod/bin/brod --help
 ```
+
+Disclaimer: This script is NOT designed for use cases where fault-tolerance is a hard requirement.
+As it may crash when e.g. kafka cluster is temporarily unreachable,
+or (for fetch command) when the parition leader migrates to another broker in the cluster.
+
+Start an Erlang shell with brod started
+
+```bash
+./_rel/brod/bin/brod-i
+```
+
