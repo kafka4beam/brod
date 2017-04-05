@@ -21,3 +21,6 @@ _rel/
 .eunit/
 .rebar/
 rebar.lock
+*.testdata
+*.log
+relx

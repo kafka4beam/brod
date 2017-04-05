@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-THIS_DIR="$(dirname $(readlink -f $0))"
+THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd $THIS_DIR/../docker
 
@@ -26,7 +26,6 @@ function create_topic {
   sudo docker exec kafka_1 bash -c "$CMD"
 }
 
-create_topic "brod-cli-produce-test"
 create_topic "brod-client-SUITE-topic"
 create_topic "brod_consumer_SUITE"
 create_topic "brod_producer_SUITE"            2
@@ -38,4 +37,5 @@ create_topic "brod-demo-topic-subscriber"     3 2
 create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
 create_topic "brod_compression_SUITE"
+create_topic "test-topic"
 

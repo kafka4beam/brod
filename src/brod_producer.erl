@@ -26,7 +26,7 @@
 -export([ start_link/4
         , produce/3
         , stop/1
-        , sync_produce_request/1
+        , sync_produce_request/2
         ]).
 
 -export([ code_change/3
@@ -185,9 +185,10 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(brod_produce_reply()) ->
+-spec sync_produce_request(brod_produce_reply(), infinity | timer:time()) ->
         ok | {error, {producer_down, any()}}.
-sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
+sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
+                     Timeout) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
                 } = CallRef,
@@ -199,6 +200,9 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply) ->
       ok;
     {'DOWN', Mref, process, _Pid, Reason} ->
       {error, {producer_down, Reason}}
+  after
+    Timeout ->
+      {error, timeout}
   end.
 
 -spec stop(pid()) -> ok.

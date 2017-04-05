@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2014-2016 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod).
 -behaviour(application).
@@ -55,6 +49,7 @@
         , produce_sync/3
         , produce_sync/5
         , sync_produce_request/1
+        , sync_produce_request/2
         ]).
 
 %% Simple Consumer API
@@ -75,17 +70,23 @@
         , start_link_topic_subscriber/6
         ]).
 
-%% Management and testing API
+%% APIs for quick metadata or message inspection and brod_cli
 -export([ get_metadata/1
         , get_metadata/2
+        , get_metadata/3
         , get_offsets/3
         , get_offsets/5
+        , get_offsets/6
         , fetch/4
         , fetch/7
+        , fetch/8
+        , connect_leader/4
         ]).
 
 %% escript
+-ifdef(BROD_CLI).
 -export([main/1]).
+-endif.
 
 -deprecated([{start_link_client, '_', next_version}]).
 
@@ -184,7 +185,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       {plain, "username", "password"}
 %%     connect_timeout (optional, default=5000)
 %%       Timeout when trying to connect to one endpoint.
-%%     request_timeout (optional, default=120000, constraint: >= 1000)
+%%     request_timeout (optional, default=240000, constraint: >= 1000)
 %%       Timeout when waiting for a response, socket restart when timedout.
 %% @end
 -spec start_client([endpoint()], brod_client_id(), client_config()) ->
@@ -346,12 +347,17 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 
 %% @doc Block wait for sent produced request to be acked by kafka.
 -spec sync_produce_request(brod_call_ref()) ->
-        ok | {error, Reason::any()}.
+        ok | {error, Reason :: any()}.
 sync_produce_request(CallRef) ->
+  sync_produce_request(CallRef, infinity).
+
+-spec sync_produce_request(brod_call_ref(), infinity | timer:time()) ->
+        ok | {error, Reason :: any()}.
+sync_produce_request(CallRef, Timeout) ->
   Expect = #brod_produce_reply{ call_ref = CallRef
                               , result   = brod_produce_req_acked
                               },
-  brod_producer:sync_produce_request(Expect).
+  brod_producer:sync_produce_request(Expect, Timeout).
 
 %% @doc Subscribe data stream from the given topic-partition.
 %% If {error, Reason} is returned, the caller should perhaps retry later.
@@ -460,6 +466,12 @@ get_metadata(Hosts) ->
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
+%% @doc Fetch broker metadata
+-spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
+        {ok, kpro_MetadataResponse()} | {error, any()}.
+get_metadata(Hosts, Topics, Options) ->
+  brod_utils:get_metadata(Hosts, Topics, Options).
+
 %% @equiv get_offsets(Hosts, Topic, Partition, latest, 1)
 -spec get_offsets([endpoint()], topic(), non_neg_integer()) ->
                      {ok, [offset()]} | {error, any()}.
@@ -471,7 +483,15 @@ get_offsets(Hosts, Topic, Partition) ->
                   offset_time(), pos_integer()) ->
                      {ok, [offset()]} | {error, any()}.
 get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition),
+  get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets, []).
+
+
+-spec get_offsets([endpoint()], topic(), partition(),
+                  offset_time(), pos_integer(), brod_sock:options()) ->
+                    {ok, [offset()]} | {error, any()}.
+get_offsets(Hosts, Topic, Partition,
+            TimeOrSemanticOffset, MaxNoOffsets, Options) ->
+  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
   try
     brod_utils:fetch_offsets(Pid, Topic, Partition,
                              TimeOrSemanticOffset, MaxNoOffsets)
@@ -486,167 +506,46 @@ fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset,
         _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
 
-%% @doc Fetch a single message set from a specified topic/partition
+%% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
-fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes0) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition),
+fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+  fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes, []).
+
+
+%% @doc Fetch a single message set from the given topic-partition.
+-spec fetch([endpoint()], topic(), partition(), offset(),
+            non_neg_integer(), non_neg_integer(), pos_integer(),
+            brod_sock:options()) ->
+               {ok, [#kafka_message{}]} | {error, any()}.
+fetch(Hosts, Topic, Partition, Offset,
+      MaxWaitTime, MinBytes, MaxBytes0, Options) ->
+  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
   ReqFun =
     fun(MaxBytes) ->
         kpro:fetch_request(Topic, Partition, Offset,
                            MaxWaitTime, MinBytes, MaxBytes)
     end,
   try
-    do_fetch(Pid, ReqFun, MaxBytes0, Offset)
+    brod_utils:fetch(Pid, ReqFun, MaxBytes0, Offset)
   after
     ok = brod_sock:stop(Pid)
   end.
 
-%% @private
--spec do_fetch(pid(), fun((non_neg_integer()) -> kpro_FetchRequest()),
-               non_neg_integer(), offset()) ->
-                  {ok, [#kafka_message{}]} | {error, any()}.
-do_fetch(SockPid, ReqFun, MaxBytes, Offset) ->
-  Request = ReqFun(MaxBytes),
-  {ok, Response} = brod_sock:request_sync(SockPid, Request, 10000),
-  #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
-  #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
-  #kpro_FetchResponsePartition{ errorCode  = ErrorCode
-                              , message_L  = Messages0
-                              } = PM,
-  case kpro_ErrorCode:is_error(ErrorCode) of
-    true ->
-      {error, kpro_ErrorCode:desc(ErrorCode)};
-    false ->
-      case brod_utils:map_messages(Offset, Messages0) of
-        {?incomplete_message, Size} ->
-          do_fetch(SockPid, ReqFun, Size, Offset);
-        Messages ->
-          {ok, Messages}
-      end
-  end.
-
-%% escript entry point
-main([]) ->
-  show_help();
-main(["help"]) ->
-  show_help();
-main(Args) ->
-  case length(Args) < 2 of
-    true ->
-      erlang:exit("I expect at least 2 arguments. Please see ./brod help.");
-    false ->
-      ok
-  end,
-  [F | Tail] = Args,
-  io:format("~p~n", [call_api(list_to_atom(F), Tail)]).
-
-show_help() ->
-  io:format(user, "Command line interface for brod.\n", []),
-  io:format(user, "General patterns:\n", []),
-  io:format(user, "  ./brod <comma-separated list of kafka host:port pairs> "
-           "<function name> <function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host:port pair> <function name> "
-           "<function arguments>\n", []),
-  io:format(user, "  ./brod <kafka host name (9092 is used by default)> "
-           "<function name> <function arguments>\n", []),
-  io:format(user, "\n", []),
-  io:format(user, "Examples:\n", []),
-  io:format(user, "Get metadata:\n", []),
-  io:format(user, "  ./brod get_metadata Hosts Topic1[,Topic2]\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1:9092,kafka-2:9092,"
-           "kafka-3:9092\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1:9092\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1:9092  topic1,topic2\n", []),
-  io:format(user, "  ./brod get_metadata kafka-1 topic1\n", []),
-  io:format(user, "Produce:\n", []),
-  io:format(user, "  ./brod produce Hosts Topic Partition Key:Value\n", []),
-  io:format(user, "  ./brod produce kafka-1 topic1 0 key:value\n", []),
-  io:format(user, "  ./brod produce kafka-1 topic1 0 :value\n", []),
-  io:format(user, "This one can be used to generate a delete marker "
-           "for compacted topic:\n", []),
-  io:format(user, "  ./brod produce kafka-1 topic1 0 key:\n", []),
-  io:format(user, "Get offsets:\n", []),
-  io:format(user, "  ./brod get_offsets Hosts Topic Partition "
-           "Time MaxNOffsets\n", []),
-  io:format(user, "  ./brod get_offsets kafka-1 topic1 0 -1 1\n", []),
-  io:format(user, "Fetch:\n", []),
-  io:format(user, "  ./brod fetch Hosts Topic Partition Offset\n", []),
-  io:format(user, "  ./brod fetch Hosts Topic Partition Offset MaxWaitTime "
-           "MinBytes MaxBytes\n", []),
-  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1\n", []),
-  io:format(user, "  ./brod fetch kafka-1 topic1 0 -1 1000 0 100000\n", []),
-  ok.
-
-call_api(get_metadata, [HostsStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  brod:get_metadata(Hosts);
-call_api(get_metadata, [HostsStr, TopicsStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Topics = [list_to_binary(T) || T <- string:tokens(TopicsStr, ",")],
-  brod:get_metadata(Hosts, Topics);
-call_api(produce, [HostsStr, TopicStr, PartitionStr, KVStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  Topic = list_to_binary(TopicStr),
-  Partition = list_to_integer(PartitionStr),
-  Pos = string:chr(KVStr, $:),
-  Key = iolist_to_binary(string:left(KVStr, Pos - 1)),
-  Value = iolist_to_binary(string:right(KVStr, length(KVStr) - Pos)),
-  Client = brod_cli,
-  {ok, _Pid} = brod_client:start_link(Hosts, Client, []),
-  ok = brod:start_producer(Client, Topic, []),
-  Res = brod:produce_sync(Client, Topic, Partition, Key, Value),
-  brod_client:stop(Client),
-  Res;
-call_api(get_offsets, [HostsStr, TopicStr, PartitionStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  brod:get_offsets(Hosts, list_to_binary(TopicStr),
-                   list_to_integer(PartitionStr));
-call_api(get_offsets, [HostsStr, TopicStr, PartitionStr,
-                       TimeStr, MaxOffsetStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  brod:get_offsets(Hosts,
-                   list_to_binary(TopicStr),
-                   list_to_integer(PartitionStr),
-                   list_to_integer(TimeStr),
-                   list_to_integer(MaxOffsetStr));
-call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  brod:fetch(Hosts,
-             list_to_binary(TopicStr),
-             list_to_integer(PartitionStr),
-             list_to_integer(OffsetStr));
-call_api(fetch, [HostsStr, TopicStr, PartitionStr, OffsetStr,
-                 MaxWaitTimeStr, MinBytesStr, MaxBytesStr]) ->
-  Hosts = parse_hosts_str(HostsStr),
-  brod:fetch(Hosts,
-             list_to_binary(TopicStr),
-             list_to_integer(PartitionStr),
-             list_to_integer(OffsetStr),
-             list_to_integer(MaxWaitTimeStr),
-             list_to_integer(MinBytesStr),
-             list_to_integer(MaxBytesStr)).
-
-%%%_* Internal functions =======================================================
-
-parse_hosts_str(HostsStr) ->
-  F = fun(HostPortStr) ->
-          Pair = string:tokens(HostPortStr, ":"),
-          case Pair of
-            [Host, PortStr] -> {Host, list_to_integer(PortStr)};
-            [Host]          -> {Host, 9092}
-          end
-      end,
-  lists:map(F, string:tokens(HostsStr, ",")).
-
--spec connect_leader([endpoint()], topic(), partition()) -> {ok, pid()}.
-connect_leader(Hosts, Topic, Partition) ->
-  {ok, Metadata} = get_metadata(Hosts, [Topic]),
+%% @doc Connect partition leader.
+-spec connect_leader([endpoint()], topic(), partition(),
+                    brod_sock:options()) -> {ok, pid()}.
+connect_leader(Hosts, Topic, Partition, Options) ->
+  {ok, Metadata} = get_metadata(Hosts, [Topic], Options),
   {ok, {Host, Port}} =
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
-  brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, []).
+  brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, Options).
+
+-ifdef(BROD_CLI).
+main(Args) -> brod_cli:main(Args, halt).
+-endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
