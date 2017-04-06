@@ -309,7 +309,8 @@ t_leader_migration(Config) when is_list(Config) ->
                     1 -> fake_rsp(<<"topic">>, 0)
                   end,
             ProducerPid ! {msg, self(), CorrId, Rsp},
-            %% keep looping. i.e. do not exit as if the old leader is still alive
+            %% keep looping.
+            %% i.e. do not exit as if the old leader is still alive
             L()
         end
       end
