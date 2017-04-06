@@ -38,7 +38,7 @@
         , shutdown_pid/1
         , try_connect/1
         , fetch_offsets/5
-        , kafka_message/1
+        , map_messages/2
         ]).
 
 -include("brod_int.hrl").
@@ -127,30 +127,6 @@ fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
   #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
   {ok, Offsets}.
 
-%% @doc Convert a `kpro_Message' to a `kafka_message'.
--spec kafka_message(#kpro_Message{})     -> #kafka_message{};
-                   (?incomplete_message) -> ?incomplete_message.
-kafka_message(#kpro_Message{ offset     = Offset
-                           , magicByte  = MagicByte
-                           , attributes = Attributes
-                           , key        = MaybeKey
-                           , value      = Value
-                           , crc        = Crc
-                           }) ->
-  Key = case MaybeKey of
-          ?undef -> <<>>;
-          _      -> MaybeKey
-        end,
-  #kafka_message{ offset     = Offset
-                , magic_byte = MagicByte
-                , attributes = Attributes
-                , key        = Key
-                , value      = Value
-                , crc        = Crc
-                };
-kafka_message(?incomplete_message) ->
-  ?incomplete_message.
-
 -spec assert_client(brod:client_id() | pid()) -> ok | no_return().
 assert_client(Client) ->
   ok_when(is_atom(Client) orelse is_pid(Client),
@@ -172,7 +148,47 @@ assert_topic(Topic) ->
   ok_when(is_binary(Topic) andalso size(Topic) > 0,
           {bad_topic, Topic}).
 
+%% @doc Map message to brod's format.
+%% incomplete message indicator is kept when the only one message is incomplete.
+%% Messages having offset earlier than the requested offset are discarded.
+%% this might happen for compressed message sets
+%% @end
+-spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
+                             | kpro_Message()
+                             ]) ->
+       {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
+map_messages(BeginOffset, Messages) when is_binary(Messages) ->
+  map_messages(BeginOffset, kpro:decode_message_set(Messages));
+map_messages(_BeginOffset, [{?incomplete_message, Size}]) ->
+  {?incomplete_message, Size};
+map_messages(BeginOffset, Messages) when is_list(Messages) ->
+  [kafka_message(M) || M <- Messages,
+   is_record(M, kpro_Message) andalso
+   M#kpro_Message.offset >= BeginOffset].
+
+
 %%%_* Internal Functions =======================================================
+
+%% @private Convert a `kpro_Message' to a `kafka_message'.
+-spec kafka_message(#kpro_Message{}) -> #kafka_message{}.
+kafka_message(#kpro_Message{ offset     = Offset
+                           , magicByte  = MagicByte
+                           , attributes = Attributes
+                           , key        = MaybeKey
+                           , value      = Value
+                           , crc        = Crc
+                           }) ->
+  Key = case MaybeKey of
+          ?undef -> <<>>;
+          _      -> MaybeKey
+        end,
+  #kafka_message{ offset     = Offset
+                , magic_byte = MagicByte
+                , attributes = Attributes
+                , key        = Key
+                , value      = Value
+                , crc        = Crc
+                }.
 
 %% @private Raise an 'error' exception when first argument is not 'true'.
 %% The second argument is used as error reason.

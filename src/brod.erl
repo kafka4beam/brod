@@ -483,32 +483,48 @@ get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
 -spec fetch([endpoint()], topic(), partition(), integer()) ->
                {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
-  fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000).
+  fetch(Hosts, Topic, Partition, Offset,
+        _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
 
 %% @doc Fetch a single message set from a specified topic/partition
--spec fetch([endpoint()], topic(), partition(), offset_time(),
+-spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
-               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
-fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
+               {ok, [#kafka_message{}]} | {error, any()}.
+fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes0) ->
   {ok, Pid} = connect_leader(Hosts, Topic, Partition),
-  Request = kpro:fetch_request(Topic, Partition, Offset,
-                               MaxWaitTime, MinBytes, MaxBytes),
-  {ok, Response} = brod_sock:request_sync(Pid, Request, 10000),
+  ReqFun =
+    fun(MaxBytes) ->
+        kpro:fetch_request(Topic, Partition, Offset,
+                           MaxWaitTime, MinBytes, MaxBytes)
+    end,
+  try
+    do_fetch(Pid, ReqFun, MaxBytes0, Offset)
+  after
+    ok = brod_sock:stop(Pid)
+  end.
+
+%% @private
+-spec do_fetch(pid(), fun((non_neg_integer()) -> kpro_FetchRequest()),
+               non_neg_integer(), offset()) ->
+                  {ok, [#kafka_message{}]} | {error, any()}.
+do_fetch(SockPid, ReqFun, MaxBytes, Offset) ->
+  Request = ReqFun(MaxBytes),
+  {ok, Response} = brod_sock:request_sync(SockPid, Request, 10000),
   #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
   #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
   #kpro_FetchResponsePartition{ errorCode  = ErrorCode
                               , message_L  = Messages0
                               } = PM,
-  ok = brod_sock:stop(Pid),
-  Messages = case is_binary(Messages0) of
-               true  -> kpro:decode_message_set(Messages0);
-               false -> Messages0
-             end,
   case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       {error, kpro_ErrorCode:desc(ErrorCode)};
     false ->
-      {ok, lists:map(fun brod_utils:kafka_message/1, Messages)}
+      case brod_utils:map_messages(Offset, Messages0) of
+        {?incomplete_message, Size} ->
+          do_fetch(SockPid, ReqFun, Size, Offset);
+        Messages ->
+          {ok, Messages}
+      end
   end.
 
 %% escript entry point
