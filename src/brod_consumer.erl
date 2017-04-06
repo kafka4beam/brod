@@ -319,16 +319,7 @@ handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
                               , highWatermarkOffset = HighWmOffset
                               , message_L           = Messages0
                               } = PartitionResponse,
-  %% Since kafka_protocol 0.9, message sets are no longer decoded in brod_sock
-  %% The second case clause here is only for backward compatibility when
-  %% performing hot code upgrade. i.e. There might be already decoded message
-  %% sets delivered to self()'s mailbox before new beam is loaded.
-  %% TODO: remove the second clause in the next major release
-  Messages1 = case is_binary(Messages0) of
-                true  -> kpro:decode_message_set(Messages0);
-                false -> Messages0
-              end,
-  Messages = map_messages(State#state.begin_offset, Messages1),
+  Messages = brod_utils:map_messages(State#state.begin_offset, Messages0),
   case kpro_ErrorCode:is_error(ErrorCode) of
     true ->
       Error = #kafka_fetch_error{ topic      = Topic
@@ -425,28 +416,6 @@ err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
 err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
 err_op(?EC_OFFSET_OUT_OF_RANGE)        -> reset_offset;
 err_op(_)                              -> restart.
-
-%% @private Map message to brod's format.
-%% incomplete message indicator is kept when the only one message is incomplete.
-%% Messages having offset earlier than the requested offset are discarded.
-%% this might happen for compressed message sets
-%% @end
--spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
-                             | kpro_Message()
-                             ]) ->
-       {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
-map_messages(_BeginOffset, [?incomplete_message]) ->
-  %% This clause is kept for backward combatibility
-  %% When performing hot code upgrade, the old messages might
-  %% have been delivered to self()'s mailbox
-  %% TODO: remove thie clause in the next major release
-  {?incomplete_message, 12};
-map_messages(_BeginOffset, [{?incomplete_message, Size}]) ->
-  {?incomplete_message, Size};
-map_messages(BeginOffset, Messages) ->
-  [brod_utils:kafka_message(M) || M <- Messages,
-   is_record(M, kpro_Message) andalso
-   M#kpro_Message.offset >= BeginOffset].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic

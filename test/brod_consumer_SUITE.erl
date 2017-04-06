@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015, 2016, Klarna AB
+%%%   Copyright (c) 2015 - 2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@
 
 %% Test cases
 -export([ t_direct_fetch/1
+        , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
         , t_consumer_socket_restart/1
         , t_consumer_resubscribe/1
@@ -136,6 +137,20 @@ t_direct_fetch(Config) when is_list(Config) ->
   {ok, [Offset]} = brod:get_offsets(?HOSTS, Topic, Partition,
                                     ?OFFSET_LATEST, 1),
   {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1),
+  ?assertEqual(Key, Msg#kafka_message.key),
+  ok.
+
+t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key = make_unique_key(),
+  Value = crypto:strong_rand_bytes(100),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
+  {ok, [Offset]} = brod:get_offsets(?HOSTS, Topic, Partition,
+                                    ?OFFSET_LATEST, 1),
+  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1,
+                           _Timeout = 1000, _MinBytes = 0, _MaxBytes = 13),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
