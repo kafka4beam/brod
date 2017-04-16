@@ -210,7 +210,7 @@ assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
 assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
 
--spec assign_partitions(pid(), [kpro_GroupMemberMetadata()],
+-spec assign_partitions(pid(), [kpro_join_group_response_v0_member()],
                         [{topic(), partition()}]) ->
                             [{kafka_group_member_id(),
                               [brod_partition_assignment()]}].

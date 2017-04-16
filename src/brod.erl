@@ -100,7 +100,7 @@
              , group_config/0
              , group_id/0
              , key/0
-             , kpro_MetadataResponse/0
+             , kpro_metadata_response_v0/0
              , kv_list/0
              , offset/0
              , offset_time/0
@@ -450,13 +450,13 @@ start_link_topic_subscriber(Client, Topic, Partitions,
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+                      {ok, kpro_metadata_response_v0()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()], [topic()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+                      {ok, kpro_metadata_response_v0()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
@@ -494,11 +494,13 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   Request = kpro:fetch_request(Topic, Partition, Offset,
                                MaxWaitTime, MinBytes, MaxBytes),
   {ok, Response} = brod_sock:request_sync(Pid, Request, 10000),
-  #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
-  #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
-  #kpro_FetchResponsePartition{ errorCode  = ErrorCode
-                              , message_L  = Messages0
-                              } = PM,
+  #kpro_fetch_response_v0{responses = [FetchResponse]} = Response,
+  #kpro_fetch_response_v0_response{partition_responses = [PM]} = FetchResponse,
+  #kpro_fetch_response_v0_partition_response
+    { partition_header = PH
+    , record_set  = Messages0
+    } = PM,
+  #kpro_fetch_response_v0_partition_header{error_code = ErrorCode} = PH,
   ok = brod_sock:stop(Pid),
   Messages = case is_binary(Messages0) of
                true  -> kpro:decode_message_set(Messages0);

@@ -51,7 +51,7 @@ get_metadata(Hosts) ->
 
 get_metadata(Hosts, Topics) ->
   {ok, Pid} = try_connect(Hosts),
-  Request = #kpro_MetadataRequest{topicName_L = Topics},
+  Request = #kpro_metadata_request_v0{topics = Topics},
   Response = brod_sock:request_sync(Pid, Request, 10000),
   ok = brod_sock:stop(Pid),
   Response.
@@ -88,7 +88,7 @@ shutdown_pid(Pid) ->
 %% @doc Find leader broker ID for the given topic-partiton in
 %% the metadata response received from socket.
 %% @end
--spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
+-spec find_leader_in_metadata(kpro_metadata_response_v0(), topic(), partition()) ->
         {ok, endpoint()} | {error, any()}.
 find_leader_in_metadata(Metadata, Topic, Partition) ->
   try
@@ -122,16 +122,19 @@ log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
 fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
   Request = offset_request(Topic, Partition, TimeOrSemanticOffset, NrOfOffsets),
   {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
-  #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
-  #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
-  #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
+  #kpro_offsets_response_v0{
+    responses = [
+       #kpro_offsets_response_v0_response{
+         partition_responses = [
+           #kpro_offsets_response_v0_partition_response{
+             offsets = Offsets }]}]} = Response,
   {ok, Offsets}.
 
-%% @doc Convert a `kpro_Message' to a `kafka_message'.
--spec kafka_message(#kpro_Message{})     -> #kafka_message{};
+%% @doc Convert a `kpro_message' to a `kafka_message'.
+-spec kafka_message(#kpro_message{})     -> #kafka_message{};
                    (?incomplete_message) -> ?incomplete_message.
-kafka_message(#kpro_Message{ offset     = Offset
-                           , magicByte  = MagicByte
+kafka_message(#kpro_message{ offset     = Offset
+                           , magic_byte = MagicByte
                            , attributes = Attributes
                            , key        = MaybeKey
                            , value      = Value
@@ -189,39 +192,42 @@ ok_when(_, Reason) -> erlang:error(Reason).
 %% Offset is used as the Time argument.
 %% @end
 -spec offset_request(topic(), partition(),
-                     offset_time(), pos_integer()) -> kpro_OffsetRequest().
+                     offset_time(), pos_integer()) -> kpro_offsets_request_v0().
 offset_request(Topic, Partition, TimeOrSemanticOffset, MaxOffsets) ->
   Time = ensure_integer_offset_time(TimeOrSemanticOffset),
-  kpro:offset_request(Topic, Partition, Time, MaxOffsets).
+  kpro:offsets_request(Topic, Partition, Time, MaxOffsets).
 
 ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
 ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
 ensure_integer_offset_time(T) when is_integer(T) -> T.
 
--spec do_find_leader_in_metadata(kpro_MetadataResponse(),
+-spec do_find_leader_in_metadata(kpro_metadata_response_v0(),
                                  topic(), partition()) -> endpoint().
 do_find_leader_in_metadata(Metadata, Topic, Partition) ->
-  #kpro_MetadataResponse{ broker_L        = Brokers
-                        , topicMetadata_L = [TopicMetadata]
-                        } = Metadata,
-  #kpro_TopicMetadata{ errorCode           = TopicEC
-                     , topicName           = RealTopic
-                     , partitionMetadata_L = Partitions
-                     } = TopicMetadata,
+  #kpro_metadata_response_v0{ brokers        = Brokers
+                            , topic_metadata = [TopicMetadata]
+                            } = Metadata,
+  #kpro_metadata_response_v0_topic_metadata
+    { topic_error_code   = TopicEC
+    , topic              = RealTopic
+    , partition_metadata = Partitions
+    } = TopicMetadata,
   RealTopic /= Topic andalso erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION),
   kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
   Id = case lists:keyfind(Partition,
-                          #kpro_PartitionMetadata.partition, Partitions) of
-         #kpro_PartitionMetadata{leader = Leader} when Leader >= 0 ->
+                          #kpro_metadata_response_v0_partition_metadata.partition_id,
+                          Partitions) of
+         #kpro_metadata_response_v0_partition_metadata{leader = Leader}
+             when Leader >= 0 ->
            Leader;
-         #kpro_PartitionMetadata{} ->
+         #kpro_metadata_response_v0_partition_metadata{} ->
            erlang:throw(?EC_LEADER_NOT_AVAILABLE);
          false ->
            erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION)
        end,
-  Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
-  Host = Broker#kpro_Broker.host,
-  Port = Broker#kpro_Broker.port,
+  Broker = lists:keyfind(Id, #kpro_metadata_response_v0_broker.node_id, Brokers),
+  Host = Broker#kpro_metadata_response_v0_broker.host,
+  Port = Broker#kpro_metadata_response_v0_broker.port,
   {binary_to_list(Host), Port}.
 
 -define(IS_BYTE(I), (I>=0 andalso I<256)).

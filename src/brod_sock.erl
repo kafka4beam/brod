@@ -98,8 +98,8 @@ request_async(Pid, Request) ->
   case call(Pid, {send, Request}) of
     {ok, CorrId} ->
       case Request of
-        #kpro_ProduceRequest{requiredAcks = 0} -> ok;
-        _                                      -> {ok, CorrId}
+        #kpro_produce_request_v0{acks = 0} -> ok;
+        _                                  -> {ok, CorrId}
       end;
     {error, Reason} ->
       {error, Reason}
@@ -209,13 +209,13 @@ maybe_sasl_auth(_Sock, _Mod, _ClientId, _Timeout, _SaslOpts = undefined) -> ok;
 maybe_sasl_auth(Sock, Mod, ClientId, Timeout,
                 _SaslOpts = {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
-  HandshakeRequest = #kpro_SaslHandshakeRequest{mechanism="PLAIN"},
+  HandshakeRequest = #kpro_sasl_handshake_request_v0{mechanism="PLAIN"},
   HandshakeRequestBin = kpro:encode_request(ClientId, 0, HandshakeRequest),
   ok = Mod:send(Sock, HandshakeRequestBin),
   {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
   {ok, HandshakeResponseBin} = Mod:recv(Sock, Len, Timeout),
-  {[ #kpro_Response{ responseMessage = #kpro_SaslHandshakeResponse{
-                                          errorCode = ErrorCode }}],
+  {[ #kpro_response{ message = #kpro_sasl_handshake_response_v0
+                                 { error_code = ErrorCode }}],
     <<>>} = kpro:decode_response(<<Len:32, HandshakeResponseBin/binary>>),
   case ErrorCode of
     no_error ->
@@ -288,8 +288,9 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
   {Responses, Tail} = kpro:decode_response(<<Tail0/binary, Bin/binary>>),
   NewRequests =
     lists:foldl(
-      fun(#kpro_Response{ correlationId   = CorrId
-                        , responseMessage = Response
+      fun(#kpro_response{ header =
+                            #kpro_response_header{ correlation_id = CorrId }
+                        , message = Response
                         }, Reqs) ->
         Caller = brod_kafka_requests:get_caller(Reqs, CorrId),
         cast(Caller, {msg, self(), CorrId, Response}),
@@ -322,7 +323,7 @@ handle_msg({From, {send, Request}},
   {Caller, _Ref} = From,
   {CorrId, NewRequests} =
     case Request of
-      #kpro_ProduceRequest{requiredAcks = 0} ->
+      #kpro_produce_request_v0{acks = 0} ->
         brod_kafka_requests:increment_corr_id(Requests);
       _ ->
         brod_kafka_requests:add(Requests, Caller)

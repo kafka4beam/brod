@@ -288,18 +288,20 @@ handle_info({produce, CallRef, Key, Value},
     false ->
       handle_produce(CallRef, Key, Value, State)
   end;
-handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
+handle_info({msg, Pid, CorrId, #kpro_produce_response_v0{} = R},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
                   } = State) ->
-  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
-  #kpro_ProduceResponseTopic{ topicName                  = Topic
-                            , produceResponsePartition_L = [ProduceOffset]
-                            } = ProduceTopic,
-  #kpro_ProduceResponsePartition{ partition  = Partition
-                                , errorCode = ErrorCode
-                                , offset     = Offset
-                                } = ProduceOffset,
+  #kpro_produce_response_v0{responses = [ProduceTopic]} = R,
+  #kpro_produce_response_v0_response
+    { topic               = Topic
+    , partition_responses = [ProduceOffset]
+    } = ProduceTopic,
+  #kpro_produce_response_v0_partition_response
+    { partition   = Partition
+    , error_code  = ErrorCode
+    , base_offset = Offset
+    } = ProduceOffset,
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
   {ok, NewState} =
@@ -459,7 +461,7 @@ is_retriable(_) ->
   false.
 
 %% @private
--spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
+-spec sock_send(?undef | pid(), kpro_produce_request_v0()) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, sock_down};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).

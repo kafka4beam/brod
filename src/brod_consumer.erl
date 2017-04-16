@@ -307,18 +307,22 @@ handle_fetch_response(_Response, CorrId1,
                       #state{ last_corr_id = CorrId2
                             } = State) when CorrId1 =/= CorrId2 ->
   {noreply, State};
-handle_fetch_response(#kpro_FetchResponse{ fetchResponseTopic_L = [TopicData]
-                                         }, CorrId, State0) ->
+handle_fetch_response(#kpro_fetch_response_v0{ responses = [TopicData]
+                                             }, CorrId, State0) ->
   CorrId = State0#state.last_corr_id, %% assert
   State = State0#state{last_corr_id = ?undef},
-  #kpro_FetchResponseTopic{ topicName = Topic
-                          , fetchResponsePartition_L = [PartitionResponse]
-                          } = TopicData,
-  #kpro_FetchResponsePartition{ partition           = Partition
-                              , errorCode           = ErrorCode
-                              , highWatermarkOffset = HighWmOffset
-                              , message_L           = Messages0
-                              } = PartitionResponse,
+  #kpro_fetch_response_v0_response{ topic = Topic
+                                  , partition_responses = [PartitionResponse]
+                                  } = TopicData,
+  #kpro_fetch_response_v0_partition_response
+    { partition_header =
+        #kpro_fetch_response_v0_partition_header
+          { partition      = Partition
+          , error_code     = ErrorCode
+          , high_watermark = HighWmOffset
+          }
+    , record_set       = Messages0
+    } = PartitionResponse,
   %% Since kafka_protocol 0.9, message sets are no longer decoded in brod_sock
   %% The second case clause here is only for backward compatibility when
   %% performing hot code upgrade. i.e. There might be already decoded message
@@ -432,7 +436,7 @@ err_op(_)                              -> restart.
 %% this might happen for compressed message sets
 %% @end
 -spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
-                             | kpro_Message()
+                             | kpro_message()
                              ]) ->
        {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
 map_messages(_BeginOffset, [?incomplete_message]) ->
@@ -445,8 +449,8 @@ map_messages(_BeginOffset, [{?incomplete_message, Size}]) ->
   {?incomplete_message, Size};
 map_messages(BeginOffset, Messages) ->
   [brod_utils:kafka_message(M) || M <- Messages,
-   is_record(M, kpro_Message) andalso
-   M#kpro_Message.offset >= BeginOffset].
+   is_record(M, kpro_message) andalso
+   M#kpro_message.offset >= BeginOffset].
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic

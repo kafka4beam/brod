@@ -216,7 +216,7 @@ get_leader_connection(Client, Topic, Partition) ->
 
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
 -spec get_metadata(client(), ?undef | topic()) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro_metadata_response_v0()} | {error, any()}.
 get_metadata(Client, Topic) ->
   safe_gen_call(Client, {get_metadata, Topic}, infinity).
 
@@ -341,14 +341,16 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
   #state{config = Config} = State,
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
+  Req = #kpro_group_coordinator_request_v0{group_id = GroupId},
   {Rsp, NewState} = request_sync(State, Req, timer:seconds(Timeout)),
   Result =
     case Rsp of
-      {ok, #kpro_GroupCoordinatorResponse{ errorCode       = EC
-                                         , coordinatorHost = Host
-                                         , coordinatorPort = Port
-                                         }} ->
+      {ok, #kpro_group_coordinator_response_v0{
+              error_code  = EC,
+              coordinator = #kpro_group_coordinator_response_v0_coordinator{
+                              host = Host,
+                              port = Port
+                            }}} ->
         case kpro_ErrorCode:is_error(EC) of
           true  -> {error, EC}; %% OBS: {error, EC} is used by group coordinator
           false -> {ok, {{binary_to_list(Host), Port},Config}}
@@ -515,9 +517,10 @@ do_validate_topic_existence(Topic0, #state{config = Config} = State) ->
     end,
   case do_get_metadata(Topic, State) of
     {{ok, Response}, NewState} ->
-      #kpro_MetadataResponse{topicMetadata_L = Topics} = Response,
-      case lists:keyfind(Topic0, #kpro_TopicMetadata.topicName, Topics) of
-        #kpro_TopicMetadata{} = TopicMetadata ->
+      #kpro_metadata_response_v0{topic_metadata = Topics} = Response,
+      case lists:keyfind(
+             Topic0, #kpro_metadata_response_v0_topic_metadata.topic, Topics) of
+        #kpro_metadata_response_v0_topic_metadata{} = TopicMetadata ->
           case do_get_partitions_count(TopicMetadata) of
             {ok, _Count}    -> {ok, NewState};
             {error, Reason} -> {{error, Reason},NewState}
@@ -530,7 +533,7 @@ do_validate_topic_existence(Topic0, #state{config = Config} = State) ->
   end.
 
 -spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
-        when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
+        when Result :: {ok, kpro_metadata_response_v0()} | {error, any()}.
 do_get_metadata(Topic, #state{ client_id   = ClientId
                              , config      = Config
                              , workers_tab = Ets
@@ -539,7 +542,7 @@ do_get_metadata(Topic, #state{ client_id   = ClientId
              ?undef -> []; %% in case no topic is given, get all
              _      -> [Topic]
            end,
-  Request = #kpro_MetadataRequest{topicName_L = Topics},
+  Request = #kpro_metadata_request_v0{topics = Topics},
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
@@ -691,16 +694,17 @@ start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints, Config,
 %% since that is the only thing relatively 'static' in topic metadata.
 %% @end
 -spec maybe_update_partitions_count_cache(
-        ets:tab(), {ok, kpro_MetadataResponse()} | {error, any()}) -> ok.
-maybe_update_partitions_count_cache(Ets, {ok, #kpro_MetadataResponse{} = R}) ->
-  update_partitions_count_cache(Ets, R#kpro_MetadataResponse.topicMetadata_L);
+        ets:tab(), {ok, kpro_metadata_response_v0()} | {error, any()}) -> ok.
+maybe_update_partitions_count_cache(Ets, {ok, #kpro_metadata_response_v0{} = R}) ->
+  update_partitions_count_cache(Ets, R#kpro_metadata_response_v0.topic_metadata);
 maybe_update_partitions_count_cache(_Ets, {error, _}) ->
   ok.
 
--spec update_partitions_count_cache(ets:tab(), [kpro_TopicMetadata()]) -> ok.
+-spec update_partitions_count_cache(
+        ets:tab(), [kpro_metadata_response_v0_topic_metadata()]) -> ok.
 update_partitions_count_cache(_Ets, []) -> ok;
 update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
-  Topic = TopicMetadata#kpro_TopicMetadata.topicName,
+  Topic = TopicMetadata#kpro_metadata_response_v0_topic_metadata.topic,
   case do_get_partitions_count(TopicMetadata) of
     {ok, Cnt} ->
       ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
@@ -725,8 +729,7 @@ get_partitions_count(Client, Ets, Topic) ->
     false ->
       %% This call should populate the cache
       case get_metadata(Client, Topic) of
-        {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
-          [TopicMetadata] = TopicsMetadata,
+        {ok, #kpro_metadata_response_v0{topic_metadata = [TopicMetadata]}} ->
           do_get_partitions_count(TopicMetadata);
         {error, Reason} ->
           {error, Reason}
@@ -753,12 +756,12 @@ lookup_partitions_count_cache(Ets, Topic) ->
       {error, client_down}
   end.
 
--spec do_get_partitions_count(kpro_TopicMetadata()) ->
+-spec do_get_partitions_count(kpro_metadata_response_v0_topic_metadata()) ->
         {ok, pos_integer()} | {error, any()}.
 do_get_partitions_count(TopicMetadata) ->
-  #kpro_TopicMetadata{ errorCode           = TopicEC
-                     , partitionMetadata_L = Partitions
-                     } = TopicMetadata,
+  #kpro_metadata_response_v0_topic_metadata{ topic_error_code = TopicEC
+                                           , partition_metadata = Partitions
+                                           } = TopicMetadata,
   case kpro_ErrorCode:is_error(TopicEC) of
     true  -> {error, TopicEC};
     false -> {ok, erlang:length(Partitions)}
@@ -776,8 +779,8 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
       {error, Reason}
   end.
 
--spec request_sync(#state{}, kpro_RequestMessage(), non_neg_integer()) ->
-        {Result, #state{}} when Result :: {ok, kpro_ResponseMessage()}
+-spec request_sync(#state{}, kpro_request_message(), non_neg_integer()) ->
+        {Result, #state{}} when Result :: {ok, kpro_response_message()}
                                         | {error, any()}.
 request_sync(State, Request, Timeout) ->
   #state{config = Config} = State,
