@@ -49,17 +49,26 @@
 
 -define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
 -define(DEFAULT_REQUEST_TIMEOUT, timer:minutes(4)).
+-define(SIZE_HEAD_BYTES, 4).
 
 %%%_* Includes =================================================================
 -include("brod_int.hrl").
 
 -type options() :: proplists:proplist().
 -type requests() :: brod_kafka_requests:requests().
+-type byte_count() :: non_neg_integer().
+
+-record(acc, { expected_size = error(bad_init) :: byte_count()
+             , acc_size = 0 :: byte_count()
+             , acc_buffer = [] :: [binary()] %% received bytes in reversed order
+             }).
+
+-type acc() :: binary() | #acc{}.
 
 -record(state, { client_id   :: binary()
                , parent      :: pid()
                , sock        :: port()
-               , tail = <<>> :: binary() %% leftover of last data stream
+               , acc = <<>>  :: acc()
                , requests    :: requests()
                , mod         :: gen_tcp | ssl
                , req_timeout :: timeout()
@@ -277,7 +286,7 @@ decode_msg(Msg, State, Debug0) ->
   handle_msg(Msg, State, Debug).
 
 handle_msg({_, Sock, Bin}, #state{ sock     = Sock
-                                 , tail     = Tail0
+                                 , acc      = Acc0
                                  , requests = Requests
                                  , mod      = Mod
                                  } = State, Debug) when is_binary(Bin) ->
@@ -285,7 +294,8 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
     gen_tcp -> ok = inet:setopts(Sock, [{active, once}]);
     ssl     -> ok = ssl:setopts(Sock, [{active, once}])
   end,
-  {Responses, Tail} = kpro:decode_response(<<Tail0/binary, Bin/binary>>),
+  Acc1 = acc_recv_bytes(Acc0, Bin),
+  {Responses, Acc} = decode_response(Acc1),
   NewRequests =
     lists:foldl(
       fun(#kpro_Response{ correlationId   = CorrId
@@ -295,7 +305,7 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
         cast(Caller, {msg, self(), CorrId, Response}),
         brod_kafka_requests:del(Reqs, CorrId)
       end, Requests, Responses),
-  ?MODULE:loop(State#state{tail = Tail, requests = NewRequests}, Debug);
+  ?MODULE:loop(State#state{acc = Acc, requests = NewRequests}, Debug);
 handle_msg(assert_max_req_age, #state{ requests = Requests
                                      , req_timeout = ReqTimeout
                                      } = State, Debug) ->
@@ -433,6 +443,76 @@ send_assert_max_req_age(Pid, Timeout) when Timeout >= 1000 ->
   SendAfter = erlang:min(Timeout div 2, timer:minutes(1)),
   _ = erlang:send_after(SendAfter, Pid, assert_max_req_age),
   ok.
+
+%% @private Accumulate newly received bytes.
+-spec acc_recv_bytes(acc(), binary()) -> acc().
+acc_recv_bytes(Acc, NewBytes) when is_binary(Acc) ->
+  case <<Acc/binary, NewBytes/binary>> of
+    <<Size:32/signed-integer, _/binary>> = AccBytes ->
+      do_acc(#acc{expected_size = Size + ?SIZE_HEAD_BYTES}, AccBytes);
+    AccBytes ->
+      AccBytes
+  end;
+acc_recv_bytes(#acc{} = Acc, NewBytes) ->
+  do_acc(Acc, NewBytes).
+
+%% @private Add newly received bytes to buffer.
+-spec do_acc(acc(), binary()) -> acc().
+do_acc(#acc{acc_size = AccSize, acc_buffer = AccBuffer} = Acc, NewBytes) ->
+  Acc#acc{acc_size = AccSize + size(NewBytes),
+          acc_buffer = [NewBytes | AccBuffer]
+         }.
+
+%% @private Decode response when accumulated enough bytes.
+-spec decode_response(acc()) -> {[kpro_Response()], acc()}.
+decode_response(#acc{expected_size = ExpectedSize,
+                     acc_size = AccSize,
+                     acc_buffer = AccBuffer}) when AccSize >= ExpectedSize ->
+  %% iolist_to_binary here to simplify kafka_protocol implementation
+  %% maybe make it smarter in the next version
+  kpro:decode_response(iolist_to_binary(lists:reverse(AccBuffer)));
+decode_response(Acc) ->
+  {[], Acc}.
+
+%%%_* Eunit ====================================================================
+
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+acc_test_() ->
+  [{"clean start flow",
+    fun() ->
+        Acc0 = acc_recv_bytes(<<>>, <<0, 0>>),
+        ?assertEqual(Acc0, <<0, 0>>),
+        Acc1 = acc_recv_bytes(Acc0, <<0, 1, 0, 0>>),
+        ?assertEqual(#acc{expected_size = 5,
+                          acc_size = 6,
+                          acc_buffer = [<<0, 0, 0, 1, 0, 0>>]
+                         }, Acc1)
+    end},
+   {"old tail leftover",
+    fun() ->
+        Acc0 = acc_recv_bytes(<<0, 0>>, <<0, 4>>),
+        ?assertEqual(#acc{expected_size = 8,
+                          acc_size = 4,
+                          acc_buffer = [<<0, 0, 0, 4>>]
+                         }, Acc0),
+        Acc1 = acc_recv_bytes(Acc0, <<0, 0>>),
+        ?assertEqual(#acc{expected_size = 8,
+                          acc_size = 6,
+                          acc_buffer = [<<0, 0>>, <<0, 0, 0, 4>>]
+                         }, Acc1),
+        Acc2 = acc_recv_bytes(Acc1, <<1, 1>>),
+        ?assertEqual(#acc{expected_size = 8,
+                          acc_size = 8,
+                          acc_buffer = [<<1, 1>>, <<0, 0>>, <<0, 0, 0, 4>>]
+                         }, Acc2)
+    end
+   }
+  ].
+
+-endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
