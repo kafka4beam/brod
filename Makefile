@@ -8,6 +8,7 @@ DEPS = supervisor3 kafka_protocol
 ifeq ($(BROD_CLI),true)
 	DEPS += docopt jsone
 	ERLC_OPTS += -DBROD_CLI
+	TEST_ERLC_OPTS += -DBROD_CLI
 endif
 
 dep_supervisor3_commit = 1.1.5

@@ -16,13 +16,17 @@
 
 -module(brod_cli_tests).
 
+-ifdef(BROD_CLI).
+
 -include_lib("eunit/include/eunit.hrl").
 
 %% no crash on 'help', 'version' etc commands
 informative_test() ->
-  brod_cli:main(["--help"]),
-  brod_cli:main(["--version"]),
-  brod_cli:main(["meta", "--help"]).
+  brod_cli:main(["--help"], exit),
+  brod_cli:main(["--version"], exit),
+  brod_cli:main(["meta", "--help", "--debug"], exit).
+
+-endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

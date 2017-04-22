@@ -235,11 +235,23 @@ main(_, Stop) ->
 %% @private
 -spec main(command(), string(), [string()], halt | exit) -> _ | no_return().
 main(Command, Doc, Args0, Stop) ->
+  IsHelp = lists:member("--help", Args0),
   IsVerbose = lists:member("--verbose", Args0),
   IsDebug = lists:member("--debug", Args0),
   Args = Args0 -- ["--verbose", "--debug"],
   erlang:put(brod_cli_verbose, IsVerbose),
   erlang:put(brod_cli_debug, IsDebug),
+  case IsHelp of
+    true ->
+      print(Doc);
+    false ->
+      main(Command, Doc, Args, Stop, IsDebug, IsVerbose)
+  end.
+
+%% @private
+-spec main(command(), string(), [string()], halt | exit,
+           boolean(), boolean()) -> _ | no_return().
+main(Command, Doc, Args, Stop, IsDebug, IsVerbose) ->
   ParsedArgs =
     try
       docopt:docopt(Doc, Args, [debug || IsDebug])
