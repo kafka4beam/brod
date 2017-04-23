@@ -27,7 +27,7 @@
 -define(MAIN_DOC, "usage:
   brod --help
   brod --version
-  brod <command> [options] [--verbose] [--debug]
+  brod <command> [options] [--verbose | --debug]
 
 commands:
   meta:   Inspect topic metadata
@@ -209,6 +209,12 @@ options:
                {?PIPE_CMD, ?PIPE_DOC}
                ]).
 
+-define(LOG_LEVEL_QUIET, 0).
+-define(LOG_LEVEL_VERBOSE, 1).
+-define(LOG_LEVEL_DEBUG, 2).
+
+-type log_level() :: non_neg_integer().
+
 -type command() :: string().
 
 main(["--help" | _], _Stop) ->
@@ -239,22 +245,25 @@ main(Command, Doc, Args0, Stop) ->
   IsVerbose = lists:member("--verbose", Args0),
   IsDebug = lists:member("--debug", Args0),
   Args = Args0 -- ["--verbose", "--debug"],
-  erlang:put(brod_cli_verbose, IsVerbose),
-  erlang:put(brod_cli_debug, IsDebug),
+  LogLevels = [{IsDebug, ?LOG_LEVEL_DEBUG},
+               {IsVerbose, ?LOG_LEVEL_VERBOSE},
+               {true, ?LOG_LEVEL_QUIET}],
+  {true, LogLevel} = lists:keyfind(true, 1, LogLevels),
+  erlang:put(brod_cli_log_level, LogLevel),
   case IsHelp of
     true ->
       print(Doc);
     false ->
-      main(Command, Doc, Args, Stop, IsDebug, IsVerbose)
+      main(Command, Doc, Args, Stop, LogLevel)
   end.
 
 %% @private
 -spec main(command(), string(), [string()], halt | exit,
-           boolean(), boolean()) -> _ | no_return().
-main(Command, Doc, Args, Stop, IsDebug, IsVerbose) ->
+           log_level()) -> _ | no_return().
+main(Command, Doc, Args, Stop, LogLevel) ->
   ParsedArgs =
     try
-      docopt:docopt(Doc, Args, [debug || IsDebug])
+      docopt:docopt(Doc, Args, [debug || LogLevel =:= ?LOG_LEVEL_DEBUG])
     catch
       C1 : E1 ->
         Stack1 = erlang:get_stacktrace(),
@@ -262,12 +271,12 @@ main(Command, Doc, Args, Stop, IsDebug, IsVerbose) ->
         print(Doc),
         erlang:Stop(?LINE)
     end,
-  case IsVerbose orelse IsDebug of
-    true ->
-      ok;
+  case LogLevel =:= ?LOG_LEVEL_QUIET of
     false ->
       ok = error_logger:logfile({open, 'brod.log'}),
-      ok = error_logger:tty(false)
+      ok = error_logger:tty(false);
+    true ->
+      ok
   end,
   {ok, _} = application:ensure_all_started(brod),
   try
@@ -430,10 +439,12 @@ pipe(ReaderPid, SendFun, PendingAcks0) ->
     {'DOWN', _Ref, process, ReaderPid, Reason} ->
       %% Reader is down, flush pending acks
       debug("reader down, reason: ~p\n", [Reason]),
-      _ = flush_pending_acks(PendingAcks1, infinity)
-  after
-    100 ->
-      pipe(ReaderPid, SendFun, PendingAcks0)
+      _ = flush_pending_acks(PendingAcks1, infinity);
+    #brod_produce_reply{ call_ref = CallRef
+                       , result = brod_produce_req_acked
+                       } ->
+      {{value, CallRef}, PendingAcks} = queue:out(PendingAcks1),
+      pipe(ReaderPid, SendFun, PendingAcks)
   end.
 
 %% @private
@@ -741,15 +752,14 @@ verbose(Str) -> verbose(Str, []).
 
 %% @private
 verbose(Fmt, Args) ->
-  case erlang:get(brod_cli_verbose) orelse
-       erlang:get(brod_cli_debug) of
+  case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_VERBOSE of
     true  -> io:format(standard_error, "[verbo]: " ++ Fmt, Args);
     false -> ok
   end.
 
 %% @private
 debug(Fmt, Args) ->
-  case erlang:get(brod_cli_debug) of
+  case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_DEBUG of
     true  -> io:format(standard_error, "[debug]: " ++ Fmt, Args);
     false -> ok
   end.
