@@ -21,3 +21,4 @@ _rel/
 .eunit/
 .rebar/
 rebar.lock
+pipe-test.data

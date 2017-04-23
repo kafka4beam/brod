@@ -257,8 +257,15 @@ make_line_reader(KvDeli, Prompt) ->
       case read_line(IoDevice, Prompt) of
         eof ->
           eof;
-        Line when KvDeli =:= none ->
-          {[{<<>>, Line}], []};
+        Key when KvDeli =:= <<"\n">> ->
+          case read_line(IoDevice, Prompt) of
+            eof ->
+              eof;
+            Val ->
+              {[{Key, Val}], []}
+          end;
+        Val when KvDeli =:= none ->
+          {[{<<>>, Val}], []};
         Line ->
           [Key, Value] = binary:split(Line, bin(KvDeli)),
           {[{Key, Value}], []}
@@ -283,7 +290,7 @@ make_stream_reader(KvDeli, MsgDeli, BlkSize) ->
           LastMsg = bin(lists:reverse(Acc)),
           KvPairs = split_kv_pairs([LastMsg], KvDeliCp, IsSameDeli),
           {KvPairs, []};
-        Bytes ->
+        {ok, Bytes} ->
           Acc1 = add_acc(size(MsgDeli), Bytes, Acc),
           {Messages, NewAcc} = split_messages(MsgDeliCp, Acc1),
           KvPairs = split_kv_pairs(Messages, KvDeliCp, IsSameDeli),
@@ -336,7 +343,10 @@ split_kv_pairs(Msgs, none, _IsSameDeli) ->
 split_kv_pairs(Msgs, _KvDeliCp, _IsSameDeli = true) ->
   make_kv_pairs(Msgs);
 split_kv_pairs(Msgs, KvDeliCp, _IsSameDeli = false) ->
-  lists:map(fun(Msg) -> {_, _} = binary:split(Msg, KvDeliCp) end, Msgs).
+  lists:map(fun(Msg) ->
+                [K, V] = binary:split(Msg, KvDeliCp),
+                {K, V}
+            end, Msgs).
 
 %% @private
 make_kv_pairs([]) -> [];
