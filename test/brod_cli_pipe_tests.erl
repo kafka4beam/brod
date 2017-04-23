@@ -51,6 +51,7 @@ line_mode_test() ->
     , {tail, false}
     , {no_exit, false}
     , {blk_size, ignore}
+    , {retry_delay, ignore}
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
@@ -71,6 +72,7 @@ line_mode_no_key_test() ->
     , {tail, false}
     , {no_exit, false}
     , {blk_size, ignore}
+    , {retry_delay, ignore}
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
@@ -92,6 +94,7 @@ line_mode_split_test() ->
     , {tail, false}
     , {no_exit, false}
     , {blk_size, 1}
+    , {retry_delay, ignore}
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
@@ -112,12 +115,41 @@ stream_one_byte_delimiter_test() ->
     , {tail, false}
     , {no_exit, false}
     , {blk_size, 2}
+    , {retry_delay, ignore}
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
   ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
   ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
   ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 1000),
+  ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
+  ok.
+
+stream_test() ->
+  File = "pipe-test.data",
+  Data = "key1::val1###key2::val2###key3::val3##",
+  ok = file:write_file(File, Data),
+  Args =
+    [ {source, {file, File}}
+    , {kv_deli, <<"::">>}
+    , {msg_deli, <<"###">>}
+    , {prompt, false}
+    , {tail, false}
+    , {no_exit, true}
+    , {blk_size, 3}
+    , {retry_delay, 10}
+    ],
+  {ok, Pid} = brod_cli_pipe:start_link(Args),
+  erlang:monitor(process, Pid),
+  ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
+  ?assertError({timeout, _},
+               ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 500)),
+  MoreData = "#key-4::val-4###",
+  ok = file:write_file(File, MoreData, [append]),
+  ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [{<<"key-4">>, <<"val-4">>}]}, ok, 1000),
+  ok = brod_cli_pipe:stop(Pid),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
 

@@ -28,6 +28,7 @@
 -behaviour(gen_server).
 
 -export([ start_link/1
+        , stop/1
         ]).
 
 -export([ code_change/3
@@ -64,7 +65,7 @@
 -record(state, { parent :: pid()
                , source :: ?STDIN | {file, string()}
                , read_fun :: read_fun()
-               , is_no_exit :: boolean()
+               , is_eof_exit :: boolean()
                , is_tail :: boolean()
                , io_device :: ?STDIN | file:io_device()
                , acc_bytes = [] :: [binary()]
@@ -88,13 +89,16 @@
 -spec start_link([{arg_name(), arg_value()}]) -> {ok, pid()}.
 start_link(Args) ->
   Parent = self(),
-  Arg = fun(Name) -> proplists:get_value(Name, Args) end,
+  Arg = fun(Name) -> {_, V} = lists:keyfind(Name, 1, Args), V end,
   KvDeli = Arg(kv_deli),
   MsgDeli = Arg(msg_deli),
   Source = Arg(source),
   IsLineMode = MsgDeli =:= ?LINE_BREAK,
   BlkSize = Arg(blk_size),
   IsPrompt = Arg(prompt),
+  IsTail = Arg(tail),
+  IsNoExit = Arg(no_exit),
+  IsEofExit = not (IsTail orelse IsNoExit),
   ReadFun =
     case IsLineMode of
       true when IsPrompt andalso Source =:= ?STDIN ->
@@ -102,16 +106,19 @@ start_link(Args) ->
       true ->
         make_line_reader(KvDeli, _PromptStr = "");
       false ->
-        make_stream_reader(KvDeli, MsgDeli, BlkSize)
+        make_stream_reader(KvDeli, MsgDeli, BlkSize, IsEofExit)
     end,
   State = #state{ parent = Parent
                 , source = Source
                 , read_fun = ReadFun
-                , is_tail = Arg(tail)
-                , is_no_exit = Arg(no_exit)
+                , is_tail = IsTail
+                , is_eof_exit = IsEofExit
                 , retry_delay = Arg(retry_delay)
                 },
   gen_server:start_link({local, ?MODULE}, ?MODULE, State, []).
+
+%% @doc Stop gen_server.
+stop(Pid) -> gen_server:cast(Pid, stop).
 
 %% @doc Tell reader to continue.
 continue() -> self() ! ?CONTINUE_MSG.
@@ -147,6 +154,8 @@ handle_info(_Info, State) ->
   {noreply, State}.
 
 %% @hidden
+handle_cast(stop, State) ->
+  {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -193,29 +202,23 @@ handle_read(#state{ read_fun = ReadFun
 handle_eof(#state{io_device = ?STDIN} = State) ->
   %% standard_io pipe closed
   {stop, normal, State};
-handle_eof(#state{ io_device = Fd
-                 , is_no_exit = IsNoExit0
-                 , is_tail = IsTail
-                 } = State) ->
-  IsNoExit = IsTail orelse IsNoExit0,
+handle_eof(#state{is_eof_exit = true} = State) ->
+  {stop, normal, State};
+handle_eof(#state{io_device = Fd} = State) ->
   %% Get current position
   {ok, LastPos} = file:position(Fd, {cur, 0}),
   %% Try set position to EOF,
   %% see if it is the current position
   case file:position(Fd, eof) of
-    {ok, LastPos} when IsNoExit ->
-      %% Reached eof, but we should not stop
-      %% Try read again later
-      ok = delay_continue(State),
-      {noreply, State};
-    {ok, LastPos} ->
-      %% Reached eof, exit
-      {stop, normal, State};
     {ok, NewPos} when NewPos < LastPos ->
       %% File has been truncated.
       %% Don't know what to do because
       %% we can not assume the file is truncated to empty
-      {stop, pipe_source_truncated, State}
+      {stop, pipe_source_truncated, State};
+    {ok, _Pos} ->
+      file:position(Fd, LastPos),
+      ok = delay_continue(State),
+      {noreply, State}
   end.
 
 %% @private
@@ -273,9 +276,9 @@ make_line_reader(KvDeli, Prompt) ->
   end.
 
 %% @private
--spec make_stream_reader(none | delimiter(), delimiter(), pos_integer()) ->
-        read_fun().
-make_stream_reader(KvDeli, MsgDeli, BlkSize) ->
+-spec make_stream_reader(none | delimiter(), delimiter(),
+                         pos_integer(), boolean()) -> read_fun().
+make_stream_reader(KvDeli, MsgDeli, BlkSize, IsEofExit) ->
   IsSameDeli = MsgDeli =:= KvDeli,
   KvDeliCp = case is_binary(KvDeli) of
                true -> binary:compile_pattern(KvDeli);
@@ -284,12 +287,21 @@ make_stream_reader(KvDeli, MsgDeli, BlkSize) ->
   MsgDeliCp = binary:compile_pattern(MsgDeli),
   fun(IoDevice, Acc) ->
       case file:read(IoDevice, BlkSize) of
-        eof when Acc =:= [] ->
-          eof;
         eof ->
-          LastMsg = bin(lists:reverse(Acc)),
-          KvPairs = split_kv_pairs([LastMsg], KvDeliCp, IsSameDeli),
-          {KvPairs, []};
+          case IsEofExit of
+            true when Acc =:= [] ->
+              %% Reached EOF
+              eof;
+            true ->
+              %% Configured to exit when reaching EOF
+              %% try split kv-pairs NOW
+              LastMsg = bin(lists:reverse(Acc)),
+              KvPairs = split_kv_pairs([LastMsg], KvDeliCp, IsSameDeli),
+              {KvPairs, []};
+            false ->
+              %% Keep looping for the next message delimiter
+              {[], Acc}
+          end;
         {ok, Bytes} ->
           Acc1 = add_acc(size(MsgDeli), Bytes, Acc),
           {Messages, NewAcc} = split_messages(MsgDeliCp, Acc1),
@@ -306,7 +318,7 @@ add_acc(_DeliSize = 1, Bytes, Acc) ->
 add_acc(_DeliSize, Bytes, []) ->
   [Bytes];
 add_acc(DeliSize, Bytes, [Tail | Header]) ->
-  Size = size(Tail) - size(DeliSize),
+  Size = size(Tail) - DeliSize,
   case Size =< 0 of
     true ->
       [<<Tail/binary, Bytes/binary>> | Header];
