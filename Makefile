@@ -4,9 +4,10 @@ PROJECT_VERSION = 2.3.6
 
 DEPS = supervisor3 kafka_protocol
 
-## BROD_CLI=true make escript
 ifeq ($(BROD_CLI),true)
 	DEPS += docopt jsone
+	ERLC_OPTS += -DBROD_CLI
+	TEST_ERLC_OPTS = -DBROD_CLI -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
 endif
 
 dep_supervisor3_commit = 1.1.5
@@ -24,10 +25,7 @@ CT_OPTS = -ct_use_short_names true
 
 include erlang.mk
 
-ifeq ($(BROD_CLI),true)
-	ERLC_OPTS += -DBROD_CLI
-	TEST_ERLC_OPTS += -DBROD_CLI
-endif
+escript:: export BROD_CLI=true
 
 ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 

@@ -355,8 +355,8 @@ brod:fetch(Hosts, Topic, Partition, 1).
 # Self-contained binary (needs erlang runtime)
 This will build a self-contained binary with brod application
 
-```bash
-BROD_CLIE=true make escript
+```shell
+make escript
 ./scripts/brod --help
 ```
 

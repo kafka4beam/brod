@@ -58,8 +58,19 @@ commands:
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
   -t,--topic=<topic>     Topic name [default: *]
+  --list-topics          List topics, no partition details
+  --under-replicated     Display only under-replicated partitions
+  --text                 Print metadata as aligned texts
+  --json                 Print metadata as JSON object
 "
 ?COMMAND_COMMON_OPTIONS
+"Text output schema:
+brokers <count>:
+  <broker-id>: <endpoint>
+topics <count>:
+  <name> <count>: [[ERROR] [<reason>]]
+    <partition>: [[ERROR] [<reason>]] | <broker-id> (isr...) (osr...) [WARNING]
+"
 ).
 
 -define(OFFSET_CMD, "offset").
@@ -272,10 +283,10 @@ main(Command, Doc, Args, Stop, LogLevel) ->
         erlang:Stop(?LINE)
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
-    false ->
+    true ->
       ok = error_logger:logfile({open, 'brod.log'}),
       ok = error_logger:tty(false);
-    true ->
+    false ->
       ok
   end,
   {ok, _} = application:ensure_all_started(brod),
@@ -299,13 +310,21 @@ main(Command, Doc, Args, Stop, LogLevel) ->
   end.
 
 %% @private
-run(?META_CMD, Brokers, Topic, SockOpts, _Args) ->
+run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
   Topics = case Topic of
              <<"*">> -> []; %% fetch all topics
              _       -> [Topic]
            end,
+  IsJSON = parse(Args, "--json", fun parse_boolean/1),
+  IsText = parse(Args, "--text", fun parse_boolean/1),
+  Format = proplists:get_value(true, [ {IsJSON, json}
+                                     , {IsText, text}
+                                     , {true, text}
+                                     ]),
+  IsList = parse(Args, "--list-topics", fun parse_boolean/1),
+  IsUrp = parse(Args, "--under-replicated", fun parse_boolean/1),
   {ok, Metadata} = brod:get_metadata(Brokers, Topics, SockOpts),
-  format_metadata(Metadata);
+  format_metadata(Metadata, Format, IsList, IsUrp);
 run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
   Count = parse(Args, "--count", fun int/1),
@@ -529,34 +548,196 @@ parse_size(Size) ->
   end.
 
 %% @private
-format_metadata(Metadata0) ->
-  Metadata = kpro:to_maps(Metadata0),
-  JSON = to_json(Metadata),
-  print([JSON, "\n"]).
+format_metadata(Metadata, Format, IsList, IsUrp) ->
+  #kpro_MetadataResponse{ broker_L = Brokers0
+                        , topicMetadata_L = Topics0
+                        } = Metadata,
+  Topics1 = case IsUrp of
+              true -> lists:filter(fun is_ur_topic/1, Topics0);
+              false -> Topics0
+            end,
+  Brokers = format_brokers(Brokers0),
+  Topics = format_topics(Topics1),
+  case Format of
+    json ->
+      JSON = jsone:encode(#{ brokers => Brokers
+                           , topics => Topics
+                           }),
+      print([JSON, "\n"]);
+    text ->
+      BL = format_broker_lines(Brokers),
+      TL0 = lists:map(
+              fun(T) ->
+                  [{Name, Partitions}] = maps:to_list(T),
+                  {Name, Partitions}
+              end, Topics),
+      TL1 = lists:keysort(1, TL0),
+      TL = format_topics_lines(TL1, IsList),
+      print([BL, TL])
+  end.
 
 %% @private
-to_json(Map0) ->
-  Map = bin2(Map0),
-  jsone:encode(Map).
+format_brokers(Brokers) ->
+  lists:map(
+    fun(#kpro_Broker{ nodeId = Id
+                    , host = Host
+                    , port = Port
+                    }) ->
+        #{ integer_to_binary(Id) => bin([Host, ":", integer_to_list(Port)])
+         }
+    end, Brokers).
 
-%% @private Ensure printable list as binary for JSON encoding.
-bin2(List) when is_list(List) ->
-  lists:map(fun(I) -> bin2(I) end, List);
-bin2(Map) when is_map(Map) ->
-  maps:map(
-    fun(_K, V) ->
-        case io_lib:printable_list(V) of
-          true ->
-            bin(V);
-          false when is_list(V) ->
-            bin2(V);
-          false when is_map(V) ->
-            bin2(V);
-          false ->
-            V
-        end
-    end, Map);
-bin2(Term) -> Term.
+%% @private
+format_broker_lines(Brokers) ->
+  Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
+  F = fun(Broker) ->
+          [{Id, Endopoint}] = maps:to_list(Broker),
+          io_lib:format("  ~s: ~s\n", [Id, Endopoint])
+      end,
+  [Header, lists:map(F, Brokers)].
+
+%% @private
+format_topics_lines(Topics, true) ->
+  Header = io_lib:format("topics [~p]:\n", [length(Topics)]),
+  [Header, lists:map(fun format_topic_list_line/1, Topics)];
+format_topics_lines(Topics, false) ->
+  Header = io_lib:format("topics [~p]:\n", [length(Topics)]),
+  [Header, lists:map(fun format_topic_lines/1, Topics)].
+
+%% @private
+format_topic_list_line({Name, Partitions}) when is_list(Partitions) ->
+  io_lib:format("  ~s\n", [Name]);
+format_topic_list_line({Name, ErrorCode}) ->
+  ErrorStr = format_error_code(ErrorCode),
+  io_lib:format("  ~s: [ERROR] ~s\n", [Name, ErrorStr]).
+
+%% @private
+format_topic_lines({Name, Partitions}) when is_list(Partitions) ->
+  Header = io_lib:format("  ~s [~p]:\n", [Name, length(Partitions)]),
+  PartitionsText = format_partitions_lines(Partitions),
+  [Header, PartitionsText];
+format_topic_lines({Name, ErrorCode}) ->
+  ErrorStr = format_error_code(ErrorCode),
+  io_lib:format("  ~s: [ERROR] ~s\n", [Name, ErrorStr]).
+
+%% @private
+format_error_code(E) when is_atom(E) -> atom_to_list(E);
+format_error_code(E) when is_integer(E) -> integer_to_list(E).
+
+%% @private
+format_partitions_lines(Partitions0) ->
+  Partitions1 =
+    lists:map(fun(P) ->
+                  [{Pnr, Info}] = maps:to_list(P),
+                  {binary_to_integer(Pnr), Info}
+              end, Partitions0),
+  Partitions = lists:keysort(1, Partitions1),
+  lists:map(fun format_partition_lines/1, Partitions).
+
+%% @private
+format_partition_lines({Partition, Info}) when is_map(Info) ->
+  #{ leader := LeaderNodeId
+   , isr := Isr
+   , osr := Osr
+   } = Info,
+  io_lib:format("~7s: ~p ~s ~s\n",
+                [integer_to_list(Partition), LeaderNodeId,
+                 format_list(Isr),
+                 format_list(Osr)]);
+format_partition_lines({Partition, ErrorCode}) ->
+  ErrorStr = format_error_code(ErrorCode),
+  io_lib:format("    ~s: [ERROR] ~s\n", [Partition, ErrorStr]).
+
+%% @doc
+format_list(List) ->
+  Str = lists:flatten(io_lib:format("~w", [List])),
+  ["(", rstrip(lstrip(Str , "["), "]"), ")"].
+
+%% @private
+format_topics(Topics) ->
+  lists:map(fun format_topic/1, Topics).
+
+%% @private Return true if a topics is under-replicated
+is_ur_topic(Topic) ->
+  #kpro_TopicMetadata{ errorCode = ErrorCode
+                     , partitionMetadata_L = PL
+                     } = Topic,
+  %% when there is an error, we do not know if
+  %% it is under-replicated or not
+  %% retrun true to alert user
+  kpro_ErrorCode:is_error(ErrorCode) orelse
+  lists:any(fun is_ur_partition/1, PL).
+
+%% @private Return true if a partition is under-replicated
+is_ur_partition(Partition) ->
+  #kpro_PartitionMetadata{ errorCode = ErrorCode
+                         , replicas = Replicas
+                         , isr = Isr
+                         } = Partition,
+  kpro_ErrorCode:is_error(ErrorCode) orelse
+  lists:sort(Isr) =/= lists:sort(Replicas).
+
+%% @private
+format_topic(Topic) ->
+  #kpro_TopicMetadata{ errorCode = ErrorCode
+                     , topicName = TopicName
+                     , partitionMetadata_L = PL
+                     } = Topic,
+  Data =
+    case kpro_ErrorCode:is_error(ErrorCode) of
+      true ->
+        ErrorCode;
+      false ->
+        format_partitions(PL)
+    end,
+  #{TopicName => Data}.
+
+%% @private
+format_partitions(Partitions) ->
+  lists:map(fun format_partition/1, Partitions).
+
+format_partition(Partition) ->
+  #kpro_PartitionMetadata{ errorCode = ErrorCode
+                         , partition = PartitionNr
+                         , leader = LeaderNodeId
+                         , replicas = Replicas
+                         , isr = Isr
+                         } = Partition,
+  Data =
+    case kpro_ErrorCode:is_error(ErrorCode) of
+      true ->
+        ErrorCode;
+      false ->
+        #{ leader => LeaderNodeId
+         , isr => Isr
+         , osr => Replicas -- Isr
+         }
+    end,
+  #{integer_to_binary(PartitionNr) => Data}.
+
+%% @private
+% to_json(Map0) ->
+%   Map = bin2(Map0),
+%   jsone:encode(Map).
+
+% %% @private Ensure printable list as binary for JSON encoding.
+% bin2(List) when is_list(List) ->
+%   lists:map(fun(I) -> bin2(I) end, List);
+% bin2(Map) when is_map(Map) ->
+%   maps:map(
+%     fun(_K, V) ->
+%         case io_lib:printable_list(V) of
+%           true ->
+%             bin(V);
+%           false when is_list(V) ->
+%             bin2(V);
+%           false when is_map(V) ->
+%             bin2(V);
+%           false ->
+%             V
+%         end
+%     end, Map);
+% bin2(Term) -> Term.
 
 %% @private
 parse_delimiter("none") ->
