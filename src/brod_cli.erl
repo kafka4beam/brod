@@ -716,30 +716,6 @@ format_partition(Partition) ->
   #{integer_to_binary(PartitionNr) => Data}.
 
 %% @private
-% to_json(Map0) ->
-%   Map = bin2(Map0),
-%   jsone:encode(Map).
-
-% %% @private Ensure printable list as binary for JSON encoding.
-% bin2(List) when is_list(List) ->
-%   lists:map(fun(I) -> bin2(I) end, List);
-% bin2(Map) when is_map(Map) ->
-%   maps:map(
-%     fun(_K, V) ->
-%         case io_lib:printable_list(V) of
-%           true ->
-%             bin(V);
-%           false when is_list(V) ->
-%             bin2(V);
-%           false when is_map(V) ->
-%             bin2(V);
-%           false ->
-%             V
-%         end
-%     end, Map);
-% bin2(Term) -> Term.
-
-%% @private
 parse_delimiter("none") ->
   none;
 parse_delimiter(EscappedStr) ->
