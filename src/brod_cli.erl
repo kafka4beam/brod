@@ -505,7 +505,7 @@ fetch_loop(FmtFun, FetchFun, Offset, Count) ->
       lists:foreach(
         fun(M) ->
             #kafka_message{offset = O, key = K, value = V} = M,
-            case FmtFun(O, K, V) of
+            case FmtFun(O, ensure_kafka_bin(K), ensure_kafka_bin(V)) of
               ok -> ok;
               IoData -> io:put_chars(IoData)
             end
@@ -926,6 +926,10 @@ int(Str) -> list_to_integer(Str).
 
 %% @private
 bin(IoData) -> iolist_to_binary(IoData).
+
+%% @private
+ensure_kafka_bin(undefined) -> <<>>;
+ensure_kafka_bin(Bin) -> Bin.
 
 %% @private
 parse_brokers(HostsStr) ->
