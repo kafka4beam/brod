@@ -17,7 +17,7 @@
 %% @doc The input source of brod-cli pipe command
 %% This module implements a process that reads off the bytes
 %% from the data source (either stdin or a file)
-%% and sends the byts to parent process.
+%% and sends the byets to parent process.
 %% Messages sent to parent process:
 %%   {pipe, self(), [{Key :: binary(), Val :: binary()}]}
 %% @end
