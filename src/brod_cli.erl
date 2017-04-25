@@ -560,15 +560,14 @@ format_metadata(Metadata, Format, IsList, IsUrp) ->
   Topics = format_topics(Topics1),
   case Format of
     json ->
-      JSON = jsone:encode(#{ brokers => Brokers
-                           , topics => Topics
-                           }),
+      JSON = jsone:encode([ {brokers, Brokers}
+                          , {topics, Topics}
+                          ]),
       print([JSON, "\n"]);
     text ->
       BL = format_broker_lines(Brokers),
       TL0 = lists:map(
-              fun(T) ->
-                  [{Name, Partitions}] = maps:to_list(T),
+              fun([{Name, Partitions}]) ->
                   {Name, Partitions}
               end, Topics),
       TL1 = lists:keysort(1, TL0),
@@ -583,15 +582,13 @@ format_brokers(Brokers) ->
                     , host = Host
                     , port = Port
                     }) ->
-        #{ integer_to_binary(Id) => bin([Host, ":", integer_to_list(Port)])
-         }
-    end, Brokers).
+        {integer_to_binary(Id), bin([Host, ":", integer_to_list(Port)])}
+    end, lists:keysort(#kpro_Broker.nodeId, Brokers)).
 
 %% @private
 format_broker_lines(Brokers) ->
   Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
-  F = fun(Broker) ->
-          [{Id, Endopoint}] = maps:to_list(Broker),
+  F = fun({Id, Endopoint}) ->
           io_lib:format("  ~s: ~s\n", [Id, Endopoint])
       end,
   [Header, lists:map(F, Brokers)].
@@ -627,19 +624,18 @@ format_error_code(E) when is_integer(E) -> integer_to_list(E).
 %% @private
 format_partitions_lines(Partitions0) ->
   Partitions1 =
-    lists:map(fun(P) ->
-                  [{Pnr, Info}] = maps:to_list(P),
+    lists:map(fun([{Pnr, Info}]) ->
                   {binary_to_integer(Pnr), Info}
               end, Partitions0),
   Partitions = lists:keysort(1, Partitions1),
   lists:map(fun format_partition_lines/1, Partitions).
 
 %% @private
-format_partition_lines({Partition, Info}) when is_map(Info) ->
-  #{ leader := LeaderNodeId
-   , isr := Isr
-   , osr := Osr
-   } = Info,
+format_partition_lines({Partition, Info}) when is_list(Info) ->
+  [ {leader, LeaderNodeId}
+  , {isr, Isr}
+  , {osr, Osr}
+  ] = Info,
   io_lib:format("~7s: ~p ~s ~s\n",
                 [integer_to_list(Partition), LeaderNodeId,
                  format_list(Isr),
@@ -690,7 +686,7 @@ format_topic(Topic) ->
       false ->
         format_partitions(PL)
     end,
-  #{TopicName => Data}.
+  [{TopicName, Data}].
 
 %% @private
 format_partitions(Partitions) ->
@@ -708,12 +704,12 @@ format_partition(Partition) ->
       true ->
         ErrorCode;
       false ->
-        #{ leader => LeaderNodeId
-         , isr => Isr
-         , osr => Replicas -- Isr
-         }
+        [ {leader, LeaderNodeId}
+        , {isr, Isr}
+        , {osr, Replicas -- Isr}
+        ]
     end,
-  #{integer_to_binary(PartitionNr) => Data}.
+  [{integer_to_binary(PartitionNr), Data}].
 
 %% @private
 parse_delimiter("none") ->
@@ -928,7 +924,7 @@ int(Str) -> list_to_integer(Str).
 bin(IoData) -> iolist_to_binary(IoData).
 
 %% @private
-ensure_kafka_bin(undefined) -> <<>>;
+ensure_kafka_bin(?undef) -> <<>>;
 ensure_kafka_bin(Bin) -> Bin.
 
 %% @private
