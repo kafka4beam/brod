@@ -58,10 +58,11 @@ commands:
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
   -t,--topic=<topic>     Topic name [default: *]
-  --list-topics          List topics, no partition details
-  --under-replicated     Display only under-replicated partitions
-  --text                 Print metadata as aligned texts
-  --json                 Print metadata as JSON object
+  -T,--text              Print metadata as aligned texts (default)
+  -J,--json              Print metadata as JSON object
+  -L,--list              List topics, no partition details,
+                         Applicable only for --text option
+  -U,--under-replicated  Display only under-replicated partitions
 "
 ?COMMAND_COMMON_OPTIONS
 "Text output schema:
@@ -321,7 +322,7 @@ run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
                                      , {IsText, text}
                                      , {true, text}
                                      ]),
-  IsList = parse(Args, "--list-topics", fun parse_boolean/1),
+  IsList = parse(Args, "--list", fun parse_boolean/1),
   IsUrp = parse(Args, "--under-replicated", fun parse_boolean/1),
   {ok, Metadata} = brod:get_metadata(Brokers, Topics, SockOpts),
   format_metadata(Metadata, Format, IsList, IsUrp);
@@ -565,7 +566,11 @@ format_metadata(Metadata, Format, IsList, IsUrp) ->
                           ]),
       print([JSON, "\n"]);
     text ->
-      BL = format_broker_lines(Brokers),
+      %% When listing topics do not display hosts
+      BL = case IsList of
+             true -> [];
+             false -> format_broker_lines(Brokers)
+           end,
       TL0 = lists:map(
               fun([{Name, Partitions}]) ->
                   {Name, Partitions}
