@@ -30,6 +30,7 @@ include erlang.mk
 
 rel:: escript
 	cp scripts/brod.escript _rel/brod/bin/brod.escript
+	tar -pczf _rel/brod.tar.gz -C _rel brod
 
 erl_libs := $(erl_libs):$(curdir)
 
