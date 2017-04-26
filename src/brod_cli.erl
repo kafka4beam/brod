@@ -285,8 +285,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
     true ->
-      ok = error_logger:logfile({open, 'brod.log'}),
-      ok = error_logger:tty(false);
+      _ = error_logger:logfile({open, 'brod.log'}),
+      _ = error_logger:tty(false);
     false ->
       ok
   end,
@@ -332,7 +332,8 @@ run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   Time = parse(Args, "--time", fun parse_offset_time/1),
   {ok, Offsets} =
     brod:get_offsets(Brokers, Topic, Partition, Time, Count, SockOpts),
-  print("~w\n", [Offsets]);
+  OffsetsStr = infix(lists:map(fun integer_to_list/1, Offsets), ","),
+  print(OffsetsStr);
 run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
   Count0 = parse(Args, "--count", fun int/1),
@@ -900,9 +901,6 @@ print_version() ->
 
 %% @private
 print(IoData) -> io:put_chars(IoData).
-
-%% @private
-print(Fmt, Args) -> io:format(Fmt, Args).
 
 %% @private
 logerr(IoData) -> io:put_chars(standard_error, IoData).
