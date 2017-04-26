@@ -593,8 +593,8 @@ format_brokers(Brokers) ->
 %% @private
 format_broker_lines(Brokers) ->
   Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
-  F = fun({Id, Endopoint}) ->
-          io_lib:format("  ~s: ~s\n", [Id, Endopoint])
+  F = fun({Id, Endpoint}) ->
+          io_lib:format("  ~s: ~s\n", [Id, Endpoint])
       end,
   [Header, lists:map(F, Brokers)].
 
