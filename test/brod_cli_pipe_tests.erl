@@ -38,13 +38,13 @@
           end
         end()).
 
+-define(TEST_FILE, "pipe.testdata").
 
 line_mode_test() ->
-  File = "pipe-test.data",
   Lines = ["key1\n", "val1\n", "key2\n", "val2\n", "key3\n"],
-  ok = file:write_file(File, Lines),
+  ok = file:write_file(?TEST_FILE, Lines),
   Args =
-    [ {source, {file, File}}
+    [ {source, {file, ?TEST_FILE}}
     , {kv_deli, <<"\n">>}
     , {msg_deli, <<"\n">>}
     , {prompt, false}
@@ -61,11 +61,10 @@ line_mode_test() ->
   ok.
 
 line_mode_no_key_test() ->
-  File = "pipe-test.data",
   Lines = ["val1\n", "val2\n", "val3\n"],
-  ok = file:write_file(File, Lines),
+  ok = file:write_file(?TEST_FILE, Lines),
   Args =
-    [ {source, {file, File}}
+    [ {source, {file, ?TEST_FILE}}
     , {kv_deli, none}
     , {msg_deli, <<"\n">>}
     , {prompt, true}
@@ -83,11 +82,10 @@ line_mode_no_key_test() ->
   ok.
 
 line_mode_split_test() ->
-  File = "pipe-test.data",
   Lines = ["key1:val1\n", "key2:val2\n"],
-  ok = file:write_file(File, Lines),
+  ok = file:write_file(?TEST_FILE, Lines),
   Args =
-    [ {source, {file, File}}
+    [ {source, {file, ?TEST_FILE}}
     , {kv_deli, <<":">>}
     , {msg_deli, <<"\n">>}
     , {prompt, false}
@@ -104,11 +102,10 @@ line_mode_split_test() ->
   ok.
 
 stream_one_byte_delimiter_test() ->
-  File = "pipe-test.data",
   Data = "key1:val1#key2:val2#key3:val3",
-  ok = file:write_file(File, Data),
+  ok = file:write_file(?TEST_FILE, Data),
   Args =
-    [ {source, {file, File}}
+    [ {source, {file, ?TEST_FILE}}
     , {kv_deli, <<":">>}
     , {msg_deli, <<"#">>}
     , {prompt, false}
@@ -126,11 +123,10 @@ stream_one_byte_delimiter_test() ->
   ok.
 
 stream_test() ->
-  File = "pipe-test.data",
   Data = "key1::val1###key2::val2###key3::val3##",
-  ok = file:write_file(File, Data),
+  ok = file:write_file(?TEST_FILE, Data),
   Args =
-    [ {source, {file, File}}
+    [ {source, {file, ?TEST_FILE}}
     , {kv_deli, <<"::">>}
     , {msg_deli, <<"###">>}
     , {prompt, false}
@@ -146,7 +142,7 @@ stream_test() ->
   ?assertError({timeout, _},
                ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 500)),
   MoreData = "#key-4::val-4###",
-  ok = file:write_file(File, MoreData, [append]),
+  ok = file:write_file(?TEST_FILE, MoreData, [append]),
   ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 1000),
   ?WAIT({pipe, Pid, [{<<"key-4">>, <<"val-4">>}]}, ok, 1000),
   ok = brod_cli_pipe:stop(Pid),

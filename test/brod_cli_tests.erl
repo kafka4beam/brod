@@ -30,6 +30,12 @@ meta_test() ->
   run(["meta", "-b", "localhost", "-L"]),
   run(["meta", "-b", "localhost", "-t", "test-topic"]).
 
+ssl_test() ->
+  run(["meta", "-b", "localhost:9192", "-L",
+       "--cacertfile", "priv/ssl/ca.crt",
+       "--keyfile", "priv/ssl/client.key",
+       "--certfile", "priv/ssl/client.crt"]).
+
 offset_test() ->
   Args = ["offset", "-b", "localhost", "-t", "test-topic", "-p", "0"],
   run(Args),
@@ -52,11 +58,29 @@ send_fetch_test() ->
   ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
   ok.
 
+sasl_test() ->
+  ok = file:write_file("sasl.testdata", "alice\nalice-secret\n"),
+  K = make_ts_str(),
+  V = make_ts_str(),
+  Output =
+    cmd("send --brokers localhost:9092,localhost:9292 -t test-topic "
+        "--cacertfile priv/ssl/ca.crt "
+        "--keyfile priv/ssl/client.key "
+        "--certfile priv/ssl/client.crt "
+        "--sasl-plain sasl.testdata "
+        "-p 0 -k " ++ K ++ " -v " ++ V),
+  ?assertEqual(Output, ""),
+  FetchOutput =
+    cmd("fetch --brokers localhost:9092 -t test-topic -p 0 "
+        "-c 1 --fmt kv"),
+  ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
+  ok.
+
 fetch_format_fun_test() ->
   T = os:timestamp(),
   Value = term_to_binary(T),
-  file:write_file("test-data.bin", Value),
-  cmd("send -b localhost -t test-topic -p 0 -v @test-data.bin"),
+  file:write_file("fetch.testdata", Value),
+  cmd("send -b localhost -t test-topic -p 0 -v @fetch.testdata"),
   FmtFun = "fun(_O, _K, V) -> io_lib:format(\"~p\", [binary_to_term(V)]) end",
   Output =
     cmd("fetch -b localhost -t test-topic -p 0 -c 1 --fmt '" ++ FmtFun ++ "'"),
