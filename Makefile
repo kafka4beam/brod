@@ -4,10 +4,11 @@ PROJECT_VERSION = 2.3.6
 
 DEPS = supervisor3 kafka_protocol
 
+ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
 ifeq ($(BROD_CLI),true)
 	DEPS += docopt jsone
 	ERLC_OPTS += -DBROD_CLI
-	TEST_ERLC_OPTS = -DBROD_CLI -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
+	TEST_ERLC_OPTS = $(ERLC_OPTS) -DBROD_CLI
 endif
 
 dep_supervisor3_commit = 1.1.5
@@ -15,19 +16,22 @@ dep_kafka_protocol_commit = 0.9.1
 
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.2
 
+ESCRIPT_FILE = scripts/brod.escript
+
 TEST_DEPS = meck proper
 
 COVER = true
 
 EUNIT_OPTS = verbose
-ERLC_OPTS += -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
+
 CT_OPTS = -ct_use_short_names true
 
 include erlang.mk
 
-escript:: export BROD_CLI=true
+rel:: escript
+	cp scripts/brod.escript _rel/brod/bin/brod.escript
 
-ERL_LIBS := $(ERL_LIBS):$(CURDIR)
+erl_libs := $(erl_libs):$(curdir)
 
 test-env:
 	./scripts/setup-test-env.sh
@@ -36,9 +40,7 @@ t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 vsn-check:
-	$(verbose) ./scripts/vsn-check.sh $(PROJECT_VERSION)
-
-ESCRIPT_FILE = scripts/$(PROJECT)
+	$(verbose) ./scripts/vsn-check.sh $(project_version)
 
 hex-publish: distclean
 	$(verbose) rebar3 hex publish

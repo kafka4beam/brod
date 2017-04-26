@@ -1,0 +1,5 @@
+{ok, [{application, brod, Props}]} = file:consult("src/brod.app.src"),
+Version = proplists:get_value(vsn, Props),
+{release, {brod, _}, Apps} = lists:keyfind(release, 1, CONFIG),
+lists:keystore(release, 1, CONFIG, {release, {brod, Version}, Apps}).
+
