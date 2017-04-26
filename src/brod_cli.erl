@@ -65,12 +65,12 @@ options:
   -U,--under-replicated  Display only under-replicated partitions
 "
 ?COMMAND_COMMON_OPTIONS
-"Text output schema:
+"Text output schema (out of sync replicas are marked with *):
 brokers <count>:
   <broker-id>: <endpoint>
 topics <count>:
   <name> <count>: [[ERROR] [<reason>]]
-    <partition>: [[ERROR] [<reason>]] | <broker-id> (isr...) (osr...) [WARNING]
+    <partition>: <leader-broker-id> (replicas[*]...) [<error-reason>]
 "
 ).
 
@@ -636,23 +636,33 @@ format_partitions_lines(Partitions0) ->
   lists:map(fun format_partition_lines/1, Partitions).
 
 %% @private
-format_partition_lines({Partition, Info}) when is_list(Info) ->
-  [ {leader, LeaderNodeId}
-  , {isr, Isr}
-  , {osr, Osr}
-  ] = Info,
-  io_lib:format("~7s: ~p ~s ~s\n",
-                [integer_to_list(Partition), LeaderNodeId,
-                 format_list(Isr),
-                 format_list(Osr)]);
-format_partition_lines({Partition, ErrorCode}) ->
-  ErrorStr = format_error_code(ErrorCode),
-  io_lib:format("    ~s: [ERROR] ~s\n", [Partition, ErrorStr]).
+format_partition_lines({Partition, Info}) ->
+  LeaderNodeId = proplists:get_value(leader, Info),
+  Status = proplists:get_value(status, Info),
+  Isr = proplists:get_value(isr, Info),
+  Osr = proplists:get_value(osr, Info),
+  MaybeWarning = case kpro_ErrorCode:is_error(Status) of
+                   true -> [" [", atom_to_list(Status), "]"];
+                   false -> ""
+                 end,
+  ReplicaList =
+    case Osr of
+      [] -> format_list(Isr, "");
+      _  -> [format_list(Isr, ""), ",", format_list(Osr, "*")]
+    end,
+  io_lib:format("~7s: ~2s (~s)~s\n",
+                [integer_to_list(Partition),
+                 integer_to_list(LeaderNodeId),
+                 ReplicaList, MaybeWarning]).
 
-%% @doc
-format_list(List) ->
-  Str = lists:flatten(io_lib:format("~w", [List])),
-  ["(", rstrip(lstrip(Str , "["), "]"), ")"].
+%% @private
+format_list(List, Mark) ->
+  infix(lists:map(fun(I) -> [integer_to_list(I), Mark] end, List), ",").
+
+%% @private
+infix([], _Sep) -> [];
+infix([_] = L, _Sep) -> L;
+infix([H | T], Sep) -> [H, Sep, infix(T, Sep)].
 
 %% @private
 format_topics(Topics) ->
@@ -704,16 +714,11 @@ format_partition(Partition) ->
                          , replicas = Replicas
                          , isr = Isr
                          } = Partition,
-  Data =
-    case kpro_ErrorCode:is_error(ErrorCode) of
-      true ->
-        ErrorCode;
-      false ->
-        [ {leader, LeaderNodeId}
-        , {isr, Isr}
-        , {osr, Replicas -- Isr}
-        ]
-    end,
+  Data = [ {leader, LeaderNodeId}
+         , {status, ErrorCode}
+         , {isr, Isr}
+         , {osr, Replicas -- Isr}
+         ],
   [{integer_to_binary(PartitionNr), Data}].
 
 %% @private
@@ -941,7 +946,13 @@ parse_brokers(HostsStr) ->
             [Host]          -> {Host, 9092}
           end
       end,
-  lists:map(F, string:tokens(HostsStr, ",")).
+  shuffle(lists:map(F, string:tokens(HostsStr, ","))).
+
+%% @private Randomize the order.
+shuffle(L) ->
+  RandList = lists:map(fun(_) -> element(3, os:timestamp()) end, L),
+  {_, SortedL} = lists:unzip(lists:keysort(1, lists:zip(RandList, L))),
+  SortedL.
 
 -endif.
 
