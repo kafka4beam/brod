@@ -18,7 +18,7 @@ dep_kafka_protocol_commit = 0.9.1
 
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.2
 
-ESCRIPT_FILE = scripts/brod.escript
+ESCRIPT_FILE = scripts/brod
 
 TEST_DEPS = meck proper
 
@@ -31,7 +31,7 @@ CT_OPTS = -ct_use_short_names true
 include erlang.mk
 
 rel:: escript
-	cp scripts/brod.escript _rel/brod/bin/brod.escript
+	cp $(ESCRIPT_FILE) _rel/brod/bin/brod
 	tar -pczf _rel/brod.tar.gz -C _rel brod
 
 ERL_LIBS := $(ERL_LIBS):$(CURDIR)

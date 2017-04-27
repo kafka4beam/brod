@@ -888,7 +888,7 @@ parse(Args, OptName, ParseFun) ->
           Reason =
             case Arg of
               ?undef -> ["Missing option ", OptName];
-              _      -> ["Failed to parse ", OptName, ": '", Arg, "'"]
+              _      -> ["Failed to parse ", OptName, ": ", Arg]
             end,
           erlang:throw(bin(Reason))
       end;
