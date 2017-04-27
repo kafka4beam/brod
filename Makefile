@@ -32,7 +32,7 @@ rel:: escript
 	cp scripts/brod.escript _rel/brod/bin/brod.escript
 	tar -pczf _rel/brod.tar.gz -C _rel brod
 
-erl_libs := $(erl_libs):$(curdir)
+ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 
 test-env:
 	./scripts/setup-test-env.sh
@@ -41,7 +41,7 @@ t: eunit ct
 	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
 
 vsn-check:
-	$(verbose) ./scripts/vsn-check.sh $(project_version)
+	$(verbose) ./scripts/vsn-check.sh $(PROJECT_VERSION)
 
 hex-publish: distclean
 	$(verbose) rebar3 hex publish
