@@ -5,10 +5,12 @@ PROJECT_VERSION = 2.3.6
 DEPS = supervisor3 kafka_protocol
 
 ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
+TEST_ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
+
 ifeq ($(BROD_CLI),true)
 	DEPS += docopt jsone
 	ERLC_OPTS += -DBROD_CLI
-	TEST_ERLC_OPTS = $(ERLC_OPTS) -DBROD_CLI
+	TEST_ERLC_OPTS += -DBROD_CLI
 endif
 
 dep_supervisor3_commit = 1.1.5

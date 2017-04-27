@@ -25,9 +25,9 @@
 -define(CLIENT, brod_cli_client).
 
 -define(MAIN_DOC, "usage:
-  brod --help
-  brod --version
-  brod <command> [options] [--help] [--verbose | --debug]
+  brod -h|--help
+  brod -v|-version
+  brod <command> [options] [-h|--help] [--verbose | --debug]
 
 commands:
   meta:   Inspect topic metadata
@@ -229,8 +229,12 @@ options:
 
 -type command() :: string().
 
+main(["-h" | _], _Stop) ->
+  print(?MAIN_DOC);
 main(["--help" | _], _Stop) ->
   print(?MAIN_DOC);
+main(["-v" | _], _Stop) ->
+  print_version();
 main(["--version" | _], _Stop) ->
   print_version();
 main(["-" ++ _ = Arg | _], Stop) ->
@@ -253,7 +257,7 @@ main(_, Stop) ->
 %% @private
 -spec main(command(), string(), [string()], halt | exit) -> _ | no_return().
 main(Command, Doc, Args0, Stop) ->
-  IsHelp = lists:member("--help", Args0),
+  IsHelp = lists:member("--help", Args0) orelse lists:member("-h", Args0),
   IsVerbose = lists:member("--verbose", Args0),
   IsDebug = lists:member("--debug", Args0),
   Args = Args0 -- ["--verbose", "--debug"],
