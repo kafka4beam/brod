@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.3.6
+PROJECT_VERSION = 2.3.7
 
 DEPS = supervisor3 kafka_protocol
 
@@ -16,7 +16,7 @@ endif
 dep_supervisor3_commit = 1.1.5
 dep_kafka_protocol_commit = 0.9.1
 
-dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.2
+dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
 ESCRIPT_FILE = scripts/brod
 
