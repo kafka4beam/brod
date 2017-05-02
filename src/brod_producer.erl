@@ -47,8 +47,8 @@
 -define(DEFAULT_MAX_BATCH_SIZE, 1048576).
 %% by default, require acks from all ISR
 -define(DEFAULT_REQUIRED_ACKS, -1).
-%% by default, leader should wait 1 second for replicas to ack
--define(DEFAULT_ACK_TIMEOUT, 1000).
+%% by default, leader should wait 10 seconds for replicas to ack
+-define(DEFAULT_ACK_TIMEOUT, 10000).
 %% by default, brod_producer will sleep for 0.5 second before trying to send
 %% buffered messages again upon receiving a error from kafka
 -define(DEFAULT_RETRY_BACKOFF_MS, 500).
@@ -97,7 +97,7 @@
 %%          sending a response.
 %%      -1: If it is -1 the broker will block until the message is committed by
 %%          all in sync replicas before acking.
-%%   ack_timeout (optional, default = 1000 ms):
+%%   ack_timeout (optional, default = 10000 ms):
 %%     Maximum time in milliseconds the broker can await the receipt of the
 %%     number of acknowledgements in RequiredAcks. The timeout is not an exact
 %%     limit on the request time for a few reasons: (1) it does not include
