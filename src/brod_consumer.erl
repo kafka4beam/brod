@@ -371,7 +371,7 @@ handle_add_offset(#pending_acks{ offsets_queue = Queue
                                } = PendingAcks, [Offset | Offsets]) ->
   NewQueue =
     case queue:out_r(Queue) of
-      {{value, {Begin, End}}, Queue1} when End =:= Offset + 1 ->
+      {{value, {Begin, End}}, Queue1} when End + 1 =:= Offset ->
         %% the incoming offset is successive to the offset range at queue rear
         %% expand the range
         queue:in({Begin, Offset}, Queue1);
@@ -672,6 +672,28 @@ maybe_send_init_socket(#state{subscriber = Subscriber}) ->
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
+
+pending_acks_to_list(#pending_acks{count = C, offsets_queue = Q}) ->
+  All = lists:foldl(fun({Begin, End}, Acc) ->
+                        Acc ++ lists:seq(Begin, End)
+                    end, [], queue:to_list(Q)),
+  ?assertEqual(C, length(All)),
+  All.
+
+pending_acks_test() ->
+  Offsets = [1, 2, 3, 5, 6, 7, 9, 100],
+  Pending0 = handle_add_offset(#pending_acks{}, Offsets),
+  #pending_acks{count = 8, offsets_queue = Q} = Pending0,
+  Ranges = queue:to_list(Q),
+  ?assertEqual([{1, 3}, {5, 7}, {9, 9}, {100, 100}], Ranges),
+  Pending1 = handle_add_offset(Pending0, [101]),
+  ?assertEqual(Offsets ++ [101], pending_acks_to_list(Pending1)),
+  Pending2 = handle_ack(Pending1, 2),
+  ?assertEqual([3, 5, 6, 7, 9, 100, 101], pending_acks_to_list(Pending2)),
+  Pending3 = handle_ack(Pending2, 99),
+  ?assertEqual([100, 101], pending_acks_to_list(Pending3)),
+  Pending4 = handle_ack(Pending3, 101),
+  ?assertEqual([], pending_acks_to_list(Pending4)).
 
 -endif. % TEST
 
