@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-THIS_DIR="$(dirname $(readlink -f $0))"
+THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd $THIS_DIR/../docker
 
