@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -smp enable -sname notcoveredlinessummary -pa ebin -pa ../ebin
+%%! -pa ebin -pa ../ebin
 
 %%%
 %%%   Copyright (c) 2015-2016, Klarna AB
