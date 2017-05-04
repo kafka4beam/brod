@@ -10,7 +10,7 @@ ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +war
 TEST_ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
 
 dep_supervisor3_commit = 1.1.5
-dep_kafka_protocol_commit = 0.9.1
+dep_kafka_protocol_commit = 0.9.2
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
 ESCRIPT_FILE = scripts/brod
