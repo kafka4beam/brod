@@ -104,9 +104,9 @@ options:
                            latest: From the latest offset (not last)
                            earliest: From earliest offset (first)
                            last: From offset (latest - 1)
-                           <integer>: from a specific offset
+                           <integer>: From a specific offset
                          [default: last]
-  -c,--count=<count>     Number of messages to fetch (-1 to as infinity)
+  -c,--count=<count>     Number of messages to fetch (-1 as infinity)
                          [default: 1]
   -w,--wait=<seconds>    Time in seconds to wait for one message set
                          [default: 5s]
