@@ -1,6 +1,5 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -smp enable -sname coversummay
 
 %%%
 %%%   Copyright (c) 2015-2016, Klarna AB
