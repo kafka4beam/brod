@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 2.4.0
+PROJECT_VERSION = 2.4.1
 
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = docopt jsone meck proper
@@ -35,6 +35,10 @@ ifeq ($(BROD_CLI),true)
 	ERLC_OPTS += -DBROD_CLI
 	TEST_ERLC_OPTS += -DBROD_CLI
 endif
+
+## Make app the default target
+## To avoid building a relese when brod is used as a erlang.mk project's dependency
+app::
 
 include erlang.mk
 

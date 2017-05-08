@@ -26,8 +26,8 @@
 
 -define(MAIN_DOC, "usage:
   brod -h|--help
-  brod -v|-version
-  brod <command> [options] [-h|--help] [--verbose | --debug]
+  brod -v|--version
+  brod <command> [options] [-h|--help] [--verbose|--debug]
 
 commands:
   meta:   Inspect topic metadata
