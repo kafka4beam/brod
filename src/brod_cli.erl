@@ -753,7 +753,7 @@ parse_fmt("okv", KvDeli, MsgDeli) ->
       [integer_to_list(Offset), KvDeli,
        Key, KvDeli, Value, MsgDeli]
   end;
-parse_fmt("term", _KvDeli, _MsgDeli) ->
+parse_fmt("eterm", _KvDeli, _MsgDeli) ->
   fun(Offset, Key, Value) ->
       io_lib:format("~p.\n", [{Offset, Key, Value}])
   end;
