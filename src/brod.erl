@@ -126,7 +126,10 @@ stop() ->
   application:stop(brod).
 
 %% @doc Application behaviour callback
-start(_StartType, _StartArgs) -> brod_sup:start_link().
+start(_StartType, _StartArgs) ->
+    %% TODO maybe conditionally load sasl NIF
+    ok = sasl_auth:init(),
+    brod_sup:start_link().
 
 %% @doc Application behaviour callback
 stop(_State) -> ok.
