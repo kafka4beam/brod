@@ -352,6 +352,18 @@ brod:get_offsets(Hosts, Topic, Partition).
 brod:fetch(Hosts, Topic, Partition, 1).
 ```
 
+# Authentication support
+brod supports SASL PLAIN authentication mechanism out of the box. To use it
+add `{sasl, {plain, Username, Password}}` to client config. Also, brod has authentication
+plugins support. Authentication callback module should implement `brod_auth_backend` behavior. Auth function spec:
+```erlang
+auth(Host :: string(), Sock :: gen_tcp:socket() | ssl:sslsocket(), Mod :: atom(), ClientId :: binary(), Timeout :: pos_integer(), SaslOpts :: term()) -> ok | {error, Reason :: term()}
+```
+If authentication is successful - callback function should return an atom `ok`, otherwise - error description.
+For example, you can use brod_gssapi plugin (https://github.com/ElMaxo/brod_gssapi) for SASL GSSAPI authentication in brod.
+To use it - add it as dependency to your top level application, that uses brod and add
+`{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config. Keytab and Principal should be binaries.
+
 # Self-contained binary (needs erlang runtime)
 This will build a self-contained binary with brod application
 
