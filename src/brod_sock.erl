@@ -191,7 +191,7 @@ init(Parent, Host, Port, ClientId, Options) ->
       SslOpts = proplists:get_value(ssl, Options, false),
       Mod = get_tcp_mod(SslOpts),
       {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
-      ok = maybe_sasl_auth(NewSock, Mod, ClientId, Timeout,
+      ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
                            proplists:get_value(sasl, Options)),
       State = State0#state{mod = Mod, sock = NewSock},
       proc_lib:init_ack(Parent, {ok, self()}),
@@ -221,9 +221,10 @@ maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts = [_|_], Timeout) ->
 maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
   {ok, Sock}.
 
-maybe_sasl_auth(_Sock, _Mod, _ClientId, _Timeout, _SaslOpts = undefined) -> ok;
-maybe_sasl_auth(Sock, Mod, ClientId, Timeout,
-                _SaslOpts = {_Method = plain, SaslUser, SaslPassword}) ->
+maybe_sasl_auth(_Host, _Sock, _Mod, _ClientId, _Timeout,
+  _SaslOpts = undefined) -> ok;
+maybe_sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
+  _SaslOpts = {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
   HandshakeRequest = #kpro_SaslHandshakeRequest{mechanism="PLAIN"},
   HandshakeRequestBin = kpro:encode_request(ClientId, 0, HandshakeRequest),
@@ -245,6 +246,15 @@ maybe_sasl_auth(Sock, Mod, ClientId, Timeout,
           exit({sasl_auth_error, Unexpected})
       end;
     _ -> exit({sasl_auth_error, ErrorCode})
+  end;
+maybe_sasl_auth(Host, Sock, Mod, ClientId, Timeout,
+  _SaslOpts = {callback, ModuleName, Opts}) ->
+  case brod_auth_backend:auth(ModuleName, Host, Sock, Mod,
+    ClientId, Timeout, Opts) of
+    ok ->
+      ok = setopts(Sock, Mod, [{active, once}]);
+    {error, Reason} ->
+      exit({callback_auth_error, Reason})
   end.
 
 sasl_plain_token(User, Password) ->
