@@ -66,6 +66,7 @@ t_request_timeout({'end', Config}) ->
 t_request_timeout(Config) when is_list(Config) ->
   TesterPid = self(),
   meck:expect(ssl, connect, fun(_, _, _) -> {ok, TesterPid} end),
+  meck:expect(ssl, setopts, fun(_, _) -> ok end),
   meck:expect(ssl, send, fun(Pid, _Bin) ->
                                  ?assertEqual(Pid, TesterPid),
                                  ok

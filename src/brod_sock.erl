@@ -221,10 +221,22 @@ maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts = [_|_], Timeout) ->
 maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
   {ok, Sock}.
 
-maybe_sasl_auth(_Host, _Sock, _Mod, _ClientId, _Timeout,
-  _SaslOpts = undefined) -> ok;
-maybe_sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
-  _SaslOpts = {_Method = plain, SaslUser, SaslPassword}) ->
+%% @private
+maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, undefined) ->
+  ok;
+maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
+  try
+    ok = sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts),
+    %% auth backends may have set other opts, ensure 'once' here
+    ok = setopts(Sock, SockMod, [{active, once}])
+  catch
+    error : Reason ->
+      exit({Reason, erlang:get_stacktrace()})
+  end.
+
+%% @private
+sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
+          {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
   HandshakeRequest = #kpro_SaslHandshakeRequest{mechanism="PLAIN"},
   HandshakeRequestBin = kpro:encode_request(ClientId, 0, HandshakeRequest),
@@ -239,7 +251,7 @@ maybe_sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
       ok = Mod:send(Sock, sasl_plain_token(SaslUser, SaslPassword)),
       case Mod:recv(Sock, 4, Timeout) of
         {ok, <<0:32>>} ->
-          ok = setopts(Sock, Mod, [{active, once}]);
+          ok;
         {error, closed} ->
           exit({sasl_auth_error, bad_credentials});
         Unexpected ->
@@ -247,12 +259,12 @@ maybe_sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
       end;
     _ -> exit({sasl_auth_error, ErrorCode})
   end;
-maybe_sasl_auth(Host, Sock, Mod, ClientId, Timeout,
-  _SaslOpts = {callback, ModuleName, Opts}) ->
+sasl_auth(Host, Sock, Mod, ClientId, Timeout,
+          {callback, ModuleName, Opts}) ->
   case brod_auth_backend:auth(ModuleName, Host, Sock, Mod,
-    ClientId, Timeout, Opts) of
+                              ClientId, Timeout, Opts) of
     ok ->
-      ok = setopts(Sock, Mod, [{active, once}]);
+      ok;
     {error, Reason} ->
       exit({callback_auth_error, Reason})
   end.
