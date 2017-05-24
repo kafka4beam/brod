@@ -32,6 +32,8 @@
         , suite/0
         ]).
 
+-export([ auth/6 ]).
+
 %% Test cases
 -export([ t_skip_unreachable_endpoint/1
         , t_no_reachable_endpoint/1
@@ -41,7 +43,8 @@
         , t_auto_start_producers/1
         , t_auto_start_producer_for_unknown_topic/1
         , t_ssl/1
-        , t_sasl_ssl/1
+        , t_sasl_plain_ssl/1
+        , t_sasl_callback/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -261,18 +264,33 @@ t_ssl(Config) when is_list(Config) ->
                  , {get_metadata_timout_seconds, 10}],
   produce_and_consume_message(?HOSTS_SSL, t_ssl, ClientConfig).
 
-t_sasl_ssl({init, Config}) ->
+t_sasl_plain_ssl({init, Config}) ->
   Config;
-t_sasl_ssl({'end', Config}) ->
-  brod:stop_client(t_sasl_ssl),
+t_sasl_plain_ssl({'end', Config}) ->
+  brod:stop_client(t_sasl_plain_ssl),
   Config;
-t_sasl_ssl(Config) when is_list(Config) ->
+t_sasl_plain_ssl(Config) when is_list(Config) ->
   ClientConfig = [ {ssl, ssl_options()}
                  , {get_metadata_timout_seconds, 10}
-                 , {sasl, {plain, "alice", "alice-secret"}}],
-  produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_ssl, ClientConfig).
+                 , {sasl, {plain, "alice", "alice-secret"}}
+                 ],
+  produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
+
+t_sasl_callback({init, Config}) ->
+  Config;
+t_sasl_callback({'end', Config}) ->
+  brod:stop_client(t_sasl_callback),
+  Config;
+t_sasl_callback(Config) when is_list(Config) ->
+  ClientConfig = [ {get_metadata_timout_seconds, 10}
+                 , {sasl, {callback, ?MODULE, []}}
+                 ],
+  produce_and_consume_message(?HOSTS, t_sasl_callback, ClientConfig).
 
 %%%_* Help functions ===========================================================
+
+%% mocked callback
+auth(_Host, _Sock, _Mod, _ClientId, _Timeout, _Opts) -> ok.
 
 ssl_options() ->
   PrivDir = code:priv_dir(brod),
