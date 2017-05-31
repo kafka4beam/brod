@@ -341,7 +341,7 @@ start(ClientId) ->
 
 brod supports SASL PLAIN authentication mechanism out of the box. To use it
 add `{sasl, {plain, Username, Password}}` to client config. Also, brod has authentication
-plugins support. Authentication callback module should implement `brod_auth_backend` behavior.
+plugins support. Authentication callback module should implement `brod_auth_backend` behaviour.
 Auth function spec:
 
 ```erlang
@@ -352,11 +352,12 @@ auth(Host :: string(), Sock :: gen_tcp:socket() | ssl:sslsocket(),
 ```
 
 If authentication is successful - callback function should return an atom `ok`, otherwise - error tuple with reason description.
-For example, you can use brod_gssapi plugin (https://github.com/ElMaxo/brod_gssapi) for SASL GSSAPI authentication in brod.
-To use it - add it as dependency to your top level application, that uses brod and add
+For example, you can use `brod_gssapi' plugin (https://github.com/ElMaxo/brod_gssapi) for SASL GSSAPI authentication.
+To use it - add it as dependency to your top level project that uses brod.
+Then add `{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config.
+Keytab should be the keytab file path, and Principal should be a byte-list or binary string.
 
-`{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config. Keytab and Principal should be binaries.
-
+See also: https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authentication
 
 # Other API to play with/inspect kafka
 
