@@ -48,6 +48,8 @@ commands:
   --sasl-plain=<file>    Tell brod to use username/password stored in the
                          given file, the file should have username and
                          password in two lines.
+  --ebin-paths=<dirs>    Comma separated directory names for extra beams,
+                         This is to support user compiled message formatters
 "
 ).
 
@@ -57,6 +59,7 @@ commands:
 
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
   -t,--topic=<topic>     Topic name [default: *]
   -T,--text              Print metadata as aligned texts (default)
   -J,--json              Print metadata as JSON object
@@ -80,6 +83,7 @@ topics <count>:
 
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number
   -c,--count=<count>     Number of offsets to fetch [default: 1]
@@ -98,6 +102,7 @@ options:
 
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number
   -o,--offset=<offset>   Offset to start fetching from
@@ -138,6 +143,7 @@ options:
 
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number [default: 0]
                          Special values:
@@ -169,6 +175,7 @@ options:
 
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number [default: 0]
                          Special values:
@@ -299,6 +306,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
     Topic = parse(ParsedArgs, "--topic", fun bin/1),
     SockOpts = parse_sock_opts(ParsedArgs),
+    Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
+    ok = code:add_pathsa(Paths),
     verbose("sock opts: ~p\n", [SockOpts]),
     run(Command, Brokers, Topic, SockOpts, ParsedArgs)
   catch
@@ -949,6 +958,10 @@ parse_brokers(HostsStr) ->
           end
       end,
   shuffle(lists:map(F, string:tokens(HostsStr, ","))).
+
+%% @private Parse code paths.
+parse_paths(?undef) -> [];
+parse_paths(Str) -> string:tokens(Str, ",").
 
 %% @private Randomize the order.
 shuffle(L) ->
