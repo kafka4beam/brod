@@ -155,7 +155,8 @@ client_spec([], ClientId, _Config) ->
 client_spec(Endpoints, ClientId, Config0) ->
   DelaySecs = proplists:get_value(restart_delay_seconds, Config0,
                                   ?DEFAULT_CLIENT_RESTART_DELAY),
-  Config    = proplists:delete(restart_delay_seconds, Config0),
+  Config1   = proplists:delete(restart_delay_seconds, Config0),
+  Config    = brod_utils:init_sasl_opt(Config1),
   StartArgs = [Endpoints, ClientId, Config],
   { _Id       = ClientId
   , _Start    = {brod_client, start_link, StartArgs}

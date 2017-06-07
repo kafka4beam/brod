@@ -44,6 +44,7 @@
         , t_auto_start_producer_for_unknown_topic/1
         , t_ssl/1
         , t_sasl_plain_ssl/1
+        , t_sasl_plain_file_ssl/1
         , t_sasl_callback/1
         ]).
 
@@ -273,6 +274,19 @@ t_sasl_plain_ssl(Config) when is_list(Config) ->
   ClientConfig = [ {ssl, ssl_options()}
                  , {get_metadata_timout_seconds, 10}
                  , {sasl, {plain, "alice", "alice-secret"}}
+                 ],
+  produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
+
+t_sasl_plain_file_ssl({init, Config}) ->
+  ok = file:write_file("sasl-plain-user-pass-file", "alice\nalice-secret\n"),
+  Config;
+t_sasl_plain_file_ssl({'end', Config}) ->
+  brod:stop_client(t_sasl_plain_file_ssl),
+  Config;
+t_sasl_plain_file_ssl(Config) when is_list(Config) ->
+  ClientConfig = [ {ssl, ssl_options()}
+                 , {get_metadata_timout_seconds, 10}
+                 , {sasl, {plain, "sasl-plain-user-pass-file"}}
                  ],
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
 

@@ -71,6 +71,13 @@
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
 
+-type sasl_opt() :: {plain, User :: string() | binary(),
+                            Pass :: string() | binary() |
+                                    fun(() -> string() | binary())}
+                  | {plain, File :: file:name_all()}
+                  | {callback, module(), term()}
+                  | ?undef.
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

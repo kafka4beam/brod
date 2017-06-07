@@ -856,17 +856,12 @@ parse_sock_opts(Args) ->
         lists:filter(FilterPred, Files)
     end,
   SaslOpt = parse(Args, "--sasl-plain", fun parse_file/1),
-  SaslOpts = maybe_read_username_password(SaslOpt),
+  SaslOpts = sasl_opts(SaslOpt),
   lists:filter(FilterPred, [{ssl, SslOpt} | SaslOpts]).
 
 %% @private
-maybe_read_username_password(?undef) ->
-  [];
-maybe_read_username_password(File) ->
-  {ok, Bin} = file:read_file(File),
-  Lines = binary:split(Bin, <<"\n">>, [global]),
-  [Username, Password] = lists:filter(fun(Line) -> Line =/= <<>> end, Lines),
-  [{sasl, {plain, Username, Password}}].
+sasl_opts(?undef) -> [];
+sasl_opts(File)   -> [{sasl, {plain, File}}].
 
 %% @private
 parse_boolean(true) -> true;
