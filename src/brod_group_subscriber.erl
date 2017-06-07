@@ -131,6 +131,7 @@
         , consumers = []     :: [#consumer{}]
         , consumer_config    :: consumer_config()
         , is_blocked = false :: boolean()
+        , subscribe_tref     :: ?undef | reference()
         , cb_module          :: module()
         , cb_state           :: cb_state()
         }).
@@ -281,11 +282,11 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
       true ->
         State;
       false ->
-        {ok, #state{} = NewState_} = subscribe_partitions(State),
-        NewState_
+        {ok, #state{} = St} = subscribe_partitions(State),
+        St
     end,
-  _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
-  {noreply, NewState};
+  Tref = start_subscribe_timer(),
+  {noreply, NewState#state{subscribe_tref = Tref}};
 handle_info(Info, State) ->
   log(State, info, "discarded message:~p", [Info]),
   {noreply, State}.
@@ -341,7 +342,9 @@ handle_cast(commit_offsets, State) ->
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ client          = Client
                   , consumer_config = ConsumerConfig
+                  , subscribe_tref  = Tref
                   } = State) ->
+  ok = cancel_subscribe_timer(Tref),
   AllTopics =
     lists:map(fun(#brod_received_assignment{topic = Topic}) ->
                 Topic
@@ -361,11 +364,12 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                                 , begin_offset = BeginOffset
                                 } <- Assignments
     ],
-  _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS),
-  NewState = State#state{ consumers    = Consumers
-                        , is_blocked   = false
-                        , memberId     = MemberId
-                        , generationId = GenerationId
+  self() ! ?LO_CMD_SUBSCRIBE_PARTITIONS,
+  NewState = State#state{ consumers      = Consumers
+                        , is_blocked     = false
+                        , memberId       = MemberId
+                        , generationId   = GenerationId
+                        , subscribe_tref = ?undef
                         },
   {noreply, NewState};
 handle_cast(stop, State) ->
@@ -380,6 +384,24 @@ terminate(_Reason, #state{}) ->
   ok.
 
 %%%_* Internal Functions =======================================================
+
+%% @private
+-spec start_subscribe_timer() -> reference().
+start_subscribe_timer() ->
+  erlang:send_after(?RESUBSCRIBE_DELAY, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS).
+
+%% @private
+-spec cancel_subscribe_timer(?undef | reference()) -> ok.
+cancel_subscribe_timer(?undef) -> ok;
+cancel_subscribe_timer(Tref) ->
+  _ = erlang:cancel_timer(Tref),
+  receive
+    ?LO_CMD_SUBSCRIBE_PARTITIONS ->
+      ok
+  after
+    0 ->
+      ok
+  end.
 
 handle_messages(_Topic, _Partition, [], State) ->
   State;
@@ -437,11 +459,7 @@ consume_ack(_Down, _Offset) ->
 commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
-send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
-
-send_lo_cmd(CMD, 0)       -> self() ! CMD;
-send_lo_cmd(CMD, DelayMS) -> erlang:send_after(DelayMS, self(), CMD).
-
+%% @private
 subscribe_partitions(#state{ client    = Client
                            , consumers = Consumers0
                            } = State) ->
@@ -449,6 +467,7 @@ subscribe_partitions(#state{ client    = Client
     lists:map(fun(C) -> subscribe_partition(Client, C) end, Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
+%% @private
 subscribe_partition(Client, Consumer) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid
