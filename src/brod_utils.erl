@@ -42,6 +42,8 @@
         , fetch_offsets/5
         , map_messages/2
         , fetch/4
+        , init_sasl_opt/1
+        , get_sasl_opt/1
         ]).
 
 -include("brod_int.hrl").
@@ -210,7 +212,50 @@ fetch(SockPid, ReqFun, MaxBytes, Offset) ->
       end
   end.
 
+%% @doc Get sasl options from client config.
+-spec get_sasl_opt(client_config()) -> sasl_opt().
+get_sasl_opt(Config) ->
+  case proplists:get_value(sasl, Config) of
+    {plain, User, PassFun} when is_function(PassFun) ->
+      {plain, User, PassFun()};
+    {plain, File} ->
+      {User, Pass} = read_sasl_file(File),
+      {plain, User, Pass};
+    Other ->
+      Other
+  end.
+
+%% @doc Hide sasl plain password in an anonymous function to avoid
+%% the plain text being dumped to crash logs
+%% @end
+-spec init_sasl_opt(client_config()) -> client_config().
+init_sasl_opt(Config) ->
+  case get_sasl_opt(Config) of
+    {plain, User, Pass} when not is_function(Pass) ->
+      replace_prop(sasl, {plain, User, fun() -> Pass end}, Config);
+    _Other ->
+      Config
+  end.
+
 %%%_* Internal Functions =======================================================
+
+%% @private
+-spec replace_prop(term(), term(), proplists:proplist()) ->
+        proplists:proplist().
+replace_prop(Key, Value, PropL0) ->
+  PropL = proplists:delete(Key, PropL0),
+  [{Key, Value} | PropL].
+
+%% @private Read a regular file, assume it has two lines:
+%% First line is the sasl-plain username
+%% Second line is the password
+%% @end
+-spec read_sasl_file(file:name_all()) -> {binary(), binary()}.
+read_sasl_file(File) ->
+  {ok, Bin} = file:read_file(File),
+  Lines = binary:split(Bin, <<"\n">>, [global]),
+  [User, Pass] = lists:filter(fun(Line) -> Line =/= <<>> end, Lines),
+  {User, Pass}.
 
 %% @private
 try_connect([], _Options, LastError) ->

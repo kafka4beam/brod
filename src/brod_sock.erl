@@ -192,7 +192,7 @@ init(Parent, Host, Port, ClientId, Options) ->
       Mod = get_tcp_mod(SslOpts),
       {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
       ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
-                           proplists:get_value(sasl, Options)),
+                           brod_utils:get_sasl_opt(Options)),
       State = State0#state{mod = Mod, sock = NewSock},
       proc_lib:init_ack(Parent, {ok, self()}),
       ReqTimeout = get_request_timeout(Options),
