@@ -230,11 +230,8 @@ get_sasl_opt(Config) ->
 %% @end
 -spec init_sasl_opt(client_config()) -> client_config().
 init_sasl_opt(Config) ->
-  case proplists:get_value(sasl, Config) of
-    {plain, User, Pass} when is_list(Pass) orelse is_binary(Pass) ->
-      replace_prop(sasl, {plain, User, fun() -> Pass end}, Config);
-    {plain, File} ->
-      {User, Pass} = read_sasl_file(File),
+  case get_sasl_opt(Config) of
+    {plain, User, Pass} when not is_function(Pass) ->
       replace_prop(sasl, {plain, User, fun() -> Pass end}, Config);
     _Other ->
       Config
