@@ -201,11 +201,11 @@ t_async_acks(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 2 seconds to receive the first message
+  %% wait at most 4 seconds to receive the first message
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, []),
+  _ = RecvFun(4000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
@@ -264,11 +264,11 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 2 seconds to receive the first message
+  %% wait at most 4 seconds to receive the first message
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, []),
+  _ = RecvFun(4000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms

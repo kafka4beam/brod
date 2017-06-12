@@ -213,7 +213,7 @@ assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
 -spec is_later_corr_id(corr_id(), corr_id()) -> boolean().
 is_later_corr_id(Id1, Id2) ->
   Diff = abs(Id1 - Id2),
-  case Diff < (?MAX_CORR_ID div 2) of
+  case Diff < (kpro:max_corr_id() div 2) of
     true  -> Id1 < Id2;
     false -> Id1 > Id2
   end.
@@ -422,15 +422,16 @@ cast_test() ->
   ok = cast(?undef, Ref).
 
 assert_corr_id_test() ->
+  Max = kpro:max_corr_id(),
   {error, none} = ack(#buf{}, 0),
   {error, none} = nack(#buf{}, 0, ignored),
   {error, 1} = ack(#buf{onwire = [{1, req}]}, 0),
   {error, 1} = nack(#buf{onwire = [{1, req}]}, 0, ignored),
-  {error, 1} = ack(#buf{onwire = [{1, req}]}, ?MAX_CORR_ID),
+  {error, 1} = ack(#buf{onwire = [{1, req}]}, Max),
   ?assertException(exit, {bad_order, 0, 1},
                    ack(#buf{onwire = [{0, req}]}, 1)),
-  ?assertException(exit, {bad_order, ?MAX_CORR_ID, 0},
-                   ack(#buf{onwire = [{?MAX_CORR_ID, req}]}, 0)),
+  ?assertException(exit, {bad_order, Max, 0},
+                   ack(#buf{onwire = [{Max, req}]}, 0)),
   ok.
 
 -endif. % TEST

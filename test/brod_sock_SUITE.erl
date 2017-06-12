@@ -87,7 +87,7 @@ t_request_timeout(Config) when is_list(Config) ->
   Sock = receive {sock, P} -> P
          after 5000 -> erlang:exit(timeout)
          end,
-  ProduceRequest = kpro:produce_request(<<"t">>, 0, [{<<"K">>, <<"V">>}],
+  ProduceRequest = kpro:produce_request(0, <<"t">>, 0, [{<<"K">>, <<"V">>}],
                                         1, 1000, no_compression),
   _ = brod_sock:request_async(Sock, ProduceRequest),
   receive

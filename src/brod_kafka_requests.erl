@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,12 +17,9 @@
 %%%=============================================================================
 %%% @doc
 %%% This module manages an opaque of sent-request collection.
-%%%
-%%% @copyright 2014, 2015 Klarna AB
 %%% @end
 %%% ============================================================================
 
-%%%_* Module declaration =======================================================
 %% @private
 -module(brod_kafka_requests).
 
@@ -65,7 +62,6 @@ new() -> #requests{}.
 add(#requests{ corr_id = CorrId
              , sent    = Sent
              } = Requests, Caller) ->
-  ok = assert_corr_id(Sent),
   NewSent = gb_trees:insert(CorrId, ?REQ(Caller, os:timestamp()), Sent),
   NewRequests = Requests#requests{ corr_id = kpro:next_corr_id(CorrId)
                                  , sent    = NewSent
@@ -110,29 +106,6 @@ scan_for_max_age(#requests{sent = Sent}) ->
                           min(Ts, Min)
                       end, Now, gb_trees:to_list(Sent)),
   timer:now_diff(Now, MinTs) div 1000.
-
-%%%_* Internal function ========================================================
-
-%% Assert that the in-buffer oldest and newest correlation ids are within a
-%% resonable window size. Otherwise it probably means:
-%% 1. kafka failed to send response to certain request(s)
-%% 2. too many requests sent on to a congested tcp connection.
-%% TODO: make it configurable?
-assert_corr_id(Sent) ->
-  Size = corr_id_window_size(Sent),
-  case  Size =< ?MAX_CORR_ID_WINDOW_SIZE of
-    true  -> ok;
-    false -> erlang:error(corr_id_window_size)
-  end.
-
-corr_id_window_size(Sent) ->
-  case gb_trees:is_empty(Sent) of
-    true -> 0;
-    false ->
-      {Min, _} = gb_trees:smallest(Sent),
-      {Max, _} = gb_trees:largest(Sent),
-      erlang:min(Max - Min, Min + ?MAX_CORR_ID - Max) + 1
-  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,6 +17,9 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
+%% -record(kafka_message, {...}).
+-include_lib("kafka_protocol/include/kpro_public.hrl").
+
 -type kafka_key()                 :: kpro:key().
 -type kafka_value()               :: kpro:value().
 -type kafka_kv_list()             :: kpro:kv_list().
@@ -30,16 +33,7 @@
 -type kafka_compression()         :: no_compression | gzip | snappy.
 -type brod_client_id()            :: atom().
 
--record(kafka_message,
-        { offset     :: kafka_offset()
-        , magic_byte :: integer()
-        , attributes :: integer()
-        , key        :: binary()
-        , value      :: binary()
-        , crc        :: integer()
-        }).
-
--type kafka_message() :: kafka_message().
+-type kafka_message() :: kpro:message().
 
 -record(kafka_message_set,
         { topic          :: kafka_topic()
@@ -111,10 +105,8 @@
                                      {ok, Partition :: integer()}).
 
 
-
 -endif. % include brod.hrl
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
 %%% End:
-

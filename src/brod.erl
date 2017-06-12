@@ -74,9 +74,9 @@
 -export([ get_metadata/1
         , get_metadata/2
         , get_metadata/3
-        , get_offsets/3
-        , get_offsets/5
-        , get_offsets/6
+        , resolve_offset/3
+        , resolve_offset/4
+        , resolve_offset/5
         , fetch/4
         , fetch/7
         , fetch/8
@@ -101,8 +101,8 @@
              , group_config/0
              , group_id/0
              , key/0
-             , kpro_MetadataResponse/0
              , kv_list/0
+             , message/0
              , offset/0
              , offset_time/0
              , producer_config/0
@@ -111,6 +111,8 @@
              ]).
 
 -include("brod_int.hrl").
+
+-type message() :: #kafka_message{}.
 
 %%%_* APIs =====================================================================
 
@@ -455,64 +457,54 @@ start_link_topic_subscriber(Client, Topic, Partitions,
                                    ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+-spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()], [topic()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @doc Fetch broker metadata
 -spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
 
-%% @equiv get_offsets(Hosts, Topic, Partition, latest, 1)
--spec get_offsets([endpoint()], topic(), non_neg_integer()) ->
-                     {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition) ->
-  get_offsets(Hosts, Topic, Partition, ?OFFSET_LATEST, 1).
+%% @equiv resolve_offset(Hosts, Topic, Partition, latest, 1)
+-spec resolve_offset([endpoint()], topic(), partition()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition) ->
+  resolve_offset(Hosts, Topic, Partition, ?OFFSET_LATEST).
 
-%% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([endpoint()], topic(), partition(),
-                  offset_time(), pos_integer()) ->
-                     {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
-  get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets, []).
+%% @doc Resolve semantic offset or timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(), offset_time()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time) ->
+  resolve_offset(Hosts, Topic, Partition, Time, []).
 
-
--spec get_offsets([endpoint()], topic(), partition(),
-                  offset_time(), pos_integer(), brod_sock:options()) ->
-                    {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition,
-            TimeOrSemanticOffset, MaxNoOffsets, Options) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
-  try
-    brod_utils:fetch_offsets(Pid, Topic, Partition,
-                             TimeOrSemanticOffset, MaxNoOffsets)
-  after
-    ok = brod_sock:stop(Pid)
-  end.
+%% @doc Resolve semantic offset or timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(),
+                     offset_time(), brod_sock:options()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
+  brod_utils:resolve_offset(Hosts, Topic, Partition, Time, Options).
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], topic(), partition(), integer()) ->
-               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset,
         _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
 
-%% @doc Fetch a single message set from the given topic-partition.
+%% @equiv fetch(Hoss, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes, []).
-
 
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
@@ -520,18 +512,9 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
             brod_sock:options()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset,
-      MaxWaitTime, MinBytes, MaxBytes0, Options) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
-  ReqFun =
-    fun(MaxBytes) ->
-        kpro:fetch_request(Topic, Partition, Offset,
-                           MaxWaitTime, MinBytes, MaxBytes)
-    end,
-  try
-    brod_utils:fetch(Pid, ReqFun, MaxBytes0, Offset)
-  after
-    ok = brod_sock:stop(Pid)
-  end.
+      MaxWaitTime, MinBytes, MaxBytes, Options) ->
+  brod_utils:fetch(Hosts, Topic, Partition, Offset,
+                   MaxWaitTime, MinBytes, MaxBytes, Options).
 
 %% @doc Connect partition leader.
 -spec connect_leader([endpoint()], topic(), partition(),

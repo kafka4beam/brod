@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015-2016 Klarna AB
+%%%   Copyright (c) 2015-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2015-2016 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod_client).
 -behaviour(gen_server).
@@ -108,6 +102,8 @@
         , config               :: client_config()
         , workers_tab          :: ets:tab()
         }).
+
+-type state() :: #state{}.
 
 %%%_* APIs =====================================================================
 
@@ -216,7 +212,7 @@ get_leader_connection(Client, Topic, Partition) ->
 
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
 -spec get_metadata(client(), ?undef | topic()) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Client, Topic) ->
   safe_gen_call(Client, {get_metadata, Topic}, infinity).
 
@@ -341,21 +337,8 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
   #state{config = Config} = State,
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
-  Req = #kpro_GroupCoordinatorRequest{groupId = GroupId},
-  {Rsp, NewState} = request_sync(State, Req, timer:seconds(Timeout)),
-  Result =
-    case Rsp of
-      {ok, #kpro_GroupCoordinatorResponse{ errorCode       = EC
-                                         , coordinatorHost = Host
-                                         , coordinatorPort = Port
-                                         }} ->
-        case kpro_ErrorCode:is_error(EC) of
-          true  -> {error, EC}; %% OBS: {error, EC} is used by group coordinator
-          false -> {ok, {{binary_to_list(Host), Port},Config}}
-        end;
-      {error, Reason} ->
-        {error, Reason}
-    end,
+  {Result, NewState} =
+    do_get_group_corrdinator(State, GroupId, timer:seconds(Timeout)),
   {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
@@ -491,46 +474,51 @@ find_consumer(Client, Topic, Partition) ->
       {error, Reason}
   end.
 
--spec validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
-        when Result :: ok | {error, any()}.
-validate_topic_existence(Topic, #state{workers_tab = Ets} = State) ->
+%% @private
+-spec validate_topic_existence(topic(), state(), boolean()) ->
+        {Result, state()} when Result :: ok | {error, any()}.
+validate_topic_existence(Topic, #state{workers_tab = Ets} = State, IsRetry) ->
   case lookup_partitions_count_cache(Ets, Topic) of
-    {ok, _Count}    -> {ok, State};
-    {error, Reason} -> {{error, Reason}, State};
-    false           -> do_validate_topic_existence(Topic, State)
+    {ok, _Count} ->
+      {ok, State};
+    {error, Reason} ->
+      {{error, Reason}, State};
+    false when IsRetry ->
+      {{error, ?EC_UNKNOWN_TOPIC_OR_PARTITION}, State};
+    false ->
+      %% Try fetch metadata (and populate partition count cache)
+      %% Then validate topic existence again.
+      with_ok(get_metadata_safe(Topic, State),
+              fun(_, S) -> validate_topic_existence(Topic, S, true) end)
   end.
 
--spec do_validate_topic_existence(topic(), #state{}) -> {Result, #state{}}
-        when Result :: ok | {error, any()}.
-do_validate_topic_existence(Topic0, #state{config = Config} = State) ->
-  %% if allow_topic_auto_creation is set 'false', do not try to fetch
-  %% metadata per topic name, fetch all topics instead. As sending
-  %% metadata request with topic name will cause an auto creation of
-  %% the topic in broker if auto.create.topics.enable is set to true
-  %% in broker config.
+%% @private Continue with {{ok, Result}, NewState}
+%% return whatever error immediately.
+%% @end
+-spec with_ok(Result, fun((_, state()) -> {Result, state()})) ->
+        {Result, state()} when Result :: ok | {ok, term()} | {error, any()}.
+with_ok({ok, State}, Continue) -> Continue(ok, State);
+with_ok({{ok, OK}, State}, Continue) -> Continue(OK, State);
+with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
+
+%% @private If allow_topic_auto_creation is set 'false',
+%% do not try to fetch metadata per topic name, fetch all topics instead.
+%% As sending metadata request with topic name will cause an auto creation
+%% of the topic if auto.create.topics.enable is enabled in broker config.
+%% @end
+-spec get_metadata_safe(topic(), state()) -> Result
+        when Result :: {{ok, kpro:struct()} | {error, any()}, state()}.
+get_metadata_safe(Topic0, #state{config = Config} = State) ->
   Topic =
     case proplists:get_value(allow_topic_auto_creation, Config, true) of
       true  -> Topic0;
       false -> ?undef
     end,
-  case do_get_metadata(Topic, State) of
-    {{ok, Response}, NewState} ->
-      #kpro_MetadataResponse{topicMetadata_L = Topics} = Response,
-      case lists:keyfind(Topic0, #kpro_TopicMetadata.topicName, Topics) of
-        #kpro_TopicMetadata{} = TopicMetadata ->
-          case do_get_partitions_count(TopicMetadata) of
-            {ok, _Count}    -> {ok, NewState};
-            {error, Reason} -> {{error, Reason},NewState}
-          end;
-        false ->
-          {{error, ?EC_UNKNOWN_TOPIC_OR_PARTITION}, NewState}
-      end;
-    {{error, Reason}, NewState} ->
-      {{error, Reason}, NewState}
-  end.
+  do_get_metadata(Topic, State).
 
--spec do_get_metadata(?undef | topic(), #state{}) -> {Result, #state{}}
-        when Result :: {ok, kpro_MetadataResponse()} | {error, any()}.
+%% @private
+-spec do_get_metadata(?undef | topic(), state()) -> {Result, state()}
+        when Result :: {ok, kpro:struct()} | {error, any()}.
 do_get_metadata(Topic, #state{ client_id   = ClientId
                              , config      = Config
                              , workers_tab = Ets
@@ -539,23 +527,48 @@ do_get_metadata(Topic, #state{ client_id   = ClientId
              ?undef -> []; %% in case no topic is given, get all
              _      -> [Topic]
            end,
-  Request = #kpro_MetadataRequest{topicName_L = Topics},
+  Vsn = 0, %% TODO: pick version
+  Request = kpro:req(metadata_request, Vsn, [{topics, Topics}]),
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
   case Result of
+    {ok, #kpro_rsp{tag = metadata_response, vsn = Vsn, msg = Metadata}} ->
+      TopicMetadataArray = kf(topic_metadata, Metadata),
+      ok = update_partitions_count_cache(Ets, TopicMetadataArray),
+      {{ok, Metadata}, NewState};
     {error, Reason} ->
       error_logger:error_msg("~p failed to fetch metadata for topics: ~p\n"
                              "reason=~p",
-                             [ClientId, Topics, Reason]);
-    _ ->
-      ok
-  end,
-  ok = maybe_update_partitions_count_cache(Ets, Result),
-  {Result, NewState}.
+                             [ClientId, Topics, Reason]),
+      {Result, NewState}
+  end.
 
--spec do_get_connection(#state{}, hostname(), portnum()) ->
-        {#state{}, Result} when Result :: {ok, pid()} | {error, any()}.
+%% @private
+-spec do_get_group_corrdinator(state(), group_id(), timer:time()) ->
+        {Result, state()} when Result :: {ok, endpoint()} | {error, any()}.
+do_get_group_corrdinator(#state{config = Config} = State, GroupId, Timeout) ->
+  Req = kpro:req(group_coordinator_request, _Vsn = 0, [{group_id, GroupId}]),
+  with_ok(
+    request_sync(State, Req, Timeout),
+    fun(#kpro_rsp{msg = Msg}, NewState) ->
+        EC = kf(error_code, Msg),
+        Result =
+          case ?IS_ERROR(EC) of
+            true ->
+              {error, EC}; %% OBS: {error, EC} is used by group coordinator
+            false ->
+              Coordinator = kf(coordinator, Msg),
+              Host = kf(host, Coordinator),
+              Port = kf(port, Coordinator),
+              {ok, {{binary_to_list(Host), Port}, Config}}
+          end,
+        {Result, NewState}
+    end).
+
+%% @private
+-spec do_get_connection(state(), hostname(), portnum()) ->
+        {state(), Result} when Result :: {ok, pid()} | {error, any()}.
 do_get_connection(#state{} = State, Host, Port) ->
   case find_socket(State, Host, Port) of
     {ok, Pid} ->
@@ -564,9 +577,9 @@ do_get_connection(#state{} = State, Host, Port) ->
       maybe_connect(State, Host, Port, Reason)
   end.
 
-
--spec maybe_connect(#state{}, hostname(), portnum(), Reason) ->
-        {#state{}, Result} when
+%% @private
+-spec maybe_connect(state(), hostname(), portnum(), Reason) ->
+        {state(), Result} when
           Reason :: not_found | dead_socket(),
           Result :: {ok, pid()} | {error, any()}.
 maybe_connect(State, Host, Port, not_found) ->
@@ -584,7 +597,8 @@ maybe_connect(#state{client_id = ClientId} = State,
      {State, {error, Reason}}
   end.
 
--spec connect(#state{}, hostname(), portnum()) -> {#state{}, Result}
+%% @private
+-spec connect(state(), hostname(), portnum()) -> {state(), Result}
         when Result :: {ok, pid()} | {error, any()}.
 connect(#state{ client_id       = ClientId
               , payload_sockets = Sockets
@@ -614,7 +628,7 @@ connect(#state{ client_id       = ClientId
 %% per-partition producer restarts and requests for a connection after
 %% it is cooled down.
 %% @end
--spec handle_socket_down(#state{}, pid(), any()) -> {ok, #state{}}.
+-spec handle_socket_down(state(), pid(), any()) -> {ok, state()}.
 handle_socket_down(#state{ client_id       = ClientId
                          , payload_sockets = Sockets
                          } = State, Pid, Reason) ->
@@ -633,11 +647,13 @@ handle_socket_down(#state{ client_id       = ClientId
       {ok, State}
   end.
 
+%% @private
 -spec mark_socket_dead(#sock{}, any()) -> {ok, #sock{}}.
 mark_socket_dead(Socket, Reason) ->
   {ok, Socket#sock{sock_pid = ?dead_since(os:timestamp(), Reason)}}.
 
--spec find_socket(#state{}, hostname(), portnum()) ->
+%% @private
+-spec find_socket(state(), hostname(), portnum()) ->
         {ok, pid()} %% normal case
       | {error, not_found} %% first call
       | {error, dead_socket()}.
@@ -673,6 +689,7 @@ start_metadata_socket(ClientId, [_|_] = Endpoints, Config) ->
   start_metadata_socket(ClientId, Endpoints, Config,
                         _FailedEndpoints = [], _Reason = ?undef).
 
+%% @private
 start_metadata_socket(_ClientId, [], _Config, FailedEndpoints, Reason) ->
   erlang:error({Reason, FailedEndpoints});
 start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints, Config,
@@ -687,20 +704,11 @@ start_metadata_socket(ClientId, [Endpoint | Rest] = Endpoints, Config,
                             [Endpoint | FailedEndpoints], Reason)
   end.
 
-%% @private Cache the number of partitions, but nothing else so far.
-%% since that is the only thing relatively 'static' in topic metadata.
-%% @end
--spec maybe_update_partitions_count_cache(
-        ets:tab(), {ok, kpro_MetadataResponse()} | {error, any()}) -> ok.
-maybe_update_partitions_count_cache(Ets, {ok, #kpro_MetadataResponse{} = R}) ->
-  update_partitions_count_cache(Ets, R#kpro_MetadataResponse.topicMetadata_L);
-maybe_update_partitions_count_cache(_Ets, {error, _}) ->
-  ok.
-
--spec update_partitions_count_cache(ets:tab(), [kpro_TopicMetadata()]) -> ok.
+%% @private
+-spec update_partitions_count_cache(ets:tab(), [kpro:struct()]) -> ok.
 update_partitions_count_cache(_Ets, []) -> ok;
 update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
-  Topic = TopicMetadata#kpro_TopicMetadata.topicName,
+  Topic = kf(topic, TopicMetadata),
   case do_get_partitions_count(TopicMetadata) of
     {ok, Cnt} ->
       ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
@@ -725,14 +733,15 @@ get_partitions_count(Client, Ets, Topic) ->
     false ->
       %% This call should populate the cache
       case get_metadata(Client, Topic) of
-        {ok, #kpro_MetadataResponse{topicMetadata_L = TopicsMetadata}} ->
-          [TopicMetadata] = TopicsMetadata,
+        {ok, Meta} ->
+          [TopicMetadata] = kf(topic_metadata, Meta),
           do_get_partitions_count(TopicMetadata);
         {error, Reason} ->
           {error, Reason}
       end
   end.
 
+%% @private
 -spec lookup_partitions_count_cache(ets:tab(), ?undef | topic()) ->
         {ok, pos_integer()} | {error, any()} | false.
 lookup_partitions_count_cache(_Ets, ?undef) -> false;
@@ -753,17 +762,18 @@ lookup_partitions_count_cache(Ets, Topic) ->
       {error, client_down}
   end.
 
--spec do_get_partitions_count(kpro_TopicMetadata()) ->
+%% @private
+-spec do_get_partitions_count(kpro:struct()) ->
         {ok, pos_integer()} | {error, any()}.
 do_get_partitions_count(TopicMetadata) ->
-  #kpro_TopicMetadata{ errorCode           = TopicEC
-                     , partitionMetadata_L = Partitions
-                     } = TopicMetadata,
-  case kpro_ErrorCode:is_error(TopicEC) of
-    true  -> {error, TopicEC};
+  ErrorCode = kf(topic_error_code, TopicMetadata),
+  Partitions = kf(partition_metadata, TopicMetadata),
+  case ?IS_ERROR(ErrorCode) of
+    true  -> {error, ErrorCode};
     false -> {ok, erlang:length(Partitions)}
   end.
 
+%% @private
 -spec maybe_start_producer(client(), topic(), partition(), {error, any()}) ->
         ok | {error, any()}.
 maybe_start_producer(Client, Topic, Partition, Error) ->
@@ -776,15 +786,16 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
       {error, Reason}
   end.
 
--spec request_sync(#state{}, kpro_RequestMessage(), non_neg_integer()) ->
-        {Result, #state{}} when Result :: {ok, kpro_ResponseMessage()}
-                                        | {error, any()}.
+%% @private
+-spec request_sync(state(), kpro:req(), timer:time()) ->
+        {Result, state()} when Result :: {ok, kpro:rsp()} | {error, any()}.
 request_sync(State, Request, Timeout) ->
   #state{config = Config} = State,
   MaxRetry = proplists:get_value(max_metadata_sock_retry, Config,
                                  ?DEFAULT_MAX_METADATA_SOCK_RETRY),
   request_sync(State, Request, Timeout, MaxRetry).
 
+%% @private
 request_sync(State0, Request, Timeout, RetryLeft) ->
   {ok, State} = maybe_restart_metadata_socket(State0),
   SockPid = State#state.meta_sock_pid,
@@ -800,7 +811,7 @@ request_sync(State0, Request, Timeout, RetryLeft) ->
   end.
 
 %% @private Move the newly failed endpoint to the last in the list.
--spec rotate_endpoints(#state{}, any()) -> {ok, #state{}}.
+-spec rotate_endpoints(state(), any()) -> {ok, state()}.
 rotate_endpoints(State, Reason) ->
   #state{ client_id           = ClientId
         , bootstrap_endpoints = BootstrapEndpoints0
@@ -812,7 +823,7 @@ rotate_endpoints(State, Reason) ->
   {ok, State#state{bootstrap_endpoints = BootstrapEndpoints}}.
 
 %% @private Maybe restart the metadata socket pid if it is no longer alive.
--spec maybe_restart_metadata_socket(#state{}) -> {ok, #state{}}.
+-spec maybe_restart_metadata_socket(state()) -> {ok, state()}.
 maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
   case brod_utils:is_pid_alive(MetaSockPid) of
     true ->
@@ -827,6 +838,7 @@ maybe_restart_metadata_socket(#state{meta_sock_pid = MetaSockPid} = State) ->
                       }}
   end.
 
+%% @private
 do_start_producer(TopicName, ProducerConfig, State) ->
   SupPid = State#state.producers_sup,
   F = fun() ->
@@ -835,6 +847,7 @@ do_start_producer(TopicName, ProducerConfig, State) ->
       end,
   do_on_valid_topic(TopicName, State, F).
 
+%% @private
 do_start_consumer(TopicName, ConsumerConfig, State) ->
   SupPid = State#state.consumers_sup,
   F = fun() ->
@@ -843,9 +856,11 @@ do_start_consumer(TopicName, ConsumerConfig, State) ->
       end,
   do_on_valid_topic(TopicName, State, F).
 
+%% @private
 do_on_valid_topic(TopicName, State, F) ->
-  case validate_topic_existence(TopicName, State) of
-    {ok, NewState} ->
+  with_ok(
+    validate_topic_existence(TopicName, State, _IsRetry = false),
+    fun(ok, NewState) ->
       case F() of
         {ok, _Pid} ->
           {ok, NewState};
@@ -853,10 +868,8 @@ do_on_valid_topic(TopicName, State, F) ->
           {ok, NewState};
         {error, Reason} ->
           {{error, Reason}, NewState}
-      end;
-    {{error, Reason}, NewState} ->
-      {{error, Reason}, NewState}
-  end.
+      end
+    end).
 
 %% @private Catch noproc exit exception when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
@@ -869,6 +882,10 @@ safe_gen_call(Server, Call, Timeout) ->
   catch exit : {noproc, _} ->
     {error, client_down}
   end.
+
+%% @private
+-spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
+kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

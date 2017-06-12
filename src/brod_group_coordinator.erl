@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,14 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% Kafka consumer group membership coordinator
-%%%
-%%% @copyright 2016 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod_group_coordinator).
 
@@ -57,7 +49,7 @@
 %% use kfaka's offset meta-topic retention policy
 -define(OFFSET_RETENTION_DEFAULT, -1).
 
--define(ESCALATE_EC(EC), kpro_ErrorCode:is_error(EC) andalso erlang:throw(EC)).
+-define(ESCALATE_EC(EC), ?IS_ERROR(EC) andalso erlang:throw(EC)).
 
 -define(ESCALATE(Expr), fun() ->
                           case Expr of
@@ -71,6 +63,8 @@
 -define(LO_CMD_COMMIT_OFFSETS, lo_cmd_commit_offsets).
 -define(LO_CMD_STABILIZE(AttemptCount, Reason),
         {lo_cmd_stabilize, AttemptCount, Reason}).
+
+-define(INITIAL_MEMBER_ID, <<>>).
 
 -type config() :: group_config().
 -type ts() :: erlang:timestamp().
@@ -111,9 +105,6 @@
           %% heartbeat reference, to discard stale responses
         , hb_ref :: {corr_id(), ts()}
           %% all group members received in the join group response
-          %% this field is currently not used, but the binary encoded
-          %% kpro_GroupMemberMetadata.protocolMetadata.userData field
-          %% can be useful for 'sticky' assignments etc. in the future
         , members = [] :: [member()]
           %% Set to false before joining the group
           %% then set to true when sucessfully joined the group.
@@ -333,10 +324,14 @@ handle_info(?LO_CMD_SEND_HB,
           {noreply, NewState}
       end
   end;
-handle_info({msg, _Pid, HbCorrId, #kpro_HeartbeatResponse{errorCode = EC}},
+handle_info({msg, _Pid, #kpro_rsp{ tag     = heartbeat_response
+                                 , corr_id = HbCorrId
+                                 , msg     = Body
+                                 }},
             #state{hb_ref = {HbCorrId, _SentTime}} = State0) ->
+  EC = kpro:find(error_code, Body),
   State = State0#state{hb_ref = ?undef},
-  case kpro_ErrorCode:is_error(EC) of
+  case ?IS_ERROR(EC) of
     true ->
       {ok, NewState} = stabilize(State, 0, EC),
       {noreply, NewState};
@@ -370,10 +365,8 @@ terminate(Reason, #state{ sock_pid = SockPid
                         , memberId = MemberId
                         } = State) ->
   log(State, info, "leaving group, reason ~p\n", [Reason]),
-  Request = #kpro_LeaveGroupRequest
-              { groupId = GroupId
-              , memberId = MemberId
-              },
+  Body = [{group_id, GroupId}, {member_id, MemberId}],
+  Request = kpro:req(leave_group_request, _V = 0, Body),
   try send_sync(SockPid, Request, 1000)
   catch _ : _ -> ok
   end,
@@ -475,7 +468,7 @@ do_stabilize([F | Rest], RetryFun, State) ->
 
 maybe_reset_member_id(State, Reason) ->
   case should_reset_member_id(Reason) of
-    true  -> State#state{memberId = <<>>};
+    true  -> State#state{memberId = ?INITIAL_MEMBER_ID};
     false -> State
   end.
 
@@ -512,37 +505,37 @@ join_group(#state{ groupId                       = GroupId
                  , partition_assignment_strategy = PaStrategy
                  , session_timeout_seconds       = SessionTimeoutSec
                  } = State0) ->
-  ConsumerGroupProtocolMeta =
-    #kpro_ConsumerGroupProtocolMetadata
-      { version     = ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION
-      , topicName_L = Topics
-      , userData    = make_user_data()
-      },
-  ConsumerGroupProtocol =
-    #kpro_GroupProtocol
-      { protocolName     = atom_to_list(PaStrategy)
-      , protocolMetadata = ConsumerGroupProtocolMeta
-      },
+  Meta =
+    [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
+    , {topics, Topics}
+    , {user_data, user_data(join)}
+    ],
+  Protocol =
+    [ {protocol_name, PaStrategy}
+    , {protocol_metadata, Meta}
+    ],
   SessionTimeout = timer:seconds(SessionTimeoutSec),
-  JoinReq =
-    #kpro_JoinGroupRequest
-      { groupId         = GroupId
-      , sessionTimeout  = SessionTimeout
-      , memberId        = MemberId0
-      , protocolType    = ?PROTOCOL_TYPE
-      , groupProtocol_L = [ConsumerGroupProtocol]
-      },
+  Body =
+    [ {group_id, GroupId}
+    , {session_timeout, SessionTimeout}
+    , {member_id, MemberId0}
+    , {protocol_type, ?PROTOCOL_TYPE}
+    , {group_protocols, [Protocol]}
+    ],
+  %% TODO: support version 1
+  Vsn = 0,
+  Req = kpro:req(join_group_request, Vsn, Body),
   %% send join group request and wait for response
   %% as long as the session timeout config
-  JoinRsp = send_sync(SockPid, JoinReq, SessionTimeout),
-  ?ESCALATE_EC(JoinRsp#kpro_JoinGroupResponse.errorCode),
-  #kpro_JoinGroupResponse
-    { generationId          = GenerationId
-    , protocolName          = _PaStrategyBinStr
-    , leaderId              = LeaderId
-    , memberId              = MemberId
-    , groupMemberMetadata_L = Members
-    } = JoinRsp,
+  #kpro_rsp{ tag = join_group_response
+           , vsn = Vsn
+           , msg = RspBody
+           } = send_sync(SockPid, Req, SessionTimeout),
+  ?ESCALATE_EC(kpro:find(error_code, RspBody)),
+  GenerationId = kpro:find(generation_id,RspBody),
+  LeaderId = kpro:find(leader_id, RspBody),
+  MemberId = kpro:find(member_id, RspBody),
+  Members = kpro:find(members, RspBody), %% assertive match
   IsGroupLeader = (LeaderId =:= MemberId),
   State =
     State0#state{ memberId     = MemberId
@@ -553,6 +546,7 @@ join_group(#state{ groupId                       = GroupId
   log(State, info, "elected=~p", [IsGroupLeader]),
   {ok, State}.
 
+%% @private
 -spec sync_group(#state{}) -> {ok, #state{}}.
 sync_group(#state{ groupId       = GroupId
                  , generationId  = GenerationId
@@ -561,20 +555,22 @@ sync_group(#state{ groupId       = GroupId
                  , member_pid    = MemberPid
                  , member_module = MemberModule
                  } = State) ->
-  SyncReq =
-    #kpro_SyncGroupRequest
-      { groupId           = GroupId
-      , generationId      = GenerationId
-      , memberId          = MemberId
-      , groupAssignment_L = assign_partitions(State)
-      },
+  ReqBody =
+    [ {group_id, GroupId}
+    , {generation_id, GenerationId}
+    , {member_id, MemberId}
+    , {group_assignment, assign_partitions(State)}
+    ],
+  Vsn = 0,
+  SyncReq = kpro:req(sync_group_request, Vsn, ReqBody),
   %% send sync group request and wait for response
-  #kpro_SyncGroupResponse
-    { errorCode        = SyncErrorCode
-    , memberAssignment = Assignment
-    } = send_sync(SockPid, SyncReq),
-  ?ESCALATE_EC(SyncErrorCode),
+  #kpro_rsp{ tag = sync_group_response
+           , vsn = Vsn
+           , msg = RspBody
+           } = send_sync(SockPid, SyncReq),
+  ?ESCALATE_EC(kpro:find(error_code, RspBody)),
   %% get my partition assignments
+  Assignment = kpro:find(member_assignment, RspBody),
   TopicAssignments = get_topic_assignments(State, Assignment),
   ok = MemberModule:assignments_received(MemberPid, MemberId,
                                          GenerationId, TopicAssignments),
@@ -583,6 +579,7 @@ sync_group(#state{ groupId       = GroupId
       [format_assignments(TopicAssignments)]),
   start_offset_commit_timer(NewState).
 
+%% @private
 -spec handle_ack(#state{}, topic(), partition(), offset()) -> {ok, #state{}}.
 handle_ack(#state{ acked_offsets = AckedOffsets
                  } = State, Topic, Partition, Offset) ->
@@ -652,36 +649,42 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          , acked_offsets            = AckedOffsets
                          } = State) ->
   Metadata = make_offset_commit_metadata(),
-  TopicOffsets =
+  TopicOffsets0 =
     lists:foldl(
       fun({{Topic, Partition}, Offset}, Acc) ->
         PartitionOffset =
-          #kpro_OCReqV2Partition{ partition = Partition
-                                , offset    = Offset
-                                , metadata  = Metadata
-                                },
+          [ {partition, Partition}
+          , {offset, Offset}
+          , {metadata, Metadata}
+          ],
         orddict:append_list(Topic, [PartitionOffset], Acc)
       end, [], AckedOffsets),
-  Offsets =
+  TopicOffsets =
     lists:map(
       fun({Topic, PartitionOffsets}) ->
-        #kpro_OCReqV2Topic{ topicName          = Topic
-                          , oCReqV2Partition_L = PartitionOffsets
-                          }
-      end, TopicOffsets),
-  Req =
-    #kpro_OffsetCommitRequestV2
-      { consumerGroupId = GroupId
-      , consumerGroupGenerationId = GenerationId
-      , consumerId = MemberId
-      , retentionTime = case OffsetRetentionSecs =/= ?undef of
-                          true  -> timer:seconds(OffsetRetentionSecs);
-                          false -> ?OFFSET_RETENTION_DEFAULT
-                        end
-      , oCReqV2Topic_L = Offsets
-      },
-  Rsp = send_sync(SockPid, Req),
-  #kpro_OffsetCommitResponse{oCRspTopic_L = Topics} = Rsp,
+          [ {topic, Topic}
+          , {partitions, PartitionOffsets}
+          ]
+      end, TopicOffsets0),
+  Retention =
+    case OffsetRetentionSecs =/= ?undef of
+      true  -> timer:seconds(OffsetRetentionSecs);
+      false -> ?OFFSET_RETENTION_DEFAULT
+    end,
+  ReqBody =
+    [ {group_id, GroupId}
+    , {group_generation_id, GenerationId}
+    , {member_id, MemberId}
+    , {retention_time, Retention}
+    , {topics, TopicOffsets}
+    ],
+  Vsn = 2, %% supports only version 2 (since kafka 0.9)
+  Req = kpro:req(offset_commit_request, Vsn, ReqBody),
+  #kpro_rsp{ tag = offset_commit_response
+           , vsn = Vsn
+           , msg = RspBody
+           } = send_sync(SockPid, Req),
+  Topics = kpro:find(responses, RspBody),
   ok = assert_commit_response(Topics),
   NewState = State#state{acked_offsets = []},
   {ok, NewState}.
@@ -689,30 +692,33 @@ do_commit_offsets_(#state{ groupId                  = GroupId
 %% @private Check commit response. If no error returns ok,
 %% if all error codes are the same, raise throw, otherwise error.
 %% %% @end
--spec assert_commit_response([kpro_OffsetCommitResponse()]) -> ok | no_return().
+-spec assert_commit_response([kpro:struct()]) -> ok | no_return().
 assert_commit_response(Topics) ->
   ErrorSet = collect_commit_response_error_codes(Topics),
   case gb_sets:to_list(ErrorSet) of
-    [] -> ok;
+    []   -> ok;
     [EC] -> ?ESCALATE_EC(EC);
-    _ -> erlang:error({commit_offset_failed, Topics})
+    _    -> erlang:error({commit_offset_failed, Topics})
   end.
 
--spec collect_commit_response_error_codes([kpro_OffsetCommitResponse()]) ->
-      gb_sets:set().
+%% @private
+-spec collect_commit_response_error_codes([kpro:struct()]) -> gb_sets:set().
 collect_commit_response_error_codes(Topics) ->
   lists:foldl(
-    fun(#kpro_OCRspTopic{oCRspPartition_L = Partitions}, Acc1) ->
+    fun(Topic, Acc1) ->
+        Partitions = kpro:find(partition_responses, Topic),
         lists:foldl(
-          fun(#kpro_OCRspPartition{errorCode = EC}, Acc2) ->
-            case kpro_ErrorCode:is_error(EC) of
-              true -> gb_sets:add_element(EC, Acc2);
-              false -> Acc2
-            end
+          fun(Partition, Acc2) ->
+              EC = kpro:find(error_code, Partition),
+              case ?IS_ERROR(EC) of
+                true -> gb_sets:add_element(EC, Acc2);
+                false -> Acc2
+              end
           end, Acc1, Partitions)
       end, gb_sets:new(), Topics).
 
--spec assign_partitions(#state{}) -> [kpro_GroupAssignment()].
+%% @private
+-spec assign_partitions(#state{}) -> [kpro:struct()].
 assign_partitions(State) when ?IS_LEADER(State) ->
   #state{ client                        = Client
         , members                       = Members
@@ -737,40 +743,36 @@ assign_partitions(State) when ?IS_LEADER(State) ->
     fun({MemberId, Topics_}) ->
       PartitionAssignments =
         lists:map(fun({Topic, Partitions}) ->
-                    #kpro_ConsumerGroupPartitionAssignment
-                      { topicName   = Topic
-                      , partition_L = Partitions
-                      }
+                      [ {topic, Topic}
+                      , {partitions, Partitions}
+                      ]
                   end, Topics_),
-      #kpro_GroupAssignment
-        { memberId = MemberId
-        , memberAssignment =
-            #kpro_ConsumerGroupMemberAssignment
-              { version = ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION
-              , consumerGroupPartitionAssignment_L = PartitionAssignments
-              , userData = <<0>> %% null is not allowed before 0.9.0.1
-              }
-        }
+      [ {member_id, MemberId}
+      , {member_assignment,
+         [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
+         , {topic_partitions, PartitionAssignments}
+         , {user_data, user_data(assign)}
+         ]}
+      ]
     end, Assignments);
 assign_partitions(#state{}) ->
   %% only leader can assign partitions to members
   [].
 
--spec translate_members([kpro_GroupMemberMetadata()]) -> [member()].
+%% @private
+-spec translate_members([kpro:struct()]) -> [member()].
 translate_members(Members) ->
   lists:map(
-    fun(#kpro_GroupMemberMetadata{ memberId         = MemberId
-                                 , protocolMetadata = Meta
-                                 }) ->
-      #kpro_ConsumerGroupProtocolMetadata
-        { version     = Version
-        , topicName_L = Topics
-        , userData    = UserData
-        } = Meta,
-      {MemberId, #kafka_group_member_metadata{ version   = Version
-                                             , topics    = Topics
-                                             , user_data = UserData
-                                             }}
+    fun(Member) ->
+        MemberId = kpro:find(member_id, Member),
+        Meta = kpro:find(member_metadata, Member),
+        Version = kpro:find(version, Meta),
+        Topics = kpro:find(topics, Meta),
+        UserData = kpro:find(user_data, Meta),
+        {MemberId, #kafka_group_member_metadata{ version   = Version
+                                               , topics    = Topics
+                                               , user_data = UserData
+                                               }}
     end, Members).
 
 %% collect topics from all members
@@ -788,6 +790,7 @@ get_partitions(Client, Topic) ->
   Count = ?ESCALATE(brod_client:get_partitions_count(Client, Topic)),
   lists:seq(0, Count-1).
 
+%% @private
 -spec do_assign_partitions(roundrobin, [member()],
                            [{topic(), partition()}]) ->
                               [{member_id(), [brod_partition_assignment()]}].
@@ -805,6 +808,7 @@ do_assign_partitions(roundrobin, Members, AllPartitions) ->
          <- roundrobin_assign_loop(AllPartitions, MemberAssignment, [])
   ].
 
+%% @private
 roundrobin_assign_loop([], PendingMembers, AssignedMembers) ->
   lists:reverse(AssignedMembers) ++ PendingMembers;
 roundrobin_assign_loop(Partitions, [], AssignedMembers) ->
@@ -828,20 +832,17 @@ roundrobin_assign_loop([{Topic, Partition} | Rest] = TopicPartitions,
 %% @private Extract the partition assignemts from SyncGroupResponse
 %% then fetch the committed offsets of each partition.
 %% @end
--spec get_topic_assignments(#state{}, kpro_ConsumerGroupMemberAssignment()) ->
+-spec get_topic_assignments(#state{}, binary() | [kpro:struct()]) ->
         brod_received_assignments().
-get_topic_assignments(#state{}, <<>>) -> [];
+get_topic_assignments(#state{}, ?kpro_cg_no_assignment) -> []; %% no assignments
 get_topic_assignments(#state{} = State, Assignment) ->
-  #kpro_ConsumerGroupMemberAssignment
-    { version                            = _VersionIgnored
-    , consumerGroupPartitionAssignment_L = PartitionAssignments
-    } = Assignment,
+  PartitionAssignments = kpro:find(topic_partitions, Assignment),
   TopicPartitions0 =
     lists:map(
-      fun(#kpro_ConsumerGroupPartitionAssignment{ topicName   = Topic
-                                                , partition_L = Partitions
-                                                }) ->
-        [{Topic, Partition} || Partition <- Partitions]
+      fun(PartitionAssignment) ->
+          Topic = kpro:find(topic, PartitionAssignment),
+          Partitions = kpro:find(partitions, PartitionAssignment),
+          [{Topic, Partition} || Partition <- Partitions]
       end, PartitionAssignments),
   TopicPartitions = lists:append(TopicPartitions0),
   CommittedOffsets = get_committed_offsets(State, TopicPartitions),
@@ -868,45 +869,46 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
   OffsetFetchRequestTopics =
     lists:map(
       fun({Topic, Partitions}) ->
-        #kpro_OFReqTopic{ topicName   = Topic
-                        , partition_L = Partitions
-                        }
+        [ {topic, Topic}
+        , {partitions, [[{partition, P}] || P <- Partitions]}
+        ]
       end, GrouppedPartitions),
-  OffsetFetchRequest =
-    #kpro_OffsetFetchRequest
-      { consumerGroup = GroupId
-      , oFReqTopic_L  = OffsetFetchRequestTopics
-      },
-  Rsp = send_sync(SockPid, OffsetFetchRequest),
-  #kpro_OffsetFetchResponse{topicOffset_L = TopicOffsets} = Rsp,
+  ReqBody =
+    [ {group_id, GroupId}
+    , {topics, OffsetFetchRequestTopics}
+    ],
+  Vsn = 1, %% TODO: pick version
+  Req = kpro:req(offset_fetch_request, Vsn, ReqBody),
+  #kpro_rsp{ tag = offset_fetch_response
+           , msg = RspBody
+           } = send_sync(SockPid, Req),
+  %% error_code is introduced in version 2
+  ?ESCALATE_EC(kpro:find(error_code, RspBody, ?EC_NONE)),
+  TopicOffsets = kpro:find(responses, RspBody),
   CommittedOffsets0 =
     lists:map(
-      fun(#kpro_TopicOffset{ topicName         = Topic
-                           , partitionOffset_L = Partitions
-                           }) ->
+      fun(TopicOffset) ->
+        Topic = kpro:find(topic, TopicOffset),
+        PartitionOffsets = kpro:find(partition_responses, TopicOffset),
         lists:foldl(
-          fun(#kpro_PartitionOffset{ partition = Partition
-                                   , offset    = Offset
-                                   , errorCode = EC
-                                   }, Acc) ->
-            case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
+          fun(PartitionOffset, Acc) ->
+            Partition = kpro:find(partition, PartitionOffset),
+            Offset = kpro:find(offset, PartitionOffset),
+            EC = kpro:find(error_code, PartitionOffset),
+            case (EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION) orelse
+                 (EC =:= ?EC_NONE andalso Offset =:= -1) of
               true ->
-                %% OffsetFetchResponse v0 if no commit history found
+                %% EC_UNKNOWN_TOPIC_OR_PARTITION is kept for version 0
                 Acc;
               false ->
-                case EC =:= ?EC_NONE andalso Offset =:= -1 of
-                  true ->
-                    %% OffsetFetchResponse v1 if no commit history found
-                    Acc;
-                  false ->
-                    ?ESCALATE_EC(EC),
-                    [{{Topic, Partition}, Offset} | Acc]
-                end
+                ?ESCALATE_EC(EC),
+                [{{Topic, Partition}, Offset} | Acc]
             end
-          end, [], Partitions)
+          end, [], PartitionOffsets)
       end, TopicOffsets),
   lists:append(CommittedOffsets0).
 
+%% @private
 -spec resolve_begin_offsets(
         TopicPartitions  :: [{topic(), partition()}],
         CommittedOffsets :: [{{topic(), partition()}, offset()}]) ->
@@ -975,11 +977,13 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                            , generationId = GenerationId
                            , sock_pid     = SockPid
                            } = State) ->
-  Request = #kpro_HeartbeatRequest{ groupId = GroupId
-                                  , memberId = MemberId
-                                  , generationId = GenerationId
-                                  },
-  {ok, CorrId} = brod_sock:request_async(SockPid, Request),
+  ReqBody =
+    [ {group_id, GroupId}
+    , {group_generation_id, GenerationId}
+    , {member_id, MemberId}
+    ],
+  Req = kpro:req(heartbeat_request, 0, ReqBody),
+  {ok, CorrId} = brod_sock:request_async(SockPid, Req),
   NewState = State#state{hb_ref = {CorrId, os:timestamp()}},
   {ok, NewState};
 maybe_send_heartbeat(#state{} = State) ->
@@ -1002,13 +1006,24 @@ log(#state{ groupId  = GroupId
     [GroupId, MemberId, GenerationId, self() | Args]).
 
 %% @private Make metata to be committed together with offsets.
--spec make_offset_commit_metadata() -> iodata().
-make_offset_commit_metadata() ->
-  io_lib:format("~s ~p ~p", [brod_utils:os_time_utc_str(), node(), self()]).
+-spec make_offset_commit_metadata() -> binary().
+make_offset_commit_metadata() -> coordinator_id().
 
-%% @private Make group member's user data in JoinGroupRequest
--spec make_user_data() -> iodata().
-make_user_data() -> coordinator_id().
+%% @private Make group member's user data in join_group_request
+%% This piece of data is currently just a dummy string.
+%%
+%% user_data can be used to share state between group members.
+%% It is originally sent by group members in join_group_request:s,
+%% then received by group leader, group leader (maybe mutate) assigns
+%% it back to members.
+%%
+%% Currently user_data is created in this module and terminated in this
+%% module, when needed for advanced features, we can originate it from
+%% member's init callback, and pass it to members via
+%% `brod_received_assignments()'
+%% @end
+-spec user_data(_) -> binary().
+user_data(_) -> <<"nothing">>.
 
 %% @private Make a client_id() to be used in the requests sent over the group
 %% coordinator's socket (group coordinator on the other end), this id will be
@@ -1021,7 +1036,11 @@ make_group_connection_client_id() -> coordinator_id().
 %% @private Use 'node()/pid()' as unique identifier of each group coordinator.
 -spec coordinator_id() -> binary().
 coordinator_id() ->
-  iolist_to_binary(io_lib:format("~p/~p", [node(), self()])).
+  bin(io_lib:format("~p/~p", [node(), self()])).
+
+%% @private
+-spec bin(iodata()) -> binary().
+bin(X) -> iolist_to_binary(X).
 
 -ifdef(TEST).
 

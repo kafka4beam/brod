@@ -86,7 +86,6 @@ options:
                          [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number
-  -c,--count=<count>     Number of offsets to fetch [default: 1]
   -T,--time=<time>       Unix epoch (in milliseconds) of the correlated offset
                          to fetch. Special values:
                            'latest' or -1 for latest offset
@@ -301,6 +300,7 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     false ->
       ok
   end,
+  {ok, _} = application:ensure_all_started(sasl),
   {ok, _} = application:ensure_all_started(brod),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
@@ -331,22 +331,23 @@ run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
            end,
   IsJSON = parse(Args, "--json", fun parse_boolean/1),
   IsText = parse(Args, "--text", fun parse_boolean/1),
-  Format = proplists:get_value(true, [ {IsJSON, json}
-                                     , {IsText, text}
-                                     , {true, text}
-                                     ]),
+  Format = kf(true, [ {IsJSON, json}
+                    , {IsText, text}
+                    , {true, text}
+                    ]),
   IsList = parse(Args, "--list", fun parse_boolean/1),
   IsUrp = parse(Args, "--under-replicated", fun parse_boolean/1),
   {ok, Metadata} = brod:get_metadata(Brokers, Topics, SockOpts),
   format_metadata(Metadata, Format, IsList, IsUrp);
 run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
-  Count = parse(Args, "--count", fun int/1),
   Time = parse(Args, "--time", fun parse_offset_time/1),
-  {ok, Offsets} =
-    brod:get_offsets(Brokers, Topic, Partition, Time, Count, SockOpts),
-  OffsetsStr = infix(lists:map(fun integer_to_list/1, Offsets), ","),
-  print(OffsetsStr);
+  case brod:resolve_offset(Brokers, Topic, Partition, Time, SockOpts) of
+    {ok, Offset} ->
+      print(integer_to_list(Offset));
+    {error, not_found} ->
+      print("no such offset")
+  end;
 run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
   Count0 = parse(Args, "--count", fun int/1),
@@ -358,18 +359,11 @@ run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
                  fun(FmtOption) ->
                      parse_fmt(FmtOption, KvDeli, MsgDeli)
                  end),
-  {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
   MaxBytes = parse(Args, "--max-bytes", fun parse_size/1),
+  {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
   Offset = resolve_begin_offset(Sock, Topic, Partition, Offset0),
-  FetchFun =
-    fun(BeginOffset) ->
-        ReqFun =
-          fun(MaxBytes_) ->
-            kpro:fetch_request(Topic, Partition, BeginOffset, Wait, 1,
-                               MaxBytes_)
-          end,
-        brod_utils:fetch(Sock, ReqFun, MaxBytes, BeginOffset)
-    end,
+  FetchFun = brod_utils:make_fetch_fun(Sock, Topic, Partition,
+                                       Wait, _MinBytes = 1, MaxBytes),
   Count = case Count0 < 0 of
             true -> 1000000000; %% as if an infinite loop
             false -> Count0
@@ -538,9 +532,8 @@ resolve_begin_offset(Sock, Topic, Partition, last) ->
     true  -> erlang:throw(bin("partition is empty"));
     false -> Latest - 1
   end;
-resolve_begin_offset(Sock, Topic, Partition, Offset0) ->
-  {ok, [Offset]} =
-    brod_utils:fetch_offsets(Sock, Topic, Partition, Offset0, 1),
+resolve_begin_offset(Sock, Topic, Partition, Time) ->
+  {ok, Offset} = brod_utils:resolve_offset(Sock, Topic, Partition, Time),
   Offset.
 
 %% @private
@@ -563,15 +556,13 @@ parse_size(Size) ->
   end.
 
 %% @private
-format_metadata(Metadata, Format, IsList, IsUrp) ->
-  #kpro_MetadataResponse{ broker_L = Brokers0
-                        , topicMetadata_L = Topics0
-                        } = Metadata,
-  Topics1 = case IsUrp of
+format_metadata(Metadata, Format, IsList, IsToListUrp) ->
+  Brokers = kf(brokers, Metadata),
+  Topics0 = kf(topic_metadata, Metadata),
+  Topics1 = case IsToListUrp of
               true -> lists:filter(fun is_ur_topic/1, Topics0);
               false -> Topics0
             end,
-  Brokers = format_brokers(Brokers0),
   Topics = format_topics(Topics1),
   case Format of
     json ->
@@ -585,30 +576,19 @@ format_metadata(Metadata, Format, IsList, IsUrp) ->
              true -> [];
              false -> format_broker_lines(Brokers)
            end,
-      TL0 = lists:map(
-              fun([{Name, Partitions}]) ->
-                  {Name, Partitions}
-              end, Topics),
-      TL1 = lists:keysort(1, TL0),
-      TL = format_topics_lines(TL1, IsList),
+      TL = format_topics_lines(Topics, IsList),
       print([BL, TL])
   end.
 
 %% @private
-format_brokers(Brokers) ->
-  lists:map(
-    fun(#kpro_Broker{ nodeId = Id
-                    , host = Host
-                    , port = Port
-                    }) ->
-        {integer_to_binary(Id), bin([Host, ":", integer_to_list(Port)])}
-    end, lists:keysort(#kpro_Broker.nodeId, Brokers)).
-
-%% @private
 format_broker_lines(Brokers) ->
   Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
-  F = fun({Id, Endpoint}) ->
-          io_lib:format("  ~s: ~s\n", [Id, Endpoint])
+  F = fun(Broker) ->
+          Id = kf(node_id, Broker),
+          Host = kf(host, Broker),
+          Port = kf(port, Broker),
+          %% TODO display rack
+          io_lib:format("  ~p: ~s\n", [Id, [Host, ":", integer_to_list(Port)]])
       end,
   [Header, lists:map(F, Brokers)].
 
@@ -643,7 +623,7 @@ format_error_code(E) when is_integer(E) -> integer_to_list(E).
 %% @private
 format_partitions_lines(Partitions0) ->
   Partitions1 =
-    lists:map(fun([{Pnr, Info}]) ->
+    lists:map(fun({Pnr, Info}) ->
                   {binary_to_integer(Pnr), Info}
               end, Partitions0),
   Partitions = lists:keysort(1, Partitions1),
@@ -651,11 +631,11 @@ format_partitions_lines(Partitions0) ->
 
 %% @private
 format_partition_lines({Partition, Info}) ->
-  LeaderNodeId = proplists:get_value(leader, Info),
-  Status = proplists:get_value(status, Info),
-  Isr = proplists:get_value(isr, Info),
-  Osr = proplists:get_value(osr, Info),
-  MaybeWarning = case kpro_ErrorCode:is_error(Status) of
+  LeaderNodeId = kf(leader, Info),
+  Status = kf(status, Info),
+  Isr = kf(isr, Info),
+  Osr = kf(osr, Info),
+  MaybeWarning = case ?IS_ERROR(Status) of
                    true -> [" [", atom_to_list(Status), "]"];
                    false -> ""
                  end,
@@ -680,60 +660,55 @@ infix([H | T], Sep) -> [H, Sep, infix(T, Sep)].
 
 %% @private
 format_topics(Topics) ->
-  lists:map(fun format_topic/1, Topics).
-
-%% @private Return true if a topics is under-replicated
-is_ur_topic(Topic) ->
-  #kpro_TopicMetadata{ errorCode = ErrorCode
-                     , partitionMetadata_L = PL
-                     } = Topic,
-  %% when there is an error, we do not know if
-  %% it is under-replicated or not
-  %% retrun true to alert user
-  kpro_ErrorCode:is_error(ErrorCode) orelse
-  lists:any(fun is_ur_partition/1, PL).
-
-%% @private Return true if a partition is under-replicated
-is_ur_partition(Partition) ->
-  #kpro_PartitionMetadata{ errorCode = ErrorCode
-                         , replicas = Replicas
-                         , isr = Isr
-                         } = Partition,
-  kpro_ErrorCode:is_error(ErrorCode) orelse
-  lists:sort(Isr) =/= lists:sort(Replicas).
+  TL = lists:map(fun format_topic/1, Topics),
+  lists:keysort(1, TL).
 
 %% @private
 format_topic(Topic) ->
-  #kpro_TopicMetadata{ errorCode = ErrorCode
-                     , topicName = TopicName
-                     , partitionMetadata_L = PL
-                     } = Topic,
+  ErrorCode = kf(topic_error_code, Topic),
+  TopicName = kf(topic, Topic),
+  PL = kf(partition_metadata, Topic),
   Data =
-    case kpro_ErrorCode:is_error(ErrorCode) of
-      true ->
-        ErrorCode;
-      false ->
-        format_partitions(PL)
+    case ?IS_ERROR(ErrorCode) of
+      true  -> ErrorCode;
+      false -> format_partitions(PL)
     end,
-  [{TopicName, Data}].
+  {TopicName, Data}.
 
 %% @private
 format_partitions(Partitions) ->
-  lists:map(fun format_partition/1, Partitions).
+  PL = lists:map(fun format_partition/1, Partitions),
+  lists:keysort(1, PL).
 
-format_partition(Partition) ->
-  #kpro_PartitionMetadata{ errorCode = ErrorCode
-                         , partition = PartitionNr
-                         , leader = LeaderNodeId
-                         , replicas = Replicas
-                         , isr = Isr
-                         } = Partition,
+%% @private
+format_partition(P) ->
+  ErrorCode = kf(partition_error_code, P),
+  PartitionNr = kf(partition_id, P),
+  LeaderNodeId = kf(leader, P),
+  Replicas = kf(replicas, P),
+  Isr = kf(isr, P),
   Data = [ {leader, LeaderNodeId}
          , {status, ErrorCode}
          , {isr, Isr}
          , {osr, Replicas -- Isr}
          ],
-  [{integer_to_binary(PartitionNr), Data}].
+  {integer_to_binary(PartitionNr), Data}.
+
+%% @private Return true if a topics is under-replicated
+is_ur_topic(Topic) ->
+  ErrorCode = kf(topic_error_code, Topic),
+  Partitions = kf(partition_metadata, Topic),
+  %% when there is an error, we do not know if
+  %% it is under-replicated or not
+  %% retrun true to alert user
+  ?IS_ERROR(ErrorCode) orelse lists:any(fun is_ur_partition/1, Partitions).
+
+%% @private Return true if a partition is under-replicated
+is_ur_partition(Partition) ->
+  ErrorCode = kf(partition_error_code, Partition),
+  Replicas = kf(replicas, Partition),
+  Isr = kf(isr, Partition),
+  ?IS_ERROR(ErrorCode) orelse lists:sort(Isr) =/= lists:sort(Replicas).
 
 %% @private
 parse_delimiter("none") ->
@@ -963,6 +938,10 @@ shuffle(L) ->
   RandList = lists:map(fun(_) -> element(3, os:timestamp()) end, L),
   {_, SortedL} = lists:unzip(lists:keysort(1, lists:zip(RandList, L))),
   SortedL.
+
+%% @private
+-spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
+kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
 -endif.
 

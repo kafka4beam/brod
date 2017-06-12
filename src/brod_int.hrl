@@ -78,6 +78,9 @@
                   | {callback, module(), term()}
                   | ?undef.
 
+%% Is kafka error code
+-define(IS_ERROR(EC), kpro_error_code:is_error(EC)).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

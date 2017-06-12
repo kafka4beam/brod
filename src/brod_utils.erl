@@ -39,22 +39,27 @@
         , shutdown_pid/1
         , try_connect/1
         , try_connect/2
-        , fetch_offsets/5
-        , map_messages/2
-        , fetch/4
+        , resolve_offset/4
+        , resolve_offset/5
+        , decode_messages/2
+        , fetch/8
         , init_sasl_opt/1
         , get_sasl_opt/1
+        , find_struct/3
+        , make_fetch_fun/6
         ]).
 
 -include("brod_int.hrl").
+
+-type req_fun() :: fun((offset(), kpro:count()) -> kpro:req()).
+-type fetch_fun() :: fun((offset()) -> {ok, [brod:message()]} | {error, any()}).
 
 %%%_* APIs =====================================================================
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for all topics
 %% @end
--spec get_metadata([endpoint()]) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+-spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
   get_metadata(Hosts, []).
 
@@ -62,7 +67,7 @@ get_metadata(Hosts) ->
 %% for the given topics
 %% @end
 -spec get_metadata([endpoint()], [topic()]) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   get_metadata(Hosts, Topics, _Options = []).
 
@@ -70,14 +75,53 @@ get_metadata(Hosts, Topics) ->
 %% connection options and fetch metadata for the given topics.
 %% @end
 -spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
-  {ok, Pid} = try_connect(Hosts, Options),
-  try
-    Request = #kpro_MetadataRequest{topicName_L = Topics},
-    brod_sock:request_sync(Pid, Request, 10000)
-  after
-    _ = brod_sock:stop(Pid)
+  with_sock(
+    try_connect(Hosts, Options),
+    fun(Pid) ->
+      Vsn = 0, %% TODO pick version
+      Body = [{topics, Topics}],
+      Request = kpro:req(metadata_request, Vsn, Body),
+      #kpro_rsp{ tag = metadata_response
+               , vsn = Vsn
+               , msg = Msg
+               } = request_sync(Pid, Request),
+      {ok, Msg}
+    end).
+
+%% @doc Resolve timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(),
+                     offset_time(), brod_sock:options()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
+  with_sock(
+    brod:connect_leader(Hosts, Topic, Partition, Options),
+    fun(Pid) ->
+        resolve_offset(Pid, Topic, Partition, Time)
+    end).
+
+%% @doc Resolve timestamp to real offset.
+-spec resolve_offset(pid(), topic(), partition(), offset_time()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(SocketPid, Topic, Partition, Time) ->
+  Request = offsets_request(Topic, Partition, Time),
+  #kpro_rsp{tag = offsets_response
+           , vsn = Vsn
+           , msg = Msg
+           } = request_sync(SocketPid, Request),
+  [Response] = kf(responses, Msg),
+  [PartitionRespons] = kf(partition_responses, Response),
+  Ec = kf(error_code, PartitionRespons),
+  ?IS_ERROR(Ec) andalso erlang:throw(Ec),
+  case Vsn of
+    0 ->
+      case kf(offsets, PartitionRespons) of
+        [Offset] -> {ok, Offset};
+        []       -> {error, not_found}
+      end;
+    1 ->
+      {ok, kf(offset, PartitionRespons)}
   end.
 
 %% @doc Try connect to any of the given bootstrap nodes.
@@ -109,7 +153,7 @@ shutdown_pid(Pid) ->
 %% @doc Find leader broker ID for the given topic-partiton in
 %% the metadata response received from socket.
 %% @end
--spec find_leader_in_metadata(kpro_MetadataResponse(), topic(), partition()) ->
+-spec find_leader_in_metadata(kpro:struct(), topic(), partition()) ->
         {ok, endpoint()} | {error, any()}.
 find_leader_in_metadata(Metadata, Topic, Partition) ->
   try
@@ -118,6 +162,7 @@ find_leader_in_metadata(Metadata, Topic, Partition) ->
     {error, Reason}
   end.
 
+%% @doc Get now timestamp, and format as UTC string.
 -spec os_time_utc_str() -> string().
 os_time_utc_str() ->
   Ts = os:timestamp(),
@@ -137,33 +182,26 @@ log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
 log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
 log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
 
-%% @doc Request (sync) for topic-partition offsets.
--spec fetch_offsets(pid(), topic(), partition(),
-                    offset_time(), pos_integer()) -> {ok, [offset()]}.
-fetch_offsets(SocketPid, Topic, Partition, TimeOrSemanticOffset, NrOfOffsets) ->
-  Request = offset_request(Topic, Partition, TimeOrSemanticOffset, NrOfOffsets),
-  {ok, Response} = brod_sock:request_sync(SocketPid, Request, 5000),
-  #kpro_OffsetResponse{topicOffsets_L = [TopicOffsets]} = Response,
-  #kpro_TopicOffsets{partitionOffsets_L = [PartitionOffsets]} = TopicOffsets,
-  #kpro_PartitionOffsets{offset_L = Offsets} = PartitionOffsets,
-  {ok, Offsets}.
-
+%% @doc Assert client_id is an atom().
 -spec assert_client(brod:client_id() | pid()) -> ok | no_return().
 assert_client(Client) ->
   ok_when(is_atom(Client) orelse is_pid(Client),
           {bad_client, Client}).
 
+%% @doc Assert group_id is a binary().
 -spec assert_group_id(brod:group_id()) -> ok | no_return().
 assert_group_id(GroupId) ->
   ok_when(is_binary(GroupId) andalso size(GroupId) > 0,
           {bad_group_id, GroupId}).
 
+%% @doc Assert a list of topic names [binary()].
 -spec assert_topics([brod:topic()]) -> ok | no_return().
 assert_topics(Topics) ->
   Pred = fun(Topic) -> ok =:= assert_topic(Topic) end,
   ok_when(is_list(Topics) andalso Topics =/= [] andalso lists:all(Pred, Topics),
           {bad_topics, Topics}).
 
+%% @doc Assert topic is a binary().
 -spec assert_topic(brod:topic()) -> ok | no_return().
 assert_topic(Topic) ->
   ok_when(is_binary(Topic) andalso size(Topic) > 0,
@@ -174,43 +212,38 @@ assert_topic(Topic) ->
 %% Messages having offset earlier than the requested offset are discarded.
 %% this might happen for compressed message sets
 %% @end
--spec map_messages(offset(), [ {?incomplete_message, non_neg_integer()}
-                             | kpro_Message()
-                             ]) ->
-       {?incomplete_message, non_neg_integer()} | [#kafka_message{}].
-map_messages(BeginOffset, Messages) when is_binary(Messages) ->
-  map_messages(BeginOffset, kpro:decode_message_set(Messages));
-map_messages(_BeginOffset, [{?incomplete_message, Size}]) ->
-  {?incomplete_message, Size};
-map_messages(BeginOffset, Messages) when is_list(Messages) ->
-  [kafka_message(M) || M <- Messages,
-   is_record(M, kpro_Message) andalso
-   M#kpro_Message.offset >= BeginOffset].
+-spec decode_messages(offset(), [kpro:decoded_message()]) ->
+       kpro:incomplete_message() | [brod:message()].
+decode_messages(BeginOffset, Messages) when is_binary(Messages) ->
+  decode_messages(BeginOffset, kpro:decode_message_set(Messages));
+decode_messages(_BeginOffset, ?incomplete_message(_) = Incomplete) ->
+  Incomplete;
+decode_messages(BeginOffset, Messages) when is_list(Messages) ->
+  drop_old_messages(BeginOffset, Messages).
 
-%% @doc For brod_cli (or Erlang shell debugging) to fetch one message-set.
--spec fetch(pid(), fun((non_neg_integer()) -> kpro_FetchRequest()),
-            non_neg_integer(), offset()) ->
+%% @doc Fetch a single message set from the given topic-partition.
+-spec fetch([endpoint()], topic(), partition(), offset(),
+            non_neg_integer(), non_neg_integer(), pos_integer(),
+            brod_sock:options()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
-fetch(SockPid, ReqFun, MaxBytes, Offset) ->
-  Request = ReqFun(MaxBytes),
-  %% infinity here because brod_sock has a global 'request_timeout' option
-  {ok, Response} = brod_sock:request_sync(SockPid, Request, infinity),
-  #kpro_FetchResponse{fetchResponseTopic_L = [TopicFetchData]} = Response,
-  #kpro_FetchResponseTopic{fetchResponsePartition_L = [PM]} = TopicFetchData,
-  #kpro_FetchResponsePartition{ errorCode  = ErrorCode
-                              , message_L  = Messages0
-                              } = PM,
-  case kpro_ErrorCode:is_error(ErrorCode) of
-    true ->
-      {error, kpro_ErrorCode:desc(ErrorCode)};
-    false ->
-      case brod_utils:map_messages(Offset, Messages0) of
-        {?incomplete_message, Size} ->
-          fetch(SockPid, ReqFun, Size, Offset);
-        Messages ->
-          {ok, Messages}
-      end
-  end.
+fetch(Hosts, Topic, Partition, Offset, WaitTime,
+      MinBytes, MaxBytes, Options) ->
+  with_sock(
+    brod:connect_leader(Hosts, Topic, Partition, Options),
+    fun(Pid) ->
+        Fetch = make_fetch_fun(Pid, Topic, Partition,
+                               WaitTime, MinBytes, MaxBytes),
+        Fetch(Offset)
+    end).
+
+%% @doc Make a fetch function which should expand `max_bytes' when
+%% it is not big enough to fetch one signle message.
+%% @end
+-spec make_fetch_fun(pid(), topic(), partition(), kpro:wait(),
+                     kpro:count(), kpro:count()) -> fetch_fun().
+make_fetch_fun(SockPid, Topic, Partition, WaitTime, MinBytes, MaxBytes) ->
+  ReqFun = make_req_fun(SockPid, Topic, Partition, WaitTime, MinBytes),
+  fun(Offset) -> fetch(SockPid, ReqFun, Offset, MaxBytes) end.
 
 %% @doc Get sasl options from client config.
 -spec get_sasl_opt(client_config()) -> sasl_opt().
@@ -238,6 +271,46 @@ init_sasl_opt(Config) ->
   end.
 
 %%%_* Internal Functions =======================================================
+
+%% @private Make a function to build fetch requests.
+%% The function takes offset and max_bytes as input as these two parameters
+%% are varient when continuously polling a specific topic-partition.
+%% @end
+-spec make_req_fun(pid(), topic(), partition(),
+                   kpro:wait(), kpro:count()) -> req_fun().
+make_req_fun(_SockPid, Topic, Partition, WaitTime, MinBytes) ->
+  Vsn = 0, %% TODO pick version (make use of SockPid)
+  fun(Offset, MaxBytes) ->
+      kpro:fetch_request(Vsn, Topic, Partition, Offset,
+                         WaitTime, MinBytes, MaxBytes)
+  end.
+
+%% @doc Fetch a message-set. If the given MaxBytes is not enough to fetch a
+%% single message, expand it to fetch exactly one message
+%% @end
+-spec fetch(pid(), req_fun(), offset(), kpro:count()) ->
+               {ok, [brod:message()]} | {error, any()}.
+fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
+  Request = ReqFun(Offset, MaxBytes),
+  #kpro_rsp{ tag = fetch_response
+           , msg = Msg
+           } = request_sync(SockPid, Request, infinity),
+  [Response] = kf(responses, Msg),
+  [PartitionResponse] = kf(partition_responses, Response),
+  Header = kf(partition_header, PartitionResponse),
+  Messages0 = kf(record_set, PartitionResponse),
+  ErrorCode = kf(error_code, Header),
+  case ?IS_ERROR(ErrorCode) of
+    true ->
+      {error, kpro_error_code:desc(ErrorCode)};
+    false ->
+      case decode_messages(Offset, Messages0) of
+        ?incomplete_message(Size) ->
+          fetch(SockPid, ReqFun, Offset, Size);
+        Messages ->
+          {ok, Messages}
+      end
+  end.
 
 %% @private
 -spec replace_prop(term(), term(), proplists:proplist()) ->
@@ -270,26 +343,16 @@ try_connect([{Host, Port} | Hosts], Options, _) ->
     Error     -> try_connect(Hosts, Options, Error)
   end.
 
-%% @private Convert a `kpro_Message' to a `kafka_message'.
--spec kafka_message(#kpro_Message{}) -> #kafka_message{}.
-kafka_message(#kpro_Message{ offset     = Offset
-                           , magicByte  = MagicByte
-                           , attributes = Attributes
-                           , key        = MaybeKey
-                           , value      = Value
-                           , crc        = Crc
-                           }) ->
-  Key = case MaybeKey of
-          ?undef -> <<>>;
-          _      -> MaybeKey
-        end,
-  #kafka_message{ offset     = Offset
-                , magic_byte = MagicByte
-                , attributes = Attributes
-                , key        = Key
-                , value      = Value
-                , crc        = Crc
-                }.
+%% @private A fetched batch may contain offsets earlier than the
+%% requested begin-offset because the batch might be compressed on
+%% kafka side. Here we drop the leading messages.
+%% @end
+drop_old_messages(_BeginOffset, []) -> [];
+drop_old_messages(BeginOffset, [Message | Rest] = All) ->
+  case Message#kafka_message.offset < BeginOffset of
+    true  -> drop_old_messages(BeginOffset, Rest);
+    false -> All
+  end.
 
 %% @private Raise an 'error' exception when first argument is not 'true'.
 %% The second argument is used as error reason.
@@ -298,51 +361,48 @@ kafka_message(#kpro_Message{ offset     = Offset
 ok_when(true, _) -> ok;
 ok_when(_, Reason) -> erlang:error(Reason).
 
-%% @private Make a 'OffsetRequest' request message for fetching offsets.
+%% @private Make a 'offset_request' message for offset resolution.
 %% In kafka protocol, -2 and -1 are semantic 'time' to request for
 %% 'earliest' and 'latest' offsets.
 %% In brod implementation, -2, -1, 'earliest' and 'latest'
 %% are semantic 'offset', this is why often a variable named
 %% Offset is used as the Time argument.
 %% @end
--spec offset_request(topic(), partition(),
-                     offset_time(), pos_integer()) -> kpro_OffsetRequest().
-offset_request(Topic, Partition, TimeOrSemanticOffset, MaxOffsets) ->
+-spec offsets_request(topic(), partition(), offset_time()) -> kpro:req().
+offsets_request(Topic, Partition, TimeOrSemanticOffset) ->
   Time = ensure_integer_offset_time(TimeOrSemanticOffset),
-  kpro:offset_request(Topic, Partition, Time, MaxOffsets).
+  kpro:offsets_request(_Vsn = 0, Topic, Partition, Time).
 
+%% @private
+-spec ensure_integer_offset_time(offset_time()) -> integer().
 ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
 ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
 ensure_integer_offset_time(T) when is_integer(T) -> T.
 
--spec do_find_leader_in_metadata(kpro_MetadataResponse(),
-                                 topic(), partition()) -> endpoint().
-do_find_leader_in_metadata(Metadata, Topic, Partition) ->
-  #kpro_MetadataResponse{ broker_L        = Brokers
-                        , topicMetadata_L = [TopicMetadata]
-                        } = Metadata,
-  #kpro_TopicMetadata{ errorCode           = TopicEC
-                     , topicName           = RealTopic
-                     , partitionMetadata_L = Partitions
-                     } = TopicMetadata,
+%% @private
+-spec do_find_leader_in_metadata(kpro:struct(), topic(), partition()) ->
+        endpoint().
+do_find_leader_in_metadata(Msg, Topic, Partition) ->
+  Brokers = kf(brokers, Msg),
+  [TopicMetadata] = kf(topic_metadata, Msg),
+  TopicEC = kf(topic_error_code, TopicMetadata),
+  RealTopic = kf(topic, TopicMetadata),
+  Partitions = kf(partition_metadata, TopicMetadata),
   RealTopic /= Topic andalso erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION),
-  kpro_ErrorCode:is_error(TopicEC) andalso erlang:throw(TopicEC),
-  Id = case lists:keyfind(Partition,
-                          #kpro_PartitionMetadata.partition, Partitions) of
-         #kpro_PartitionMetadata{leader = Leader} when Leader >= 0 ->
-           Leader;
-         #kpro_PartitionMetadata{} ->
-           erlang:throw(?EC_LEADER_NOT_AVAILABLE);
-         false ->
-           erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION)
+  ?IS_ERROR(TopicEC) andalso erlang:throw(TopicEC),
+  Id = case find_struct(partition_id, Partition, Partitions) of
+         false -> erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION);
+         PartitionMetadata -> kf(leader, PartitionMetadata)
        end,
-  Broker = lists:keyfind(Id, #kpro_Broker.nodeId, Brokers),
-  Host = Broker#kpro_Broker.host,
-  Port = Broker#kpro_Broker.port,
+  Id >= 0 orelse erlang:throw(?EC_LEADER_NOT_AVAILABLE),
+  Broker = find_struct(node_id, Id, Brokers),
+  Host = kf(host, Broker),
+  Port = kf(port, Broker),
   {binary_to_list(Host), Port}.
 
 -define(IS_BYTE(I), (I>=0 andalso I<256)).
 
+%% @private
 -spec bytes(key() | value() | kv_list()) -> non_neg_integer().
 bytes([]) -> 0;
 bytes(undefined) -> 0;
@@ -351,13 +411,52 @@ bytes(B) when is_binary(B) -> erlang:size(B);
 bytes({K, V}) -> bytes(K) + bytes(V);
 bytes([H | T]) -> bytes(H) + bytes(T).
 
-%%%_* Tests ====================================================================
+%% @private
+-spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
+kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
--ifdef(TEST).
+%% @private Find kpro struct in array.
+%% Return false if no struct matches the given field name and value
+%% @end
+-spec find_struct(kpro:field_name(), kpro:field_value(), [kpro:struct()]) ->
+        false | kpro:struct().
+find_struct(_FieldName, _Value, []) -> false;
+find_struct(FieldName, Value, [Struct | Rest]) ->
+  case kf(FieldName, Struct) =:= Value of
+    true  -> Struct;
+    false -> find_struct(FieldName, Value, Rest)
+  end.
 
--include_lib("eunit/include/eunit.hrl").
+%% @private
+-spec with_sock({ok, pid()}, fun((pid()) -> Result)) -> Result
+        when Result :: {ok, _} | {errory, any()}.
+with_sock({ok, Pid}, Fun) ->
+  try
+    Fun(Pid)
+  catch
+    throw : Reason ->
+      io:format("whaaaaaaaaaaaaaaaat: ~p\n", [Reason]),
+      {error, Reason}
+  after
+    _ = brod_sock:stop(Pid)
+  end;
+with_sock({error, Reason}, _Fun) ->
+  {error, Reason}.
 
--endif. % TEST
+%% @private
+-spec request_sync(pid(), kpro:req()) -> kpro:rsp().
+request_sync(Pid, Req) ->
+  request_sync(Pid, Req, infinity).
+
+%% @private
+-spec request_sync(pid(), kpro:req(), infinity | timer:time()) -> kpro:rsp().
+request_sync(Pid, Req, Timeout) ->
+  % brod_sock has a global 'request_timeout' option
+  % the socket pid will exit if that one times out
+  case brod_sock:request_sync(Pid, Req, Timeout) of
+    {ok, Rsp} -> Rsp;
+    {error, Reason} -> erlang:throw(Reason)
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

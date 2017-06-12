@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@
 %%%     the partition consumers.
 %%%  4. Send acknowledged offsets to group coordinator which will be committed
 %%%     to kafka periodically.
-%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -211,10 +210,12 @@ assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
 assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
 
--spec assign_partitions(pid(), [kpro_GroupMemberMetadata()],
+%% @doc This function is called only when `partition_assignment_strategy'
+%% is set for `callback_implemented' in group config.
+%% @end
+-spec assign_partitions(pid(), [kafka_group_member()],
                         [{topic(), partition()}]) ->
-                            [{kafka_group_member_id(),
-                              [brod_partition_assignment()]}].
+        [{kafka_group_member_id(), [brod_partition_assignment()]}].
 assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
   Call = {assign_partitions, MemberMetadataList, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
@@ -285,7 +286,7 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
         {ok, #state{} = St} = subscribe_partitions(State),
         St
     end,
-  Tref = start_subscribe_timer(),
+  Tref = start_subscribe_timer(?undef, ?RESUBSCRIBE_DELAY),
   {noreply, NewState#state{subscribe_tref = Tref}};
 handle_info(Info, State) ->
   log(State, info, "discarded message:~p", [Info]),
@@ -344,7 +345,6 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                   , consumer_config = ConsumerConfig
                   , subscribe_tref  = Tref
                   } = State) ->
-  ok = cancel_subscribe_timer(Tref),
   AllTopics =
     lists:map(fun(#brod_received_assignment{topic = Topic}) ->
                 Topic
@@ -364,12 +364,11 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                                 , begin_offset = BeginOffset
                                 } <- Assignments
     ],
-  self() ! ?LO_CMD_SUBSCRIBE_PARTITIONS,
   NewState = State#state{ consumers      = Consumers
                         , is_blocked     = false
                         , memberId       = MemberId
                         , generationId   = GenerationId
-                        , subscribe_tref = ?undef
+                        , subscribe_tref = start_subscribe_timer(Tref, 0)
                         },
   {noreply, NewState};
 handle_cast(stop, State) ->
@@ -386,22 +385,13 @@ terminate(_Reason, #state{}) ->
 %%%_* Internal Functions =======================================================
 
 %% @private
--spec start_subscribe_timer() -> reference().
-start_subscribe_timer() ->
-  erlang:send_after(?RESUBSCRIBE_DELAY, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS).
-
-%% @private
--spec cancel_subscribe_timer(?undef | reference()) -> ok.
-cancel_subscribe_timer(?undef) -> ok;
-cancel_subscribe_timer(Tref) ->
-  _ = erlang:cancel_timer(Tref),
-  receive
-    ?LO_CMD_SUBSCRIBE_PARTITIONS ->
-      ok
-  after
-    0 ->
-      ok
-  end.
+-spec start_subscribe_timer(?undef | reference(), timer:time()) -> reference().
+start_subscribe_timer(?undef, Delay) ->
+  erlang:send_after(Delay, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS);
+start_subscribe_timer(Ref, _Delay) when is_reference(Ref) ->
+  %% The old timer is not expired, keep waiting
+  %% A bit delay on subscribing to brod_consumer is fine
+  Ref.
 
 handle_messages(_Topic, _Partition, [], State) ->
   State;

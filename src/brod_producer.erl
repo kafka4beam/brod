@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2014-2017 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod_producer).
 -behaviour(gen_server).
@@ -233,8 +227,9 @@ init({ClientPid, Topic, Partition, Config}) ->
     end,
   SendFun =
     fun(SockPid, KafkaKvList) ->
+        Vsn = 0, %% TODO pick version
         ProduceRequest =
-          kpro:produce_request(Topic, Partition, KafkaKvList,
+          kpro:produce_request(Vsn, Topic, Partition, KafkaKvList,
                                RequiredAcks, AckTimeout,
                                MaybeCompress(KafkaKvList)),
         sock_send(SockPid, ProduceRequest)
@@ -285,22 +280,23 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
   end;
 handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
   handle_produce(CallRef, Key, Value, State);
-handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
+handle_info({msg, Pid, #kpro_rsp{ tag     = produce_response
+                                , corr_id = CorrId
+                                , msg     = Rsp
+                                }},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
                   } = State) ->
-  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
-  #kpro_ProduceResponseTopic{ topicName                  = Topic
-                            , produceResponsePartition_L = [ProduceOffset]
-                            } = ProduceTopic,
-  #kpro_ProduceResponsePartition{ partition  = Partition
-                                , errorCode  = ErrorCode
-                                , offset     = Offset
-                                } = ProduceOffset,
+  [TopicRsp] = kpro:find(responses, Rsp),
+  Topic = kpro:find(topic, TopicRsp),
+  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
+  Partition = kpro:find(partition, PartitionRsp),
+  ErrorCode = kpro:find(error_code, PartitionRsp),
+  Offset = kpro:find(base_offset, PartitionRsp),
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
   {ok, NewState} =
-    case kpro_ErrorCode:is_error(ErrorCode) of
+    case ?IS_ERROR(ErrorCode) of
       true ->
         _ = log_error_code(Topic, Partition, Offset, ErrorCode),
         Error = {produce_response_error, Topic, Partition,
@@ -485,7 +481,7 @@ is_retriable(_) ->
   false.
 
 %% @private
--spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
+-spec sock_send(?undef | pid(), kpro:req()) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, no_leader};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).

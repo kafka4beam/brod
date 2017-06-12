@@ -63,7 +63,7 @@ sasl_test() ->
   K = make_ts_str(),
   V = make_ts_str(),
   Output =
-    cmd("send --brokers localhost:9092,localhost:9292 -t test-topic "
+    cmd("send --brokers localhost:9292,localhost:9392 -t test-topic "
         "--cacertfile priv/ssl/ca.crt "
         "--keyfile priv/ssl/client.key "
         "--certfile priv/ssl/client.crt "
