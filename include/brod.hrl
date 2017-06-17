@@ -105,6 +105,10 @@
                                      {ok, Partition :: integer()}).
 
 
+-record(brod_cg, { id :: brod:group_id()
+                 , protocol_type :: brod:cg_protocol_type()
+                 }).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

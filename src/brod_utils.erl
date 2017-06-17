@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014, 2015, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2014, 2015 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod_utils).
 
@@ -47,6 +41,9 @@
         , get_sasl_opt/1
         , find_struct/3
         , make_fetch_fun/6
+        , list_all_groups/2
+        , list_groups/2
+        , describe_groups/3
         ]).
 
 -include("brod_int.hrl").
@@ -312,6 +309,88 @@ fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
       end
   end.
 
+%% @doc List all groups in the given cluster.
+%% NOTE: Exception if failed against any of the coordinator brokers.
+%% @end
+-spec list_all_groups([brod:endpoint()], brod_sock:options()) ->
+        [{brod:endpoint(), [brod:cg()] | {error, any()}}].
+list_all_groups(Endpoints, Options) ->
+  {ok, Metadata} = get_metadata(Endpoints, [], Options),
+  Brokers0 = kf(brokers, Metadata),
+  Brokers = [{binary_to_list(kf(host, B)), kf(port, B)} || B <- Brokers0],
+  lists:foldl(
+    fun(Broker, Acc) ->
+        case list_groups(Broker, Options) of
+          {ok, Groups}    -> [{Broker, Groups} | Acc];
+          {error, Reason} -> [{Broker, {error, Reason}} | Acc]
+        end
+    end, [], Brokers).
+
+%% @doc List all groups in the given coordinator broker.
+-spec list_groups(endpoint(), brod_sock:options()) ->
+        {ok, [brod:cg()]} | {error, any()}.
+list_groups(Endpoint, Options) ->
+  with_sock(
+    try_connect([Endpoint], Options),
+    fun(Pid) ->
+      Vsn = 0, %% only one version
+      Body = [], %% this request has no struct field
+      Request = kpro:req(list_groups_request, Vsn, Body),
+      #kpro_rsp{ tag = list_groups_response
+               , vsn = Vsn
+               , msg = Msg
+               } = request_sync(Pid, Request),
+      ErrorCode = kf(error_code, Msg),
+      case ?IS_ERROR(ErrorCode) of
+        true ->
+          {error, ErrorCode};
+        false ->
+          Groups =
+            lists:map(
+              fun(Struct) ->
+                  Id = kf(group_id, Struct),
+                  Type = kf(protocol_type, Struct),
+                  #brod_cg{ id = Id
+                          , protocol_type = Type
+                          }
+              end, kf(groups, Msg)),
+          {ok, Groups}
+      end
+    end).
+
+%% @doc Send describe_groups_request and wait for describe_groups_response.
+-spec describe_groups(endpoint(), brod_sock:options(), [brod:group_id()]) ->
+        {ok, kpro:struct()} | {error, any()}.
+describe_groups(Coordinator, SockOpts, IDs) ->
+  with_sock(
+    try_connect([Coordinator], SockOpts),
+    fun(Pid) ->
+        Req = kpro:req(describe_groups_request, 0, [{group_ids, IDs}]),
+        #kpro_rsp{ tag = describe_groups_response
+                 , vsn = 0
+                 , msg = Msg
+                 } = request_sync(Pid, Req),
+        Groups = kf(groups, Msg),
+        {ok, Groups}
+    end).
+
+%%%_* Internal functions =======================================================
+
+%% @private
+-spec with_sock({ok, pid()}, fun((pid()) -> Result)) -> Result
+        when Result :: {ok, _} | {errory, any()}.
+with_sock({ok, Pid}, Fun) ->
+  try
+    Fun(Pid)
+  catch
+    throw : Reason ->
+      {error, Reason}
+  after
+    _ = brod_sock:stop(Pid)
+  end;
+with_sock({error, Reason}, _Fun) ->
+  {error, Reason}.
+
 %% @private
 -spec replace_prop(term(), term(), proplists:proplist()) ->
         proplists:proplist().
@@ -330,7 +409,12 @@ read_sasl_file(File) ->
   [User, Pass] = lists:filter(fun(Line) -> Line =/= <<>> end, Lines),
   {User, Pass}.
 
-%% @private
+%% @private Try to connect to one of the given endpoints.
+%% Try next in the list if failed. Return the last failure reason
+%% if failed on all endpoints.
+%% @end
+-spec try_connect([endpoint()], brod_sock:options(), any()) ->
+        {ok, pid()} | {error, any()}.
 try_connect([], _Options, LastError) ->
   LastError;
 try_connect([{Host, Port} | Hosts], Options, _) ->
@@ -426,22 +510,6 @@ find_struct(FieldName, Value, [Struct | Rest]) ->
     true  -> Struct;
     false -> find_struct(FieldName, Value, Rest)
   end.
-
-%% @private
--spec with_sock({ok, pid()}, fun((pid()) -> Result)) -> Result
-        when Result :: {ok, _} | {errory, any()}.
-with_sock({ok, Pid}, Fun) ->
-  try
-    Fun(Pid)
-  catch
-    throw : Reason ->
-      io:format("whaaaaaaaaaaaaaaaat: ~p\n", [Reason]),
-      {error, Reason}
-  after
-    _ = brod_sock:stop(Pid)
-  end;
-with_sock({error, Reason}, _Fun) ->
-  {error, Reason}.
 
 %% @private
 -spec request_sync(pid(), kpro:req()) -> kpro:rsp().

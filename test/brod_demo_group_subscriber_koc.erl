@@ -136,7 +136,7 @@ bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
   ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
   %% commit offsets to kafka every 5 seconds
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
-                ,{offset_commit_interval_seconds, 5}
+                ,{offset_commit_interval_seconds, 1}
                 ],
   {ok, _Subscriber} =
     brod:start_link_group_subscriber(

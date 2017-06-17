@@ -30,11 +30,12 @@
   brod <command> [options] [-h|--help] [--verbose|--debug]
 
 commands:
-  meta:   Inspect topic metadata
-  offset: Inspect offsets
-  fetch:  Fetch messages
-  send:   Produce messages
-  pipe:   Pipe file or stdin as messages to kafka
+  meta:    Inspect topic metadata
+  offset:  Inspect offsets
+  fetch:   Fetch messages
+  send:    Produce messages
+  pipe:    Pipe file or stdin as messages to kafka
+  groups:  List or describe consumer group
 ").
 
 %% NOTE: bad indentation at the first line is intended
@@ -220,12 +221,31 @@ options:
 "
 ).
 
--define(DOCS, [{?META_CMD, ?META_DOC},
-               {?OFFSET_CMD, ?OFFSET_DOC},
-               {?SEND_CMD, ?SEND_DOC},
-               {?FETCH_CMD, ?FETCH_DOC},
-               {?PIPE_CMD, ?PIPE_DOC}
-               ]).
+-define(GROUPS_CMD, "groups").
+-define(GROUPS_DOC, "usage:
+  brod groups [options]
+
+options:
+  -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
+  --describe             Describe group status details
+  --ids=<group-id>       Comma separated group IDs to describe [default: all]
+"
+?COMMAND_COMMON_OPTIONS
+"NOTE: When --source is path/to/file, it by default reads from BOF
+      unless --tail is given.
+"
+).
+
+
+-define(DOCS,
+        [ {?META_CMD,   ?META_DOC}
+        , {?OFFSET_CMD, ?OFFSET_DOC}
+        , {?SEND_CMD,   ?SEND_DOC}
+        , {?FETCH_CMD,  ?FETCH_DOC}
+        , {?PIPE_CMD,   ?PIPE_DOC}
+        , {?GROUPS_CMD, ?GROUPS_DOC}
+        ]).
 
 -define(LOG_LEVEL_QUIET, 0).
 -define(LOG_LEVEL_VERBOSE, 1).
@@ -304,12 +324,11 @@ main(Command, Doc, Args, Stop, LogLevel) ->
   {ok, _} = application:ensure_all_started(brod),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
-    Topic = parse(ParsedArgs, "--topic", fun bin/1),
     SockOpts = parse_sock_opts(ParsedArgs),
     Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
     ok = code:add_pathsa(Paths),
     verbose("sock opts: ~p\n", [SockOpts]),
-    run(Command, Brokers, Topic, SockOpts, ParsedArgs)
+    run(Command, Brokers, SockOpts, ParsedArgs)
   catch
     throw : Reason when is_binary(Reason) ->
       %% invalid options etc.
@@ -458,6 +477,138 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
   pipe(ReaderPid, SendFun, queue:new()).
 
 %% @private
+run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
+  IsDesc = parse(Args, "--describe", fun parse_boolean/1),
+  IDs = parse(Args, "--ids", fun parse_cg_ids/1),
+  cg(Brokers, SockOpts, IsDesc, IDs);
+run(Cmd, Brokers, SockOpts, Args) ->
+  %% Clause for all per-topic commands
+  Topic = parse(Args, "--topic", fun bin/1),
+  run(Cmd, Brokers, Topic, SockOpts, Args).
+
+%% @private
+cg(BootstrapEndpoints, SockOpts, _IsDesc = false, _IDs) ->
+  %% Describe all groups
+  All = list_groups(BootstrapEndpoints, SockOpts),
+  lists:foreach(fun print_cg_cluster/1, All);
+cg(BootstrapEndpoints, SockOpts, _IsDesc = true, IDs0) ->
+  CgClusters = list_groups(BootstrapEndpoints, SockOpts),
+  IDs =
+    case IDs0 =:= all of
+      true ->
+        lists:foldl(fun({_, Cgs}, Acc) ->
+                        [ID || #brod_cg{id = ID} <- Cgs] ++ Acc
+                    end, [], CgClusters);
+      false ->
+        IDs0
+    end,
+  describe_cgs(CgClusters, SockOpts, IDs).
+
+%% @private
+describe_cgs(_, _SockOpts, []) -> ok;
+describe_cgs([], _SockOpts, IDs) ->
+  logerr("Unknown group IDs: ~s", [infix(IDs, ", ")]);
+describe_cgs([{Coordinator, CgList} | Rest], SockOpts, IDs) ->
+  %% Get all IDs managed by current coordinator.
+  ThisIDs = [ID || #brod_cg{id = ID} <- CgList, lists:member(ID, IDs)],
+  ok = do_describe_cgs(Coordinator, SockOpts, ThisIDs),
+  IDsRest = IDs -- ThisIDs,
+  describe_cgs(Rest, SockOpts, IDsRest).
+
+%% @private
+do_describe_cgs(_Coordinator, _SockOpts, []) ->
+  ok;
+do_describe_cgs(Coordinator, SockOpts, IDs) ->
+  case brod:describe_groups(Coordinator, SockOpts, IDs) of
+    {ok, DescArray} ->
+      ok = print("~s\n", [fmt_endpoint(Coordinator)]),
+      lists:foreach(fun print_cg_desc/1, DescArray);
+    {error, Reason} ->
+      logerr("Failed to describe IDs [~s] at broker ~s\nreason:~p\n",
+             [infix(IDs, ","), fmt_endpoint(Coordinator), Reason])
+  end.
+
+%% @private
+print_cg_desc(Desc) ->
+  EC = kf(error_code, Desc),
+  GroupId = kf(group_id, Desc),
+  case ?IS_ERROR(EC) of
+    true ->
+      logerr("Failed to describe group id=~s\nreason:~p\n", [GroupId, EC]);
+    false ->
+      D1 = lists:keydelete(error_code, 1, Desc),
+      D  = lists:keydelete(group_id, 1, D1),
+      print("  ~s\n~s", [GroupId, pp_fmt_struct(_Indent = 2, D)])
+  end.
+
+%% @private
+pp_fmt_struct(_Indent, []) -> [];
+pp_fmt_struct(Indent, [{Field, Value} | Rest]) ->
+  [ indent_fmt(Indent, "~p: ~s", [Field, pp_fmt_struct_value(Indent, Value)])
+  | pp_fmt_struct(Indent, Rest)
+  ].
+
+%% @private
+pp_fmt_struct_value(_Indent, X) when is_integer(X) orelse
+                                     is_atom(X) orelse
+                                     is_binary(X) orelse
+                                     X =:= [] ->
+  [pp_fmt_prim(X), "\n"];
+pp_fmt_struct_value(Indent, [{_,_}|_] = SubStruct) ->
+  ["\n", pp_fmt_struct(Indent + 1, SubStruct)];
+pp_fmt_struct_value(Indent, Array) when is_list(Array) ->
+  case hd(Array) of
+    [{_,_}|_] ->
+      %% array of sub struct
+      ["\n",
+       lists:map(fun(Item) ->
+                     pp_fmt_struct(Indent + 1, Item)
+                 end, Array)
+      ];
+    _ ->
+      %% array of primitive values
+      [[pp_fmt_prim(V) || V <- Array], "\n"]
+  end.
+
+%% @private
+pp_fmt_prim([]) -> "[]";
+pp_fmt_prim(N) when is_integer(N) -> integer_to_list(N);
+pp_fmt_prim(A) when is_atom(A) -> atom_to_list(A);
+pp_fmt_prim(S) when is_binary(S) -> S.
+
+%% @private
+indent_fmt(Indent, Fmt, Args) ->
+  io_lib:format(lists:duplicate(Indent * 2, $\s) ++ Fmt, Args).
+
+%% @private
+print_cg_cluster({Endpoint, Cgs}) ->
+  ok = print([fmt_endpoint(Endpoint), "\n"]),
+  IoData = [ io_lib:format("  ~s (~s)\n", [Id, Type])
+             || #brod_cg{id = Id, protocol_type = Type} <- Cgs
+           ],
+  print(IoData).
+
+%% @private
+fmt_endpoint({Host, Port}) ->
+  bin(io_lib:format("~s:~B", [Host, Port])).
+
+%% @private Return consumer groups clustered by group coordinator
+%% {CoordinatorEndpoint, [group_id()]}.
+%% @end
+list_groups(Brokers, SockOpts) ->
+  Cgs = brod:list_all_groups(Brokers, SockOpts),
+  lists:keysort(1, lists:foldl(fun do_list_groups/2, [], Cgs)).
+
+%% @private
+do_list_groups({_Endpoint, []}, Acc) -> Acc;
+do_list_groups({Endpoint, {error, Reason}}, Acc) ->
+  logerr("Failed to list groups at kafka ~s\nreason~p",
+         [fmt_endpoint(Endpoint), Reason]),
+  Acc;
+do_list_groups({Endpoint, Cgs}, Acc) ->
+  [{Endpoint, Cgs} | Acc].
+
+%% @private
 pipe(ReaderPid, SendFun, PendingAcks0) ->
   PendingAcks1 = flush_pending_acks(PendingAcks0, _Timeout = 0),
   receive
@@ -588,7 +739,7 @@ format_broker_lines(Brokers) ->
           Host = kf(host, Broker),
           Port = kf(port, Broker),
           %% TODO display rack
-          io_lib:format("  ~p: ~s\n", [Id, [Host, ":", integer_to_list(Port)]])
+          io_lib:format("  ~p: ~s\n", [Id, fmt_endpoint({Host, Port})])
       end,
   [Header, lists:map(F, Brokers)].
 
@@ -711,10 +862,8 @@ is_ur_partition(Partition) ->
   ?IS_ERROR(ErrorCode) orelse lists:sort(Isr) =/= lists:sort(Replicas).
 
 %% @private
-parse_delimiter("none") ->
-  none;
-parse_delimiter(EscappedStr) ->
-  eval_str(EscappedStr).
+parse_delimiter("none") -> none;
+parse_delimiter(EscappedStr) -> eval_str(EscappedStr).
 
 %% @private
 eval_str([]) -> [];
@@ -846,6 +995,11 @@ parse_boolean("false") -> false;
 parse_boolean(?undef) -> ?undef.
 
 %% @private
+parse_cg_ids("") -> [];
+parse_cg_ids("all") -> all;
+parse_cg_ids(Str) -> [bin(I) || I <- string:tokens(Str, ",")].
+
+%% @private
 parse_file(?undef) ->
   ?undef;
 parse_file(Path) ->
@@ -886,10 +1040,13 @@ print_version() ->
 print(IoData) -> io:put_chars(IoData).
 
 %% @private
-logerr(IoData) -> io:put_chars(standard_error, IoData).
+print(Fmt, Args) -> io:format(Fmt, Args).
 
 %% @private
-logerr(Fmt, Args) -> io:format(standard_error, Fmt, Args).
+logerr(IoData) -> io:put_chars(standard_error, ["*** ", IoData]).
+
+%% @private
+logerr(Fmt, Args) -> io:format(standard_error, "*** " ++ Fmt, Args).
 
 %% @private
 verbose(Str) -> verbose(Str, []).

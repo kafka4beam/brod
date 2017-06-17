@@ -81,6 +81,9 @@
         , fetch/7
         , fetch/8
         , connect_leader/4
+        , list_all_groups/2
+        , list_groups/2
+        , describe_groups/3
         ]).
 
 %% escript
@@ -93,6 +96,8 @@
 -export_type([ brod_call_ref/0
              , brod_client_id/0
              , brod_partition_fun/0
+             , cg/0
+             , cg_protocol_type/0
              , client/0
              , client_config/0
              , consumer_config/0
@@ -113,6 +118,8 @@
 -include("brod_int.hrl").
 
 -type message() :: #kafka_message{}.
+-type cg() :: #brod_cg{}.
+-type cg_protocol_type() :: binary().
 
 %%%_* APIs =====================================================================
 
@@ -525,6 +532,29 @@ connect_leader(Hosts, Topic, Partition, Options) ->
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, Options).
+
+%% @doc List ALL consumer groups in the given kafka cluster.
+%% NOTE: Exception if failed against any of the coordinator brokers.
+%% @end
+-spec list_all_groups([endpoint()], brod_sock:options()) ->
+        [{endpoint(), [cg()] | {error, any()}}].
+list_all_groups(Hosts, Options) ->
+  brod_utils:list_all_groups(Hosts, Options).
+
+%% @doc List consumer groups in the given group coordinator broker.
+-spec list_groups([endpoint()], brod_sock:options()) ->
+        {ok, [cg()]} | {error, any()}.
+list_groups(Hosts, Options) ->
+  brod_utils:list_groups(Hosts, Options).
+
+%% @doc Describe consumer groups. The given consumer group IDs should be all
+%% managed by the coordinator-broker running at the given endpoint.
+%% Otherwise error codes will be returned in the result structs.
+%% @end
+-spec describe_groups(endpoint(), brod_sock:options(), [brod:group_id()]) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+describe_groups(CoordinatorEndpoint, SockOpts, IDs) ->
+  brod_utils:describe_groups(CoordinatorEndpoint, SockOpts, IDs).
 
 -ifdef(BROD_CLI).
 main(Args) -> brod_cli:main(Args, halt).
