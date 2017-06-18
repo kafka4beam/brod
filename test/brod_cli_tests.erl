@@ -106,6 +106,17 @@ pipe_test() ->
   Expected = iolist_to_binary(Expected2),
   ?assertEqual(Expected, FetchedLines).
 
+groups_test() ->
+  assert_no_error(cmd("groups")),
+  assert_no_error(cmd("groups --describe")),
+  assert_no_error(cmd("groups --describe --ids all")).
+
+assert_no_error(Result) ->
+  case binary:match(iolist_to_binary(Result), <<"***">>) of
+    nomatch -> ok;
+    _ -> erlang:throw(Result)
+  end.
+
 run(Args) -> brod_cli:main(Args, exit).
 
 cmd(ArgsStr) ->

@@ -11,6 +11,7 @@ before_install:
   - curl -L https://github.com/docker/compose/releases/download/1.6.0/docker-compose-`uname -s`-`uname -m` > docker-compose
   - chmod +x docker-compose
   - sudo mv docker-compose /usr/local/bin/
+  - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; sudo cp rebar3 /usr/bin; cd ..
 
 notifications:
   email: false
@@ -23,20 +24,20 @@ script:
   - set -e
   - make vsn-check
   - scripts/line-width-check.sh
-  - make deps
-  - make app
-  - make xref
-  - make edoc
-  - make distclean
+
   - echo "verifying rebar compilation"
   - rebar get-deps
   - rebar compile
+
   - make distclean
   - echo "verifying rebar3 compilation"
-  - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; cd ..
-  - ./rebar3/rebar3 compile
+  - rebar3 compile
+
+  - export BROD_CLI=true
   - make distclean
-  - make escript
+  - make rel
+  - make edoc
+  - make xref
   - make test-env
   - make t
 

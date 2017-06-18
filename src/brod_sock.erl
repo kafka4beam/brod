@@ -201,7 +201,7 @@ maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
   {ok, Sock}.
 
 %% @private
-maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, undefined) ->
+maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, ?undef) ->
   ok;
 maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
   try

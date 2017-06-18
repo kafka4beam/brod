@@ -22,34 +22,39 @@
         , assert_topics/1
         , assert_topic/1
         , bytes/1
+        , connect_group_coordinator/3
+        , decode_messages/2
+        , describe_groups/3
+        , fetch/8
+        , fetch_committed_offsets/2
+        , fetch_committed_offsets/3
         , find_leader_in_metadata/3
+        , find_struct/3
         , get_metadata/1
         , get_metadata/2
         , get_metadata/3
+        , get_sasl_opt/1
+        , init_sasl_opt/1
         , is_normal_reason/1
         , is_pid_alive/1
+        , list_all_groups/2
+        , list_groups/2
         , log/3
+        , make_fetch_fun/6
         , os_time_utc_str/0
+        , resolve_offset/4
+        , resolve_offset/5
         , shutdown_pid/1
         , try_connect/1
         , try_connect/2
-        , resolve_offset/4
-        , resolve_offset/5
-        , decode_messages/2
-        , fetch/8
-        , init_sasl_opt/1
-        , get_sasl_opt/1
-        , find_struct/3
-        , make_fetch_fun/6
-        , list_all_groups/2
-        , list_groups/2
-        , describe_groups/3
+        , resolve_group_coordinator/3
         ]).
 
 -include("brod_int.hrl").
 
 -type req_fun() :: fun((offset(), kpro:count()) -> kpro:req()).
 -type fetch_fun() :: fun((offset()) -> {ok, [brod:message()]} | {error, any()}).
+-type sock_opts() :: brod:sock_opts().
 
 %%%_* APIs =====================================================================
 
@@ -71,7 +76,7 @@ get_metadata(Hosts, Topics) ->
 %% @doc Try to connect to any of the bootstrap nodes using the given
 %% connection options and fetch metadata for the given topics.
 %% @end
--spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
+-spec get_metadata([endpoint()], [topic()], sock_opts()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   with_sock(
@@ -89,7 +94,7 @@ get_metadata(Hosts, Topics, Options) ->
 
 %% @doc Resolve timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
-                     offset_time(), brod_sock:options()) ->
+                     offset_time(), sock_opts()) ->
         {ok, [offset()]} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
   with_sock(
@@ -221,8 +226,7 @@ decode_messages(BeginOffset, Messages) when is_list(Messages) ->
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer(),
-            brod_sock:options()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+            sock_opts()) -> {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, WaitTime,
       MinBytes, MaxBytes, Options) ->
   with_sock(
@@ -265,6 +269,38 @@ init_sasl_opt(Config) ->
       replace_prop(sasl, {plain, User, fun() -> Pass end}, Config);
     _Other ->
       Config
+  end.
+
+%% @doc Fethc ommitted offsets for ALL topics in the given consumer group.
+-spec fetch_committed_offsets([endpoint()], sock_opts(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
+  with_sock(
+    connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId),
+    fun(Pid) -> fetch_committed_offsets(Pid, GroupId) end).
+
+%% @doc Same as `fetch_committed_offsets/3', only work on a socket
+%% connected to the group coordinator broker.
+%% @end
+-spec fetch_committed_offsets(pid(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(SockPid, GroupId) ->
+  Body = [ {group_id, GroupId}
+         , {topics, ?undef} %% Fetch ALL when topics array is null
+         ],
+  %% {topics, ?undef} works only with version 2
+  Vsn = 2,
+  Req = kpro:req(offset_fetch_request, Vsn, Body),
+  try
+    #kpro_rsp{ tag = offset_fetch_response
+             , vsn = Vsn
+             , msg = Msg
+             } = request_sync(SockPid, Req),
+    TopicsArray = kf(responses, Msg),
+    {ok, TopicsArray}
+  catch
+    throw : Reason ->
+      {error, Reason}
   end.
 
 %%%_* Internal Functions =======================================================
@@ -312,7 +348,7 @@ fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
 %% @doc List all groups in the given cluster.
 %% NOTE: Exception if failed against any of the coordinator brokers.
 %% @end
--spec list_all_groups([brod:endpoint()], brod_sock:options()) ->
+-spec list_all_groups([brod:endpoint()], sock_opts()) ->
         [{brod:endpoint(), [brod:cg()] | {error, any()}}].
 list_all_groups(Endpoints, Options) ->
   {ok, Metadata} = get_metadata(Endpoints, [], Options),
@@ -327,7 +363,7 @@ list_all_groups(Endpoints, Options) ->
     end, [], Brokers).
 
 %% @doc List all groups in the given coordinator broker.
--spec list_groups(endpoint(), brod_sock:options()) ->
+-spec list_groups(endpoint(), sock_opts()) ->
         {ok, [brod:cg()]} | {error, any()}.
 list_groups(Endpoint, Options) ->
   with_sock(
@@ -359,7 +395,7 @@ list_groups(Endpoint, Options) ->
     end).
 
 %% @doc Send describe_groups_request and wait for describe_groups_response.
--spec describe_groups(endpoint(), brod_sock:options(), [brod:group_id()]) ->
+-spec describe_groups(endpoint(), sock_opts(), [brod:group_id()]) ->
         {ok, kpro:struct()} | {error, any()}.
 describe_groups(Coordinator, SockOpts, IDs) ->
   with_sock(
@@ -372,6 +408,41 @@ describe_groups(Coordinator, SockOpts, IDs) ->
                  } = request_sync(Pid, Req),
         Groups = kf(groups, Msg),
         {ok, Groups}
+    end).
+
+%% @doc Connect to consumer group coordinator broker.
+%% Done in steps: 1) connect to any of the given bootstrap ednpoints;
+%% 2) send group_coordinator_request to resolve group coordinator endpoint;
+%% 3) connect to the resolved endpoint and return the brod_sock pid
+%% @end
+-spec connect_group_coordinator([endpoint()], sock_opts(), group_id()) ->
+        {ok, pid()} | {error, any()}.
+connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
+  case resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) of
+    {ok, Endpoint} -> try_connect([Endpoint]);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @doc Send group_coordinator_request to any of the bootstrap endpoints.
+%% return resolved coordinator broker endpoint.
+%% @end
+-spec resolve_group_coordinator([endpoint()], sock_opts(), group_id()) ->
+        {ok, endpoint()} | {error, any()}.
+resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
+  with_sock(
+    try_connect(BootstrapEndpoints, SockOpts),
+    fun(BootstrapSockPid) ->
+        Req = kpro:req(group_coordinator_request, 0, [{group_id, GroupId}]),
+        #kpro_rsp{ tag = group_coordinator_response
+                 , vsn = 0
+                 , msg = Struct
+                 } = request_sync(BootstrapSockPid, Req),
+        EC = kf(error_code, Struct),
+        ?IS_ERROR(EC) andalso erlang:throw(EC),
+        Coordinator = kf(coordinator, Struct),
+        Host = kf(host, Coordinator),
+        Port = kf(port, Coordinator),
+        {ok, {binary_to_list(Host), Port}}
     end).
 
 %%%_* Internal functions =======================================================
@@ -413,7 +484,7 @@ read_sasl_file(File) ->
 %% Try next in the list if failed. Return the last failure reason
 %% if failed on all endpoints.
 %% @end
--spec try_connect([endpoint()], brod_sock:options(), any()) ->
+-spec try_connect([endpoint()], sock_opts(), any()) ->
         {ok, pid()} | {error, any()}.
 try_connect([], _Options, LastError) ->
   LastError;
@@ -489,7 +560,7 @@ do_find_leader_in_metadata(Msg, Topic, Partition) ->
 %% @private
 -spec bytes(key() | value() | kv_list()) -> non_neg_integer().
 bytes([]) -> 0;
-bytes(undefined) -> 0;
+bytes(?undef) -> 0;
 bytes(I) when ?IS_BYTE(I) -> 1;
 bytes(B) when is_binary(B) -> erlang:size(B);
 bytes({K, V}) -> bytes(K) + bytes(V);

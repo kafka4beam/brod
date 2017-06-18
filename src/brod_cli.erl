@@ -36,6 +36,7 @@ commands:
   send:    Produce messages
   pipe:    Pipe file or stdin as messages to kafka
   groups:  List or describe consumer group
+  commits: List consumer group offset commits
 ").
 
 %% NOTE: bad indentation at the first line is intended
@@ -232,19 +233,29 @@ options:
   --ids=<group-id>       Comma separated group IDs to describe [default: all]
 "
 ?COMMAND_COMMON_OPTIONS
-"NOTE: When --source is path/to/file, it by default reads from BOF
-      unless --tail is given.
-"
 ).
 
 
+-define(COMMITS_CMD, "commits").
+-define(COMMITS_DOC, "usage:
+  brod commits [options]
+
+options:
+  -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
+  --id=<group-id>        Comma separated group IDs to describe
+"
+?COMMAND_COMMON_OPTIONS
+).
+
 -define(DOCS,
-        [ {?META_CMD,   ?META_DOC}
-        , {?OFFSET_CMD, ?OFFSET_DOC}
-        , {?SEND_CMD,   ?SEND_DOC}
-        , {?FETCH_CMD,  ?FETCH_DOC}
-        , {?PIPE_CMD,   ?PIPE_DOC}
-        , {?GROUPS_CMD, ?GROUPS_DOC}
+        [ {?META_CMD,    ?META_DOC}
+        , {?OFFSET_CMD,  ?OFFSET_DOC}
+        , {?SEND_CMD,    ?SEND_DOC}
+        , {?FETCH_CMD,   ?FETCH_DOC}
+        , {?PIPE_CMD,    ?PIPE_DOC}
+        , {?GROUPS_CMD,  ?GROUPS_DOC}
+        , {?COMMITS_CMD, ?COMMITS_DOC}
         ]).
 
 -define(LOG_LEVEL_QUIET, 0).
@@ -481,10 +492,32 @@ run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
   IsDesc = parse(Args, "--describe", fun parse_boolean/1),
   IDs = parse(Args, "--ids", fun parse_cg_ids/1),
   cg(Brokers, SockOpts, IsDesc, IDs);
+run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
+  ID = parse(Args, "--id",
+             fun(?undef) -> erlang:throw(<<"option --id missing">>);
+                (X)      -> X
+             end),
+  commits(Brokers, SockOpts, ID);
 run(Cmd, Brokers, SockOpts, Args) ->
   %% Clause for all per-topic commands
   Topic = parse(Args, "--topic", fun bin/1),
   run(Cmd, Brokers, Topic, SockOpts, Args).
+
+%% @private
+commits(BootstrapEndpoints, SockOpts, GroupId) ->
+  case brod:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) of
+    {ok, PerTopicStructs} ->
+      lists:foreach(fun print_commits/1, PerTopicStructs);
+    {error, Reason} ->
+      logerr("Failed to fetch commited offsets ~p\n", [Reason])
+  end.
+
+%% @private
+print_commits(Struct) ->
+  Topic = kf(topic, Struct),
+  PartRsps = kf(partition_responses, Struct),
+  print([Topic, ":\n"]),
+  print([pp_fmt_struct(1, P) || P <- PartRsps]).
 
 %% @private
 cg(BootstrapEndpoints, SockOpts, _IsDesc = false, _IDs) ->

@@ -84,6 +84,9 @@
         , list_all_groups/2
         , list_groups/2
         , describe_groups/3
+        , connect_group_coordinator/3
+        , fetch_committed_offsets/2
+        , fetch_committed_offsets/3
         ]).
 
 %% escript
@@ -111,6 +114,7 @@
              , offset/0
              , offset_time/0
              , producer_config/0
+             , sock_opts/0
              , topic/0
              , value/0
              ]).
@@ -120,6 +124,7 @@
 -type message() :: #kafka_message{}.
 -type cg() :: #brod_cg{}.
 -type cg_protocol_type() :: binary().
+-type sock_opts() :: brod_sock:options().
 
 %%%_* APIs =====================================================================
 
@@ -464,18 +469,27 @@ start_link_topic_subscriber(Client, Topic, Partitions,
                                    ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Fetch broker metadata
+%% Return the message body of metadata_response.
+%% See kpro_schema.erl for details
+%% @end
 -spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
+%% Return the message body of metadata_response.
+%% See `kpro_schema.erl' for struct details
+%% @end
 -spec get_metadata([endpoint()], [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
+%% Return the message body of metadata_response.
+%% See `kpro_schema.erl' for struct details
+%% @end
+-spec get_metadata([endpoint()], [topic()], sock_opts()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
@@ -494,7 +508,7 @@ resolve_offset(Hosts, Topic, Partition, Time) ->
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
-                     offset_time(), brod_sock:options()) ->
+                     offset_time(), sock_opts()) ->
         {ok, [offset()]} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
   brod_utils:resolve_offset(Hosts, Topic, Partition, Time, Options).
@@ -516,8 +530,7 @@ fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer(),
-            brod_sock:options()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+            sock_opts()) -> {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset,
       MaxWaitTime, MinBytes, MaxBytes, Options) ->
   brod_utils:fetch(Hosts, Topic, Partition, Offset,
@@ -525,7 +538,7 @@ fetch(Hosts, Topic, Partition, Offset,
 
 %% @doc Connect partition leader.
 -spec connect_leader([endpoint()], topic(), partition(),
-                    brod_sock:options()) -> {ok, pid()}.
+                     sock_opts()) -> {ok, pid()}.
 connect_leader(Hosts, Topic, Partition, Options) ->
   {ok, Metadata} = get_metadata(Hosts, [Topic], Options),
   {ok, {Host, Port}} =
@@ -536,13 +549,13 @@ connect_leader(Hosts, Topic, Partition, Options) ->
 %% @doc List ALL consumer groups in the given kafka cluster.
 %% NOTE: Exception if failed against any of the coordinator brokers.
 %% @end
--spec list_all_groups([endpoint()], brod_sock:options()) ->
+-spec list_all_groups([endpoint()], sock_opts()) ->
         [{endpoint(), [cg()] | {error, any()}}].
 list_all_groups(Hosts, Options) ->
   brod_utils:list_all_groups(Hosts, Options).
 
 %% @doc List consumer groups in the given group coordinator broker.
--spec list_groups([endpoint()], brod_sock:options()) ->
+-spec list_groups([endpoint()], sock_opts()) ->
         {ok, [cg()]} | {error, any()}.
 list_groups(Hosts, Options) ->
   brod_utils:list_groups(Hosts, Options).
@@ -550,11 +563,40 @@ list_groups(Hosts, Options) ->
 %% @doc Describe consumer groups. The given consumer group IDs should be all
 %% managed by the coordinator-broker running at the given endpoint.
 %% Otherwise error codes will be returned in the result structs.
+%% Return `describe_groups_response' response body field named `groups'.
+%% See `kpro_schema.erl' for struct details
 %% @end
--spec describe_groups(endpoint(), brod_sock:options(), [brod:group_id()]) ->
+-spec describe_groups(endpoint(), sock_opts(), [group_id()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
 describe_groups(CoordinatorEndpoint, SockOpts, IDs) ->
   brod_utils:describe_groups(CoordinatorEndpoint, SockOpts, IDs).
+
+%% @doc Connect to consumer group coordinator broker.
+%% Done in steps: 1) connect to any of the given bootstrap ednpoints;
+%% 2) send group_coordinator_request to resolve group coordinator endpoint;;
+%% 3) connect to the resolved endpoint and return the brod_sock pid
+%% @end
+-spec connect_group_coordinator([endpoint()], sock_opts(), group_id()) ->
+        {ok, pid()} | {error, any()}.
+connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
+  brod_utils:connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId).
+
+%% @doc Fetch committed offsets for ALL topics in the given consumer group.
+%% Return the `responses' field of the `offset_fetch_response' response.
+%% See `kpro_schema.erl' for struct details.
+%% @end
+-spec fetch_committed_offsets([endpoint()], sock_opts(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
+  brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId).
+
+%% @doc Same as `fetch_committed_offsets/3', only work on the socket
+%% connected to the group coordinator broker.
+%% @end
+-spec fetch_committed_offsets(pid(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(SockPid, GroupId) ->
+  brod_utils:fetch_committed_offsets(SockPid, GroupId).
 
 -ifdef(BROD_CLI).
 main(Args) -> brod_cli:main(Args, halt).

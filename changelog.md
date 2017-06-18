@@ -7,6 +7,12 @@
   - SASL-PLAIN username password in text file
   - Hide SASL-PLAIN password in an anonymous function in `brod_client` state
 * 3.0.0
+  * New features
+    - New API `brod:connect_group_cordinator` to estabilish a sockt towards group coordinator broker.
+    - New API `brod:fetch_committed_offsets` to fetch consumer group commited offsets.
+    - New API `brod:list_groups`, `brod:list_all_groups` and `brod:describe_groups/3`.
+    - Brod-cli new command `groups` to list / describe consumer groups.
+    - Brod-cli new command `commits` to list comsuer group committed offsets.
   * Backward-incompatible changes
     - `brod:get_offsets` API replaced with `brod:resolve_offset`.
        Reason: `brod:get_offsets` and `brod_utils:fetch_offsets` are very confusing,
@@ -19,6 +25,4 @@
   * Backward-compatible changes
     - `#kafka_message{}` record is extended with new fields `ts_type` and `ts`.
     - `#kafka_message.crc` changed from signed to unsigned integer.
-    - New API `brod:list_groups`, `brod:list_all_groups` and `brod:describe_groups/3`.
-    - Brod-cli new command `groups` to list / describe consumer groups.
 
