@@ -47,6 +47,8 @@
         , terminate/2
         ]).
 
+-export_type([config/0]).
+
 -include("brod_int.hrl").
 
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
@@ -71,13 +73,25 @@
 
 -define(UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS, 120).
 
+-type endpoint() :: brod:endpoint().
+-type client() :: brod:client().
+-type client_id() :: brod:client_id().
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+-type config() :: proplists:proplist().
+-type group_id() :: brod:group_id().
+-type hostname() :: brod:hostname().
+-type portnum() :: brod:portnum().
+
 -type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
                               | ?CONSUMER_KEY(topic(), partition()).
 
 -type get_producer_error() :: client_down
                             | {producer_down, noproc}
                             | {producer_not_found, topic()}
-                            | {producer_not_found, topic(), partition()}.
+                            | { producer_not_found
+                              , topic()
+                              , partition()}.
 
 -type get_consumer_error() :: client_down
                             | {consumer_down, noproc}
@@ -93,13 +107,13 @@
         }).
 
 -record(state,
-        { client_id            :: brod_client_id()
+        { client_id            :: client_id()
         , bootstrap_endpoints  :: [endpoint()]
         , meta_sock_pid        :: pid() | dead_socket()
         , payload_sockets = [] :: [#sock{}]
         , producers_sup        :: pid()
         , consumers_sup        :: pid()
-        , config               :: client_config()
+        , config               :: config()
         , workers_tab          :: ets:tab()
         }).
 
@@ -107,9 +121,8 @@
 
 %%%_* APIs =====================================================================
 
--spec start_link( [endpoint()]
-                , brod_client_id()
-                , client_config()) -> {ok, pid()} | {error, any()}.
+-spec start_link([endpoint()], client_id(), config()) ->
+        {ok, pid()} | {error, any()}.
 start_link(BootstrapEndpoints, ClientId, Config) when is_atom(ClientId) ->
   Args = {BootstrapEndpoints, ClientId, Config},
   gen_server:start_link({local, ClientId}, ?MODULE, Args, []).
@@ -150,8 +163,8 @@ get_consumer(Client, Topic, Partition) ->
 %% @doc Dynamically start a per-topic producer.
 %% Return ok if the producer is already started.
 %% @end
--spec start_producer(client(), topic(), producer_config()) ->
-                        ok | {error, any()}.
+-spec start_producer(client(), topic(), brod:producer_config()) ->
+        ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   case get_producer(Client, TopicName, _Partition = 0) of
     {ok, _Pid} ->
@@ -171,7 +184,7 @@ stop_producer(Client, TopicName) ->
 %% @doc Dynamically start a topic consumer.
 %% Returns ok if the consumer is already started.
 %% @end.
--spec start_consumer(client(), topic(), consumer_config()) ->
+-spec start_consumer(client(), topic(), brod:consumer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
   case get_consumer(Client, TopicName, _Partition = 0) of
@@ -198,7 +211,7 @@ stop_consumer(Client, TopicName) ->
 %% {error, LastReason} is returned.
 %% @end
 -spec get_leader_connection(client(), topic(), partition()) ->
-                               {ok, pid()} | {error, any()}.
+        {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
   case get_metadata(Client, Topic) of
     {ok, Metadata} ->
@@ -231,7 +244,7 @@ get_partitions_count(Client, Topic) when is_pid(Client) ->
 
 %% @doc Get the endpoint of the group coordinator broker.
 -spec get_group_coordinator(client(), group_id()) ->
-        {ok, {endpoint(), client_config()}} | {error, any()}.
+        {ok, {endpoint(), config()}} | {error, any()}.
 get_group_coordinator(Client, GroupId) ->
   safe_gen_call(Client, {get_group_coordinator, GroupId}, infinity).
 
@@ -411,7 +424,6 @@ terminate(Reason, #state{ client_id       = ClientId
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
-  %% TODO: remove this clause when bord:start_link_client/_ is removed.
   case erlang:process_info(ClientPid, registered_name) of
     {registered_name, ClientId} when is_atom(ClientId) ->
       get_partition_worker(ClientId, Key);
@@ -683,8 +695,8 @@ is_cooled_down(Ts, #state{config = Config}) ->
 %% NOTE: crash in case failed to connect to all of the endpoints.
 %%       should be restarted by supervisor.
 %% @end
--spec start_metadata_socket(brod_client_id(), [endpoint()], client_config()) ->
-                               {ok, pid(),  [endpoint()]}.
+-spec start_metadata_socket(client_id(), [endpoint()], config()) ->
+        {ok, pid(),  [endpoint()]}.
 start_metadata_socket(ClientId, [_|_] = Endpoints, Config) ->
   start_metadata_socket(ClientId, Endpoints, Config,
                         _FailedEndpoints = [], _Reason = ?undef).
@@ -774,7 +786,8 @@ do_get_partitions_count(TopicMetadata) ->
   end.
 
 %% @private
--spec maybe_start_producer(client(), topic(), partition(), {error, any()}) ->
+-spec maybe_start_producer(client(), topic(),
+                           partition(), {error, any()}) ->
         ok | {error, any()}.
 maybe_start_producer(Client, Topic, Partition, Error) ->
   case safe_gen_call(Client, {auto_start_producer, Topic}, infinity) of

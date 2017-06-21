@@ -46,7 +46,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/src/brod_int.hrl").
+-include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).

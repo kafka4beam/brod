@@ -44,9 +44,11 @@
 
 -type cb_state() :: term().
 -type cb_ret() :: {ok, cb_state()} | {ok, ack, cb_state()}.
--type cb_fun() :: fun((partition(), kafka_message(), cb_state()) -> cb_ret()).
--type committed_offsets() :: [{partition(), offset()}].
--type ack_ref()  :: {partition(), offset()}.
+-type cb_fun() :: fun(( brod:partition()
+                      , brod:message()
+                      , cb_state()) -> cb_ret()).
+-type committed_offsets() :: [{brod:partition(), brod:offset()}].
+-type ack_ref()  :: {brod:partition(), brod:offset()}.
 
 %%%_* behaviour callbacks ======================================================
 
@@ -59,7 +61,7 @@
 %%      e.g. CommittedOffsets = [], the consumer will use 'latest' by default,
 %%      or 'begin_offset' in consumer config (if found) to start fetching.
 %% CbState is the user's looping state for message processing.
--callback init(topic(), term()) -> {ok, committed_offsets(), cb_state()}.
+-callback init(brod:topic(), term()) -> {ok, committed_offsets(), cb_state()}.
 
 %% Handle a message. Return one of:
 %%
@@ -73,21 +75,23 @@
 %% NOTE: While this callback function is being evaluated, the fetch-ahead
 %%       partition-consumers are polling for more messages behind the scene
 %%       unless prefetch_count is set to 0 in consumer config.
--callback handle_message(partition(), #kafka_message{}, cb_state()) -> cb_ret().
+-callback handle_message(brod:partition(),
+                         #kafka_message{},
+                         cb_state()) -> cb_ret().
 
 %%%_* Types and macros =========================================================
 
 -record(consumer,
-        { partition     :: partition()
+        { partition     :: brod:partition()
         , consumer_pid  :: pid() | {down, string(), any()}
         , consumer_mref :: ?undef | reference()
-        , acked_offset  :: ?undef | offset()
+        , acked_offset  :: ?undef | brod:offset()
         }).
 
 -record(state,
-        { client         :: client()
+        { client         :: brod:client()
         , client_mref    :: reference()
-        , topic          :: topic()
+        , topic          :: brod:topic()
         , consumers = [] :: [#consumer{}]
         , cb_fun         :: cb_fun()
         , cb_state       :: cb_state()
@@ -108,8 +112,8 @@
 %% messages from the given partition set. Use atom 'all' to subscribe to all
 %% partitions. Messages are handled by calling CbModule:handle_message
 %% @end
--spec start_link(client(), topic(), all | [partition()],
-                 consumer_config(), module(), term()) ->
+-spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
+                 brod:consumer_config(), module(), term()) ->
         {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
   Args = {Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg},
@@ -119,9 +123,9 @@ start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
 %% messages from the given partition set. Use atom 'all' to subscribe to all
 %% partitions. Messages are handled by calling the callback function.
 %% @end
--spec start_link(client(), topic(), all | [partition()], consumer_config(),
-                 committed_offsets(), cb_fun(), cb_state()) ->
-        {ok, pid()} | {error, any()}.
+-spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
+                 brod:consumer_config(), committed_offsets(),
+                 cb_fun(), cb_state()) -> {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
            CommittedOffsets, CbFun, CbInitialState) ->
   Args = {Client, Topic, Partitions, ConsumerConfig,
@@ -140,7 +144,7 @@ stop(Pid) ->
   end.
 
 %% @doc Acknowledge that message has been sucessfully consumed.
--spec ack(pid(), partition(), offset()) -> ok.
+-spec ack(pid(), brod:partition(), brod:offset()) -> ok.
 ack(Pid, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Partition, Offset}).
 

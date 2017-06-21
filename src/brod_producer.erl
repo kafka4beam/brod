@@ -31,6 +31,8 @@
         , terminate/2
         ]).
 
+-export_type([ config/0 ]).
+
 -include("brod_int.hrl").
 
 %% default number of messages in buffer before block callers
@@ -65,6 +67,13 @@
 
 -type milli_sec() :: non_neg_integer().
 -type delay_send_ref() :: ?undef | {timer:tref(), reference()}.
+-type produce_reply() :: brod:produce_reply().
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+-type offset() :: brod:offset().
+-type corr_id() :: brod:corr_id().
+-type config() :: proplists:proplist().
+-type call_ref() :: brod:call_ref().
 
 -record(state,
         { client_pid        :: pid()
@@ -145,20 +154,19 @@
 %%     NOTE: It does not make sense to have this value set larger than
 %%           `partition_buffer_limit'
 %% @end
--spec start_link(pid(), topic(), partition(), producer_config()) ->
-        {ok, pid()}.
+-spec start_link(pid(), topic(), partition(), config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
-%% The function returns a call reference of type brod_call_ref() to the
+%% The function returns a call reference of type call_ref() to the
 %% caller so the caller can used it to expect (match) a brod_produce_req_acked
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
--spec produce(pid(), key(), value()) ->
-        {ok, brod_call_ref()} | {error, any()}.
+-spec produce(pid(), brod:key(), brod:value()) ->
+        {ok, call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
@@ -179,7 +187,7 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(brod_produce_reply(), infinity | timer:time()) ->
+-spec sync_produce_request(produce_reply(), infinity | timer:time()) ->
         ok | {error, {producer_down, any()}}.
 sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
                      Timeout) ->
@@ -339,7 +347,7 @@ terminate(_Reason, _State) ->
 %%%_* Internal Functions =======================================================
 
 %% @private
--spec log_error_code(topic(), partition(), offset(), kafka_error_code()) -> _.
+-spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
   brod_utils:log(error,
                  "Error in produce response\n"

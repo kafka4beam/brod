@@ -45,7 +45,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).

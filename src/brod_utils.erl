@@ -55,6 +55,12 @@
 -type req_fun() :: fun((offset(), kpro:count()) -> kpro:req()).
 -type fetch_fun() :: fun((offset()) -> {ok, [brod:message()]} | {error, any()}).
 -type sock_opts() :: brod:sock_opts().
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+-type offset() :: brod:offset().
+-type endpoint() :: brod:endpoint().
+-type offset_time() :: brod:offset_time().
+-type group_id() :: brod:group_id().
 
 %%%_* APIs =====================================================================
 
@@ -191,20 +197,20 @@ assert_client(Client) ->
           {bad_client, Client}).
 
 %% @doc Assert group_id is a binary().
--spec assert_group_id(brod:group_id()) -> ok | no_return().
+-spec assert_group_id(group_id()) -> ok | no_return().
 assert_group_id(GroupId) ->
   ok_when(is_binary(GroupId) andalso size(GroupId) > 0,
           {bad_group_id, GroupId}).
 
 %% @doc Assert a list of topic names [binary()].
--spec assert_topics([brod:topic()]) -> ok | no_return().
+-spec assert_topics([topic()]) -> ok | no_return().
 assert_topics(Topics) ->
   Pred = fun(Topic) -> ok =:= assert_topic(Topic) end,
   ok_when(is_list(Topics) andalso Topics =/= [] andalso lists:all(Pred, Topics),
           {bad_topics, Topics}).
 
 %% @doc Assert topic is a binary().
--spec assert_topic(brod:topic()) -> ok | no_return().
+-spec assert_topic(topic()) -> ok | no_return().
 assert_topic(Topic) ->
   ok_when(is_binary(Topic) andalso size(Topic) > 0,
           {bad_topic, Topic}).
@@ -247,7 +253,7 @@ make_fetch_fun(SockPid, Topic, Partition, WaitTime, MinBytes, MaxBytes) ->
   fun(Offset) -> fetch(SockPid, ReqFun, Offset, MaxBytes) end.
 
 %% @doc Get sasl options from client config.
--spec get_sasl_opt(client_config()) -> sasl_opt().
+-spec get_sasl_opt(brod:client_config()) -> sasl_opt().
 get_sasl_opt(Config) ->
   case proplists:get_value(sasl, Config) of
     {plain, User, PassFun} when is_function(PassFun) ->
@@ -262,7 +268,7 @@ get_sasl_opt(Config) ->
 %% @doc Hide sasl plain password in an anonymous function to avoid
 %% the plain text being dumped to crash logs
 %% @end
--spec init_sasl_opt(client_config()) -> client_config().
+-spec init_sasl_opt(brod:client_config()) -> brod:client_config().
 init_sasl_opt(Config) ->
   case get_sasl_opt(Config) of
     {plain, User, Pass} when not is_function(Pass) ->
@@ -348,8 +354,8 @@ fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
 %% @doc List all groups in the given cluster.
 %% NOTE: Exception if failed against any of the coordinator brokers.
 %% @end
--spec list_all_groups([brod:endpoint()], sock_opts()) ->
-        [{brod:endpoint(), [brod:cg()] | {error, any()}}].
+-spec list_all_groups([endpoint()], sock_opts()) ->
+        [{endpoint(), [brod:cg()] | {error, any()}}].
 list_all_groups(Endpoints, Options) ->
   {ok, Metadata} = get_metadata(Endpoints, [], Options),
   Brokers0 = kf(brokers, Metadata),
@@ -523,20 +529,21 @@ ok_when(_, Reason) -> erlang:error(Reason).
 %% are semantic 'offset', this is why often a variable named
 %% Offset is used as the Time argument.
 %% @end
--spec offsets_request(topic(), partition(), offset_time()) -> kpro:req().
+-spec offsets_request(brod:topic(), brod:partition(),
+                      brod:offset_time()) -> kpro:req().
 offsets_request(Topic, Partition, TimeOrSemanticOffset) ->
   Time = ensure_integer_offset_time(TimeOrSemanticOffset),
   kpro:offsets_request(_Vsn = 0, Topic, Partition, Time).
 
 %% @private
--spec ensure_integer_offset_time(offset_time()) -> integer().
+-spec ensure_integer_offset_time(brod:offset_time()) -> integer().
 ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
 ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
 ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 %% @private
--spec do_find_leader_in_metadata(kpro:struct(), topic(), partition()) ->
-        endpoint().
+-spec do_find_leader_in_metadata(kpro:struct(), brod:topic(),
+                                 brod:partition()) -> brod:endpoint().
 do_find_leader_in_metadata(Msg, Topic, Partition) ->
   Brokers = kf(brokers, Msg),
   [TopicMetadata] = kf(topic_metadata, Msg),
@@ -558,7 +565,7 @@ do_find_leader_in_metadata(Msg, Topic, Partition) ->
 -define(IS_BYTE(I), (I>=0 andalso I<256)).
 
 %% @private
--spec bytes(key() | value() | kv_list()) -> non_neg_integer().
+-spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
 bytes([]) -> 0;
 bytes(?undef) -> 0;
 bytes(I) when ?IS_BYTE(I) -> 1;

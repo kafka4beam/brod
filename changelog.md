@@ -22,6 +22,7 @@
     - `brod_utils:fetch/4` is removed, use `make_fetch_fun/8` instead.
     - `--count` option removed from `brod-cli` `offset` command,
       The command now resolves only one (or maybe none) offset at a time.
+    - All type specs defined in `brod.hrl` are moved to exported types from `brod.erl`
   * Backward-compatible changes
     - `#kafka_message{}` record is extended with new fields `ts_type` and `ts`.
     - `#kafka_message.crc` changed from signed to unsigned integer.

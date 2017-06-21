@@ -32,7 +32,7 @@
 
 -behaviour(brod_topic_subscriber).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT, ?MODULE).
 -define(ETS, consumer_offsets).

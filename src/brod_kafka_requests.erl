@@ -58,7 +58,7 @@ new() -> #requests{}.
 %% @doc Add a new request to sent collection.
 %% Return the last corrlation ID and the new opaque.
 %% @end
--spec add(requests(), pid()) -> {corr_id(), requests()}.
+-spec add(requests(), pid()) -> {brod:corr_id(), requests()}.
 add(#requests{ corr_id = CorrId
              , sent    = Sent
              } = Requests, Caller) ->
@@ -71,27 +71,27 @@ add(#requests{ corr_id = CorrId
 %% @doc Delete a request from the opaque collection.
 %% Crash if correlation ID is not found.
 %% @end
--spec del(requests(), corr_id()) -> requests().
+-spec del(requests(), brod:corr_id()) -> requests().
 del(#requests{sent = Sent} = Requests, CorrId) ->
   Requests#requests{sent = gb_trees:delete(CorrId, Sent)}.
 
 %% @doc Get caller of a request having the given correlation ID.
 %% Crash if the request is not found.
 %% @end
--spec get_caller(requests(), corr_id()) -> pid().
+-spec get_caller(requests(), brod:corr_id()) -> pid().
 get_caller(#requests{sent = Sent}, CorrId) ->
   ?REQ(Caller, _Ts) = gb_trees:get(CorrId, Sent),
   Caller.
 
 %% @doc Get the correction to be sent for the next request.
--spec get_corr_id(requests()) -> corr_id().
+-spec get_corr_id(requests()) -> brod:corr_id().
 get_corr_id(#requests{ corr_id = CorrId }) ->
   CorrId.
 
 %% @doc Fetch and increment the correlation ID
 %% This is used if we don't want a response from the broker
 %% @end
--spec increment_corr_id(requests()) -> {corr_id(), requests()}.
+-spec increment_corr_id(requests()) -> {brod:corr_id(), requests()}.
 increment_corr_id(#requests{corr_id = CorrId} = Requests) ->
   {CorrId, Requests#requests{ corr_id = kpro:next_corr_id(CorrId) }}.
 

@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 %%%=============================================================================
 %%% @doc
 %%% This is a topic subscriber example
-%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -33,7 +32,7 @@
         , bootstrap/1
         ]).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
@@ -88,20 +87,20 @@ handle_message(Partition, Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
   error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
-                        [self(), Partition, Now, Offset, Seqno]),
+                       [ self(), Partition, Now, Offset, Seqno]),
   ok = commit_offset(Dir, Partition, Offset),
   {ok, ack, State}.
 
 %%%_* Internal Functions =======================================================
 
--spec read_offsets(string()) -> [{kafka_partition(), kafka_offset()}].
+-spec read_offsets(string()) -> [{brod:partition(), brod:offset()}].
 read_offsets(Dir) when is_binary(Dir) ->
   read_offsets(binary_to_list(Dir));
 read_offsets(Dir) ->
   Files = filelib:wildcard("*.offset", Dir),
   lists:map(fun(Filename) -> read_offset(Dir, Filename) end, Files).
 
--spec read_offset(string(), string()) -> {kafka_partition(), kafka_offset()}.
+-spec read_offset(string(), string()) -> {brod:partition(), brod:offset()}.
 read_offset(Dir, Filename) ->
   PartitionStr = filename:basename(Filename, ".offset"),
   Partition = list_to_integer(PartitionStr),
@@ -153,4 +152,3 @@ os_time_utc_str() ->
 %%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
-

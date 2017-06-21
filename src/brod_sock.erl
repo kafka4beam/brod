@@ -74,17 +74,19 @@
                , req_timeout :: timeout()
                }).
 
+-type client_id() :: brod:client_id() | binary().
+
 %%%_* API ======================================================================
 
 %% @equiv start_link(Parent, Host, Port, ClientId, [])
 start_link(Parent, Host, Port, ClientId) ->
   start_link(Parent, Host, Port, ClientId, []).
 
--spec start_link(pid(), hostname(), portnum(),
-                 brod_client_id() | binary(), term()) ->
+-spec start_link(pid(), brod:hostname(), brod:portnum(),
+                 client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
-  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  BinClientId = atom_to_binary(ClientId, utf8),
   start_link(Parent, Host, Port, BinClientId, Options);
 start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
@@ -93,17 +95,18 @@ start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
 start(Parent, Host, Port, ClientId) ->
   start(Parent, Host, Port, ClientId, []).
 
--spec start(pid(), hostname(), portnum(),
-            brod_client_id() | binary(), term()) ->
+-spec start(pid(), brod:hostname(), brod:portnum(),
+            client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
 start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
-  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  BinClientId = atom_to_binary(ClientId, utf8),
   start(Parent, Host, Port, BinClientId, Options);
 start(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
 
 %% @doc Send a request and wait (indefinitely) for response.
--spec request_async(pid(), kpro:req()) -> {ok, corr_id()} | ok | {error, any()}.
+-spec request_async(pid(), kpro:req()) ->
+        {ok, brod:corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
   case call(Pid, {send, Request}) of
     {ok, CorrId} ->
@@ -125,12 +128,14 @@ request_sync(Pid, Request, Timeout) ->
     {error, Reason} -> {error, Reason}
   end.
 
+%% @doc Stop socket process.
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) when is_pid(Pid) ->
   call(Pid, stop);
 stop(_) ->
   ok.
 
+%% @hidden
 -spec get_tcp_sock(pid()) -> {ok, port()}.
 get_tcp_sock(Pid) ->
   call(Pid, get_tcp_sock).
@@ -150,8 +155,8 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* Internal functions =======================================================
 
--spec init(pid(), hostname(), portnum(), brod_client_id(), [any()]) ->
-        no_return().
+-spec init(pid(), brod:hostname(), brod:portnum(),
+           binary(), [any()]) -> no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
   Timeout = get_connect_timeout(Options),
@@ -259,7 +264,7 @@ setopts(Sock, _Mod = gen_tcp, Opts) -> inet:setopts(Sock, Opts);
 setopts(Sock, _Mod = ssl, Opts)     ->  ssl:setopts(Sock, Opts).
 
 %% @private
--spec wait_for_resp(pid(), term(), corr_id(), timeout()) ->
+-spec wait_for_resp(pid(), term(), brod:corr_id(), timeout()) ->
         {ok, term()} | {error, any()}.
 wait_for_resp(Pid, _, CorrId, Timeout) ->
   Mref = erlang:monitor(process, Pid),

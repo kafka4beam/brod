@@ -39,10 +39,17 @@
         , code_change/3
         ]).
 
--include("brod.hrl").
+-export_type([config/0]).
+
 -include("brod_int.hrl").
 
--type options() :: consumer_options().
+-type corr_id() :: brod:corr_id().
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+-type offset() :: brod:offset().
+-type offset_time() :: brod:offset_time().
+
+-type options() :: brod:consumer_options().
 -type offset_reset_policy() :: reset_by_subscriber
                              | reset_to_earliest
                              | reset_to_latest.
@@ -50,6 +57,8 @@
 -type bytes() :: non_neg_integer().
 -type offset_range() :: {offset(), offset()}.
 -type offsets_queue() :: queue:queue(offset_range()).
+-type config() :: proplists:proplist().
+
 -record(pending_acks, { count         = 0            :: integer()
                       , offsets_queue = queue:new()  :: offsets_queue()
                       }).
@@ -91,8 +100,8 @@
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
--spec start_link(pid(), topic(), partition(),
-                 consumer_config()) -> {ok, pid()} | {error, any()}.
+-spec start_link(pid(), topic(), partition(), config()) ->
+        {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   start_link(ClientPid, Topic, Partition, Config, []).
 
@@ -123,8 +132,8 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     reset_to_earliest: consume from the earliest offset.
 %%     reset_to_latest: consume from the last available offset.
 %% @end
--spec start_link(pid(), topic(), partition(),
-                 consumer_config(), [any()]) -> {ok, pid()} | {error, any()}.
+-spec start_link(pid(), topic(), partition(), config(), [any()]) ->
+                    {ok, pid()} | {error, any()}.
 start_link(ClientPid, Topic, Partition, Config, Debug) ->
   Args = {ClientPid, Topic, Partition, Config},
   gen_server:start_link(?MODULE, Args, [{debug, Debug}]).
@@ -156,7 +165,7 @@ unsubscribe(Pid, SubscriberPid) ->
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
 %% @end
--spec ack(pid(), offset()) -> ok.
+-spec ack(pid(), brod:offset()) -> ok.
 ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
 
 -spec debug(pid(), print | string() | none) -> ok.
@@ -332,6 +341,7 @@ handle_fetch_response(#kpro_rsp{corr_id = CorrId, msg = Rsp}, State0) ->
       handle_message_set(MsgSet, State)
   end.
 
+%% @private
 handle_message_set(#kafka_message_set{messages = ?incomplete_message(Size)},
                    #state{max_bytes = MaxBytes} = State0) ->
   %% max_bytes is too small to fetch ONE complete message
@@ -412,6 +422,7 @@ err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
 err_op(?EC_OFFSET_OUT_OF_RANGE)        -> reset_offset;
 err_op(_)                              -> restart.
 
+%% @private
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic
                          , partition  = Partition
@@ -432,6 +443,7 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       {stop, {restart, ErrorCode}, State}
   end.
 
+%% @private
 handle_reset_offset(#state{ subscriber          = Subscriber
                           , offset_reset_policy = reset_by_subscriber
                           } = State, Error) ->
@@ -475,6 +487,7 @@ handle_ack(#pending_acks{ offsets_queue = Queue
       PendingAcks
   end.
 
+%% @private
 cast_to_subscriber(Pid, Msg) ->
   try
     Pid ! {self(), Msg},
@@ -483,6 +496,7 @@ cast_to_subscriber(Pid, Msg) ->
     ok
   end.
 
+%% @private
 -spec maybe_delay_fetch_request(state()) -> state().
 maybe_delay_fetch_request(#state{sleep_timeout = T} = State) when T > 0 ->
   _ = erlang:send_after(T, self(), ?SEND_FETCH_REQUEST),
@@ -537,6 +551,7 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                        State#state.max_bytes),
   brod_sock:request_async(SocketPid, Request).
 
+%% @private
 handle_subscribe_call(Pid, Options,
                       #state{subscriber_mref = OldMref} = State0) ->
   case update_options(Options, State0) of
@@ -556,6 +571,7 @@ handle_subscribe_call(Pid, Options,
       {reply, {error, Reason}, State0}
   end.
 
+%% @private
 -spec update_options(options(), state()) -> {ok, state()} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
