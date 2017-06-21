@@ -338,7 +338,7 @@ handle_call({get_group_coordinator, GroupId}, _From, State) ->
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} =
-    do_get_group_corrdinator(State, GroupId, timer:seconds(Timeout)),
+    do_get_group_coordinator(State, GroupId, timer:seconds(Timeout)),
   {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
@@ -545,9 +545,9 @@ do_get_metadata(Topic, #state{ client_id   = ClientId
   end.
 
 %% @private
--spec do_get_group_corrdinator(state(), group_id(), timer:time()) ->
+-spec do_get_group_coordinator(state(), group_id(), timer:time()) ->
         {Result, state()} when Result :: {ok, endpoint()} | {error, any()}.
-do_get_group_corrdinator(#state{config = Config} = State, GroupId, Timeout) ->
+do_get_group_coordinator(#state{config = Config} = State, GroupId, Timeout) ->
   Req = kpro:req(group_coordinator_request, _Vsn = 0, [{group_id, GroupId}]),
   with_ok(
     request_sync(State, Req, Timeout),

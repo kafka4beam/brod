@@ -520,7 +520,7 @@ fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset,
         _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
 
-%% @equiv fetch(Hoss, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
+%% @equiv fetch(Hosts, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
