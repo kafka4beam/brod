@@ -281,12 +281,12 @@ start_link_client(BootstrapEndpoints) ->
 
 %% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
 -spec start_link_client([endpoint()], client_id()) ->
-                           {ok, pid()} | {error, any()}.
+        {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId) ->
   start_link_client(BootstrapEndpoints, ClientId, []).
 
 -spec start_link_client([endpoint()], client_id(), client_config()) ->
-                           {ok, pid()} | {error, any()}.
+        {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId, Config) ->
   brod_client:start_link(BootstrapEndpoints, ClientId, Config).
 
@@ -427,7 +427,7 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 sync_produce_request(CallRef) ->
   sync_produce_request(CallRef, infinity).
 
--spec sync_produce_request(call_ref(), infinity | timer:time()) ->
+-spec sync_produce_request(call_ref(), infinity | timeout()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef, Timeout) ->
   Expect = #brod_produce_reply{ call_ref = CallRef
@@ -617,8 +617,7 @@ list_all_groups(Hosts, Options) ->
   brod_utils:list_all_groups(Hosts, Options).
 
 %% @doc List consumer groups in the given group coordinator broker.
--spec list_groups([endpoint()], sock_opts()) ->
-        {ok, [cg()]} | {error, any()}.
+-spec list_groups(endpoint(), sock_opts()) -> {ok, [cg()]} | {error, any()}.
 list_groups(Hosts, Options) ->
   brod_utils:list_groups(Hosts, Options).
 

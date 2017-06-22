@@ -62,6 +62,7 @@
 -include("brod_int.hrl").
 
 -type cb_state() :: term().
+-type member_id() :: brod:group_member_id().
 
 %% Initialize the callback module s state.
 -callback init(brod:group_id(), term()) -> {ok, cb_state()}.
@@ -119,9 +120,9 @@
         , consumer_pid    :: ?undef                  %% initial state
                            | pid()                   %% normal state
                            | {down, string(), any()} %% consumer restarting
-        , consumer_mref   :: reference()
-        , begin_offset    :: brod:offset()
-        , acked_offset    :: brod:offset()
+        , consumer_mref   :: ?undef | reference()
+        , begin_offset    :: ?undef | brod:offset()
+        , acked_offset    :: ?undef | brod:offset()
         }).
 
 -type ack_ref() :: {brod:topic(), brod:partition(), brod:offset()}.
@@ -130,8 +131,8 @@
         { client             :: brod:client()
         , client_mref        :: reference()
         , groupId            :: brod:group_id()
-        , memberId           :: brod:member_id()
-        , generationId       :: integer()
+        , memberId           :: ?undef | member_id()
+        , generationId       :: ?undef | brod:group_generation_id()
         , coordinator        :: pid()
         , consumers = []     :: [#consumer{}]
         , consumer_config    :: brod:consumer_config()
@@ -205,7 +206,7 @@ commit(Pid) ->
 %%%_* APIs for group coordinator ===============================================
 
 %% @doc Called by group coordinator when there is new assignemnt received.
--spec assignments_received(pid(), brod:member_id(), integer(),
+-spec assignments_received(pid(), member_id(), integer(),
                            brod:received_assignments()) -> ok.
 assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
   gen_server:cast(Pid, {new_assignments, MemberId,
@@ -221,7 +222,7 @@ assignments_revoked(Pid) ->
 %% @end
 -spec assign_partitions(pid(), [brod:group_member()],
                         [{brod:topic(), brod:partition()}]) ->
-        [{brod:group_member_id(), [brod:partition_assignment()]}].
+        [{member_id(), [brod:partition_assignment()]}].
 assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
   Call = {assign_partitions, MemberMetadataList, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
@@ -391,7 +392,7 @@ terminate(_Reason, #state{}) ->
 %%%_* Internal Functions =======================================================
 
 %% @private
--spec start_subscribe_timer(?undef | reference(), timer:time()) -> reference().
+-spec start_subscribe_timer(?undef | reference(), timeout()) -> reference().
 start_subscribe_timer(?undef, Delay) ->
   erlang:send_after(Delay, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS);
 start_subscribe_timer(Ref, _Delay) when is_reference(Ref) ->

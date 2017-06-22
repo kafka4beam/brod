@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 %%% A topic subscriber is a gen_server which subscribes to all or a given set
 %%% of partition consumers (pollers) of a given topic and calls the user-defined
 %%% callback functions for message processing.
-%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -83,7 +82,7 @@
 
 -record(consumer,
         { partition     :: brod:partition()
-        , consumer_pid  :: pid() | {down, string(), any()}
+        , consumer_pid  :: ?undef | pid() | {down, string(), any()}
         , consumer_mref :: ?undef | reference()
         , acked_offset  :: ?undef | brod:offset()
         }).
@@ -311,9 +310,7 @@ handle_messages(Partition, [Msg | Rest], State) ->
       {ok, NewCbState_} ->
         {false, NewCbState_};
       {ok, ack, NewCbState_} ->
-        {true, NewCbState_};
-      Unknown ->
-        erlang:error({bad_return_value, handle_message, Unknown})
+        {true, NewCbState_}
     end,
   State1 = State#state{cb_state = NewCbState},
   NewState =

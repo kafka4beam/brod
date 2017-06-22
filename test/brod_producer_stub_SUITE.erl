@@ -26,7 +26,7 @@
 
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/src/brod_int.hrl").
+-include("brod_int.hrl").
 
 -define(WAIT(Pattern, Handle, Timeout),
         fun() ->

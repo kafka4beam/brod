@@ -103,18 +103,18 @@
 
 -record(sock,
         { endpoint :: endpoint()
-        , sock_pid :: pid() | dead_socket()
+        , sock_pid :: ?undef | pid() | dead_socket()
         }).
 
 -record(state,
         { client_id            :: client_id()
         , bootstrap_endpoints  :: [endpoint()]
-        , meta_sock_pid        :: pid() | dead_socket()
+        , meta_sock_pid        :: ?undef | pid() | dead_socket()
         , payload_sockets = [] :: [#sock{}]
-        , producers_sup        :: pid()
-        , consumers_sup        :: pid()
-        , config               :: config()
-        , workers_tab          :: ets:tab()
+        , producers_sup        :: ?undef | pid()
+        , consumers_sup        :: ?undef | pid()
+        , config               :: ?undef | config()
+        , workers_tab          :: ?undef | ets:tab()
         }).
 
 -type state() :: #state{}.
@@ -507,8 +507,8 @@ validate_topic_existence(Topic, #state{workers_tab = Ets} = State, IsRetry) ->
 %% @private Continue with {{ok, Result}, NewState}
 %% return whatever error immediately.
 %% @end
--spec with_ok(Result, fun((_, state()) -> {Result, state()})) ->
-        {Result, state()} when Result :: ok | {ok, term()} | {error, any()}.
+-spec with_ok(Result, fun((_, state()) -> Result)) ->
+        Result when Result :: {ok | {ok, term()} | {error, any()}, state()}.
 with_ok({ok, State}, Continue) -> Continue(ok, State);
 with_ok({{ok, OK}, State}, Continue) -> Continue(OK, State);
 with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
@@ -518,8 +518,8 @@ with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
 %% As sending metadata request with topic name will cause an auto creation
 %% of the topic if auto.create.topics.enable is enabled in broker config.
 %% @end
--spec get_metadata_safe(topic(), state()) -> Result
-        when Result :: {{ok, kpro:struct()} | {error, any()}, state()}.
+-spec get_metadata_safe(topic(), state()) -> {Result, state()}
+        when Result :: {ok, kpro:struct()} | {error, any()}.
 get_metadata_safe(Topic0, #state{config = Config} = State) ->
   Topic =
     case proplists:get_value(allow_topic_auto_creation, Config, true) of
@@ -557,7 +557,7 @@ do_get_metadata(Topic, #state{ client_id   = ClientId
   end.
 
 %% @private
--spec do_get_group_coordinator(state(), group_id(), timer:time()) ->
+-spec do_get_group_coordinator(state(), group_id(), timeout()) ->
         {Result, state()} when Result :: {ok, endpoint()} | {error, any()}.
 do_get_group_coordinator(#state{config = Config} = State, GroupId, Timeout) ->
   Req = kpro:req(group_coordinator_request, _Vsn = 0, [{group_id, GroupId}]),
@@ -800,7 +800,7 @@ maybe_start_producer(Client, Topic, Partition, Error) ->
   end.
 
 %% @private
--spec request_sync(state(), kpro:req(), timer:time()) ->
+-spec request_sync(state(), kpro:req(), timeout()) ->
         {Result, state()} when Result :: {ok, kpro:rsp()} | {error, any()}.
 request_sync(State, Request, Timeout) ->
   #state{config = Config} = State,

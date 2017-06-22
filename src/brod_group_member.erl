@@ -65,8 +65,8 @@
 %% Called when assignments are received from group leader.
 %% the member process should now call brod:subscribe/5
 %% to start receiving message from kafka.
--callback assignments_received(pid(), brod:member_id(),
-                               kafka_group_brod:generation_id(),
+-callback assignments_received(pid(), brod:group_member_id(),
+                               brod:group_generation_id(),
                                brod:received_assignments()) -> ok.
 
 %% Called before group re-balancing, the member should call

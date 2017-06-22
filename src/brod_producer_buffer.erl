@@ -175,6 +175,7 @@ nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
 %% @doc Return true if there is no message pending,
 %% buffered or waiting for ack.
 %% @end
+-spec is_empty(buf()) -> boolean().
 is_empty(#buf{ pending = Pending
              , buffer  = Buffer
              , onwire  = Onwire

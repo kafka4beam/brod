@@ -66,7 +66,7 @@
 -define(config(Key, Default), proplists:get_value(Key, Config, Default)).
 
 -type milli_sec() :: non_neg_integer().
--type delay_send_ref() :: ?undef | {timer:tref(), reference()}.
+-type delay_send_ref() :: ?undef | {reference(), reference()}.
 -type produce_reply() :: brod:produce_reply().
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
@@ -79,13 +79,15 @@
         { client_pid        :: pid()
         , topic             :: topic()
         , partition         :: partition()
-        , sock_pid          :: pid()
-        , sock_mref         :: reference()
+        , sock_pid          :: ?undef | pid()
+        , sock_mref         :: ?undef | reference()
         , buffer            :: brod_producer_buffer:buf()
         , retry_backoff_ms  :: non_neg_integer()
-        , retry_tref        :: timer:tref()
+        , retry_tref        :: ?undef | reference()
         , delay_send_ref    :: delay_send_ref()
         }).
+
+-type state() :: #state{}.
 
 %%%_* APIs =====================================================================
 
@@ -187,7 +189,7 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(produce_reply(), infinity | timer:time()) ->
+-spec sync_produce_request(produce_reply(), infinity | timeout()) ->
         ok | {error, {producer_down, any()}}.
 sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
                      Timeout) ->
@@ -383,7 +385,7 @@ do_handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
   {noreply, NewState}.
 
 %% @private
--spec maybe_reinit_socket(#state{}) -> #state{}.
+-spec maybe_reinit_socket(state()) -> {ok, state()}.
 maybe_reinit_socket(#state{ client_pid = ClientPid
                           , sock_pid   = OldSockPid
                           , sock_mref  = OldSockMref

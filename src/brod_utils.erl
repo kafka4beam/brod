@@ -101,7 +101,7 @@ get_metadata(Hosts, Topics, Options) ->
 %% @doc Resolve timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), sock_opts()) ->
-        {ok, [offset()]} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
   with_sock(
     brod:connect_leader(Hosts, Topic, Partition, Options),
@@ -111,7 +111,7 @@ resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
 
 %% @doc Resolve timestamp to real offset.
 -spec resolve_offset(pid(), topic(), partition(), offset_time()) ->
-        {ok, [offset()]} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 resolve_offset(SocketPid, Topic, Partition, Time) ->
   Request = offsets_request(Topic, Partition, Time),
   #kpro_rsp{tag = offsets_response
@@ -220,8 +220,8 @@ assert_topic(Topic) ->
 %% Messages having offset earlier than the requested offset are discarded.
 %% this might happen for compressed message sets
 %% @end
--spec decode_messages(offset(), [kpro:decoded_message()]) ->
-       kpro:incomplete_message() | [brod:message()].
+-spec decode_messages(offset(), kpro:incomplete_message() | [brod:message()]) ->
+        kpro:incomplete_message() | [brod:message()].
 decode_messages(BeginOffset, Messages) when is_binary(Messages) ->
   decode_messages(BeginOffset, kpro:decode_message_set(Messages));
 decode_messages(_BeginOffset, ?incomplete_message(_) = Incomplete) ->
@@ -454,8 +454,6 @@ resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
 %%%_* Internal functions =======================================================
 
 %% @private
--spec with_sock({ok, pid()}, fun((pid()) -> Result)) -> Result
-        when Result :: {ok, _} | {errory, any()}.
 with_sock({ok, Pid}, Fun) ->
   try
     Fun(Pid)
@@ -595,7 +593,7 @@ request_sync(Pid, Req) ->
   request_sync(Pid, Req, infinity).
 
 %% @private
--spec request_sync(pid(), kpro:req(), infinity | timer:time()) -> kpro:rsp().
+-spec request_sync(pid(), kpro:req(), infinity | timeout()) -> kpro:rsp().
 request_sync(Pid, Req, Timeout) ->
   % brod_sock has a global 'request_timeout' option
   % the socket pid will exit if that one times out

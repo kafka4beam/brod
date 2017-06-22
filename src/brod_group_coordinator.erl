@@ -74,6 +74,7 @@
 -type ts() :: erlang:timestamp().
 -type member() :: brod:group_member().
 -type offset_commit_policy() :: brod_offset_commit_policy().
+-type member_id() :: brod:group_member_id().
 
 -record(state,
         { client :: brod:client()
@@ -84,10 +85,10 @@
           %% This field may change if the member has lost connection
           %% to the coordinator and received 'UnknownMemberId' exception
           %% in response messages.
-        , memberId = <<"">> :: brod:member_id()
+        , memberId = <<"">> :: member_id()
           %% State#state.memberId =:= State#state.leaderId if
           %% elected as group leader by the coordinator.
-        , leaderId :: brod:member_id()
+        , leaderId :: ?undef | member_id()
           %% Generation ID is used by the group coordinator to sync state
           %% of the group members, e.g. kick out stale members who have not
           %% kept up with the latest generation ID bumps.
@@ -97,7 +98,7 @@
           %% This is the result of group coordinator discovery.
           %% It may change when the coordinator is down then a new one
           %% is elected among the kafka cluster members.
-        , coordinator :: brod:endpoint()
+        , coordinator :: ?undef | brod:endpoint()
           %% The socket pid to the group coordinator broker.
           %% This socket is dedicated for group management and
           %% offset commit requests.
@@ -105,9 +106,9 @@
           %% because the socket might be shared with other group
           %% members in the same client, however group members are
           %% distinguished by connections to coordinator
-        , sock_pid  :: pid()
+        , sock_pid :: ?undef | pid()
           %% heartbeat reference, to discard stale responses
-        , hb_ref :: {brod:corr_id(), ts()}
+        , hb_ref :: ?undef | {brod:corr_id(), ts()}
           %% all group members received in the join group response
         , members = [] :: [member()]
           %% Set to false before joining the group
@@ -128,7 +129,7 @@
         , acked_offsets = [] :: [{{brod:topic(), brod:partition()}
                                  , brod:offset()}]
           %% The referece of the timer which triggers offset commit
-        , offset_commit_timer :: reference()
+        , offset_commit_timer :: ?undef | reference()
 
           %% configs, see start_link/5 doc for details
         , partition_assignment_strategy  :: partition_assignment_strategy()
@@ -374,8 +375,12 @@ terminate(Reason, #state{ sock_pid = SockPid
   log(State, info, "leaving group, reason ~p\n", [Reason]),
   Body = [{group_id, GroupId}, {member_id, MemberId}],
   Request = kpro:req(leave_group_request, _V = 0, Body),
-  try send_sync(SockPid, Request, 1000)
-  catch _ : _ -> ok
+  try
+    _ = send_sync(SockPid, Request, 1000),
+    ok
+  catch
+    _ : _ ->
+      ok
   end,
   ok = stop_socket(SockPid).
 
@@ -802,8 +807,7 @@ get_partitions(Client, Topic) ->
 %% @private
 -spec do_assign_partitions(roundrobin, [member()],
                            [{brod:topic(), brod:partition()}]) ->
-                              [{ brod:member_id()
-                               , [brod:partition_assignment()]}].
+                              [{member_id(), [brod:partition_assignment()]}].
 do_assign_partitions(roundrobin, Members, AllPartitions) ->
   F = fun({MemberId, M}) ->
         SubscribedTopics = M#kafka_group_member_metadata.topics,

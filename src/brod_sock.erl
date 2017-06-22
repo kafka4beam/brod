@@ -40,7 +40,7 @@
         , format_status/2
         ]).
 
--epxort_type([ options/0
+-export_type([ options/0
              ]).
 
 -define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
@@ -67,11 +67,11 @@
 
 -record(state, { client_id   :: binary()
                , parent      :: pid()
-               , sock        :: port()
+               , sock        :: ?undef | port()
                , acc = <<>>  :: acc()
-               , requests    :: requests()
-               , mod         :: gen_tcp | ssl
-               , req_timeout :: timeout()
+               , requests    :: ?undef | requests()
+               , mod         :: ?undef | gen_tcp | ssl
+               , req_timeout :: ?undef | timeout()
                }).
 
 -type client_id() :: brod:client_id() | binary().
@@ -379,8 +379,11 @@ handle_msg({From, {send, Request}},
           ssl     -> ssl:send(Sock, RequestBin)
         end,
   case Res of
-    ok              -> reply(From, {ok, CorrId});
-    {error, Reason} -> exit({send_error, Reason})
+    ok ->
+      _ = reply(From, {ok, CorrId}),
+      ok;
+    {error, Reason} ->
+      exit({send_error, Reason})
   end,
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->

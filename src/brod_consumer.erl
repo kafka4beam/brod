@@ -62,8 +62,9 @@
 -record(pending_acks, { count         = 0            :: integer()
                       , offsets_queue = queue:new()  :: offsets_queue()
                       }).
+
 -record(state, { client_pid          :: pid()
-               , socket_pid          :: pid()
+               , socket_pid          :: ?undef | pid()
                , topic               :: binary()
                , partition           :: integer()
                , begin_offset        :: offset_time()
