@@ -547,7 +547,7 @@ join_group(#state{ groupId                       = GroupId
   GenerationId = kpro:find(generation_id,RspBody),
   LeaderId = kpro:find(leader_id, RspBody),
   MemberId = kpro:find(member_id, RspBody),
-  Members = kpro:find(members, RspBody), %% assertive match
+  Members = kpro:find(members, RspBody),
   IsGroupLeader = (LeaderId =:= MemberId),
   State =
     State0#state{ memberId     = MemberId

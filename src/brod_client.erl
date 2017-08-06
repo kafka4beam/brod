@@ -858,7 +858,7 @@ do_start_producer(TopicName, ProducerConfig, State) ->
         brod_producers_sup:start_producer(SupPid, self(),
                                           TopicName, ProducerConfig)
       end,
-  do_on_valid_topic(TopicName, State, F).
+  ensure_partition_workers(TopicName, State, F).
 
 %% @private
 do_start_consumer(TopicName, ConsumerConfig, State) ->
@@ -867,10 +867,10 @@ do_start_consumer(TopicName, ConsumerConfig, State) ->
         brod_consumers_sup:start_consumer(SupPid, self(),
                                           TopicName, ConsumerConfig)
       end,
-  do_on_valid_topic(TopicName, State, F).
+  ensure_partition_workers(TopicName, State, F).
 
 %% @private
-do_on_valid_topic(TopicName, State, F) ->
+ensure_partition_workers(TopicName, State, F) ->
   with_ok(
     validate_topic_existence(TopicName, State, _IsRetry = false),
     fun(ok, NewState) ->
