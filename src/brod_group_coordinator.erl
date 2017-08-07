@@ -936,7 +936,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets) ->
         %% No commit history found
         ?undef
     end,
-  BeginOffset = case is_integer(Offset) andalso Offset > 0 of
+  BeginOffset = case is_integer(Offset) andalso Offset >= 0 of
                   true  -> Offset + 1;
                   false -> Offset
                 end,

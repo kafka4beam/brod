@@ -6,6 +6,8 @@
   - Fix group subscriber duplicated loopback messages (bug)
   - SASL-PLAIN username password in text file
   - Hide SASL-PLAIN password in an anonymous function in `brod_client` state
+* 2.5.1
+  - Fix ignored commit history when committed offset is 0 (bug)
 * 3.0.0
   * New features
     - New API `brod:connect_group_cordinator` to estabilish a sockt towards group coordinator broker.
