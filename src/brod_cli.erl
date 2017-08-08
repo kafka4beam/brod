@@ -30,11 +30,13 @@
   brod <command> [options] [-h|--help] [--verbose|--debug]
 
 commands:
-  meta:   Inspect topic metadata
-  offset: Inspect offsets
-  fetch:  Fetch messages
-  send:   Produce messages
-  pipe:   Pipe file or stdin as messages to kafka
+  meta:    Inspect topic metadata
+  offset:  Inspect offsets
+  fetch:   Fetch messages
+  send:    Produce messages
+  pipe:    Pipe file or stdin as messages to kafka
+  groups:  List or describe consumer group
+  commits: List consumer group offset commits
 ").
 
 %% NOTE: bad indentation at the first line is intended
@@ -86,7 +88,6 @@ options:
                          [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number
-  -c,--count=<count>     Number of offsets to fetch [default: 1]
   -T,--time=<time>       Unix epoch (in milliseconds) of the correlated offset
                          to fetch. Special values:
                            'latest' or -1 for latest offset
@@ -221,12 +222,41 @@ options:
 "
 ).
 
--define(DOCS, [{?META_CMD, ?META_DOC},
-               {?OFFSET_CMD, ?OFFSET_DOC},
-               {?SEND_CMD, ?SEND_DOC},
-               {?FETCH_CMD, ?FETCH_DOC},
-               {?PIPE_CMD, ?PIPE_DOC}
-               ]).
+-define(GROUPS_CMD, "groups").
+-define(GROUPS_DOC, "usage:
+  brod groups [options]
+
+options:
+  -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
+  --describe             Describe group status details
+  --ids=<group-id>       Comma separated group IDs to describe [default: all]
+"
+?COMMAND_COMMON_OPTIONS
+).
+
+
+-define(COMMITS_CMD, "commits").
+-define(COMMITS_DOC, "usage:
+  brod commits [options]
+
+options:
+  -b,--brokers=<brokers> Comma separated host:port pairs
+                         [default: localhost:9092]
+  --id=<group-id>        Comma separated group IDs to describe
+"
+?COMMAND_COMMON_OPTIONS
+).
+
+-define(DOCS,
+        [ {?META_CMD,    ?META_DOC}
+        , {?OFFSET_CMD,  ?OFFSET_DOC}
+        , {?SEND_CMD,    ?SEND_DOC}
+        , {?FETCH_CMD,   ?FETCH_DOC}
+        , {?PIPE_CMD,    ?PIPE_DOC}
+        , {?GROUPS_CMD,  ?GROUPS_DOC}
+        , {?COMMITS_CMD, ?COMMITS_DOC}
+        ]).
 
 -define(LOG_LEVEL_QUIET, 0).
 -define(LOG_LEVEL_VERBOSE, 1).
@@ -301,15 +331,15 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     false ->
       ok
   end,
+  {ok, _} = application:ensure_all_started(sasl),
   {ok, _} = application:ensure_all_started(brod),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
-    Topic = parse(ParsedArgs, "--topic", fun bin/1),
     SockOpts = parse_sock_opts(ParsedArgs),
     Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
     ok = code:add_pathsa(Paths),
     verbose("sock opts: ~p\n", [SockOpts]),
-    run(Command, Brokers, Topic, SockOpts, ParsedArgs)
+    run(Command, Brokers, SockOpts, ParsedArgs)
   catch
     throw : Reason when is_binary(Reason) ->
       %% invalid options etc.
@@ -331,22 +361,23 @@ run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
            end,
   IsJSON = parse(Args, "--json", fun parse_boolean/1),
   IsText = parse(Args, "--text", fun parse_boolean/1),
-  Format = proplists:get_value(true, [ {IsJSON, json}
-                                     , {IsText, text}
-                                     , {true, text}
-                                     ]),
+  Format = kf(true, [ {IsJSON, json}
+                    , {IsText, text}
+                    , {true, text}
+                    ]),
   IsList = parse(Args, "--list", fun parse_boolean/1),
   IsUrp = parse(Args, "--under-replicated", fun parse_boolean/1),
   {ok, Metadata} = brod:get_metadata(Brokers, Topics, SockOpts),
   format_metadata(Metadata, Format, IsList, IsUrp);
 run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
-  Count = parse(Args, "--count", fun int/1),
   Time = parse(Args, "--time", fun parse_offset_time/1),
-  {ok, Offsets} =
-    brod:get_offsets(Brokers, Topic, Partition, Time, Count, SockOpts),
-  OffsetsStr = infix(lists:map(fun integer_to_list/1, Offsets), ","),
-  print(OffsetsStr);
+  case brod:resolve_offset(Brokers, Topic, Partition, Time, SockOpts) of
+    {ok, Offset} ->
+      print(integer_to_list(Offset));
+    {error, not_found} ->
+      print("no such offset")
+  end;
 run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
   Count0 = parse(Args, "--count", fun int/1),
@@ -358,18 +389,11 @@ run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
                  fun(FmtOption) ->
                      parse_fmt(FmtOption, KvDeli, MsgDeli)
                  end),
-  {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
   MaxBytes = parse(Args, "--max-bytes", fun parse_size/1),
+  {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
   Offset = resolve_begin_offset(Sock, Topic, Partition, Offset0),
-  FetchFun =
-    fun(BeginOffset) ->
-        ReqFun =
-          fun(MaxBytes_) ->
-            kpro:fetch_request(Topic, Partition, BeginOffset, Wait, 1,
-                               MaxBytes_)
-          end,
-        brod_utils:fetch(Sock, ReqFun, MaxBytes, BeginOffset)
-    end,
+  FetchFun = brod_utils:make_fetch_fun(Sock, Topic, Partition,
+                                       Wait, _MinBytes = 1, MaxBytes),
   Count = case Count0 < 0 of
             true -> 1000000000; %% as if an infinite loop
             false -> Count0
@@ -464,6 +488,160 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
   pipe(ReaderPid, SendFun, queue:new()).
 
 %% @private
+run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
+  IsDesc = parse(Args, "--describe", fun parse_boolean/1),
+  IDs = parse(Args, "--ids", fun parse_cg_ids/1),
+  cg(Brokers, SockOpts, IsDesc, IDs);
+run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
+  ID = parse(Args, "--id",
+             fun(?undef) -> erlang:throw(<<"option --id missing">>);
+                (X)      -> X
+             end),
+  commits(Brokers, SockOpts, ID);
+run(Cmd, Brokers, SockOpts, Args) ->
+  %% Clause for all per-topic commands
+  Topic = parse(Args, "--topic", fun bin/1),
+  run(Cmd, Brokers, Topic, SockOpts, Args).
+
+%% @private
+commits(BootstrapEndpoints, SockOpts, GroupId) ->
+  case brod:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) of
+    {ok, PerTopicStructs} ->
+      lists:foreach(fun print_commits/1, PerTopicStructs);
+    {error, Reason} ->
+      logerr("Failed to fetch commited offsets ~p\n", [Reason])
+  end.
+
+%% @private
+print_commits(Struct) ->
+  Topic = kf(topic, Struct),
+  PartRsps = kf(partition_responses, Struct),
+  print([Topic, ":\n"]),
+  print([pp_fmt_struct(1, P) || P <- PartRsps]).
+
+%% @private
+cg(BootstrapEndpoints, SockOpts, _IsDesc = false, _IDs) ->
+  %% Describe all groups
+  All = list_groups(BootstrapEndpoints, SockOpts),
+  lists:foreach(fun print_cg_cluster/1, All);
+cg(BootstrapEndpoints, SockOpts, _IsDesc = true, IDs0) ->
+  CgClusters = list_groups(BootstrapEndpoints, SockOpts),
+  IDs =
+    case IDs0 =:= all of
+      true ->
+        lists:foldl(fun({_, Cgs}, Acc) ->
+                        [ID || #brod_cg{id = ID} <- Cgs] ++ Acc
+                    end, [], CgClusters);
+      false ->
+        IDs0
+    end,
+  describe_cgs(CgClusters, SockOpts, IDs).
+
+%% @private
+describe_cgs(_, _SockOpts, []) -> ok;
+describe_cgs([], _SockOpts, IDs) ->
+  logerr("Unknown group IDs: ~s", [infix(IDs, ", ")]);
+describe_cgs([{Coordinator, CgList} | Rest], SockOpts, IDs) ->
+  %% Get all IDs managed by current coordinator.
+  ThisIDs = [ID || #brod_cg{id = ID} <- CgList, lists:member(ID, IDs)],
+  ok = do_describe_cgs(Coordinator, SockOpts, ThisIDs),
+  IDsRest = IDs -- ThisIDs,
+  describe_cgs(Rest, SockOpts, IDsRest).
+
+%% @private
+do_describe_cgs(_Coordinator, _SockOpts, []) ->
+  ok;
+do_describe_cgs(Coordinator, SockOpts, IDs) ->
+  case brod:describe_groups(Coordinator, SockOpts, IDs) of
+    {ok, DescArray} ->
+      ok = print("~s\n", [fmt_endpoint(Coordinator)]),
+      lists:foreach(fun print_cg_desc/1, DescArray);
+    {error, Reason} ->
+      logerr("Failed to describe IDs [~s] at broker ~s\nreason:~p\n",
+             [infix(IDs, ","), fmt_endpoint(Coordinator), Reason])
+  end.
+
+%% @private
+print_cg_desc(Desc) ->
+  EC = kf(error_code, Desc),
+  GroupId = kf(group_id, Desc),
+  case ?IS_ERROR(EC) of
+    true ->
+      logerr("Failed to describe group id=~s\nreason:~p\n", [GroupId, EC]);
+    false ->
+      D1 = lists:keydelete(error_code, 1, Desc),
+      D  = lists:keydelete(group_id, 1, D1),
+      print("  ~s\n~s", [GroupId, pp_fmt_struct(_Indent = 2, D)])
+  end.
+
+%% @private
+pp_fmt_struct(_Indent, []) -> [];
+pp_fmt_struct(Indent, [{Field, Value} | Rest]) ->
+  [ indent_fmt(Indent, "~p: ~s", [Field, pp_fmt_struct_value(Indent, Value)])
+  | pp_fmt_struct(Indent, Rest)
+  ].
+
+%% @private
+pp_fmt_struct_value(_Indent, X) when is_integer(X) orelse
+                                     is_atom(X) orelse
+                                     is_binary(X) orelse
+                                     X =:= [] ->
+  [pp_fmt_prim(X), "\n"];
+pp_fmt_struct_value(Indent, [{_,_}|_] = SubStruct) ->
+  ["\n", pp_fmt_struct(Indent + 1, SubStruct)];
+pp_fmt_struct_value(Indent, Array) when is_list(Array) ->
+  case hd(Array) of
+    [{_,_}|_] ->
+      %% array of sub struct
+      ["\n",
+       lists:map(fun(Item) ->
+                     pp_fmt_struct(Indent + 1, Item)
+                 end, Array)
+      ];
+    _ ->
+      %% array of primitive values
+      [[pp_fmt_prim(V) || V <- Array], "\n"]
+  end.
+
+%% @private
+pp_fmt_prim([]) -> "[]";
+pp_fmt_prim(N) when is_integer(N) -> integer_to_list(N);
+pp_fmt_prim(A) when is_atom(A) -> atom_to_list(A);
+pp_fmt_prim(S) when is_binary(S) -> S.
+
+%% @private
+indent_fmt(Indent, Fmt, Args) ->
+  io_lib:format(lists:duplicate(Indent * 2, $\s) ++ Fmt, Args).
+
+%% @private
+print_cg_cluster({Endpoint, Cgs}) ->
+  ok = print([fmt_endpoint(Endpoint), "\n"]),
+  IoData = [ io_lib:format("  ~s (~s)\n", [Id, Type])
+             || #brod_cg{id = Id, protocol_type = Type} <- Cgs
+           ],
+  print(IoData).
+
+%% @private
+fmt_endpoint({Host, Port}) ->
+  bin(io_lib:format("~s:~B", [Host, Port])).
+
+%% @private Return consumer groups clustered by group coordinator
+%% {CoordinatorEndpoint, [group_id()]}.
+%% @end
+list_groups(Brokers, SockOpts) ->
+  Cgs = brod:list_all_groups(Brokers, SockOpts),
+  lists:keysort(1, lists:foldl(fun do_list_groups/2, [], Cgs)).
+
+%% @private
+do_list_groups({_Endpoint, []}, Acc) -> Acc;
+do_list_groups({Endpoint, {error, Reason}}, Acc) ->
+  logerr("Failed to list groups at kafka ~s\nreason~p",
+         [fmt_endpoint(Endpoint), Reason]),
+  Acc;
+do_list_groups({Endpoint, Cgs}, Acc) ->
+  [{Endpoint, Cgs} | Acc].
+
+%% @private
 pipe(ReaderPid, SendFun, PendingAcks0) ->
   PendingAcks1 = flush_pending_acks(PendingAcks0, _Timeout = 0),
   receive
@@ -538,9 +716,8 @@ resolve_begin_offset(Sock, Topic, Partition, last) ->
     true  -> erlang:throw(bin("partition is empty"));
     false -> Latest - 1
   end;
-resolve_begin_offset(Sock, Topic, Partition, Offset0) ->
-  {ok, [Offset]} =
-    brod_utils:fetch_offsets(Sock, Topic, Partition, Offset0, 1),
+resolve_begin_offset(Sock, Topic, Partition, Time) ->
+  {ok, Offset} = brod_utils:resolve_offset(Sock, Topic, Partition, Time),
   Offset.
 
 %% @private
@@ -563,15 +740,13 @@ parse_size(Size) ->
   end.
 
 %% @private
-format_metadata(Metadata, Format, IsList, IsUrp) ->
-  #kpro_MetadataResponse{ broker_L = Brokers0
-                        , topicMetadata_L = Topics0
-                        } = Metadata,
-  Topics1 = case IsUrp of
+format_metadata(Metadata, Format, IsList, IsToListUrp) ->
+  Brokers = kf(brokers, Metadata),
+  Topics0 = kf(topic_metadata, Metadata),
+  Topics1 = case IsToListUrp of
               true -> lists:filter(fun is_ur_topic/1, Topics0);
               false -> Topics0
             end,
-  Brokers = format_brokers(Brokers0),
   Topics = format_topics(Topics1),
   case Format of
     json ->
@@ -585,30 +760,19 @@ format_metadata(Metadata, Format, IsList, IsUrp) ->
              true -> [];
              false -> format_broker_lines(Brokers)
            end,
-      TL0 = lists:map(
-              fun([{Name, Partitions}]) ->
-                  {Name, Partitions}
-              end, Topics),
-      TL1 = lists:keysort(1, TL0),
-      TL = format_topics_lines(TL1, IsList),
+      TL = format_topics_lines(Topics, IsList),
       print([BL, TL])
   end.
 
 %% @private
-format_brokers(Brokers) ->
-  lists:map(
-    fun(#kpro_Broker{ nodeId = Id
-                    , host = Host
-                    , port = Port
-                    }) ->
-        {integer_to_binary(Id), bin([Host, ":", integer_to_list(Port)])}
-    end, lists:keysort(#kpro_Broker.nodeId, Brokers)).
-
-%% @private
 format_broker_lines(Brokers) ->
   Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
-  F = fun({Id, Endpoint}) ->
-          io_lib:format("  ~s: ~s\n", [Id, Endpoint])
+  F = fun(Broker) ->
+          Id = kf(node_id, Broker),
+          Host = kf(host, Broker),
+          Port = kf(port, Broker),
+          %% TODO display rack
+          io_lib:format("  ~p: ~s\n", [Id, fmt_endpoint({Host, Port})])
       end,
   [Header, lists:map(F, Brokers)].
 
@@ -643,7 +807,7 @@ format_error_code(E) when is_integer(E) -> integer_to_list(E).
 %% @private
 format_partitions_lines(Partitions0) ->
   Partitions1 =
-    lists:map(fun([{Pnr, Info}]) ->
+    lists:map(fun({Pnr, Info}) ->
                   {binary_to_integer(Pnr), Info}
               end, Partitions0),
   Partitions = lists:keysort(1, Partitions1),
@@ -651,11 +815,11 @@ format_partitions_lines(Partitions0) ->
 
 %% @private
 format_partition_lines({Partition, Info}) ->
-  LeaderNodeId = proplists:get_value(leader, Info),
-  Status = proplists:get_value(status, Info),
-  Isr = proplists:get_value(isr, Info),
-  Osr = proplists:get_value(osr, Info),
-  MaybeWarning = case kpro_ErrorCode:is_error(Status) of
+  LeaderNodeId = kf(leader, Info),
+  Status = kf(status, Info),
+  Isr = kf(isr, Info),
+  Osr = kf(osr, Info),
+  MaybeWarning = case ?IS_ERROR(Status) of
                    true -> [" [", atom_to_list(Status), "]"];
                    false -> ""
                  end,
@@ -680,66 +844,59 @@ infix([H | T], Sep) -> [H, Sep, infix(T, Sep)].
 
 %% @private
 format_topics(Topics) ->
-  lists:map(fun format_topic/1, Topics).
-
-%% @private Return true if a topics is under-replicated
-is_ur_topic(Topic) ->
-  #kpro_TopicMetadata{ errorCode = ErrorCode
-                     , partitionMetadata_L = PL
-                     } = Topic,
-  %% when there is an error, we do not know if
-  %% it is under-replicated or not
-  %% retrun true to alert user
-  kpro_ErrorCode:is_error(ErrorCode) orelse
-  lists:any(fun is_ur_partition/1, PL).
-
-%% @private Return true if a partition is under-replicated
-is_ur_partition(Partition) ->
-  #kpro_PartitionMetadata{ errorCode = ErrorCode
-                         , replicas = Replicas
-                         , isr = Isr
-                         } = Partition,
-  kpro_ErrorCode:is_error(ErrorCode) orelse
-  lists:sort(Isr) =/= lists:sort(Replicas).
+  TL = lists:map(fun format_topic/1, Topics),
+  lists:keysort(1, TL).
 
 %% @private
 format_topic(Topic) ->
-  #kpro_TopicMetadata{ errorCode = ErrorCode
-                     , topicName = TopicName
-                     , partitionMetadata_L = PL
-                     } = Topic,
+  ErrorCode = kf(topic_error_code, Topic),
+  TopicName = kf(topic, Topic),
+  PL = kf(partition_metadata, Topic),
   Data =
-    case kpro_ErrorCode:is_error(ErrorCode) of
-      true ->
-        ErrorCode;
-      false ->
-        format_partitions(PL)
+    case ?IS_ERROR(ErrorCode) of
+      true  -> ErrorCode;
+      false -> format_partitions(PL)
     end,
-  [{TopicName, Data}].
+  {TopicName, Data}.
 
 %% @private
 format_partitions(Partitions) ->
-  lists:map(fun format_partition/1, Partitions).
+  PL = lists:map(fun format_partition/1, Partitions),
+  lists:keysort(1, PL).
 
-format_partition(Partition) ->
-  #kpro_PartitionMetadata{ errorCode = ErrorCode
-                         , partition = PartitionNr
-                         , leader = LeaderNodeId
-                         , replicas = Replicas
-                         , isr = Isr
-                         } = Partition,
+%% @private
+format_partition(P) ->
+  ErrorCode = kf(partition_error_code, P),
+  PartitionNr = kf(partition_id, P),
+  LeaderNodeId = kf(leader, P),
+  Replicas = kf(replicas, P),
+  Isr = kf(isr, P),
   Data = [ {leader, LeaderNodeId}
          , {status, ErrorCode}
          , {isr, Isr}
          , {osr, Replicas -- Isr}
          ],
-  [{integer_to_binary(PartitionNr), Data}].
+  {integer_to_binary(PartitionNr), Data}.
+
+%% @private Return true if a topics is under-replicated
+is_ur_topic(Topic) ->
+  ErrorCode = kf(topic_error_code, Topic),
+  Partitions = kf(partition_metadata, Topic),
+  %% when there is an error, we do not know if
+  %% it is under-replicated or not
+  %% retrun true to alert user
+  ?IS_ERROR(ErrorCode) orelse lists:any(fun is_ur_partition/1, Partitions).
+
+%% @private Return true if a partition is under-replicated
+is_ur_partition(Partition) ->
+  ErrorCode = kf(partition_error_code, Partition),
+  Replicas = kf(replicas, Partition),
+  Isr = kf(isr, Partition),
+  ?IS_ERROR(ErrorCode) orelse lists:sort(Isr) =/= lists:sort(Replicas).
 
 %% @private
-parse_delimiter("none") ->
-  none;
-parse_delimiter(EscappedStr) ->
-  eval_str(EscappedStr).
+parse_delimiter("none") -> none;
+parse_delimiter(EscappedStr) -> eval_str(EscappedStr).
 
 %% @private
 eval_str([]) -> [];
@@ -871,6 +1028,11 @@ parse_boolean("false") -> false;
 parse_boolean(?undef) -> ?undef.
 
 %% @private
+parse_cg_ids("") -> [];
+parse_cg_ids("all") -> all;
+parse_cg_ids(Str) -> [bin(I) || I <- string:tokens(Str, ",")].
+
+%% @private
 parse_file(?undef) ->
   ?undef;
 parse_file(Path) ->
@@ -911,10 +1073,13 @@ print_version() ->
 print(IoData) -> io:put_chars(IoData).
 
 %% @private
-logerr(IoData) -> io:put_chars(standard_error, IoData).
+print(Fmt, Args) -> io:format(Fmt, Args).
 
 %% @private
-logerr(Fmt, Args) -> io:format(standard_error, Fmt, Args).
+logerr(IoData) -> io:put_chars(standard_error, ["*** ", IoData]).
+
+%% @private
+logerr(Fmt, Args) -> io:format(standard_error, "*** " ++ Fmt, Args).
 
 %% @private
 verbose(Str) -> verbose(Str, []).
@@ -963,6 +1128,10 @@ shuffle(L) ->
   RandList = lists:map(fun(_) -> element(3, os:timestamp()) end, L),
   {_, SortedL} = lists:unzip(lists:keysort(1, lists:zip(RandList, L))),
   SortedL.
+
+%% @private
+-spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
+kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
 -endif.
 

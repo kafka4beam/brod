@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@
 
 -behaviour(brod_topic_subscriber).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT, ?MODULE).
 -define(ETS, consumer_offsets).

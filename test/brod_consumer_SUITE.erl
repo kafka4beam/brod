@@ -46,7 +46,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/src/brod_int.hrl").
+-include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
@@ -134,8 +134,8 @@ t_direct_fetch(Config) when is_list(Config) ->
   Key = make_unique_key(),
   Value = <<>>,
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
-  {ok, [Offset]} = brod:get_offsets(?HOSTS, Topic, Partition,
-                                    ?OFFSET_LATEST, 1),
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST),
   {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
@@ -147,8 +147,8 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
   Key = make_unique_key(),
   Value = crypto:strong_rand_bytes(100),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
-  {ok, [Offset]} = brod:get_offsets(?HOSTS, Topic, Partition,
-                                    ?OFFSET_LATEST, 1),
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST),
   {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1,
                            _Timeout = 1000, _MinBytes = 0, _MaxBytes = 13),
   ?assertEqual(Key, Msg#kafka_message.key),
@@ -174,9 +174,9 @@ t_consumer_max_bytes_too_small(Config) ->
   %% 34 is the magic number for kafka 0.10
   MaxBytes3 = size(Key) + ValueBytes + 34,
   Tester = self(),
-  F = fun(Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
+  F = fun(Vsn, Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
         Tester ! {max_bytes, MaxBytes},
-        meck:passthrough([Topic, Partition1, BeginOffset,
+        meck:passthrough([Vsn, Topic, Partition1, BeginOffset,
                           MaxWait, MinBytes, MaxBytes])
       end,
   %% Expect the fetch_request construction function called twice

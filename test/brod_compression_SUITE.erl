@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016, Klarna AB
+%%%   Copyright (c) 2016-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/src/brod_int.hrl").
+-include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
@@ -125,9 +125,9 @@ produce(Config) when is_list(Config) ->
                    ],
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   {K, V} = make_unique_kv(),
-  {ok, [Offset0]} = brod:get_offsets(?HOSTS, Topic, 0),
+  {ok, Offset0} = brod:resolve_offset(?HOSTS, Topic, 0),
   ok = brod:produce_sync(Client, Topic, 0, K, V),
-  {ok, [Offset1]} = brod:get_offsets(?HOSTS, Topic, 0),
+  {ok, Offset1} = brod:resolve_offset(?HOSTS, Topic, 0),
   ?assert(Offset1 =:= Offset0 + 1),
   ok = brod:start_consumer(Client, Topic, [{begin_offset, Offset0}]),
   {ok, ConsumerPid} = brod:subscribe(Client, self(), ?TOPIC, 0, []),
@@ -150,7 +150,7 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   Client = ?config(client),
   BatchCount = 100,
   %% get the latest offset before producing the batch
-  {ok, [Offset0]} = brod:get_offsets(?HOSTS, Topic, 0),
+  {ok, Offset0} = brod:resolve_offset(?HOSTS, Topic, 0),
   ct:pal("offset before batch: ~p", [Offset0]),
   ProducerConfig = [ {min_compression_batch_size, 0}
                    , {compression, ?config(compression)}
@@ -159,7 +159,7 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   KvList = [make_unique_kv() || _ <- lists:seq(1, BatchCount)],
   ok = brod:produce_sync(Client, Topic, 0, <<>>, KvList),
   %% Get the latest offset after the batch is produced
-  {ok, [Offset1]} = brod:get_offsets(?HOSTS, Topic, 0),
+  {ok, Offset1} = brod:resolve_offset(?HOSTS, Topic, 0),
   ct:pal("offset after batch: ~p", [Offset1]),
   ?assertEqual(Offset1, Offset0 + BatchCount),
   HalfBatch = BatchCount div 2,

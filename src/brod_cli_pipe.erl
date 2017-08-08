@@ -69,7 +69,7 @@
                , is_tail :: boolean()
                , io_device :: ?STDIN | file:io_device()
                , acc_bytes = [] :: [binary()]
-               , retry_delay :: timer:time()
+               , retry_delay :: timeout()
                }).
 
 %% @doc Args explained:

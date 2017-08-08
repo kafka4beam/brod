@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 Klarna AB
+%%%   Copyright (c) 2015-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -105,8 +105,9 @@
 start_link() ->
   supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
 
--spec start_client([endpoint()], brod_client_id(), client_config()) ->
-                      ok | {error, any()}.
+-spec start_client([brod:endpoint()],
+                   brod:client_id(),
+                   brod:client_config()) -> ok | {error, any()}.
 start_client(Endpoints, ClientId, Config) ->
   ClientSpec = client_spec(Endpoints, ClientId, Config),
   case supervisor3:start_child(?SUP, ClientSpec) of
@@ -114,12 +115,12 @@ start_client(Endpoints, ClientId, Config) ->
     Error      -> Error
   end.
 
--spec stop_client(brod_client_id()) -> ok | {error, any()}.
+-spec stop_client(brod:client_id()) -> ok | {error, any()}.
 stop_client(ClientId) ->
   _ = supervisor3:terminate_child(?SUP, ClientId),
   supervisor3:delete_child(?SUP, ClientId).
 
--spec find_client(brod_client_id()) -> [pid()].
+-spec find_client(brod:client_id()) -> [pid()].
 find_client(Client) ->
   supervisor3:find_child(?SUP, Client).
 

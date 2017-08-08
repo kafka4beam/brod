@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015-2106, Klarna AB
+%%%   Copyright (c) 2015-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2015-2016 Klarna AB
-%%% @end
-%%% ============================================================================
 
 %% @private
 -module(brod_producer_buffer).
@@ -39,13 +33,13 @@
 -include("brod_int.hrl").
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> {key(), value()}).
+-type data() :: fun(() -> {brod:key(), brod:value()}).
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
 
 -record(req,
-        { call_ref :: brod_call_ref()
+        { call_ref :: brod:call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
         , ctime    :: milli_ts() %% time when request was created
@@ -53,9 +47,9 @@
         }).
 -type req() :: #req{}.
 
--type send_fun() :: fun((pid(), [{key(), value()}]) ->
+-type send_fun() :: fun((pid(), [{brod:key(), brod:value()}]) ->
                         ok |
-                        {ok, corr_id()} |
+                        {ok, brod:corr_id()} |
                         {error, any()}).
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
@@ -73,10 +67,12 @@
         , onwire_count      = 0          :: non_neg_integer()
         , pending           = ?NEW_QUEUE :: queue:queue(#req{})
         , buffer            = ?NEW_QUEUE :: queue:queue(#req{})
-        , onwire            = []         :: [{corr_id(), [#req{}]}]
+        , onwire            = []         :: [{brod:corr_id(), [#req{}]}]
         }).
 
 -opaque buf() :: #buf{}.
+
+-type corr_id() :: brod:corr_id().
 
 %%%_* APIs =====================================================================
 
@@ -105,7 +101,7 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
 %% @end
--spec add(buf(), brod_call_ref(), key(), value()) -> {ok, buf()}.
+-spec add(buf(), brod:call_ref(), brod:key(), brod:value()) -> {ok, buf()}.
 add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
@@ -139,8 +135,7 @@ maybe_send(#buf{} = Buf, SockPid) ->
   end.
 
 %% @doc Reply 'acked' to callers.
--spec ack(buf(), corr_id()) ->
-        {ok, buf()} | {error, none | corr_id()}.
+-spec ack(buf(), corr_id()) -> {ok, buf()} | {error, none | corr_id()}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
         } = Buf, CorrId) ->
@@ -158,8 +153,7 @@ ack(#buf{onwire = OnWire}, CorrIdReceived) ->
 %% reached maximum retry limit.
 %% Unknown correlation IDs are discarded.
 %% @end
--spec nack(buf(), corr_id(), any()) ->
-        {ok, buf()} | {error, none | corr_id()}.
+-spec nack(buf(), corr_id(), any()) -> {ok, buf()} | {error, none | corr_id()}.
 nack(#buf{onwire = [{CorrId, _Reqs} | _]} = Buf, CorrId, Reason) ->
   nack_all(Buf, Reason);
 nack(#buf{onwire = OnWire}, CorrIdReceived, _Reason) ->
@@ -181,6 +175,7 @@ nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
 %% @doc Return true if there is no message pending,
 %% buffered or waiting for ack.
 %% @end
+-spec is_empty(buf()) -> boolean().
 is_empty(#buf{ pending = Pending
              , buffer  = Buffer
              , onwire  = Onwire
@@ -213,7 +208,7 @@ assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
 -spec is_later_corr_id(corr_id(), corr_id()) -> boolean().
 is_later_corr_id(Id1, Id2) ->
   Diff = abs(Id1 - Id2),
-  case Diff < (?MAX_CORR_ID div 2) of
+  case Diff < (kpro:max_corr_id() div 2) of
     true  -> Id1 < Id2;
     false -> Id1 > Id2
   end.
@@ -399,7 +394,7 @@ cast(Pid, Msg) ->
     ok
   end.
 
--spec data_size(key() | value()) -> non_neg_integer().
+-spec data_size(brod:key() | brod:value()) -> non_neg_integer().
 data_size(Data) -> brod_utils:bytes(Data).
 
 %% @private
@@ -422,15 +417,16 @@ cast_test() ->
   ok = cast(?undef, Ref).
 
 assert_corr_id_test() ->
+  Max = kpro:max_corr_id(),
   {error, none} = ack(#buf{}, 0),
   {error, none} = nack(#buf{}, 0, ignored),
   {error, 1} = ack(#buf{onwire = [{1, req}]}, 0),
   {error, 1} = nack(#buf{onwire = [{1, req}]}, 0, ignored),
-  {error, 1} = ack(#buf{onwire = [{1, req}]}, ?MAX_CORR_ID),
+  {error, 1} = ack(#buf{onwire = [{1, req}]}, Max),
   ?assertException(exit, {bad_order, 0, 1},
                    ack(#buf{onwire = [{0, req}]}, 1)),
-  ?assertException(exit, {bad_order, ?MAX_CORR_ID, 0},
-                   ack(#buf{onwire = [{?MAX_CORR_ID, req}]}, 0)),
+  ?assertException(exit, {bad_order, Max, 0},
+                   ack(#buf{onwire = [{Max, req}]}, 0)),
   ok.
 
 -endif. % TEST

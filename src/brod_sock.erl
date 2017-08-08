@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -14,13 +14,6 @@
 %%%   limitations under the License.
 %%%
 
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2014-2016 Klarna AB
-%%% @end
-%%% ============================================================================
-
-%%%_* Module declaration =======================================================
 %% @private
 -module(brod_sock).
 
@@ -47,7 +40,7 @@
         , format_status/2
         ]).
 
--epxort_type([ options/0
+-export_type([ options/0
              ]).
 
 -define(DEFAULT_CONNECT_TIMEOUT, timer:seconds(5)).
@@ -74,12 +67,14 @@
 
 -record(state, { client_id   :: binary()
                , parent      :: pid()
-               , sock        :: port()
+               , sock        :: ?undef | port()
                , acc = <<>>  :: acc()
-               , requests    :: requests()
-               , mod         :: gen_tcp | ssl
-               , req_timeout :: timeout()
+               , requests    :: ?undef | requests()
+               , mod         :: ?undef | gen_tcp | ssl
+               , req_timeout :: ?undef | timeout()
                }).
+
+-type client_id() :: brod:client_id() | binary().
 
 %%%_* API ======================================================================
 
@@ -87,11 +82,11 @@
 start_link(Parent, Host, Port, ClientId) ->
   start_link(Parent, Host, Port, ClientId, []).
 
--spec start_link(pid(), hostname(), portnum(),
-                 brod_client_id() | binary(), term()) ->
+-spec start_link(pid(), brod:hostname(), brod:portnum(),
+                 client_id() | binary(), term()) ->
                     {ok, pid()} | {error, any()}.
 start_link(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
-  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  BinClientId = atom_to_binary(ClientId, utf8),
   start_link(Parent, Host, Port, BinClientId, Options);
 start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start_link(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
@@ -100,28 +95,31 @@ start_link(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
 start(Parent, Host, Port, ClientId) ->
   start(Parent, Host, Port, ClientId, []).
 
--spec start(pid(), hostname(), portnum(),
-            brod_client_id() | binary(), term()) ->
+-spec start(pid(), brod:hostname(), brod:portnum(),
+            client_id() | binary(), term()) ->
                {ok, pid()} | {error, any()}.
 start(Parent, Host, Port, ClientId, Options) when is_atom(ClientId) ->
-  BinClientId = list_to_binary(atom_to_list(ClientId)),
+  BinClientId = atom_to_binary(ClientId, utf8),
   start(Parent, Host, Port, BinClientId, Options);
 start(Parent, Host, Port, ClientId, Options) when is_binary(ClientId) ->
   proc_lib:start(?MODULE, init, [Parent, Host, Port, ClientId, Options]).
 
--spec request_async(pid(), term()) -> {ok, corr_id()} | ok | {error, any()}.
+%% @doc Send a request and wait (indefinitely) for response.
+-spec request_async(pid(), kpro:req()) ->
+        {ok, brod:corr_id()} | ok | {error, any()}.
 request_async(Pid, Request) ->
   case call(Pid, {send, Request}) of
     {ok, CorrId} ->
       case Request of
-        #kpro_ProduceRequest{requiredAcks = 0} -> ok;
-        _                                      -> {ok, CorrId}
+        #kpro_req{no_ack = true} -> ok;
+        _  -> {ok, CorrId}
       end;
     {error, Reason} ->
       {error, Reason}
   end.
 
--spec request_sync(pid(), term(), timeout()) ->
+%% @doc Send a request and wait for response for at most Timeout milliseconds.
+-spec request_sync(pid(), kpro:req(), timeout()) ->
         {ok, term()} | ok | {error, any()}.
 request_sync(Pid, Request, Timeout) ->
   case request_async(Pid, Request) of
@@ -130,38 +128,24 @@ request_sync(Pid, Request, Timeout) ->
     {error, Reason} -> {error, Reason}
   end.
 
--spec wait_for_resp(pid(), term(), corr_id(), timeout()) ->
-        {ok, term()} | {error, any()}.
-wait_for_resp(Pid, _, CorrId, Timeout) ->
-  Mref = erlang:monitor(process, Pid),
-  receive
-    {msg, Pid, CorrId, Response} ->
-      erlang:demonitor(Mref, [flush]),
-      {ok, Response};
-    {'DOWN', Mref, _, _, Reason} ->
-      {error, {sock_down, Reason}}
-  after
-    Timeout ->
-      erlang:demonitor(Mref, [flush]),
-      {error, timeout}
-  end.
-
+%% @doc Stop socket process.
 -spec stop(pid()) -> ok | {error, any()}.
 stop(Pid) when is_pid(Pid) ->
   call(Pid, stop);
 stop(_) ->
   ok.
 
+%% @hidden
 -spec get_tcp_sock(pid()) -> {ok, port()}.
 get_tcp_sock(Pid) ->
   call(Pid, get_tcp_sock).
 
--spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the socket process.
 %%      debug(Pid, pring) prints debug info on stdout
 %%      debug(Pid, File) prints debug info into a File
 %%      debug(Pid, none) stops debugging
 %% @end
+-spec debug(pid(), print | string() | none) -> ok.
 debug(Pid, none) ->
   system_call(Pid, {debug, no_debug});
 debug(Pid, print) ->
@@ -171,8 +155,8 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* Internal functions =======================================================
 
--spec init(pid(), hostname(), portnum(), brod_client_id(), [any()]) ->
-        no_return().
+-spec init(pid(), brod:hostname(), brod:portnum(),
+           binary(), [any()]) -> no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
   Timeout = get_connect_timeout(Options),
@@ -222,7 +206,7 @@ maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
   {ok, Sock}.
 
 %% @private
-maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, undefined) ->
+maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, ?undef) ->
   ok;
 maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
   try
@@ -238,16 +222,18 @@ maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
 sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
           {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
-  HandshakeRequest = #kpro_SaslHandshakeRequest{mechanism="PLAIN"},
-  HandshakeRequestBin = kpro:encode_request(ClientId, 0, HandshakeRequest),
+  Req = kpro:req(sasl_handshake_request, _V = 0, [{mechanism, <<"PLAIN">>}]),
+  HandshakeRequestBin = kpro:encode_request(ClientId, 0, Req),
   ok = Mod:send(Sock, HandshakeRequestBin),
   {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
   {ok, HandshakeResponseBin} = Mod:recv(Sock, Len, Timeout),
-  {[ #kpro_Response{ responseMessage = #kpro_SaslHandshakeResponse{
-                                          errorCode = ErrorCode }}],
-    <<>>} = kpro:decode_response(<<Len:32, HandshakeResponseBin/binary>>),
-  case ErrorCode of
-    no_error ->
+  {[Rsp], <<>>} = kpro:decode_response(<<Len:32, HandshakeResponseBin/binary>>),
+  #kpro_rsp{tag = sasl_handshake_response, vsn = 0, msg = Body} = Rsp,
+  ErrorCode = kpro:find(error_code, Body),
+  case ?IS_ERROR(ErrorCode) of
+    true ->
+      exit({sasl_auth_error, ErrorCode});
+    false ->
       ok = Mod:send(Sock, sasl_plain_token(SaslUser, SaslPassword)),
       case Mod:recv(Sock, 4, Timeout) of
         {ok, <<0:32>>} ->
@@ -256,8 +242,7 @@ sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
           exit({sasl_auth_error, bad_credentials});
         Unexpected ->
           exit({sasl_auth_error, Unexpected})
-      end;
-    _ -> exit({sasl_auth_error, ErrorCode})
+      end
   end;
 sasl_auth(Host, Sock, Mod, ClientId, Timeout,
           {callback, ModuleName, Opts}) ->
@@ -269,6 +254,7 @@ sasl_auth(Host, Sock, Mod, ClientId, Timeout,
       exit({callback_auth_error, Reason})
   end.
 
+%% @private
 sasl_plain_token(User, Password) ->
   Message = list_to_binary([0, unicode:characters_to_binary(User),
                             0, unicode:characters_to_binary(Password)]),
@@ -277,6 +263,24 @@ sasl_plain_token(User, Password) ->
 setopts(Sock, _Mod = gen_tcp, Opts) -> inet:setopts(Sock, Opts);
 setopts(Sock, _Mod = ssl, Opts)     ->  ssl:setopts(Sock, Opts).
 
+%% @private
+-spec wait_for_resp(pid(), term(), brod:corr_id(), timeout()) ->
+        {ok, term()} | {error, any()}.
+wait_for_resp(Pid, _, CorrId, Timeout) ->
+  Mref = erlang:monitor(process, Pid),
+  receive
+    {msg, Pid, #kpro_rsp{corr_id = CorrId} = Rsp} ->
+      erlang:demonitor(Mref, [flush]),
+      {ok, Rsp};
+    {'DOWN', Mref, _, _, Reason} ->
+      {error, {sock_down, Reason}}
+  after
+    Timeout ->
+      erlang:demonitor(Mref, [flush]),
+      {error, timeout}
+  end.
+
+%% @private
 system_call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
   erlang:send(Pid, {system, {self(), Mref}, Request}),
@@ -288,6 +292,7 @@ system_call(Pid, Request) ->
       {error, {sock_down, Reason}}
   end.
 
+%% @private
 call(Pid, Request) ->
   Mref = erlang:monitor(process, Pid),
   erlang:send(Pid, {{self(), Mref}, Request}),
@@ -299,13 +304,16 @@ call(Pid, Request) ->
       {error, {sock_down, Reason}}
   end.
 
+%% @private
 reply({To, Tag}, Reply) ->
   To ! {Tag, Reply}.
 
+%% @private
 loop(State, Debug) ->
   Msg = receive Input -> Input end,
   decode_msg(Msg, State, Debug).
 
+%% @private
 decode_msg({system, From, Msg}, #state{parent = Parent} = State, Debug) ->
   sys:handle_system_msg(Msg, From, Parent, ?MODULE, Debug, State);
 decode_msg(Msg, State, [] = Debug) ->
@@ -314,6 +322,7 @@ decode_msg(Msg, State, Debug0) ->
   Debug = sys:handle_debug(Debug0, fun print_msg/3, State, Msg),
   handle_msg(Msg, State, Debug).
 
+%% @private
 handle_msg({_, Sock, Bin}, #state{ sock     = Sock
                                  , acc      = Acc0
                                  , requests = Requests
@@ -327,11 +336,9 @@ handle_msg({_, Sock, Bin}, #state{ sock     = Sock
   {Responses, Acc} = decode_response(Acc1),
   NewRequests =
     lists:foldl(
-      fun(#kpro_Response{ correlationId   = CorrId
-                        , responseMessage = Response
-                        }, Reqs) ->
+      fun(#kpro_rsp{corr_id = CorrId} = Rsp, Reqs) ->
         Caller = brod_kafka_requests:get_caller(Reqs, CorrId),
-        cast(Caller, {msg, self(), CorrId, Response}),
+        cast(Caller, {msg, self(), Rsp}),
         brod_kafka_requests:del(Reqs, CorrId)
       end, Requests, Responses),
   ?MODULE:loop(State#state{acc = Acc, requests = NewRequests}, Debug);
@@ -361,7 +368,7 @@ handle_msg({From, {send, Request}},
   {Caller, _Ref} = From,
   {CorrId, NewRequests} =
     case Request of
-      #kpro_ProduceRequest{requiredAcks = 0} ->
+      #kpro_req{no_ack = true} ->
         brod_kafka_requests:increment_corr_id(Requests);
       _ ->
         brod_kafka_requests:add(Requests, Caller)
@@ -372,8 +379,11 @@ handle_msg({From, {send, Request}},
           ssl     -> ssl:send(Sock, RequestBin)
         end,
   case Res of
-    ok              -> reply(From, {ok, CorrId});
-    {error, Reason} -> exit({send_error, Reason})
+    ok ->
+      _ = reply(From, {ok, CorrId}),
+      ok;
+    {error, Reason} ->
+      exit({send_error, Reason})
   end,
   ?MODULE:loop(State#state{requests = NewRequests}, Debug);
 handle_msg({From, get_tcp_sock}, State, Debug) ->
@@ -388,6 +398,7 @@ handle_msg(Msg, #state{} = State, Debug) ->
                           [?MODULE, self(), Msg]),
   ?MODULE:loop(State, Debug).
 
+%% @private
 cast(Pid, Msg) ->
   try
     Pid ! Msg,
@@ -396,20 +407,25 @@ cast(Pid, Msg) ->
     ok
   end.
 
+%% @private
 system_continue(_Parent, Debug, State) ->
   ?MODULE:loop(State, Debug).
 
+%% @private
 -spec system_terminate(any(), _, _, _) -> no_return().
 system_terminate(Reason, _Parent, Debug, _Misc) ->
   sys:print_log(Debug),
   exit(Reason).
 
+%% @private
 system_code_change(State, _Module, _Vsn, _Extra) ->
   {ok, State}.
 
+%% @private
 format_status(Opt, Status) ->
   {Opt, Status}.
 
+%% @private
 print_msg(Device, {_From, {send, Request}}, State) ->
   do_print_msg(Device, "send: ~p", [Request], State);
 print_msg(Device, {tcp, _Sock, Bin}, State) ->
@@ -423,11 +439,13 @@ print_msg(Device, {_From, stop}, State) ->
 print_msg(Device, Msg, State) ->
   do_print_msg(Device, "unknown msg: ~p", [Msg], State).
 
+%% @private
 do_print_msg(Device, Fmt, Args, State) ->
   CorrId = brod_kafka_requests:get_corr_id(State#state.requests),
   io:format(Device, "[~s] ~p [~10..0b] " ++ Fmt ++ "~n",
             [ts(), self(), CorrId] ++ Args).
 
+%% @private
 ts() ->
   Now = os:timestamp(),
   {_, _, MicroSec} = Now,
@@ -453,6 +471,7 @@ get_connect_timeout(Options) ->
 get_request_timeout(Options) ->
   proplists:get_value(request_timeout, Options, ?DEFAULT_REQUEST_TIMEOUT).
 
+%% @private
 -spec assert_max_req_age(requests(), timeout()) -> ok | no_return().
 assert_max_req_age(Requests, Timeout) ->
   case brod_kafka_requests:scan_for_max_age(Requests) of
@@ -493,7 +512,7 @@ do_acc(#acc{acc_size = AccSize, acc_buffer = AccBuffer} = Acc, NewBytes) ->
          }.
 
 %% @private Decode response when accumulated enough bytes.
--spec decode_response(acc()) -> {[kpro_Response()], acc()}.
+-spec decode_response(acc()) -> {[kpro:rsp()], acc()}.
 decode_response(#acc{expected_size = ExpectedSize,
                      acc_size = AccSize,
                      acc_buffer = AccBuffer}) when AccSize >= ExpectedSize ->

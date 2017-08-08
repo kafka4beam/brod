@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -38,16 +38,13 @@
         , get_committed_offsets/3
         ]).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
--type topic() :: brod:topic().
--type partition() :: brod:partition().
-
 -record(state, { group_id :: binary()
                , offset_dir :: file:fd()
-               , handlers = [] :: [{{topic(), partition()}, pid()}]
+               , handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
                }).
 
 %% @doc This function bootstraps everything to demo group subscribers.
@@ -219,4 +216,3 @@ os_time_utc_str() ->
 %%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
-

@@ -63,7 +63,7 @@ sasl_test() ->
   K = make_ts_str(),
   V = make_ts_str(),
   Output =
-    cmd("send --brokers localhost:9092,localhost:9292 -t test-topic "
+    cmd("send --brokers localhost:9292,localhost:9392 -t test-topic "
         "--cacertfile priv/ssl/ca.crt "
         "--keyfile priv/ssl/client.key "
         "--certfile priv/ssl/client.crt "
@@ -105,6 +105,17 @@ pipe_test() ->
                               end, Expected1),
   Expected = iolist_to_binary(Expected2),
   ?assertEqual(Expected, FetchedLines).
+
+groups_test() ->
+  assert_no_error(cmd("groups")),
+  assert_no_error(cmd("groups --describe")),
+  assert_no_error(cmd("groups --describe --ids all")).
+
+assert_no_error(Result) ->
+  case binary:match(iolist_to_binary(Result), <<"***">>) of
+    nomatch -> ok;
+    _ -> erlang:throw(Result)
+  end.
 
 run(Args) -> brod_cli:main(Args, exit).
 

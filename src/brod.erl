@@ -34,7 +34,6 @@
         , stop_client/1
         ]).
 
-%% Client API (deprecated)
 -export([ start_link_client/1
         , start_link_client/2
         , start_link_client/3
@@ -74,13 +73,19 @@
 -export([ get_metadata/1
         , get_metadata/2
         , get_metadata/3
-        , get_offsets/3
-        , get_offsets/5
-        , get_offsets/6
+        , resolve_offset/3
+        , resolve_offset/4
+        , resolve_offset/5
         , fetch/4
         , fetch/7
         , fetch/8
         , connect_leader/4
+        , list_all_groups/2
+        , list_groups/2
+        , describe_groups/3
+        , connect_group_coordinator/3
+        , fetch_committed_offsets/2
+        , fetch_committed_offsets/3
         ]).
 
 %% escript
@@ -88,29 +93,101 @@
 -export([main/1]).
 -endif.
 
--deprecated([{start_link_client, '_', next_version}]).
-
--export_type([ brod_call_ref/0
-             , brod_client_id/0
-             , brod_partition_fun/0
+-export_type([ call_ref/0
+             , cg/0
+             , cg_protocol_type/0
              , client/0
              , client_config/0
+             , client_id/0
+             , compression/0
              , consumer_config/0
+             , consumer_option/0
              , consumer_options/0
+             , corr_id/0
              , endpoint/0
+             , error_code/0
              , group_config/0
+             , group_generation_id/0
              , group_id/0
+             , group_member/0
+             , group_member_id/0
+             , hostname/0
              , key/0
-             , kpro_MetadataResponse/0
              , kv_list/0
+             , message/0
              , offset/0
              , offset_time/0
+             , partition/0
+             , partition_assignment/0
+             , partition_fun/0
+             , portnum/0
              , producer_config/0
+             , produce_reply/0
+             , produce_result/0
+             , received_assignments/0
+             , sock_opts/0
              , topic/0
              , value/0
              ]).
 
 -include("brod_int.hrl").
+
+%%%_* Types ====================================================================
+
+%% basics
+-type hostname() :: string().
+-type portnum() :: pos_integer().
+-type endpoint() :: {hostname(), portnum()}.
+-type topic() :: kpro:topic().
+-type partition() :: kpro:partition().
+-type offset() :: kpro:offset().
+-type key() :: kpro:key().
+-type value() :: kpro:value().
+-type kv_list() :: kpro:kv_list().
+-type client_id() :: atom().
+-type client() :: client_id() | pid().
+-type client_config() :: brod_client:config().
+-type offset_time() :: integer()
+                     | ?OFFSET_EARLIEST
+                     | ?OFFSET_LATEST.
+-type message() :: kpro:message().
+-type error_code() :: kpro:error_code().
+
+%% producers
+-type produce_reply() :: #brod_produce_reply{}.
+-type producer_config() :: brod_producer:config().
+-type partition_fun() :: fun((topic(), partition(), key(), value()) ->
+                                {ok, partition()}).
+-type compression() :: no_compression | gzip | snappy.
+-type call_ref() :: #brod_call_ref{}.
+-type produce_result() :: brod_produce_req_buffered
+                        | brod_produce_req_acked.
+
+
+%% consumers
+-type consumer_option() :: begin_offset
+                         | min_bytes
+                         | max_bytes
+                         | max_wait_time
+                         | sleep_timeout
+                         | prefetch_count.
+-type consumer_options() :: [{consumer_option(), integer()}].
+-type consumer_config() :: brod_consumer:config().
+
+%% consumer groups
+-type group_id() :: binary().
+-type group_member_id() :: binary().
+-type group_member() :: {group_member_id(), #kafka_group_member_metadata{}}.
+-type group_generation_id() :: non_neg_integer().
+-type group_config() :: proplists:proplist().
+-type partition_assignment() :: {topic() , [partition()]}.
+-type received_assignments() :: [#brod_received_assignment{}].
+-type cg() :: #brod_cg{}.
+-type cg_protocol_type() :: binary().
+
+%% internals
+-type corr_id() :: kpro:corr_id().
+-type sock_opts() :: brod_sock:options().
 
 %%%_* APIs =====================================================================
 
@@ -137,7 +214,7 @@ start_client(BootstrapEndpoints) ->
   start_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
 %% @equiv stat_client(BootstrapEndpoints, ClientId, [])
--spec start_client([endpoint()], brod_client_id()) -> ok | {error, any()}.
+-spec start_client([endpoint()], client_id()) -> ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId) ->
   start_client(BootstrapEndpoints, ClientId, []).
 
@@ -188,7 +265,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     request_timeout (optional, default=240000, constraint: >= 1000)
 %%       Timeout when waiting for a response, socket restart when timedout.
 %% @end
--spec start_client([endpoint()], brod_client_id(), client_config()) ->
+-spec start_client([endpoint()], client_id(), client_config()) ->
                       ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId, Config) ->
   case brod_sup:start_client(BootstrapEndpoints, ClientId, Config) of
@@ -203,13 +280,13 @@ start_link_client(BootstrapEndpoints) ->
   start_link_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
 %% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
--spec start_link_client([endpoint()], brod_client_id()) ->
-                           {ok, pid()} | {error, any()}.
+-spec start_link_client([endpoint()], client_id()) ->
+        {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId) ->
   start_link_client(BootstrapEndpoints, ClientId, []).
 
--spec start_link_client([endpoint()], brod_client_id(), client_config()) ->
-                           {ok, pid()} | {error, any()}.
+-spec start_link_client([endpoint()], client_id(), client_config()) ->
+        {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId, Config) ->
   brod_client:start_link(BootstrapEndpoints, ClientId, Config).
 
@@ -271,8 +348,7 @@ get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 
 %% @equiv produce(Pid, 0, <<>>, Value)
--spec produce(pid(), value()) ->
-                 {ok, brod_call_ref()} | {error, any()}.
+-spec produce(pid(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
@@ -282,7 +358,7 @@ produce(Pid, Value) ->
 %% The pid should be a partition producer pid, NOT client pid.
 %% @end
 -spec produce(pid(), key(), value()) ->
-        {ok, brod_call_ref()} | {error, any()}.
+        {ok, call_ref()} | {error, any()}.
 produce(ProducerPid, Key, Value) ->
   brod_producer:produce(ProducerPid, Key, Value).
 
@@ -293,8 +369,8 @@ produce(ProducerPid, Key, Value) ->
 %% This function first lookup the producer pid,
 %% then call produce/3 to do the real work.
 %% @end
--spec produce(client(), topic(), partition() | brod_partition_fun(),
-              key(), value()) -> {ok, brod_call_ref()} | {error, any()}.
+-spec produce(client(), topic(), partition() | partition_fun(),
+              key(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
   case brod_client:get_partitions_count(Client, Topic) of
     {ok, PartitionsCnt} ->
@@ -335,7 +411,7 @@ produce_sync(Pid, Key, Value) ->
 %% however if producer is started with required_acks set to 0, this function
 %% will return once the messages are buffered in the producer process.
 %% @end
--spec produce_sync(client(), topic(), partition() | brod_partition_fun(),
+-spec produce_sync(client(), topic(), partition() | partition_fun(),
                    key(), value()) -> ok | {error, any()}.
 produce_sync(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
@@ -346,12 +422,12 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
   end.
 
 %% @doc Block wait for sent produced request to be acked by kafka.
--spec sync_produce_request(brod_call_ref()) ->
+-spec sync_produce_request(call_ref()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef) ->
   sync_produce_request(CallRef, infinity).
 
--spec sync_produce_request(brod_call_ref(), infinity | timer:time()) ->
+-spec sync_produce_request(call_ref(), infinity | timeout()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef, Timeout) ->
   Expect = #brod_produce_reply{ call_ref = CallRef
@@ -455,93 +531,133 @@ start_link_topic_subscriber(Client, Topic, Partitions,
                                    ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+%% Return the message body of metadata_response.
+%% See kpro_schema.erl for details
+%% @end
+-spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
 %% @doc Fetch broker metadata
+%% Return the message body of metadata_response.
+%% See `kpro_schema.erl' for struct details
+%% @end
 -spec get_metadata([endpoint()], [topic()]) ->
-                      {ok, kpro_MetadataResponse()} | {error, any()}.
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
 %% @doc Fetch broker metadata
--spec get_metadata([endpoint()], [topic()], brod_sock:options()) ->
-        {ok, kpro_MetadataResponse()} | {error, any()}.
+%% Return the message body of metadata_response.
+%% See `kpro_schema.erl' for struct details
+%% @end
+-spec get_metadata([endpoint()], [topic()], sock_opts()) ->
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
 
-%% @equiv get_offsets(Hosts, Topic, Partition, latest, 1)
--spec get_offsets([endpoint()], topic(), non_neg_integer()) ->
-                     {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition) ->
-  get_offsets(Hosts, Topic, Partition, ?OFFSET_LATEST, 1).
+%% @equiv resolve_offset(Hosts, Topic, Partition, latest, 1)
+-spec resolve_offset([endpoint()], topic(), partition()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition) ->
+  resolve_offset(Hosts, Topic, Partition, ?OFFSET_LATEST).
 
-%% @doc Get valid offsets for a specified topic/partition
--spec get_offsets([endpoint()], topic(), partition(),
-                  offset_time(), pos_integer()) ->
-                     {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets) ->
-  get_offsets(Hosts, Topic, Partition, TimeOrSemanticOffset, MaxNoOffsets, []).
+%% @doc Resolve semantic offset or timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(), offset_time()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time) ->
+  resolve_offset(Hosts, Topic, Partition, Time, []).
 
-
--spec get_offsets([endpoint()], topic(), partition(),
-                  offset_time(), pos_integer(), brod_sock:options()) ->
-                    {ok, [offset()]} | {error, any()}.
-get_offsets(Hosts, Topic, Partition,
-            TimeOrSemanticOffset, MaxNoOffsets, Options) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
-  try
-    brod_utils:fetch_offsets(Pid, Topic, Partition,
-                             TimeOrSemanticOffset, MaxNoOffsets)
-  after
-    ok = brod_sock:stop(Pid)
-  end.
+%% @doc Resolve semantic offset or timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(),
+                     offset_time(), sock_opts()) ->
+        {ok, [offset()]} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
+  brod_utils:resolve_offset(Hosts, Topic, Partition, Time, Options).
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], topic(), partition(), integer()) ->
-               {ok, [#kafka_message{} | ?incomplete_message]} | {error, any()}.
+               {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset,
         _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
 
-%% @doc Fetch a single message set from the given topic-partition.
+%% @equiv fetch(Hosts, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
                {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes, []).
 
-
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer(),
-            brod_sock:options()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+            sock_opts()) -> {ok, [#kafka_message{}]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset,
-      MaxWaitTime, MinBytes, MaxBytes0, Options) ->
-  {ok, Pid} = connect_leader(Hosts, Topic, Partition, Options),
-  ReqFun =
-    fun(MaxBytes) ->
-        kpro:fetch_request(Topic, Partition, Offset,
-                           MaxWaitTime, MinBytes, MaxBytes)
-    end,
-  try
-    brod_utils:fetch(Pid, ReqFun, MaxBytes0, Offset)
-  after
-    ok = brod_sock:stop(Pid)
-  end.
+      MaxWaitTime, MinBytes, MaxBytes, Options) ->
+  brod_utils:fetch(Hosts, Topic, Partition, Offset,
+                   MaxWaitTime, MinBytes, MaxBytes, Options).
 
 %% @doc Connect partition leader.
 -spec connect_leader([endpoint()], topic(), partition(),
-                    brod_sock:options()) -> {ok, pid()}.
+                     sock_opts()) -> {ok, pid()}.
 connect_leader(Hosts, Topic, Partition, Options) ->
   {ok, Metadata} = get_metadata(Hosts, [Topic], Options),
   {ok, {Host, Port}} =
     brod_utils:find_leader_in_metadata(Metadata, Topic, Partition),
   %% client id matters only for producer clients
   brod_sock:start_link(self(), Host, Port, ?BROD_DEFAULT_CLIENT_ID, Options).
+
+%% @doc List ALL consumer groups in the given kafka cluster.
+%% NOTE: Exception if failed against any of the coordinator brokers.
+%% @end
+-spec list_all_groups([endpoint()], sock_opts()) ->
+        [{endpoint(), [cg()] | {error, any()}}].
+list_all_groups(Hosts, Options) ->
+  brod_utils:list_all_groups(Hosts, Options).
+
+%% @doc List consumer groups in the given group coordinator broker.
+-spec list_groups(endpoint(), sock_opts()) -> {ok, [cg()]} | {error, any()}.
+list_groups(Hosts, Options) ->
+  brod_utils:list_groups(Hosts, Options).
+
+%% @doc Describe consumer groups. The given consumer group IDs should be all
+%% managed by the coordinator-broker running at the given endpoint.
+%% Otherwise error codes will be returned in the result structs.
+%% Return `describe_groups_response' response body field named `groups'.
+%% See `kpro_schema.erl' for struct details
+%% @end
+-spec describe_groups(endpoint(), sock_opts(), [group_id()]) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+describe_groups(CoordinatorEndpoint, SockOpts, IDs) ->
+  brod_utils:describe_groups(CoordinatorEndpoint, SockOpts, IDs).
+
+%% @doc Connect to consumer group coordinator broker.
+%% Done in steps: 1) connect to any of the given bootstrap ednpoints;
+%% 2) send group_coordinator_request to resolve group coordinator endpoint;;
+%% 3) connect to the resolved endpoint and return the brod_sock pid
+%% @end
+-spec connect_group_coordinator([endpoint()], sock_opts(), group_id()) ->
+        {ok, pid()} | {error, any()}.
+connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
+  brod_utils:connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId).
+
+%% @doc Fetch committed offsets for ALL topics in the given consumer group.
+%% Return the `responses' field of the `offset_fetch_response' response.
+%% See `kpro_schema.erl' for struct details.
+%% @end
+-spec fetch_committed_offsets([endpoint()], sock_opts(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
+  brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId).
+
+%% @doc Same as `fetch_committed_offsets/3', only work on the socket
+%% connected to the group coordinator broker.
+%% @end
+-spec fetch_committed_offsets(pid(), group_id()) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+fetch_committed_offsets(SockPid, GroupId) ->
+  brod_utils:fetch_committed_offsets(SockPid, GroupId).
 
 -ifdef(BROD_CLI).
 main(Args) -> brod_cli:main(Args, halt).

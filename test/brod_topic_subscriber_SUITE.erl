@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015, 2016, Klarna AB
+%%%   Copyright (c) 2015-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).

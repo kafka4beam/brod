@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016 Klarna AB
+%%%   Copyright (c) 2016-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -40,16 +40,12 @@
 
 -export([ message_handler_loop/3 ]).
 
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
--type topic() :: brod:topic().
--type partition() :: brod:partition().
--type client_id() :: brod:client_id().
-
 -record(callback_state,
-        { handlers = [] :: [{{topic(), partition()}, pid()}]
+        { handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
         }).
 
 %% @doc This function bootstraps everything to demo group subscribers.
@@ -136,7 +132,7 @@ bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
   ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
   %% commit offsets to kafka every 5 seconds
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
-                ,{offset_commit_interval_seconds, 5}
+                ,{offset_commit_interval_seconds, 1}
                 ],
   {ok, _Subscriber} =
     brod:start_link_group_subscriber(
@@ -169,8 +165,8 @@ producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
 %% Or even spawn dynamically in `handle_message` callback and
 %% `exit(normal)` when idle for long.
 %% @end
--spec spawn_message_handlers(client_id(), [topic()]) ->
-        [{{topic(), partition()}, pid()}].
+-spec spawn_message_handlers(brod:client_id(), [brod:topic()]) ->
+        [{{brod:topic(), brod:partition()}, pid()}].
 spawn_message_handlers(_ClientId, []) -> [];
 spawn_message_handlers(ClientId, [Topic | Rest]) ->
   {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),

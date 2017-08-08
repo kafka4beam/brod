@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -17,104 +17,64 @@
 -ifndef(__BROD_HRL).
 -define(__BROD_HRL, true).
 
--type kafka_key()                 :: kpro:key().
--type kafka_value()               :: kpro:value().
--type kafka_kv_list()             :: kpro:kv_list().
--type kafka_topic()               :: kpro:topic().
--type kafka_partition()           :: kpro:partition().
--type kafka_offset()              :: kpro:offset().
--type kafka_error_code()          :: kpro:error_code().
--type kafka_group_id()            :: binary().
--type kafka_group_member_id()     :: binary().
--type kafka_group_generation_id() :: non_neg_integer().
--type kafka_compression()         :: no_compression | gzip | snappy.
--type brod_client_id()            :: atom().
+%% -record(kafka_message, {...}).
+-include_lib("kafka_protocol/include/kpro_public.hrl").
 
--record(kafka_message,
-        { offset     :: kafka_offset()
-        , magic_byte :: integer()
-        , attributes :: integer()
-        , key        :: binary()
-        , value      :: binary()
-        , crc        :: integer()
-        }).
-
--type kafka_message() :: kafka_message().
+-define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
+-define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
 
 -record(kafka_message_set,
-        { topic          :: kafka_topic()
-        , partition      :: kafka_partition()
+        { topic          :: brod:topic()
+        , partition      :: brod:partition()
         , high_wm_offset :: integer() %% max offset of the partition
-        , messages       :: kpro:incomplete_message() | [kafka_message()]
+        , messages       :: [brod:message()] %% exposed to brod user
+                          | kpro:incomplete_message() %% this union member
+                                                      %% is internal only
         }).
 
 -record(kafka_fetch_error,
-        { topic      :: kafka_topic()
-        , partition  :: kafka_partition()
-        , error_code :: kafka_error_code()
+        { topic      :: brod:topic()
+        , partition  :: brod:partition()
+        , error_code :: brod:error_code()
         , error_desc :: binary()
         }).
-
--define(BROD_DEFAULT_CLIENT_ID, brod_default_client).
 
 -record(brod_call_ref, { caller :: pid()
                        , callee :: pid()
                        , ref    :: reference()
                        }).
 
--type brod_call_ref() :: #brod_call_ref{}.
-
--type brod_produce_result() :: brod_produce_req_buffered
-                             | brod_produce_req_acked.
-
--record(brod_produce_reply, { call_ref :: brod_call_ref()
-                            , result   :: brod_produce_result()
+-record(brod_produce_reply, { call_ref :: brod:call_ref()
+                            , result   :: brod:produce_result()
                             }).
-
--type brod_produce_reply() :: #brod_produce_reply{}.
-
--type brod_client_config() :: proplists:proplist().
--type brod_producer_config() :: proplists:proplist().
--type brod_consumer_config() :: proplists:proplist().
--type brod_group_config() :: proplists:proplist().
--type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
-                                   | consumer_managed.
--type brod_partition_assignment_strategy() :: roundrobin
-                                            | callback_implemented.
 
 -record(kafka_group_member_metadata,
         { version   :: non_neg_integer()
-        , topics    :: [kafka_topic()]
+        , topics    :: [brod:topic()]
         , user_data :: binary()
         }).
 
--type kafka_group_member() :: {kafka_group_member_id(),
-                               #kafka_group_member_metadata{}}.
-
--type brod_partition_assignment() ::
-        {kafka_topic(), [kafka_partition()]}.
-
 -record(brod_received_assignment,
-        { topic        :: kafka_topic()
-        , partition    :: kafka_partition()
-        , begin_offset :: undefined | kafka_offset()
+        { topic        :: brod:topic()
+        , partition    :: brod:partition()
+        , begin_offset :: undefined | brod:offset()
         }).
 
 -type brod_received_assignments() :: [#brod_received_assignment{}].
 
--define(BROD_CONSUMER_GROUP_PROTOCOL_VERSION, 0).
-
--type brod_partition_fun() :: fun(( Topic         :: kafka_topic()
+-type brod_partition_fun() :: fun(( Topic         :: brod:topic()
                                   , PartitionsCnt :: integer()
-                                  , Key           :: binary()
-                                  , Value         :: binary()) ->
-                                     {ok, Partition :: integer()}).
+                                  , Key           :: brod:key()
+                                  , Value         :: brod:value()) ->
+                                     {ok, Partition :: brod:partition()}).
 
 
+-record(brod_cg, { id :: brod:group_id()
+                 , protocol_type :: brod:cg_protocol_type()
+                 }).
 
 -endif. % include brod.hrl
 
 %%% Local Variables:
 %%% erlang-indent-level: 2
 %%% End:
-

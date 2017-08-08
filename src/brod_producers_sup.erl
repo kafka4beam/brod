@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 Klarna AB
+%%%   Copyright (c) 2015-2017 Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -56,22 +56,22 @@ start_link() ->
   supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor
--spec start_producer(pid(), pid(), topic(), producer_config()) ->
+-spec start_producer(pid(), pid(), brod:topic(), brod:producer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_producer(SupPid, ClientPid, TopicName, Config) ->
   Spec = producers_sup_spec(ClientPid, TopicName, Config),
   supervisor3:start_child(SupPid, Spec).
 
 %% @doc Dynamically stop a per-topic supervisor
--spec stop_producer(pid(), topic()) -> ok | {}.
+-spec stop_producer(pid(), brod:topic()) -> ok | {}.
 stop_producer(SupPid, TopicName) ->
   supervisor3:terminate_child(SupPid, TopicName).
 
 %% @doc Find a brod_producer process pid running under ?PARTITIONS_SUP.
--spec find_producer(pid(), topic(), partition()) ->
+-spec find_producer(pid(), brod:topic(), brod:partition()) ->
                        {ok, pid()} | {error, Reason} when
-        Reason :: {producer_not_found, topic()}
-                | {producer_not_found, topic(), partition()}
+        Reason :: {producer_not_found, brod:topic()}
+                | {producer_not_found, brod:topic(), brod:partition()}
                 | {producer_down, noproc}.
 find_producer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
@@ -142,8 +142,8 @@ producer_spec(ClientPid, Topic, Partition, Config0) ->
 
 %%%_* Internal Functions =======================================================
 
--spec take_delay_secs(producer_config(), atom(), integer()) ->
-        {producer_config(), integer()}.
+-spec take_delay_secs(brod:producer_config(), atom(), integer()) ->
+        {brod:producer_config(), integer()}.
 take_delay_secs(Config, Name, DefaultValue) ->
   Secs =
     case proplists:get_value(Name, Config) of

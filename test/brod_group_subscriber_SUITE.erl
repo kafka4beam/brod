@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015, 2016, Klarna AB
+%%%   Copyright (c) 2015-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/include/brod.hrl").
+-include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
 -define(TOPIC1, <<"brod-group-subscriber-1">>).
@@ -201,11 +201,11 @@ t_async_acks(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 2 seconds to receive the first message
+  %% wait at most 4 seconds to receive the first message
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, []),
+  _ = RecvFun(4000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
@@ -264,11 +264,11 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       end
     end,
   ok = SendFun(0),
-  %% wait at most 2 seconds to receive the first message
+  %% wait at most 4 seconds to receive the first message
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, []),
+  _ = RecvFun(4000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms

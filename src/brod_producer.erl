@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2016, Klarna AB
+%%%   Copyright (c) 2014-2017, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2014-2017 Klarna AB
-%%% @end
-%%%=============================================================================
 
 -module(brod_producer).
 -behaviour(gen_server).
@@ -36,6 +30,8 @@
         , init/1
         , terminate/2
         ]).
+
+-export_type([ config/0 ]).
 
 -include("brod_int.hrl").
 
@@ -70,19 +66,28 @@
 -define(config(Key, Default), proplists:get_value(Key, Config, Default)).
 
 -type milli_sec() :: non_neg_integer().
--type delay_send_ref() :: ?undef | {timer:tref(), reference()}.
+-type delay_send_ref() :: ?undef | {reference(), reference()}.
+-type produce_reply() :: brod:produce_reply().
+-type topic() :: brod:topic().
+-type partition() :: brod:partition().
+-type offset() :: brod:offset().
+-type corr_id() :: brod:corr_id().
+-type config() :: proplists:proplist().
+-type call_ref() :: brod:call_ref().
 
 -record(state,
         { client_pid        :: pid()
         , topic             :: topic()
         , partition         :: partition()
-        , sock_pid          :: pid()
-        , sock_mref         :: reference()
+        , sock_pid          :: ?undef | pid()
+        , sock_mref         :: ?undef | reference()
         , buffer            :: brod_producer_buffer:buf()
         , retry_backoff_ms  :: non_neg_integer()
-        , retry_tref        :: timer:tref()
+        , retry_tref        :: ?undef | reference()
         , delay_send_ref    :: delay_send_ref()
         }).
+
+-type state() :: #state{}.
 
 %%%_* APIs =====================================================================
 
@@ -151,20 +156,19 @@
 %%     NOTE: It does not make sense to have this value set larger than
 %%           `partition_buffer_limit'
 %% @end
--spec start_link(pid(), topic(), partition(), producer_config()) ->
-        {ok, pid()}.
+-spec start_link(pid(), topic(), partition(), config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
-%% The function returns a call reference of type brod_call_ref() to the
+%% The function returns a call reference of type call_ref() to the
 %% caller so the caller can used it to expect (match) a brod_produce_req_acked
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
 %% @end
--spec produce(pid(), key(), value()) ->
-        {ok, brod_call_ref()} | {error, any()}.
+-spec produce(pid(), brod:key(), brod:value()) ->
+        {ok, call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
@@ -185,7 +189,7 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(brod_produce_reply(), infinity | timer:time()) ->
+-spec sync_produce_request(produce_reply(), infinity | timeout()) ->
         ok | {error, {producer_down, any()}}.
 sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
                      Timeout) ->
@@ -233,8 +237,9 @@ init({ClientPid, Topic, Partition, Config}) ->
     end,
   SendFun =
     fun(SockPid, KafkaKvList) ->
+        Vsn = 0, %% TODO pick version
         ProduceRequest =
-          kpro:produce_request(Topic, Partition, KafkaKvList,
+          kpro:produce_request(Vsn, Topic, Partition, KafkaKvList,
                                RequiredAcks, AckTimeout,
                                MaybeCompress(KafkaKvList)),
         sock_send(SockPid, ProduceRequest)
@@ -285,22 +290,23 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
   end;
 handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
   handle_produce(CallRef, Key, Value, State);
-handle_info({msg, Pid, CorrId, #kpro_ProduceResponse{} = R},
+handle_info({msg, Pid, #kpro_rsp{ tag     = produce_response
+                                , corr_id = CorrId
+                                , msg     = Rsp
+                                }},
             #state{ sock_pid = Pid
                   , buffer   = Buffer
                   } = State) ->
-  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]} = R,
-  #kpro_ProduceResponseTopic{ topicName                  = Topic
-                            , produceResponsePartition_L = [ProduceOffset]
-                            } = ProduceTopic,
-  #kpro_ProduceResponsePartition{ partition  = Partition
-                                , errorCode  = ErrorCode
-                                , offset     = Offset
-                                } = ProduceOffset,
+  [TopicRsp] = kpro:find(responses, Rsp),
+  Topic = kpro:find(topic, TopicRsp),
+  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
+  Partition = kpro:find(partition, PartitionRsp),
+  ErrorCode = kpro:find(error_code, PartitionRsp),
+  Offset = kpro:find(base_offset, PartitionRsp),
   Topic = State#state.topic, %% assert
   Partition = State#state.partition, %% assert
   {ok, NewState} =
-    case kpro_ErrorCode:is_error(ErrorCode) of
+    case ?IS_ERROR(ErrorCode) of
       true ->
         _ = log_error_code(Topic, Partition, Offset, ErrorCode),
         Error = {produce_response_error, Topic, Partition,
@@ -343,7 +349,7 @@ terminate(_Reason, _State) ->
 %%%_* Internal Functions =======================================================
 
 %% @private
--spec log_error_code(topic(), partition(), offset(), kafka_error_code()) -> _.
+-spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
   brod_utils:log(error,
                  "Error in produce response\n"
@@ -379,7 +385,7 @@ do_handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
   {noreply, NewState}.
 
 %% @private
--spec maybe_reinit_socket(#state{}) -> #state{}.
+-spec maybe_reinit_socket(state()) -> {ok, state()}.
 maybe_reinit_socket(#state{ client_pid = ClientPid
                           , sock_pid   = OldSockPid
                           , sock_mref  = OldSockMref
@@ -485,7 +491,7 @@ is_retriable(_) ->
   false.
 
 %% @private
--spec sock_send(?undef | pid(), kpro_ProduceRequest()) ->
+-spec sock_send(?undef | pid(), kpro:req()) ->
         ok | {ok, corr_id()} | {error, any()}.
 sock_send(?undef, _KafkaReq) -> {error, no_leader};
 sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).

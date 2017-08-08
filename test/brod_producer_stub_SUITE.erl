@@ -26,7 +26,7 @@
 
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("brod/src/brod_int.hrl").
+-include("brod_int.hrl").
 
 -define(WAIT(Pattern, Handle, Timeout),
         fun() ->
@@ -97,9 +97,8 @@ t_normal_flow(Config) when is_list(Config) ->
               end),
   {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0, []),
   {ok, CallRef} = brod_producer:produce(Producer, <<"key">>, <<"val">>),
-  FakeRsp = fake_rsp(<<"topic">>, 0),
   ?WAIT({request_async, CorrId, _KafkaReq},
-        Producer ! {msg, Tester, CorrId, FakeRsp}, 2000),
+        Producer ! {msg, Tester, fake_rsp(CorrId, <<"topic">>, 0)}, 2000),
   ?WAIT(#brod_produce_reply{call_ref = CallRef,
                             result = brod_produce_req_acked},
         ok, 2000),
@@ -120,7 +119,7 @@ t_no_required_acks(Config) when is_list(Config) ->
   meck:expect(brod_client, get_leader_connection,
               fun(client, <<"topic">>, 0) -> {ok, Tester} end),
   meck:expect(kpro, produce_request,
-              fun(<<"topic">>, 0, KvList, 0, _, no_compression) ->
+              fun(_Vsn = 0, <<"topic">>, 0, KvList, 0, _, no_compression) ->
                   case length(KvList) =:= MaxLingerCount of
                     true ->
                       ?assertEqual([{<<"1">>, <<"1">>},
@@ -169,11 +168,12 @@ t_retry_on_same_socket(Config) when is_list(Config) ->
         receive
           {produce, CorrId, ProducerPid, <<"the req">>} ->
             Rsp = case N of
-                    1 -> fake_rsp(<<"topic">>, 0, ?EC_REQUEST_TIMED_OUT);
-                    2 -> fake_rsp(<<"topic">>, 0)
+                    1 -> fake_rsp(CorrId, <<"topic">>, 0,
+                                  ?EC_REQUEST_TIMED_OUT);
+                    2 -> fake_rsp(CorrId, <<"topic">>, 0)
                   end,
             Tester ! {'try', N},
-            ProducerPid ! {msg, self(), CorrId, Rsp},
+            ProducerPid ! {msg, self(), Rsp},
             Loop(N + 1)
         end
     end,
@@ -211,7 +211,7 @@ t_retry_on_same_socket(Config) when is_list(Config) ->
 t_sock_down_retry({init, Config}) ->
   meck_module(kpro),
   meck:expect(kpro, produce_request,
-              fun(<<"topic">>, 0, KvList, _RequiredAcks,
+              fun(_Vsn = 0, <<"topic">>, 0, KvList, _RequiredAcks,
                   _AckTimeout, no_compression) ->
                   {<<"fake-req">>, KvList}
               end),
@@ -232,8 +232,8 @@ t_sock_down_retry(Config) when is_list(Config) ->
               0 ->
                 ok;
               2 ->
-                Rsp = fake_rsp(<<"topic">>, 0),
-                ProducerPid ! {msg, self(), CorrId, Rsp};
+                Rsp = fake_rsp(CorrId, <<"topic">>, 0),
+                ProducerPid ! {msg, self(), Rsp};
               X ->
                 %% this should pollute Tester's message queue
                 %% and cause test to fail
@@ -287,7 +287,7 @@ t_sock_down_retry(Config) when is_list(Config) ->
 t_leader_migration({init, Config}) ->
   meck_module(kpro),
   meck:expect(kpro, produce_request,
-              fun(<<"topic">>, 0, KvList, _RequiredAcks,
+              fun(_Vsn = 0, <<"topic">>, 0, KvList, _RequiredAcks,
                   _AckTimeout, no_compression) ->
                   {<<"fake-req">>, KvList}
               end),
@@ -305,10 +305,11 @@ t_leader_migration(Config) when is_list(Config) ->
             ?assertEqual(ExpectedCorrId, CorrId),
             Tester ! {sent, CorrId, KvList},
             Rsp = case CorrId of
-                    0 -> fake_rsp(<<"topic">>, 0, ?EC_NOT_LEADER_FOR_PARTITION);
-                    1 -> fake_rsp(<<"topic">>, 0)
+                    0 -> fake_rsp(CorrId, <<"topic">>, 0,
+                                  ?EC_NOT_LEADER_FOR_PARTITION);
+                    1 -> fake_rsp(CorrId, <<"topic">>, 0)
                   end,
-            ProducerPid ! {msg, self(), CorrId, Rsp},
+            ProducerPid ! {msg, self(), Rsp},
             %% keep looping.
             %% i.e. do not exit as if the old leader is still alive
             L()
@@ -370,20 +371,24 @@ corr_id() ->
   put(corr_id, CorrId),
   CorrId.
 
-fake_rsp(Topic, Partition) ->
-  fake_rsp(Topic, Partition, ?EC_NONE).
+fake_rsp(CorrId, Topic, Partition) ->
+  fake_rsp(CorrId, Topic, Partition, ?EC_NONE).
 
-fake_rsp(Topic, Partition, ErrorCode) ->
-  ProduceOffset =
-    #kpro_ProduceResponsePartition{ partition  = Partition
-                                  , errorCode  = ErrorCode
-                                  , offset     = 0
-                                  },
-  ProduceTopic =
-    #kpro_ProduceResponseTopic{ topicName                  = Topic
-                              , produceResponsePartition_L = [ProduceOffset]
-                              },
-  #kpro_ProduceResponse{produceResponseTopic_L = [ProduceTopic]}.
+fake_rsp(CorrId, Topic, Partition, ErrorCode) ->
+  #kpro_rsp{ tag = produce_response
+           , vsn = 0
+           , corr_id = CorrId
+           , msg = [{responses,
+                     [[{topic, Topic}
+                      ,{partition_responses,
+                        [[{partition, Partition},
+                          {error_code, ErrorCode},
+                          {base_offset, -1}
+                         ]
+                        ]}
+                      ]
+                     ]}]
+           }.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
