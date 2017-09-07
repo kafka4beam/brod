@@ -40,6 +40,7 @@
 %% Test cases
 -export([ t_async_acks/1
         , t_demo/1
+        , t_demo_message_set/1
         ]).
 
 
@@ -120,7 +121,25 @@ t_demo(Config) when is_list(Config) ->
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_topic_subscriber:bootstrap(1),
+        brod_demo_topic_subscriber:bootstrap(1, message),
+        receive
+          _ ->
+            ok
+        end
+      end),
+  receive
+    {'DOWN', Mref, process, Pid, Reason} ->
+      erlang:error({demo_crashed, Reason})
+  after 10000 ->
+    exit(Pid, shutdown),
+    ok
+  end.
+
+t_demo_message_set(Config) when is_list(Config) ->
+  {Pid, Mref} =
+    erlang:spawn_monitor(
+      fun() ->
+        brod_demo_topic_subscriber:bootstrap(1, message_set),
         receive
           _ ->
             ok
