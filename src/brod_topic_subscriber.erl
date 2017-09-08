@@ -201,13 +201,9 @@ handle_info({_ConsumerPid,
             #state{topic = Topic, message_type = message} = State) ->
   NewState = handle_messages(Partition, Messages, State),
   {noreply, NewState};
-handle_info({_ConsumerPid,
-             #kafka_message_set{ topic = Topic
-                               , partition = Partition
-                               } = MessageSet
-            },
+handle_info({_ConsumerPid, #kafka_message_set{topic = Topic} = MessageSet},
             #state{topic = Topic, message_type = message_set} = State) ->
-  NewState = handle_message_set(Partition, MessageSet, State),
+  NewState = handle_message_set(MessageSet, State),
   {noreply, NewState};
 handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
                                    Partitions0),
@@ -330,7 +326,10 @@ subscribe_partition(Client, Topic, Consumer) ->
       end
   end.
 
-handle_message_set(Partition, MessageSet, State) ->
+handle_message_set(MessageSet, State) ->
+  #kafka_message_set{ partition = Partition
+                    , messages  = Messages
+                    } = MessageSet,
   #state{cb_fun = CbFun, cb_state = CbState} = State,
   {AckNow, NewCbState} =
     case CbFun(Partition, MessageSet, CbState) of
@@ -342,7 +341,7 @@ handle_message_set(Partition, MessageSet, State) ->
   State1 = State#state{cb_state = NewCbState},
   case AckNow of
     true  ->
-      LastMessage = lists:last(MessageSet#kafka_message_set.messages),
+      LastMessage = lists:last(Messages),
       LastOffset  = LastMessage#kafka_message.offset,
       AckRef      = {Partition, LastOffset},
       handle_ack(AckRef, State1);

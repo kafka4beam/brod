@@ -65,6 +65,7 @@
 
 %% Subscriber API
 -export([ start_link_group_subscriber/7
+        , start_link_group_subscriber/8
         , start_link_topic_subscriber/5
         , start_link_topic_subscriber/6
         , start_link_topic_subscriber/7
@@ -510,6 +511,19 @@ start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
                             ConsumerConfig, CbModule, CbInitArg) ->
   brod_group_subscriber:start_link(Client, GroupId, Topics, GroupConfig,
                                    ConsumerConfig, CbModule, CbInitArg).
+
+%% @equiv brod_group_subscriber:start_link/8
+-spec start_link_group_subscriber(
+        client(), group_id(), [topic()], group_config(),
+        consumer_config(), message | message_type,
+        module(), term()) ->
+          {ok, pid()} | {error, any()}.
+start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
+                            ConsumerConfig, MessageType,
+                            CbModule, CbInitArg) ->
+  brod_group_subscriber:start_link(Client, GroupId, Topics, GroupConfig,
+                                   ConsumerConfig, MessageType,
+                                   CbModule, CbInitArg).
 
 %% @equiv start_link_topic_subscriber(Client, Topic, 'all', ConsumerConfig,
 %%                                    CbModule, CbInitArg)

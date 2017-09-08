@@ -30,6 +30,7 @@
 
 -export([ bootstrap/0
         , bootstrap/1
+        , bootstrap/2
         ]).
 
 %% behabviour callbacks
@@ -44,6 +45,7 @@
 
 -record(state, { group_id :: binary()
                , offset_dir :: file:fd()
+               , message_type  :: message | message_set
                , handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
                }).
 
@@ -78,6 +80,9 @@ bootstrap() ->
   bootstrap(?PRODUCE_DELAY_SECONDS).
 
 bootstrap(DelaySeconds) ->
+  bootstrap(DelaySeconds, message).
+
+bootstrap(DelaySeconds, MessageType) ->
   BootstrapHosts = [{"localhost", 9092}],
   Topic = <<"brod-demo-group-subscriber-loc">>,
   {ok, _} = application:ensure_all_started(brod),
@@ -93,7 +98,8 @@ bootstrap(DelaySeconds) ->
   MemberClients = [ 'brod-demo-group-subscriber-loc-client-1'
                   , 'brod-demo-group-subscriber-loc-client-2'
                   ],
-  ok = bootstrap_subscribers(MemberClients, BootstrapHosts, GroupId, TopicSet),
+  ok = bootstrap_subscribers(MemberClients, BootstrapHosts, GroupId, TopicSet,
+                             MessageType),
 
   %% start one producer process for each partition to feed sequence numbers
   %% to kafka, then consumed by the group subscribers.
@@ -105,17 +111,31 @@ bootstrap(DelaySeconds) ->
   ok.
 
 %% @doc Initialize nothing in our case.
-init(GroupId, _CallbackInitArg = []) ->
+init(GroupId, MessageType) ->
   OffsetDir = "/tmp",
-  {ok, #state{ group_id   = GroupId
-             , offset_dir = OffsetDir
+  {ok, #state{ group_id     = GroupId
+             , offset_dir   = OffsetDir
+             , message_type = MessageType
              }}.
 
 %% @doc Handle one message (not message-set).
-handle_message(Topic, Partition, Message,
-               #state{ offset_dir = Dir
-                     , group_id   = GroupId
+handle_message(Topic, Partition, #kafka_message{} = Message,
+               #state{ offset_dir   = Dir
+                     , group_id     = GroupId
+                     , message_type = message
                      } = State) ->
+  ok = process_message(Topic, Partition, Dir, GroupId, Message),
+  {ok, ack, State};
+handle_message(Topic, Partition, #kafka_message_set{} = MessageSet,
+               #state{ offset_dir   = Dir
+                     , group_id     = GroupId
+                     , message_type = message_set
+                     } = State) ->
+  #kafka_message_set{messages = Messages} = MessageSet,
+  [process_message(Topic, Partition, Dir, GroupId, Msg) || Msg <- Messages],
+  {ok, ack, State}.
+
+process_message(Topic, Partition, Dir, GroupId, Message) ->
   %% Process the message synchronously here.
   %% Depending on the use case:
   %% It might be a good idea to spawn worker processes for each partition
@@ -129,8 +149,7 @@ handle_message(Topic, Partition, Message,
   Now = os_time_utc_str(),
   error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
                         [self(), Partition, Now, Offset, Seqno]),
-  ok = commit_offset(Dir, GroupId, Topic, Partition, Offset),
-  {ok, ack, State}.
+  ok = commit_offset(Dir, GroupId, Topic, Partition, Offset).
 
 %% @doc This callback is called whenever there is a new assignment received.
 %% e.g. when joining the group after restart, or group assigment rebalance
@@ -157,8 +176,9 @@ get_committed_offsets(GroupId, TopicPartitions,
 
 %%%_* Internal Functions =======================================================
 
-bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics) -> ok;
-bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
+bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics, _MsgType) -> ok;
+bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId,
+                      Topics, MessageType) ->
   ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
   %% commit offsets to kafka every 5 seconds
   GroupConfig = [{offset_commit_policy, consumer_managed}
@@ -167,9 +187,10 @@ bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
     brod:start_link_group_subscriber(
       ClientId, GroupId, Topics, GroupConfig,
       _ConsumerConfig  = [{begin_offset, earliest}],
+      MessageType,
       _CallbackModule  = ?MODULE,
-      _CallbackInitArg = []),
-  bootstrap_subscribers(Rest, BootstrapHosts, GroupId, Topics).
+      _CallbackInitArg = MessageType),
+  bootstrap_subscribers(Rest, BootstrapHosts, GroupId, Topics, MessageType).
 
 filename(Dir, GroupId, Topic, Partition) ->
   filename:join([Dir, GroupId, Topic, integer_to_list(Partition)]).

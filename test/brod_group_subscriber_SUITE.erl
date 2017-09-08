@@ -41,7 +41,9 @@
 %% Test cases
 -export([ t_async_acks/1
         , t_koc_demo/1
+        , t_koc_demo_message_set/1
         , t_loc_demo/1
+        , t_loc_demo_message_set/1
         , t_2_members_subscribe_to_different_topics/1
         ]).
 
@@ -144,11 +146,47 @@ t_loc_demo(Config) when is_list(Config) ->
     ok
   end.
 
+t_loc_demo_message_set(Config) when is_list(Config) ->
+  {Pid, Mref} =
+    erlang:spawn_monitor(
+      fun() ->
+        brod_demo_group_subscriber_loc:bootstrap(1, message_set),
+        receive
+          _ ->
+            ok
+        end
+      end),
+  receive
+    {'DOWN', Mref, process, Pid, Reason} ->
+      erlang:error({demo_crashed, Reason})
+  after 10000 ->
+    exit(Pid, shutdown),
+    ok
+  end.
+
 t_koc_demo(Config) when is_list(Config) ->
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
         brod_demo_group_subscriber_koc:bootstrap(1),
+        receive
+          _ ->
+            ok
+        end
+      end),
+  receive
+    {'DOWN', Mref, process, Pid, Reason} ->
+      erlang:error({demo_crashed, Reason})
+  after 10000 ->
+    exit(Pid, shutdown),
+    ok
+  end.
+
+t_koc_demo_message_set(Config) when is_list(Config) ->
+  {Pid, Mref} =
+    erlang:spawn_monitor(
+      fun() ->
+        brod_demo_group_subscriber_koc:bootstrap(1, message_set),
         receive
           _ ->
             ok
