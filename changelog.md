@@ -28,4 +28,7 @@
   * Backward-compatible changes
     - `#kafka_message{}` record is extended with new fields `ts_type` and `ts`.
     - `#kafka_message.crc` changed from signed to unsigned integer.
-
+* 3.1.0
+  * New Features
+    - New message type option for topic and group subscribers that specifies whether to
+      handle a Kafka `message` or `message_set`.
