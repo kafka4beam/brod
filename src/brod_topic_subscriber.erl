@@ -28,6 +28,7 @@
 -export([ ack/3
         , start_link/6
         , start_link/7
+        , start_link/8
         , stop/1
         ]).
 
@@ -75,7 +76,7 @@
 %%       partition-consumers are polling for more messages behind the scene
 %%       unless prefetch_count is set to 0 in consumer config.
 -callback handle_message(brod:partition(),
-                         #kafka_message{},
+                         #kafka_message{} | #kafka_message_set{},
                          cb_state()) -> cb_ret().
 
 %%%_* Types and macros =========================================================
@@ -94,6 +95,7 @@
         , consumers = [] :: [#consumer{}]
         , cb_fun         :: cb_fun()
         , cb_state       :: cb_state()
+        , message_type   :: message | message_set
         }).
 
 %% delay 2 seconds retry the failed subscription to partiton consumer process
@@ -114,8 +116,25 @@
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), module(), term()) ->
         {ok, pid()} | {error, any()}.
-start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
-  Args = {Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg},
+start_link(Client, Topic, Partitions, ConsumerConfig,
+           CbModule, CbInitArg) ->
+  Args = {Client, Topic, Partitions, ConsumerConfig,
+          message, CbModule, CbInitArg},
+  gen_server:start_link(?MODULE, Args, []).
+
+%% @doc Start (link) a topic subscriber which receives and processes the
+%% messages or message sets from the given partition set. Use atom 'all'
+%% to subscribe to all partitions. Messages are handled by calling
+%% CbModule:handle_message
+%% @end
+-spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
+                 brod:consumer_config(), message | message_set,
+                 module(), term()) ->
+        {ok, pid()} | {error, any()}.
+start_link(Client, Topic, Partitions, ConsumerConfig,
+           MessageType, CbModule, CbInitArg) ->
+  Args = {Client, Topic, Partitions, ConsumerConfig,
+          MessageType, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
@@ -124,11 +143,12 @@ start_link(Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg) ->
 %% @end
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), committed_offsets(),
-                 cb_fun(), cb_state()) -> {ok, pid()} | {error, any()}.
+                 message | message_set, cb_fun(), cb_state()) ->
+        {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
-           CommittedOffsets, CbFun, CbInitialState) ->
+           CommittedOffsets, MessageType, CbFun, CbInitialState) ->
   Args = {Client, Topic, Partitions, ConsumerConfig,
-          CommittedOffsets, CbFun, CbInitialState},
+          CommittedOffsets, MessageType, CbFun, CbInitialState},
   gen_server:start_link(?MODULE, Args, []).
 
 
@@ -149,24 +169,26 @@ ack(Pid, Partition, Offset) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({Client, Topic, Partitions, ConsumerConfig, CbModule, CbInitArg}) ->
+init({Client, Topic, Partitions, ConsumerConfig,
+      MessageType, CbModule, CbInitArg}) ->
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, CbInitArg),
   CbFun = fun(Partition, Msg, CbStateIn) ->
                 CbModule:handle_message(Partition, Msg, CbStateIn)
           end,
   init({Client, Topic, Partitions, ConsumerConfig,
-        CommittedOffsets, CbFun, CbState});
+        CommittedOffsets, MessageType, CbFun, CbState});
 init({Client, Topic, Partitions, ConsumerConfig,
-      CommittedOffsets, CbFun, CbState}) ->
+      CommittedOffsets, MessageType, CbFun, CbState}) ->
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
   self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
-    #state{ client      = Client
-          , client_mref = erlang:monitor(process, Client)
-          , topic       = Topic
-          , cb_fun      = CbFun
-          , cb_state    = CbState
+    #state{ client       = Client
+          , client_mref  = erlang:monitor(process, Client)
+          , topic        = Topic
+          , cb_fun       = CbFun
+          , cb_state     = CbState
+          , message_type = MessageType
           },
   {ok, State}.
 
@@ -174,9 +196,14 @@ handle_info({_ConsumerPid,
              #kafka_message_set{ topic     = Topic
                                , partition = Partition
                                , messages  = Messages
-                               }},
-             #state{topic = Topic} = State) ->
+                               }
+            },
+            #state{topic = Topic, message_type = message} = State) ->
   NewState = handle_messages(Partition, Messages, State),
+  {noreply, NewState};
+handle_info({_ConsumerPid, #kafka_message_set{topic = Topic} = MessageSet},
+            #state{topic = Topic, message_type = message_set} = State) ->
+  NewState = handle_message_set(MessageSet, State),
   {noreply, NewState};
 handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
                                    Partitions0),
@@ -297,6 +324,28 @@ subscribe_partition(Client, Topic, Consumer) ->
                            , consumer_mref = ?undef
                            }
       end
+  end.
+
+handle_message_set(MessageSet, State) ->
+  #kafka_message_set{ partition = Partition
+                    , messages  = Messages
+                    } = MessageSet,
+  #state{cb_fun = CbFun, cb_state = CbState} = State,
+  {AckNow, NewCbState} =
+    case CbFun(Partition, MessageSet, CbState) of
+      {ok, NewCbState_} ->
+        {false, NewCbState_};
+      {ok, ack, NewCbState_} ->
+        {true, NewCbState_}
+    end,
+  State1 = State#state{cb_state = NewCbState},
+  case AckNow of
+    true  ->
+      LastMessage = lists:last(Messages),
+      LastOffset  = LastMessage#kafka_message.offset,
+      AckRef      = {Partition, LastOffset},
+      handle_ack(AckRef, State1);
+    false -> State1
   end.
 
 handle_messages(_Partition, [], State) ->

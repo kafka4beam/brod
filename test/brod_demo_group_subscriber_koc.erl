@@ -31,6 +31,7 @@
 
 -export([ bootstrap/0
         , bootstrap/1
+        , bootstrap/2
         ]).
 
 %% behabviour callbacks
@@ -45,7 +46,8 @@
 -define(PRODUCE_DELAY_SECONDS, 5).
 
 -record(callback_state,
-        { handlers = [] :: [{{brod:topic(), brod:partition()}, pid()}]
+        { handlers     = []      :: [{{brod:topic(), brod:partition()}, pid()}]
+        , message_type = message :: message | message_set
         }).
 
 %% @doc This function bootstraps everything to demo group subscribers.
@@ -78,6 +80,9 @@ bootstrap() ->
   bootstrap(?PRODUCE_DELAY_SECONDS).
 
 bootstrap(DelaySeconds) ->
+  bootstrap(DelaySeconds, message).
+
+bootstrap(DelaySeconds, MessageType) ->
   BootstrapHosts = [{"localhost", 9092}],
   Topic = <<"brod-demo-group-subscriber-koc">>,
   {ok, _} = application:ensure_all_started(brod),
@@ -93,7 +98,8 @@ bootstrap(DelaySeconds) ->
   MemberClients = [ 'brod-demo-group-subscriber-koc-client-1'
                   , 'brod-demo-group-subscriber-koc-client-2'
                   ],
-  ok = bootstrap_subscribers(MemberClients, BootstrapHosts, GroupId, TopicSet),
+  ok = bootstrap_subscribers(MemberClients, BootstrapHosts, GroupId, TopicSet,
+                             MessageType),
 
   %% start one producer process for each partition to feed sequence numbers
   %% to kafka, then consumed by the group subscribers.
@@ -105,7 +111,7 @@ bootstrap(DelaySeconds) ->
   ok.
 
 %% @doc Initialize nothing in our case.
-init(_GroupId, _CallbackInitArg = {ClientId, Topics}) ->
+init(_GroupId, _CallbackInitArg = {ClientId, Topics, MessageType}) ->
   %% For demo, spawn one message handler per topic-partition.
   %% Depending on the use case:
   %% It might be enough to handle the message locally in the subscriber
@@ -113,22 +119,36 @@ init(_GroupId, _CallbackInitArg = {ClientId, Topics}) ->
   %% Or there could be a pool of handlers if the messages can be processed
   %% in arbitrary order.
   Handlers = spawn_message_handlers(ClientId, Topics),
-  {ok, #callback_state{handlers = Handlers}}.
+  {ok, #callback_state{handlers = Handlers, message_type = MessageType}}.
 
-%% @doc Handle one message (not message-set).
-handle_message(Topic, Partition, Message,
-               #callback_state{handlers = Handlers} = State) ->
-  %% send to a worker process
-  {_, Pid} = lists:keyfind({Topic, Partition}, 1, Handlers),
-  Pid ! Message,
+%% @doc Handle one message or a message-set.
+handle_message(Topic, Partition,
+               #kafka_message{} = Message,
+               #callback_state{ handlers = Handlers
+                              , message_type = message
+                              } = State) ->
+  process_message(Topic, Partition, Handlers, Message),
   %% or return {ok, ack, State} in case the message can be handled
   %% synchronously here without dispatching to a worker
+  {ok, State};
+handle_message(Topic, Partition,
+               #kafka_message_set{messages = Messages} = _MessageSet,
+               #callback_state{ handlers = Handlers
+                              , message_type = message_set
+                              } = State) ->
+  [process_message(Topic, Partition, Handlers, Message) || Message <- Messages],
   {ok, State}.
 
 %%%_* Internal Functions =======================================================
 
-bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics) -> ok;
-bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
+process_message(Topic, Partition, Handlers, Message) ->
+  %% send to a worker process
+  {_, Pid} = lists:keyfind({Topic, Partition}, 1, Handlers),
+  Pid ! Message.
+
+bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics, _MsgType) -> ok;
+bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId,
+                      Topics, MessageType) ->
   ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
   %% commit offsets to kafka every 5 seconds
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
@@ -137,10 +157,10 @@ bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId, Topics) ->
   {ok, _Subscriber} =
     brod:start_link_group_subscriber(
       ClientId, GroupId, Topics, GroupConfig,
-      _ConsumerConfig  = [{begin_offset, earliest}],
+      _ConsumerConfig  = [{begin_offset, earliest}], MessageType,
       _CallbackModule  = ?MODULE,
-      _CallbackInitArg = {ClientId, Topics}),
-  bootstrap_subscribers(Rest, BootstrapHosts, GroupId, Topics).
+      _CallbackInitArg = {ClientId, Topics, MessageType}),
+  bootstrap_subscribers(Rest, BootstrapHosts, GroupId, Topics, MessageType).
 
 spawn_producers(ClientId, Topic, DelaySeconds, P) when is_integer(P) ->
   Partitions = lists:seq(0, P-1),

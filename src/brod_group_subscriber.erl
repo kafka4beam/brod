@@ -41,6 +41,7 @@
 -export([ ack/4
         , commit/1
         , start_link/7
+        , start_link/8
         , stop/1
         ]).
 
@@ -140,6 +141,7 @@
         , subscribe_tref     :: ?undef | reference()
         , cb_module          :: module()
         , cb_state           :: cb_state()
+        , message_type       :: message | message_set
         }).
 
 %% delay 2 seconds retry the failed subscription to partiton consumer process
@@ -175,8 +177,41 @@
                  module(), term()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, GroupConfig,
            ConsumerConfig, CbModule, CbInitArg) ->
+  start_link(Client, GroupId, Topics, GroupConfig, ConsumerConfig,
+             message, CbModule, CbInitArg).
+
+%% @doc Start (link) a group subscriber.
+%% Client:
+%%   Client ID (or pid, but not recommended) of the brod client.
+%% GroupId:
+%%   Consumer group ID which should be unique per kafka cluster
+%% Topics:
+%%   Predefined set of topic names to join the group.
+%%   NOTE: The group leader member will collect topics from all members and
+%%         assign all collected topic-partitions to members in the group.
+%%         i.e. members can join with arbitrary set of topics.
+%% GroupConfig:
+%%   For group coordinator, @see brod_group_coordinator:start_link/5
+%% ConsumerConfig:
+%%   For partition consumer, @see brod_consumer:start_link/4
+%% MessageType:
+%%   The type of message that is going to be handled by the callback
+%%   module. Can be either message or message set.
+%% CbModule:
+%%   Callback module which should have the callback functions
+%%   implemented for message processing.
+%% CbInitArg:
+%%   The term() that is going to be passed to CbModule:init/1 when
+%%   initializing the subscriger.
+%% @end
+-spec start_link(brod:client(), brod:group_id(), [brod:topic()],
+                 brod:group_config(), brod:consumer_config(),
+                 message | message_set,
+                 module(), term()) -> {ok, pid()} | {error, any()}.
+start_link(Client, GroupId, Topics, GroupConfig,
+           ConsumerConfig, MessageType, CbModule, CbInitArg) ->
   Args = {Client, GroupId, Topics, GroupConfig,
-          ConsumerConfig, CbModule, CbInitArg},
+          ConsumerConfig, MessageType, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
 
 -spec stop(pid()) -> ok.
@@ -240,7 +275,7 @@ get_committed_offsets(Pid, TopicPartitions) ->
 %%%_* gen_server callbacks =====================================================
 
 init({Client, GroupId, Topics, GroupConfig,
-      ConsumerConfig, CbModule, CbInitArg}) ->
+      ConsumerConfig, MessageType, CbModule, CbInitArg}) ->
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_group_id(GroupId),
   ok = brod_utils:assert_topics(Topics),
@@ -254,6 +289,7 @@ init({Client, GroupId, Topics, GroupConfig,
                 , consumer_config = ConsumerConfig
                 , cb_module       = CbModule
                 , cb_state        = CbState
+                , message_type    = MessageType
                 },
   {ok, State}.
 
@@ -261,8 +297,13 @@ handle_info({_ConsumerPid,
              #kafka_message_set{ topic     = Topic
                                , partition = Partition
                                , messages  = Messages
-                               }}, State) ->
+                               }},
+            #state{message_type = message} = State) ->
   NewState = handle_messages(Topic, Partition, Messages, State),
+  {noreply, NewState};
+handle_info( {_ConsumerPid, MessageSet}
+           , #state{message_type = message_set} = State) ->
+  NewState = handle_message_set(MessageSet, State),
   {noreply, NewState};
 handle_info({'DOWN', Mref, process, _Pid, _Reason},
             #state{client_mref = Mref} = State) ->
@@ -399,6 +440,32 @@ start_subscribe_timer(Ref, _Delay) when is_reference(Ref) ->
   %% The old timer is not expired, keep waiting
   %% A bit delay on subscribing to brod_consumer is fine
   Ref.
+
+handle_message_set(MessageSet, State) ->
+  #kafka_message_set{ topic     = Topic
+                    , partition = Partition
+                    , messages  = Messages
+                    } = MessageSet,
+  #state{cb_module = CbModule, cb_state = CbState} = State,
+  {AckNow, NewCbState} =
+    case CbModule:handle_message(Topic, Partition, MessageSet, CbState) of
+      {ok, NewCbState_} ->
+        {false, NewCbState_};
+      {ok, ack, NewCbState_} ->
+        {true, NewCbState_};
+      Unknown ->
+        erlang:error({bad_return_value,
+                      {CbModule, handle_message, Unknown}})
+    end,
+  State1 = State#state{cb_state = NewCbState},
+  case AckNow of
+    true  ->
+      LastMessage = lists:last(Messages),
+      LastOffset  = LastMessage#kafka_message.offset,
+      AckRef      = {Topic, Partition, LastOffset},
+      handle_ack(AckRef, State1);
+    false -> State1
+  end.
 
 handle_messages(_Topic, _Partition, [], State) ->
   State;

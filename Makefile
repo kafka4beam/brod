@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 3.0.0
+PROJECT_VERSION = 3.1.0
 
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = docopt jsone meck proper
@@ -57,4 +57,3 @@ vsn-check:
 
 hex-publish: distclean
 	$(verbose) rebar3 hex publish
-

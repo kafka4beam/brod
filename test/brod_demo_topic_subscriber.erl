@@ -29,14 +29,15 @@
         ]).
 
 -export([ bootstrap/0
-        , bootstrap/1
+        , bootstrap/2
         ]).
 
 -include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
--record(state, { offset_dir :: file:fd()
+-record(state, { offset_dir   :: file:fd()
+               , message_type :: message | message_type
                }).
 
 %% @doc This function bootstraps everything to demo of topic subscriber.
@@ -54,9 +55,9 @@
 %% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
-  bootstrap(?PRODUCE_DELAY_SECONDS).
+  bootstrap(?PRODUCE_DELAY_SECONDS, message).
 
-bootstrap(DelaySeconds) ->
+bootstrap(DelaySeconds, MessageType) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = [],
@@ -64,23 +65,42 @@ bootstrap(DelaySeconds) ->
   {ok, _} = application:ensure_all_started(brod),
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
-  {ok, _Pid} = spawn_consumer(ClientId, Topic),
+  {ok, _Pid} = spawn_consumer(ClientId, Topic, MessageType),
   {ok, PartitionCount} = brod:get_partitions_count(ClientId, Topic),
   Partitions = lists:seq(0, PartitionCount - 1),
   ok = spawn_producers(ClientId, Topic, DelaySeconds, Partitions),
   ok.
 
 %% @doc Get committed offsets from file `/tmp/<topic>'
-init(Topic, []) ->
+init(Topic, MessageType) ->
   OffsetDir = filename:join(["/tmp", Topic]),
   Offsets = read_offsets(OffsetDir),
-  State = #state{ offset_dir = OffsetDir },
+  State = #state{ offset_dir   = OffsetDir
+                , message_type =  MessageType
+                },
   {ok, Offsets, State}.
 
 %% @doc Handle one message (not message-set).
 handle_message(Partition, Message,
-               #state{ offset_dir = Dir
+               #state{ offset_dir   = Dir
+                     , message_type = message
                      } = State) ->
+  process_message(Dir, Partition, Message),
+  {ok, ack, State};
+handle_message(Partition, MessageSet,
+               #state{ offset_dir   = Dir
+                     , message_type = message_set
+                     } = State) ->
+  #kafka_message_set{ partition = Partition
+                    , messages  = Messages
+                    } = MessageSet,
+  [process_message(Dir, Partition, Message) || Message <- Messages],
+  {ok, ack, State}.
+
+%%%_* Internal Functions =======================================================
+
+-spec process_message(file:fd(), brod:partition(), brod:kafka_message()) -> ok.
+process_message(Dir, Partition, Message) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
@@ -88,10 +108,7 @@ handle_message(Partition, Message,
   Now = os_time_utc_str(),
   error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
                        [ self(), Partition, Now, Offset, Seqno]),
-  ok = commit_offset(Dir, Partition, Offset),
-  {ok, ack, State}.
-
-%%%_* Internal Functions =======================================================
+  ok = commit_offset(Dir, Partition, Offset).
 
 -spec read_offsets(string()) -> [{brod:partition(), brod:offset()}].
 read_offsets(Dir) when is_binary(Dir) ->
@@ -117,11 +134,13 @@ commit_offset(Dir, Partition, Offset) ->
   ok = filelib:ensure_dir(Filename),
   ok = file:write_file(Filename, [integer_to_list(Offset), $\n]).
 
-spawn_consumer(ClientId, Topic) ->
+spawn_consumer(ClientId, Topic, MessageType) ->
+  CallbackInitArg = MessageType,
   brod_topic_subscriber:start_link(ClientId, Topic, all,
                                    _ConsumerConfig  = [],
-                                   _CallbackModule  = ?MODULE,
-                                   _CallbackInitArg = []).
+                                   MessageType,
+                                   _CallbackModule = ?MODULE,
+                                   CallbackInitArg).
 
 spawn_producers(_ClientId, _Topic, _DelaySeconds, []) -> ok;
 spawn_producers(ClientId, Topic, DelaySeconds, [Partition | Partitions]) ->
