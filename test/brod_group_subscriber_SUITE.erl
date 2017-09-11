@@ -36,6 +36,7 @@
 -export([ init/2
         , get_committed_offsets/3
         , handle_message/4
+        , rand_uniform/1
         ]).
 
 %% Test cases
@@ -58,6 +59,10 @@
 -define(TOPIC3, <<"brod-group-subscriber-3">>).
 -define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 -define(config(Name), proplists:get_value(Name, Config)).
+
+rand_uniform(Max) ->
+  {_, _, Micro} = os:timestamp(),
+  Micro rem Max.
 
 %%%_* ct callbacks =============================================================
 
@@ -272,13 +277,13 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
   Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
-                  {ok, crypto:rand_uniform(0, PartitionCnt)}
+                  {ok, rand_uniform(PartitionCnt)}
                 end,
   SendFun =
     fun(I) ->
       Value = list_to_binary(integer_to_list(I)),
       Topic =
-        case crypto:rand_uniform(0,2) of
+        case rand_uniform(2) of
           0 -> ?TOPIC2;
           1 -> ?TOPIC3
         end,
