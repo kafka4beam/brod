@@ -42,7 +42,8 @@ suite() -> [{timetrap, {seconds, 30}}].
 init_per_suite(Config) ->
   Config.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+  ok.
 
 init_per_testcase(_Case, Config) ->
   Config.
@@ -71,14 +72,17 @@ t_request_timeout(Config) when is_list(Config) ->
                                  ?assertEqual(Pid, TesterPid),
                                  ok
                              end),
+  ClientConfig =
+    [{query_api_versions, false},
+     {ssl, true}, %% so we can meck ssl module because gen_tcp module is sticky
+     {request_timeout, 1000}],
   %% spawn an isolated middleman
   %% so we dont get killed when brod_sock exits
   {Pid, Ref} =
     spawn_monitor(
       fun() ->
-          {ok, SockPid} =
-            brod_sock:start_link(self(), "localhost", 9092, client_id,
-                                [{ssl, true}, {request_timeout, 1000}]),
+          {ok, SockPid} = brod_sock:start_link(self(), "localhost", 9092,
+                                               client_id, ClientConfig),
           TesterPid ! {sock, SockPid},
           receive  Msg -> exit({<<"unexpected message">>, Msg})
           after 10000  -> exit(<<"test timeout">>)
@@ -87,8 +91,9 @@ t_request_timeout(Config) when is_list(Config) ->
   Sock = receive {sock, P} -> P
          after 5000 -> erlang:exit(timeout)
          end,
-  ProduceRequest = kpro:produce_request(0, <<"t">>, 0, [{<<"K">>, <<"V">>}],
-                                        1, 1000, no_compression),
+  ProduceRequest =
+    brod_kafka_request:produce_request(0, <<"t">>, 0, [{<<"K">>, <<"V">>}],
+                                       1, 1000, no_compression),
   _ = brod_sock:request_async(Sock, ProduceRequest),
   receive
     {_DOWN, Ref, process, Pid, Reason} ->

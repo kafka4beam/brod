@@ -126,6 +126,8 @@ find_client(Client) ->
 
 %% @doc supervisor3 callback
 init(clients_sup) ->
+  %% start and link it to root supervisor
+  {ok, _} = brod_kafka_apis:start_link(),
   Clients = application:get_env(brod, clients, []),
   ClientSpecs =
     lists:map(fun({ClientId, Args}) ->

@@ -83,7 +83,7 @@ t_random_latency_ack(Config) when is_list(Config) ->
 t_nack(Config) when is_list(Config) ->
   UnknownCorrId = 0,
   SendFun =
-    fun(SockPid, KvList) ->
+    fun(SockPid, KvList, _Vsn) ->
       CorrId = case get(<<"t_nack_corr_id">>) of
                  undefined -> UnknownCorrId + 1;
                  N         -> N + 1
@@ -114,7 +114,7 @@ t_nack(Config) when is_list(Config) ->
     end,
   MaybeSend =
     fun(BufIn) ->
-      {ok, BufOut} = brod_producer_buffer:maybe_send(BufIn, self()),
+      {ok, BufOut} = brod_producer_buffer:maybe_send(BufIn, self(), 0),
       BufOut
     end,
   AckFun =
@@ -159,7 +159,7 @@ t_nack(Config) when is_list(Config) ->
 
 t_send_fun_error(Config) when is_list(Config) ->
   SendFun =
-    fun(_SockPid, _KvList) ->
+    fun(_SockPid, _KvList, _Vsn) ->
       {error, "the reason"}
     end,
   Buf0 = brod_producer_buffer:new(_BufferLimit = 1,
@@ -181,7 +181,7 @@ t_send_fun_error(Config) when is_list(Config) ->
     end,
   MaybeSend =
     fun(BufIn) ->
-      {retry, BufOut} = brod_producer_buffer:maybe_send(BufIn, self()),
+      {retry, BufOut} = brod_producer_buffer:maybe_send(BufIn, self(), 0),
       BufOut
     end,
   Buf1 = AddFun(AddFun(Buf0, 0), 1),
@@ -208,7 +208,7 @@ prop_value_with_processing_latency_list() ->
   proper_types:list({prop_latency_ms(), proper_types:binary()}).
 
 prop_no_ack_run() ->
-  SendFun = fun(_SockPid, _KvList) -> ok end,
+  SendFun = fun(_SockPid, _KvList, _Vsn) -> ok end,
   ?FORALL(
     {BufferLimit, OnWireLimit, MsgSetBytes, ValueList},
     {prop_buffer_limit(), prop_onwire_limit(),
@@ -225,7 +225,7 @@ prop_no_ack_run() ->
 
 prop_random_latency_ack_run() ->
   SendFun0 =
-    fun(FakeKafka, KvList) ->
+    fun(FakeKafka, KvList, _Vsn) ->
       %% use reference as correlation to simplify test
       CorrId = make_ref(),
       %% send the message to fake kafka
@@ -245,7 +245,9 @@ prop_random_latency_ack_run() ->
       KeyList = lists:seq(1, length(ValueList)),
       KvList = lists:zip(KeyList, ValueList),
       FakeKafka = spawn_fake_kafka(),
-      SendFun = fun(_SockPid, KvList_) -> SendFun0(FakeKafka, KvList_) end,
+      SendFun = fun(_SockPid, KvList_, Vsn) ->
+                    SendFun0(FakeKafka, KvList_, Vsn)
+                end,
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,
                                      MaxLingerTime, MaxLingerCount, SendFun),
@@ -263,7 +265,7 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   BinKey = list_to_binary(integer_to_list(Key)),
   {ok, Buf1} = brod_producer_buffer:add(Buf, CallRef, BinKey, Value),
   FakeSockPid = self(),
-  {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid),
+  {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid, 0),
   %% in case of no ack required, expect 'buffered' immediately
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
@@ -352,7 +354,7 @@ collect_replies(#state{ buffered  = Buffered
 maybe_send(#state{buf = Buf0, delay_ref = DelayRef} = State) ->
   SendTo = self(),
   _ = cancel_delay_send_timer(DelayRef),
-  case brod_producer_buffer:maybe_send(Buf0, SendTo) of
+  case brod_producer_buffer:maybe_send(Buf0, SendTo, 0) of
     {ok, Buf} ->
       State#state{buf = Buf};
     {{delay, Timeout}, Buf} ->

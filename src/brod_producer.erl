@@ -85,6 +85,7 @@
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: ?undef | reference()
         , delay_send_ref    :: delay_send_ref()
+        , produce_req_vsn   :: brod_kafka_apis:vsn()
         }).
 
 -type state() :: #state{}.
@@ -236,8 +237,7 @@ init({ClientPid, Topic, Partition, Config}) ->
       end
     end,
   SendFun =
-    fun(SockPid, KafkaKvList) ->
-        Vsn = 0, %% TODO pick version
+    fun(SockPid, KafkaKvList, Vsn) ->
         ProduceRequest =
           kpro:produce_request(Vsn, Topic, Partition, KafkaKvList,
                                RequiredAcks, AckTimeout,
@@ -253,6 +253,7 @@ init({ClientPid, Topic, Partition, Config}) ->
                 , buffer           = Buffer
                 , retry_backoff_ms = RetryBackoffMs
                 , sock_pid         = ?undef
+                , produce_req_vsn  = ?undef
                 },
   %% Register self() to client.
   ok = brod_client:register_producer(ClientPid, Topic, Partition),
@@ -280,13 +281,15 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
   case brod_producer_buffer:is_empty(Buffer0) of
     true ->
       %% no socket restart in case of empty request buffer
-      {noreply, State#state{sock_pid = ?undef}};
+      {noreply, State#state{sock_pid = ?undef,
+                            produce_req_vsn = ?undef}};
     false ->
       %% put sent requests back to buffer immediately after socket down
       %% to fail fast if retry is not allowed (reaching max_retries).
       {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, Reason),
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
-      {noreply, NewState#state{sock_pid = ?undef}}
+      {noreply, NewState#state{sock_pid = ?undef,
+                               produce_req_vsn = ?undef}}
   end;
 handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
   handle_produce(CallRef, Key, Value, State);
@@ -403,9 +406,11 @@ maybe_reinit_socket(#state{ client_pid = ClientPid
       SockMref = erlang:monitor(process, SockPid),
       %% Make sure the sent but not acked ones are put back to buffer
       {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, new_leader),
-      {ok, State#state{ sock_pid  = SockPid
-                      , sock_mref = SockMref
-                      , buffer    = Buffer
+      ReqVersion = brod_kafka_apis:pick_version(SockPid, produce_request),
+      {ok, State#state{ sock_pid        = SockPid
+                      , sock_mref       = SockMref
+                      , buffer          = Buffer
+                      , produce_req_vsn = ReqVersion
                       }};
     {error, Reason} ->
       ok = maybe_demonitor(OldSockMref),
@@ -413,9 +418,10 @@ maybe_reinit_socket(#state{ client_pid = ClientPid
       {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, no_leader),
       brod_utils:log(warning, "Failed to (re)init socket, reason:\n~p",
                      [Reason]),
-      {ok, State#state{ sock_pid  = ?undef
-                      , sock_mref = ?undef
-                      , buffer    = Buffer
+      {ok, State#state{ sock_pid        = ?undef
+                      , sock_mref       = ?undef
+                      , buffer          = Buffer
+                      , produce_req_vsn = ?undef
                       }}
   end.
 
@@ -426,9 +432,10 @@ maybe_produce(#state{retry_tref = Ref} = State) when is_reference(Ref) ->
 maybe_produce(#state{ buffer = Buffer0
                     , sock_pid = SockPid
                     , delay_send_ref = DelaySendRef0
+                    , produce_req_vsn = Vsn
                     } = State) ->
   _ = cancel_delay_send_timer(DelaySendRef0),
-  case brod_producer_buffer:maybe_send(Buffer0, SockPid) of
+  case brod_producer_buffer:maybe_send(Buffer0, SockPid, Vsn) of
     {ok, Buffer} ->
       %% One or more produce requests are sent;
       %% Or no more message left to send;

@@ -520,7 +520,7 @@ drop_old_messages(BeginOffset, [Message | Rest] = All) ->
 ok_when(true, _) -> ok;
 ok_when(_, Reason) -> erlang:error(Reason).
 
-%% @private Make a 'offset_request' message for offset resolution.
+%% @private Make a 'offsets_request' message for offset resolution.
 %% In kafka protocol, -2 and -1 are semantic 'time' to request for
 %% 'earliest' and 'latest' offsets.
 %% In brod implementation, -2, -1, 'earliest' and 'latest'

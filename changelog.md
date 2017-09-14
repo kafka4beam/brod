@@ -9,7 +9,7 @@
 * 2.5.1
   - Fix ignored commit history when committed offset is 0 (bug)
 * 3.0.0
-  * New features
+  * New Features
     - New API `brod:connect_group_cordinator` to estabilish a sockt towards group coordinator broker.
     - New API `brod:fetch_committed_offsets` to fetch consumer group commited offsets.
     - New API `brod:list_groups`, `brod:list_all_groups` and `brod:describe_groups/3`.
@@ -32,6 +32,9 @@
   * New Features
     - New message type option for topic and group subscribers that specifies whether to
       handle a Kafka `message` or `message_set`.
-* 3.?.?
+* 3.2.0
+  * New Features
+    - Added produce request version 1, 2 support
+  * Bug Fixes
     - Remove sasl application from dependent app list
 
