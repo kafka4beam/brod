@@ -9,7 +9,7 @@ sudo docker-compose -f docker-compose-basic.yml build
 sudo docker-compose -f docker-compose-kafka-2.yml up -d
 
 n=0
-while [ "$(sudo docker exec kafka_1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --list')" != '' ]; do
+while [ "$(sudo docker exec kafka_1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --describe')" != '' ]; do
   if [ $n -gt 4 ]; then
     echo "timeout waiting for kakfa_1"
     exit 1
