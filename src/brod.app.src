@@ -3,7 +3,7 @@
  [{description,"Apache Kafka Erlang client library"},
   {vsn,"3.1.0"},
   {registered,[]},
-  {applications,[kernel,stdlib,sasl,ssl,kafka_protocol,supervisor3]},
+  {applications,[kernel,stdlib,ssl,kafka_protocol,supervisor3]},
   {env,[]},
   {mod, {brod, []}},
   {modules,[]},

@@ -32,3 +32,6 @@
   * New Features
     - New message type option for topic and group subscribers that specifies whether to
       handle a Kafka `message` or `message_set`.
+* 3.?.?
+    - Remove sasl application from dependent app list
+
