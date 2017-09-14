@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 3.1.0
+PROJECT_VERSION = 3.2.0
 
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = docopt jsone meck proper
@@ -10,7 +10,7 @@ ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +war
 TEST_ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info
 
 dep_supervisor3_commit = 1.1.5
-dep_kafka_protocol_commit = 1.0.0
+dep_kafka_protocol_commit = 17c464612f946ec7c52ea7ff2317a2778b0605ed
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
 ESCRIPT_FILE = scripts/brod

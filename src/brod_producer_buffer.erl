@@ -22,7 +22,7 @@
         , ack/2
         , nack/3
         , nack_all/2
-        , maybe_send/2
+        , maybe_send/3
         ]).
 
 -export([ is_empty/1
@@ -125,13 +125,13 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
 %% retry:
 %%   Failed to send a batch, caller should schedule a delayed retry.
 %% @end
--spec maybe_send(buf(), pid()) -> {Action, buf()}
+-spec maybe_send(buf(), pid(), brod_kafka_apis:vsn()) -> {Action, buf()}
         when Action :: ok | retry | {delay, milli_sec()}.
-maybe_send(#buf{} = Buf, SockPid) ->
+maybe_send(#buf{} = Buf, SockPid, Vsn) ->
   case take_reqs(Buf) of
     false          -> {ok, Buf};
     {delay, T}     -> {{delay, T}, Buf};
-    {Reqs, NewBuf} -> do_send(Reqs, NewBuf, SockPid)
+    {Reqs, NewBuf} -> do_send(Reqs, NewBuf, SockPid, Vsn)
   end.
 
 %% @doc Reply 'acked' to callers.
@@ -298,26 +298,26 @@ take_reqs_loop_2(#buf{ buffer_count   = BufferCount
   end.
 
 %% @private Send produce request to kafka.
--spec do_send([req()], buf(), pid()) -> {Action, buf()}
+-spec do_send([req()], buf(), pid(), brod_kafka_apis:vsn()) -> {Action, buf()}
         when Action :: ok | retry | {delay, milli_sec()}.
 do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
-                  } = Buf, SockPid) ->
+                  } = Buf, SockPid, Vsn) ->
   MessageSet = lists:map(fun(#req{data = F}) -> F() end, Reqs),
-  case SendFun(SockPid, MessageSet) of
+  case SendFun(SockPid, MessageSet, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
       ok = lists:foreach(fun reply_acked/1, Reqs),
       %% continue to try next batch
-      maybe_send(Buf, SockPid);
+      maybe_send(Buf, SockPid, Vsn);
     {ok, CorrId} ->
       %% Keep onwire message reference to match acks later on
       NewBuf = Buf#buf{ onwire_count = OnWireCount + 1
                       , onwire       = OnWire ++ [{CorrId, Reqs}]
                       },
       %% continue try next batch
-      maybe_send(NewBuf, SockPid);
+      maybe_send(NewBuf, SockPid, Vsn);
     {error, Reason} ->
       %% The requests sent on-wire are not re-buffered here
       %% because there are still chances to receive acks for them.

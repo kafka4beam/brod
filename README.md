@@ -17,17 +17,35 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Simple consumer: The poller, has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
 * Group subscriber: Support for consumer groups with options to have Kafka as offset storage or a custom one
 * Topic subscriber: Subscribe on messages from all or selected topic partitions without using consumer groups
+* Pick latest supported version when sending requests to kafka.
 
 # Missing features
 
 * lz4 compression & decompression
-* new 0.10 on-wire message format
 * new 0.10.1.0 create/delete topic api
 
 # Building and testing
 
     make
     make test-env t # requires docker-composer in place
+
+# Working With Kafka 0.9.x or Earlier
+
+Make sure `{query_api_versions, false}` exists in client config.
+This is because `ApiVersionRequest` was introduced in kafka 0.10, 
+sending such request to older version brokers will cause connection failure.
+Setting `query_api_versions` to `true` is to instruct brod to use old version APIs
+
+e.g. in sy.config:
+
+```
+[{brod,
+   [ { clients
+     , [ { brod_client_1 %% registered name
+         , [ { endpoints, [{"localhost", 9092}]}
+           , { query_api_versions, false} %% <---------- here
+           ]}]}]}]
+```
 
 # Quick Demo
 

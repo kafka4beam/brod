@@ -47,7 +47,11 @@
 -define(DEFAULT_REQUEST_TIMEOUT, timer:minutes(4)).
 -define(SIZE_HEAD_BYTES, 4).
 
-%%%_* Includes =================================================================
+%% try not to use 0 corr ID for the first few requests
+%% as they are usually used by upper level callers
+-define(SASL_AUTH_REQ_CORRID, kpro:max_corr_id()).
+-define(API_VERSIONS_REQ_CORRID, (kpro:max_corr_id() - 1)).
+
 -include("brod_int.hrl").
 
 -type opt_key() :: connect_timeout
@@ -177,6 +181,9 @@ init(Parent, Host, Port, ClientId, Options) ->
       {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
       ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
                            brod_utils:get_sasl_opt(Options)),
+      MaybeQuery = proplists:get_value(query_api_versions, Options),
+      ok = maybe_query_api_versions(MaybeQuery, ClientId,
+                                    NewSock, Mod, Timeout),
       State = State0#state{mod = Mod, sock = NewSock},
       proc_lib:init_ack(Parent, {ok, self()}),
       ReqTimeout = get_request_timeout(Options),
@@ -194,6 +201,42 @@ init(Parent, Host, Port, ClientId, Options) ->
       exit({connection_failure, Reason})
   end.
 
+%% @private
+maybe_query_api_versions(false, _ClientId, _Sock, _Mod, _Timeout) -> ok;
+maybe_query_api_versions(_TrueOrUndefined, ClientId, Sock, Mod, Timeout) ->
+  Versions = query_api_versions(ClientId, Sock, Mod, Timeout),
+  ok = brod_kafka_apis:versions_received(ClientId, self(), Versions).
+
+%% @private Query API version ranges.
+query_api_versions(ClientId, Sock, Mod, Timeout) ->
+  ok = setopts(Sock, Mod, [{active, false}]),
+  Req = kpro:req(api_versions_request, _Vsn = 0, []),
+  ReqBin = kpro:encode_request(ClientId, ?API_VERSIONS_REQ_CORRID, Req),
+  Rsp = inactive_request_sync(Sock, Mod, ReqBin, Timeout),
+  #kpro_rsp{tag = api_versions_response, vsn = 0, msg = Body} = Rsp,
+  ErrorCode = kpro:find(error_code, Body),
+  case ?IS_ERROR(ErrorCode) of
+    true ->
+      exit({failed_to_query_api_versions, ErrorCode});
+    false ->
+      Versions = kpro:find(api_versions, Body),
+      F = fun(S) ->
+              ReqName = kpro:find(api_key, S),
+              MinVsn = kpro:find(min_version, S),
+              MaxVsn = kpro:find(max_version, S),
+              {ReqName, {MinVsn, MaxVsn}}
+          end,
+      lists:map(F, Versions)
+  end.
+
+%% @private Send request to active = false socket, and wait for response.
+inactive_request_sync(Sock, Mod, ReqBin, Timeout) ->
+  ok = Mod:send(Sock, ReqBin),
+  {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
+  {ok, RspBin} = Mod:recv(Sock, Len, Timeout),
+  {[Rsp], <<>>} = kpro:decode_response(<<Len:32, RspBin/binary>>),
+  Rsp.
+
 get_tcp_mod(_SslOpts = true)  -> ssl;
 get_tcp_mod(_SslOpts = [_|_]) -> ssl;
 get_tcp_mod(_)                -> gen_tcp.
@@ -210,9 +253,7 @@ maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, ?undef) ->
   ok;
 maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
   try
-    ok = sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts),
-    %% auth backends may have set other opts, ensure 'once' here
-    ok = setopts(Sock, SockMod, [{active, once}])
+    ok = sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts)
   catch
     error : Reason ->
       exit({Reason, erlang:get_stacktrace()})
@@ -223,11 +264,9 @@ sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
           {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
   Req = kpro:req(sasl_handshake_request, _V = 0, [{mechanism, <<"PLAIN">>}]),
-  HandshakeRequestBin = kpro:encode_request(ClientId, 0, Req),
-  ok = Mod:send(Sock, HandshakeRequestBin),
-  {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
-  {ok, HandshakeResponseBin} = Mod:recv(Sock, Len, Timeout),
-  {[Rsp], <<>>} = kpro:decode_response(<<Len:32, HandshakeResponseBin/binary>>),
+  HandshakeRequestBin =
+    kpro:encode_request(ClientId, ?SASL_AUTH_REQ_CORRID, Req),
+  Rsp = inactive_request_sync(Sock, Mod, HandshakeRequestBin, Timeout),
   #kpro_rsp{tag = sasl_handshake_response, vsn = 0, msg = Body} = Rsp,
   ErrorCode = kpro:find(error_code, Body),
   case ?IS_ERROR(ErrorCode) of
@@ -309,7 +348,8 @@ reply({To, Tag}, Reply) ->
   To ! {Tag, Reply}.
 
 %% @private
-loop(State, Debug) ->
+loop(#state{sock = Sock, mod = Mod} = State, Debug) ->
+  ok = setopts(Sock, Mod, [{active, once}]),
   Msg = receive Input -> Input end,
   decode_msg(Msg, State, Debug).
 
