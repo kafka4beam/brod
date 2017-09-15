@@ -57,24 +57,16 @@ stop() ->
 -spec versions_received(client_id(), pid(), [{atom(), range()}]) -> ok.
 versions_received(ClientId, SockPid, Versions) ->
   case resolve_version_ranges(ClientId, Versions, []) of
-    [] -> ok;
-    Vsns -> gen_server:call(?SERVER, {versions_received, SockPid, Vsns}, infinity)
+    [] ->
+      ok;
+    Vsns ->
+      gen_server:call(?SERVER, {versions_received, SockPid, Vsns}, infinity)
   end.
 
-%% @doc Pick the highest supported version for the given API.
+%% @doc Pick API version for the given API.
 -spec pick_version(pid(), api()) -> vsn().
 pick_version(SockPid, API) ->
-  %% Match tuple here intend to crash when return 'none'
-  {Min, Max} = supported_versions(API),
-  case Min =:= Max of
-    true ->
-      %% only one version supported, no need to lookup
-      Max;
-    false ->
-      %% query the highest supported version
-      %% in case not found, use the brod supported minimum
-      lookup_version(SockPid, API, Min)
-  end.
+  do_pick_version(SockPid, API, supported_versions(API)).
 
 init([]) ->
   ets:new(?ETS, [named_table, protected]),
@@ -107,16 +99,27 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, _State) ->
   ok.
 
+%% @private
+-spec do_pick_version(pid(), api(), range()) -> vsn().
+do_pick_version(_SockPid, _API, {Vsn, Vsn}) ->
+  %% only one version supported, no need to lookup
+  Vsn;
+do_pick_version(SockPid, API, {Min, _Max}) ->
+  %% query the highest supported version
+  case lookup_version(SockPid, API) of
+    none -> Min; %% no version received from kafka, use min
+    Vsn  -> Vsn  %% use max supported version
+  end.
+
 %% @private Lookup API from cache, return default if not found.
--spec lookup_version(pid(), api(), vsn()) -> vsn() | none.
-lookup_version(SockPid, API, DefaultVsn) ->
+-spec lookup_version(pid(), api()) -> vsn() | none.
+lookup_version(SockPid, API) ->
   case ets:lookup(?ETS, SockPid) of
-    [] ->
-      DefaultVsn;
+    [] -> none;
     [{SockPid, Versions}] ->
       case lists:keyfind(API, 1, Versions) of
-        {API, Max} -> Max;
-        false -> DefaultVsn
+        {API, Vsn} -> Vsn;
+        false -> none
       end
   end.
 
@@ -179,7 +182,7 @@ log_unsupported_api(ClientId, API, BrodRange, KafkaRange) ->
 supported_versions(API) ->
   case API of
     produce_request           -> {0, 2};
-    fetch_request             -> {0, 0};
+    fetch_request             -> {0, 3};
     offsets_request           -> {0, 0};
     metadata_request          -> {0, 0};
     offset_commit_request     -> {2, 2};

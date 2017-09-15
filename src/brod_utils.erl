@@ -317,11 +317,10 @@ fetch_committed_offsets(SockPid, GroupId) ->
 %% @end
 -spec make_req_fun(pid(), topic(), partition(),
                    kpro:wait(), kpro:count()) -> req_fun().
-make_req_fun(_SockPid, Topic, Partition, WaitTime, MinBytes) ->
-  Vsn = 0, %% TODO pick version (make use of SockPid)
+make_req_fun(SockPid, Topic, Partition, WaitTime, MinBytes) ->
   fun(Offset, MaxBytes) ->
-      kpro:fetch_request(Vsn, Topic, Partition, Offset,
-                         WaitTime, MinBytes, MaxBytes)
+      brod_kafka_request:fetch_request(SockPid, Topic, Partition, Offset,
+                                       WaitTime, MinBytes, MaxBytes)
   end.
 
 %% @doc Fetch a message-set. If the given MaxBytes is not enough to fetch a
