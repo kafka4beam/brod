@@ -17,13 +17,15 @@
 %% @doc Help functions to build request messages.
 -module(brod_kafka_request).
 
--export([ produce_request/7
+-export([ fetch_request/7
+        , produce_request/7
         ]).
 
 -type api() :: brod_kafka_apis:api().
 -type vsn() :: brod_kafka_apis:vsn().
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
+-type offset() :: brod:offset().
 
 %% @doc Make a produce request, If the first arg is a `brod_sock' pid, call
 %% `brod_kafka_apis:pick_version/2' to resolve version.
@@ -37,17 +39,30 @@
                       brod:compression()) -> kpro:req().
 produce_request(MaybePid, Topic, Partition, KvList,
                 RequiredAcks, AckTimeout, Compression) ->
-  Vsn = case is_pid(MaybePid) of
-          true  -> pick_version(produce_request, MaybePid);
-          false -> MaybePid
-        end,
+  Vsn = pick_version(produce_request, MaybePid),
   kpro:produce_request(Vsn, Topic, Partition, KvList,
                        RequiredAcks, AckTimeout, Compression).
 
+%% @doc Make a fetch request, If the first arg is a `brod_sock' pid, call
+%% `brod_kafka_apis:pick_version/2' to resolve version.
+%%
+%% NOTE: `pick_version' is essentially a ets lookup, for intensive callers
+%%       like `brod_producer', we should pick version before hand
+%%       and re-use it for each produce request.
+%% @end
+-spec fetch_request(pid() | vsn(), topic(), partition(), offset(),
+                    kpro:wait(), kpro:count(), kpro:count()) -> kpro:req().
+fetch_request(MaybePid, Topic, Partition, Offset,
+              WaitTime, MinBytes, MaxBytes) ->
+  Vsn = pick_version(fetch_request, MaybePid),
+  kpro:fetch_request(Vsn, Topic, Partition, Offset,
+                     WaitTime, MinBytes, MaxBytes).
+
 %% @private
 -spec pick_version(api(), pid()) -> vsn().
-pick_version(API, SockPid) ->
-  brod_kafka_apis:pick_version(API, SockPid).
+pick_version(_API, Vsn) when is_integer(Vsn) -> Vsn;
+pick_version(API, SockPid) when is_pid(SockPid) ->
+  brod_kafka_apis:pick_version(SockPid, API).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

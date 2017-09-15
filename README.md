@@ -34,7 +34,6 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 Make sure `{query_api_versions, false}` exists in client config.
 This is because `ApiVersionRequest` was introduced in kafka 0.10, 
 sending such request to older version brokers will cause connection failure.
-Setting `query_api_versions` to `true` is to instruct brod to use old version APIs
 
 e.g. in sy.config:
 
