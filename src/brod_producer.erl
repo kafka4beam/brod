@@ -247,13 +247,14 @@ init({ClientPid, Topic, Partition, Config}) ->
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
+  DefaultReqVersion = brod_kafka_apis:default_version(produce_request),
   State = #state{ client_pid       = ClientPid
                 , topic            = Topic
                 , partition        = Partition
                 , buffer           = Buffer
                 , retry_backoff_ms = RetryBackoffMs
                 , sock_pid         = ?undef
-                , produce_req_vsn  = ?undef
+                , produce_req_vsn  = DefaultReqVersion
                 },
   %% Register self() to client.
   ok = brod_client:register_producer(ClientPid, Topic, Partition),
@@ -281,15 +282,13 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
   case brod_producer_buffer:is_empty(Buffer0) of
     true ->
       %% no socket restart in case of empty request buffer
-      {noreply, State#state{sock_pid = ?undef,
-                            produce_req_vsn = ?undef}};
+      {noreply, State#state{sock_pid = ?undef}};
     false ->
       %% put sent requests back to buffer immediately after socket down
       %% to fail fast if retry is not allowed (reaching max_retries).
       {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, Reason),
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
-      {noreply, NewState#state{sock_pid = ?undef,
-                               produce_req_vsn = ?undef}}
+      {noreply, NewState#state{sock_pid = ?undef}}
   end;
 handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
   handle_produce(CallRef, Key, Value, State);
@@ -418,10 +417,9 @@ maybe_reinit_socket(#state{ client_pid = ClientPid
       {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, no_leader),
       brod_utils:log(warning, "Failed to (re)init socket, reason:\n~p",
                      [Reason]),
-      {ok, State#state{ sock_pid        = ?undef
-                      , sock_mref       = ?undef
-                      , buffer          = Buffer
-                      , produce_req_vsn = ?undef
+      {ok, State#state{ sock_pid  = ?undef
+                      , sock_mref = ?undef
+                      , buffer    = Buffer
                       }}
   end.
 

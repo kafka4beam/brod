@@ -16,7 +16,8 @@
 
 -module(brod_kafka_apis).
 
--export([ pick_version/2
+-export([ default_version/1
+        , pick_version/2
         , start_link/0
         , stop/0
         , versions_received/3
@@ -62,6 +63,12 @@ versions_received(ClientId, SockPid, Versions) ->
     Vsns ->
       gen_server:call(?SERVER, {versions_received, SockPid, Vsns}, infinity)
   end.
+
+%% @doc Bet default supported version for the given API.
+-spec default_version(api()) -> vsn().
+default_version(API) ->
+  {Min, _Max} = supported_versions(API),
+  Min.
 
 %% @doc Pick API version for the given API.
 -spec pick_version(pid(), api()) -> vsn().
