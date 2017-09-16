@@ -771,10 +771,17 @@ format_broker_lines(Brokers) ->
           Id = kf(node_id, Broker),
           Host = kf(host, Broker),
           Port = kf(port, Broker),
-          %% TODO display rack
-          io_lib:format("  ~p: ~s\n", [Id, fmt_endpoint({Host, Port})])
+          Rack = kf(rack, Broker, undefined),
+          HostStr = fmt_endpoint({Host, Port}),
+          format_broker_line(Id, Rack, HostStr)
       end,
   [Header, lists:map(F, Brokers)].
+
+%% @private
+format_broker_line(Id, undefined, Endpoint) ->
+  io_lib:format("  ~p: ~s\n", [Id, Endpoint]);
+format_broker_line(Id, Rack, Endpoint) ->
+  io_lib:format("  ~p(~s): ~s\n", [Id, Rack, Endpoint]).
 
 %% @private
 format_topics_lines(Topics, true) ->
@@ -1132,6 +1139,12 @@ shuffle(L) ->
 %% @private
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
 kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
+
+%% @private
+-spec kf(kpro:field_name(), kpro:struct(), kpro:field_value()) ->
+        kpro:field_value().
+kf(FieldName, Struct, Default) ->
+  kpro:find(FieldName, Struct, Default).
 
 -endif.
 

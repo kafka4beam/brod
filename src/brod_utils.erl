@@ -112,12 +112,12 @@ resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
 %% @doc Resolve timestamp to real offset.
 -spec resolve_offset(pid(), topic(), partition(), offset_time()) ->
         {ok, offset()} | {error, any()}.
-resolve_offset(SocketPid, Topic, Partition, Time) ->
-  Request = offsets_request(Topic, Partition, Time),
+resolve_offset(Pid, Topic, Partition, Time) ->
+  Request = brod_kafka_request:offsets_request(Pid, Topic, Partition, Time),
   #kpro_rsp{tag = offsets_response
            , vsn = Vsn
            , msg = Msg
-           } = request_sync(SocketPid, Request),
+           } = request_sync(Pid, Request),
   [Response] = kf(responses, Msg),
   [PartitionRespons] = kf(partition_responses, Response),
   Ec = kf(error_code, PartitionRespons),
@@ -518,25 +518,6 @@ drop_old_messages(BeginOffset, [Message | Rest] = All) ->
 -spec ok_when(boolean(), any()) -> ok | no_return().
 ok_when(true, _) -> ok;
 ok_when(_, Reason) -> erlang:error(Reason).
-
-%% @private Make a 'offsets_request' message for offset resolution.
-%% In kafka protocol, -2 and -1 are semantic 'time' to request for
-%% 'earliest' and 'latest' offsets.
-%% In brod implementation, -2, -1, 'earliest' and 'latest'
-%% are semantic 'offset', this is why often a variable named
-%% Offset is used as the Time argument.
-%% @end
--spec offsets_request(brod:topic(), brod:partition(),
-                      brod:offset_time()) -> kpro:req().
-offsets_request(Topic, Partition, TimeOrSemanticOffset) ->
-  Time = ensure_integer_offset_time(TimeOrSemanticOffset),
-  kpro:offsets_request(_Vsn = 0, Topic, Partition, Time).
-
-%% @private
--spec ensure_integer_offset_time(brod:offset_time()) -> integer().
-ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
-ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
-ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 %% @private
 -spec do_find_leader_in_metadata(kpro:struct(), brod:topic(),
