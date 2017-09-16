@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 start_stop_test() ->
-  ok = application:stop(brod), %% other tests might have it started
+  _ = application:stop(brod), %% other tests might have it started
   {ok, _Pid} = brod_kafka_apis:start_link(),
   ?assert(lists:member(brod_kafka_apis, ets:all())),
   ok = brod_kafka_apis:stop().

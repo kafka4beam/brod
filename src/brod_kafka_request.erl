@@ -86,7 +86,9 @@ metadata_request(SockPid, Topics) ->
 -spec pick_version(api(), pid()) -> vsn().
 pick_version(_API, Vsn) when is_integer(Vsn) -> Vsn;
 pick_version(API, SockPid) when is_pid(SockPid) ->
-  brod_kafka_apis:pick_version(SockPid, API).
+  brod_kafka_apis:pick_version(SockPid, API);
+pick_version(API, _) ->
+  brod_kafka_apis:default_version(API).
 
 %% @private
 -spec ensure_integer_offset_time(brod:offset_time()) -> integer().
