@@ -19,7 +19,10 @@
 
 -export([ fetch_request/7
         , produce_request/7
+        , offsets_request/4
         ]).
+
+-include("brod_int.hrl").
 
 -type api() :: brod_kafka_apis:api().
 -type vsn() :: brod_kafka_apis:vsn().
@@ -58,11 +61,31 @@ fetch_request(MaybePid, Topic, Partition, Offset,
   kpro:fetch_request(Vsn, Topic, Partition, Offset,
                      WaitTime, MinBytes, MaxBytes).
 
+%% @doc Make a 'offsets_request' message for offset resolution.
+%% In kafka protocol, -2 and -1 are semantic 'time' to request for
+%% 'earliest' and 'latest' offsets.
+%% In brod implementation, -2, -1, 'earliest' and 'latest'
+%% are semantic 'offset', this is why often a variable named
+%% Offset is used as the Time argument.
+%% @end
+-spec offsets_request(pid(), topic(), partition(), brod:offset_time()) ->
+        kpro:req().
+offsets_request(SockPid, Topic, Partition, TimeOrSemanticOffset) ->
+  Time = ensure_integer_offset_time(TimeOrSemanticOffset),
+  Vsn = pick_version(offsets_request, SockPid),
+  kpro:offsets_request(Vsn, Topic, Partition, Time).
+
 %% @private
 -spec pick_version(api(), pid()) -> vsn().
 pick_version(_API, Vsn) when is_integer(Vsn) -> Vsn;
 pick_version(API, SockPid) when is_pid(SockPid) ->
   brod_kafka_apis:pick_version(SockPid, API).
+
+%% @private
+-spec ensure_integer_offset_time(brod:offset_time()) -> integer().
+ensure_integer_offset_time(?OFFSET_EARLIEST)     -> -2;
+ensure_integer_offset_time(?OFFSET_LATEST)       -> -1;
+ensure_integer_offset_time(T) when is_integer(T) -> T.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
