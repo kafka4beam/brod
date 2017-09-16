@@ -184,7 +184,7 @@ supported_versions(API) ->
     produce_request           -> {0, 2};
     fetch_request             -> {0, 3};
     offsets_request           -> {0, 1};
-    metadata_request          -> {0, 0};
+    metadata_request          -> {0, 2};
     offset_commit_request     -> {2, 2};
     offset_fetch_request      -> {1, 1};
     group_coordinator_request -> {0, 0};

@@ -531,21 +531,21 @@ get_metadata_safe(Topic0, #state{config = Config} = State) ->
 %% @private
 -spec do_get_metadata(?undef | topic(), state()) -> {Result, state()}
         when Result :: {ok, kpro:struct()} | {error, any()}.
-do_get_metadata(Topic, #state{ client_id   = ClientId
-                             , config      = Config
-                             , workers_tab = Ets
+do_get_metadata(Topic, #state{ client_id     = ClientId
+                             , config        = Config
+                             , workers_tab   = Ets
+                             , meta_sock_pid = SockPid
                              } = State) ->
   Topics = case Topic of
              ?undef -> []; %% in case no topic is given, get all
              _      -> [Topic]
            end,
-  Vsn = 0, %% TODO: pick version
-  Request = kpro:req(metadata_request, Vsn, [{topics, Topics}]),
+  Request = brod_kafka_request:metadata_request(SockPid, Topics),
   Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
   case Result of
-    {ok, #kpro_rsp{tag = metadata_response, vsn = Vsn, msg = Metadata}} ->
+    {ok, #kpro_rsp{tag = metadata_response, msg = Metadata}} ->
       TopicMetadataArray = kf(topic_metadata, Metadata),
       ok = update_partitions_count_cache(Ets, TopicMetadataArray),
       {{ok, Metadata}, NewState};

@@ -34,7 +34,10 @@
       handle a Kafka `message` or `message_set`.
 * 3.2.0
   * New Features
-    - Added produce request version 1, 2 support
+    - Support produce_request version 0 - 2
+    - Support fetch_request version 0 - 3
+    - Support offsets_request version 0 - 1
+    - Support metadata_request version 0 - 2
   * Bug Fixes
     - Remove sasl application from dependent app list
 

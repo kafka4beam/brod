@@ -88,11 +88,8 @@ get_metadata(Hosts, Topics, Options) ->
   with_sock(
     try_connect(Hosts, Options),
     fun(Pid) ->
-      Vsn = 0, %% TODO pick version
-      Body = [{topics, Topics}],
-      Request = kpro:req(metadata_request, Vsn, Body),
+      Request = brod_kafka_request:metadata_request(Pid, Topics),
       #kpro_rsp{ tag = metadata_response
-               , vsn = Vsn
                , msg = Msg
                } = request_sync(Pid, Request),
       {ok, Msg}

@@ -743,6 +743,8 @@ parse_size(Size) ->
 format_metadata(Metadata, Format, IsList, IsToListUrp) ->
   Brokers = kf(brokers, Metadata),
   Topics0 = kf(topic_metadata, Metadata),
+  Cluster = kf(cluster_id, Metadata, ?undef),
+  Controller = kf(controller_id, Metadata, ?undef),
   Topics1 = case IsToListUrp of
               true -> lists:filter(fun is_ur_topic/1, Topics0);
               false -> Topics0
@@ -752,16 +754,26 @@ format_metadata(Metadata, Format, IsList, IsToListUrp) ->
     json ->
       JSON = jsone:encode([ {brokers, Brokers}
                           , {topics, Topics}
+                          , {cluster_id, Cluster}
+                          , {controller_id, Controller}
                           ]),
       print([JSON, "\n"]);
     text ->
-      %% When listing topics do not display hosts
-      BL = case IsList of
-             true -> [];
-             false -> format_broker_lines(Brokers)
+      CL = case Cluster of
+             ?undef -> "";
+             _ -> io_lib:format("cluster_id: ~s\n", [Cluster])
            end,
+
+      CT = case Controller of
+             ?undef -> "";
+             _ -> io_lib:format("controller: ~p\n", [Controller])
+           end,
+      BL = format_broker_lines(Brokers),
       TL = format_topics_lines(Topics, IsList),
-      print([BL, TL])
+      case IsList of
+        true -> print(TL);
+        false -> print([CL, CT, BL, TL])
+      end
   end.
 
 %% @private
@@ -771,14 +783,14 @@ format_broker_lines(Brokers) ->
           Id = kf(node_id, Broker),
           Host = kf(host, Broker),
           Port = kf(port, Broker),
-          Rack = kf(rack, Broker, undefined),
+          Rack = kf(rack, Broker, ?undef),
           HostStr = fmt_endpoint({Host, Port}),
           format_broker_line(Id, Rack, HostStr)
       end,
   [Header, lists:map(F, Brokers)].
 
 %% @private
-format_broker_line(Id, undefined, Endpoint) ->
+format_broker_line(Id, ?undef, Endpoint) ->
   io_lib:format("  ~p: ~s\n", [Id, Endpoint]);
 format_broker_line(Id, Rack, Endpoint) ->
   io_lib:format("  ~p(~s): ~s\n", [Id, Rack, Endpoint]).
