@@ -18,8 +18,9 @@
 -module(brod_kafka_request).
 
 -export([ fetch_request/7
-        , produce_request/7
+        , metadata_request/2
         , offsets_request/4
+        , produce_request/7
         ]).
 
 -include("brod_int.hrl").
@@ -74,6 +75,12 @@ offsets_request(SockPid, Topic, Partition, TimeOrSemanticOffset) ->
   Time = ensure_integer_offset_time(TimeOrSemanticOffset),
   Vsn = pick_version(offsets_request, SockPid),
   kpro:offsets_request(Vsn, Topic, Partition, Time).
+
+%% @doc Make a metadata request.
+-spec metadata_request(pid(), [topic()]) -> kpro:req().
+metadata_request(SockPid, Topics) ->
+  Vsn = pick_version(metadata_request, SockPid),
+  kpro:req(metadata_request, Vsn, [{topics, Topics}]).
 
 %% @private
 -spec pick_version(api(), pid()) -> vsn().
