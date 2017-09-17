@@ -81,6 +81,7 @@
                , offset_reset_policy :: offset_reset_policy()
                , avg_bytes           :: number()
                , max_bytes           :: bytes()
+               , size_stat_window    :: non_neg_integer()
                }).
 
 -type state() :: #state{}.
@@ -132,6 +133,10 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%                          'begin_offset' option.
 %%     reset_to_earliest: consume from the earliest offset.
 %%     reset_to_latest: consume from the last available offset.
+%%  size_stat_window: (optional, default = 5)
+%%     The moving-average window size when shrinking 'max_bytes' after it has
+%%     been expanded to fetch a large message. Use 0 to immediately shrink
+%%     back to original 'max_bytes' from config.
 %% @end
 -spec start_link(pid(), topic(), partition(), config(), [any()]) ->
                     {ok, pid()} | {error, any()}.
@@ -209,6 +214,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , offset_reset_policy = OffsetResetPolicy
              , avg_bytes           = 0
              , max_bytes           = MaxBytes
+             , size_stat_window    = Cfg(size_stat_window, ?DEFAULT_AVG_WINDOW)
              }}.
 
 handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
@@ -390,6 +396,12 @@ handle_add_offset(#pending_acks{ offsets_queue = Queue
                                             }, Offsets).
 
 %% @private
+maybe_shrink_max_bytes(#state{ size_stat_window = W
+                             , max_bytes_orig = MaxBytesOrig
+                             } = State, _) when W < 1 ->
+  %% Configured to not collect average message size,
+  %% shrink back to original max_bytes immediately
+  State#state{max_bytes = MaxBytesOrig};
 maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
                              , max_bytes_orig = MaxBytesOrig
                              , max_bytes      = MaxBytes
@@ -402,15 +414,16 @@ maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
   NewMaxBytes = erlang:max(EstimatedSetSize, MaxBytesOrig),
   %% maybe shrink the max_bytes to send in fetch request to NewMaxBytes
   State#state{max_bytes = erlang:min(NewMaxBytes, MaxBytes)};
-maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
-                             , avg_bytes      = AvgBytes
+maybe_shrink_max_bytes(#state{ prefetch_count   = PrefetchCount
+                             , avg_bytes        = AvgBytes
+                             , size_stat_window = Window
                              } = State,
                        [#kafka_message{key = Key, value = Value} | Rest]) ->
   %% kafka adds 34 bytes of overhead (metadata) for each message
   %% use 40 to give some room for future kafka protocol versions
   MsgBytes = bytes(Key) + bytes(Value) + 40,
   %% See https://en.wikipedia.org/wiki/Moving_average
-  WindowSize = erlang:max(PrefetchCount, ?DEFAULT_AVG_WINDOW),
+  WindowSize = erlang:max(PrefetchCount, Window),
   NewAvgBytes = ((WindowSize - 1) * AvgBytes + MsgBytes) / WindowSize,
   maybe_shrink_max_bytes(State#state{avg_bytes = NewAvgBytes}, Rest).
 
@@ -587,6 +600,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     , prefetch_count      = F(prefetch_count, State#state.prefetch_count)
     , offset_reset_policy = OffsetResetPolicy
     , max_bytes           = F(max_bytes, State#state.max_bytes)
+    , size_stat_window    = F(size_stat_window, State#state.size_stat_window)
     },
   NewState =
     case NewBeginOffset =/= OldBeginOffset of
