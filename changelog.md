@@ -38,6 +38,8 @@
     - Support fetch_request version 0 - 3
     - Support offsets_request version 0 - 1
     - Support metadata_request version 0 - 2
+    - Support message create time by allowing `Value` to be `[{Ts, Key, Value}]` in `brod:produce` and `brod:produce_sync` APIs
+    - Bind all `#kafka_message{}` fields to variables so they can be used in brod-cli `fetch` command's `--fmt` expression
   * Bug Fixes
     - Remove sasl application from dependent app list
 

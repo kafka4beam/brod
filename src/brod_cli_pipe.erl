@@ -349,7 +349,7 @@ split_messages(MsgDeliCp, [Tail | Header]) ->
 
 %% @private
 -spec split_kv_pairs([binary()], none | delimiter(), boolean()) ->
-        [{Key :: binary(), Value :: binary()}].
+        brod:kv_list().
 split_kv_pairs(Msgs, none, _IsSameDeli) ->
   lists:map(fun(Msg) -> {<<>>, Msg} end, Msgs);
 split_kv_pairs(Msgs, _KvDeliCp, _IsSameDeli = true) ->
@@ -357,7 +357,8 @@ split_kv_pairs(Msgs, _KvDeliCp, _IsSameDeli = true) ->
 split_kv_pairs(Msgs, KvDeliCp, _IsSameDeli = false) ->
   lists:map(fun(Msg) ->
                 [K, V] = binary:split(Msg, KvDeliCp),
-                {K, V}
+                CreateTs = brod_utils:os_time_milli(),
+                {CreateTs, K, V}
             end, Msgs).
 
 %% @private

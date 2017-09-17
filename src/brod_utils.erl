@@ -42,6 +42,7 @@
         , log/3
         , make_fetch_fun/6
         , os_time_utc_str/0
+        , os_time_milli/0
         , resolve_offset/4
         , resolve_offset/5
         , shutdown_pid/1
@@ -176,6 +177,12 @@ os_time_utc_str() ->
   S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
+
+%% @doc Milliseconds since beginning of the epoch (midnight Jan 1, 1970 (UTC)).
+-spec os_time_milli() -> kpro:msg_ts().
+os_time_milli() ->
+  {Mega, S, Micro} = os:timestamp(),
+  (((Mega * 1000000)  + S) * 1000) + Micro div 1000.
 
 %% @doc simple wrapper around error_logger.
 %% NOTE: keep making MFA calls to error_logger to
@@ -447,6 +454,21 @@ resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
         {ok, {binary_to_list(Host), Port}}
     end).
 
+-define(IS_BYTE(I), (I>=0 andalso I<256)).
+
+%% @doc Return message set size in number of bytes.
+%% NOTE: This does not include the overheads of encoding protocol.
+%%       such as magic bytes, attributes, and length tags etc.
+%% @end
+-spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
+bytes([]) -> 0;
+bytes(?undef) -> 0;
+bytes(I) when ?IS_BYTE(I) -> 1;
+bytes(B) when is_binary(B) -> erlang:size(B);
+bytes({T, K, V}) when is_integer(T) -> 8 + bytes(K) + bytes(V);
+bytes({K, V}) -> bytes(K) + bytes(V);
+bytes([H | T]) -> bytes(H) + bytes(T).
+
 %%%_* Internal functions =======================================================
 
 %% @private
@@ -536,17 +558,6 @@ do_find_leader_in_metadata(Msg, Topic, Partition) ->
   Host = kf(host, Broker),
   Port = kf(port, Broker),
   {binary_to_list(Host), Port}.
-
--define(IS_BYTE(I), (I>=0 andalso I<256)).
-
-%% @private
--spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
-bytes([]) -> 0;
-bytes(?undef) -> 0;
-bytes(I) when ?IS_BYTE(I) -> 1;
-bytes(B) when is_binary(B) -> erlang:size(B);
-bytes({K, V}) -> bytes(K) + bytes(V);
-bytes([H | T]) -> bytes(H) + bytes(T).
 
 %% @private
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
