@@ -116,6 +116,7 @@
              , hostname/0
              , key/0
              , kv_list/0
+             , msg_ts/0
              , message/0
              , offset/0
              , offset_time/0
@@ -146,6 +147,7 @@
 -type key() :: kpro:key().
 -type value() :: kpro:value().
 -type kv_list() :: kpro:kv_list().
+-type msg_ts() :: kpro:msg_ts().
 -type client_id() :: atom().
 -type client() :: client_id() | pid().
 -type client_config() :: brod_client:config().

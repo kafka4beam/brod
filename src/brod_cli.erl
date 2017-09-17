@@ -127,12 +127,12 @@ options:
                          okv:   Print 'O <kv-deli> K <kv-deli> V <msg-deli>'
                          eterm: Pretty print tuple '{Offse, Key, Value}.'
                                 to a consultable Erlang term format.
-                         Fun:   An anonymous Erlang function literal to be
-                                evaluated for each message, the function is
-                                expected to be of below spec:
-                                fun((Offset, Key, Value) -> ok | iodata()).
-                                Print nothing if 'ok' is returned otherwise
-                                print the return value. [default: v]
+                         Expr:  An Erlang expression to be evaluated for each
+                                message. Bound variable to be used in the
+                                expression: Offset, Key, Value, CRC, TsType, Ts.
+                                Print nothing the evaluation result in 'ok',
+                                otherwise print the evaluated io-list.
+                         [default: v]
 "
 ?COMMAND_COMMON_OPTIONS
 "NOTE: Reaching either --count or --wait limit will cause script to exit"
@@ -431,7 +431,8 @@ run(?SEND_CMD, Brokers, Topic, SockOpts, Args) ->
     , {default_producer_config, ProducerConfig}
     ] ++ SockOpts,
   {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, ClientConfig),
-  ok = brod:produce_sync(?CLIENT, Topic, Partition, Key, Value);
+  Msgs = [{brod_utils:os_time_milli(), Key, Value}],
+  ok = brod:produce_sync(?CLIENT, Topic, Partition, <<>>, Msgs);
 run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun parse_partition/1),
   Acks = parse(Args, "--acks", fun parse_acks/1),
@@ -698,7 +699,11 @@ fetch_loop(FmtFun, FetchFun, Offset, Count) ->
       lists:foreach(
         fun(M) ->
             #kafka_message{offset = O, key = K, value = V} = M,
-            case FmtFun(O, ensure_kafka_bin(K), ensure_kafka_bin(V)) of
+            R = case is_function(FmtFun, 3) of
+                  true -> FmtFun(O, ensure_kafka_bin(K), ensure_kafka_bin(V));
+                  false -> FmtFun(M)
+                end,
+            case R of
               ok -> ok;
               IoData -> io:put_chars(IoData)
             end
@@ -946,9 +951,38 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
   FunLiteral = ensure_end_with_dot(FunLiteral0),
   {ok, Tokens, _Line} = erl_scan:string(FunLiteral),
   {ok, [Expr]} = erl_parse:parse_exprs(Tokens),
-  {value, Fun, _Bindings} = erl_eval:expr(Expr, []),
-  true = is_function(Fun, 3),
-  Fun.
+  fun(#kafka_message{offset     = Offset,
+                     magic_byte = MagicByte,
+                     attributes = Attributes,
+                     key        = Key,
+                     value      = Value,
+                     crc        = CRC,
+                     ts_type    = TsType,
+                     ts         = Ts
+                    }) ->
+      Bindings =
+        lists:foldl(
+          fun({VarName, VarValue}, Acc) ->
+            erl_eval:add_binding(VarName, VarValue, Acc)
+          end, erl_eval:new_bindings(),
+          [ {'Offset', Offset}
+          , {'MagicByte', MagicByte}
+          , {'Attributes', Attributes}
+          , {'Key', Key}
+          , {'Value', Value}
+          , {'CRC', CRC}
+          , {'TsType', TsType}
+          , {'Ts', Ts}
+          ]),
+      {value, Val, _NewBindings} = erl_eval:expr(Expr, Bindings),
+      case Val of
+        F when is_function(F, 3) ->
+          %% for backward compatibility
+          F(Offset, Key, Value);
+        V ->
+          V
+      end
+  end.
 
 %% @private Append a dot to the function literal.
 ensure_end_with_dot(Str0) ->

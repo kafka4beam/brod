@@ -121,10 +121,10 @@ all() -> [F || {F, _A} <- module_info(exports),
 t_produce_sync(Config) when is_list(Config) ->
   Client = ?config(client),
   Partition = 0,
-  {K1, V1} = make_unique_kv(),
-  ok = brod:produce_sync(Client, ?TOPIC, Partition, K1, V1),
-  {K2, V2} = make_unique_kv(),
-  ok = brod:produce_sync(Client, ?TOPIC, Partition, K2, V2),
+  {T1, K1, V1} = make_unique_tkv(),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, <<>>, [{T1, K1, V1}]),
+  {T2, K2, V2} = make_unique_tkv(),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, <<>>, [{T2, K2, V2}]),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
@@ -266,6 +266,10 @@ make_unique_kv() ->
   { iolist_to_binary(["key-", make_ts_str()])
   , iolist_to_binary(["val-", make_ts_str()])
   }.
+
+make_unique_tkv() ->
+  {K, V} = make_unique_kv(),
+  {brod_utils:os_time_milli(), K, V}.
 
 make_ts_str() -> brod_utils:os_time_utc_str().
 

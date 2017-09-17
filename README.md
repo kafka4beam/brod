@@ -229,6 +229,13 @@ brod:produce(_Client    = brod_client_1,
                           ]).
 ```
 
+## Produce message create time.
+
+```erlang
+brod:produce(Client, Topic, Partition, _Key = <<>>,
+             _Value = [{Ts1, Key1, Value1}, {Ts2, Key2, Value2}]).
+```
+
 ## Handle acks from kafka
 
 Unless brod:produce_sync was called, callers of brod:produce should 
@@ -409,4 +416,32 @@ Start an Erlang shell with brod started
 ```bash
 ./_rel/brod/bin/brod-i
 ```
+
+## brod-cli examples:
+
+### Fetch and print metadata
+```
+./scripts/brod meta -b localhost
+```
+
+### Produce a message
+```
+./scripts/brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
+
+```
+
+### Fetch a message
+
+```
+./scripts/brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
+```
+
+Bound variables to be used in `--fmt` expression:
+
+- `Offset`: Message offset
+- `Key`: Kafka key
+- `Value`: Kafka Value
+- `CRC`: Message CRC
+- `TsType`: Timestamp type either `create` or `append`
+- `Ts`: Timestamp, `-1` as no value
 

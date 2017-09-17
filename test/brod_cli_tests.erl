@@ -87,6 +87,17 @@ fetch_format_fun_test() ->
   Expected = lists:flatten(io_lib:format("~p", [T])),
   ?assertEqual(Expected, Output).
 
+fetch_format_expr_test() ->
+  T = os:timestamp(),
+  Value = term_to_binary(T),
+  file:write_file("fetch.testdata", Value),
+  cmd("send -b localhost -t test-topic -p 0 -v @fetch.testdata"),
+  FmtExpr = "io_lib:format(\"~p\", [binary_to_term(Value)])",
+  Output =
+    cmd("fetch -b localhost -t test-topic -p 0 -c 1 --fmt '" ++ FmtExpr ++ "'"),
+  Expected = lists:flatten(io_lib:format("~p", [T])),
+  ?assertEqual(Expected, Output).
+
 pipe_test() ->
   %% get last offset
   OffsetStr = cmd("offset -b localhost -t test-topic -p 0 -T latest"),
