@@ -130,7 +130,7 @@ options:
                          Expr:  An Erlang expression to be evaluated for each
                                 message. Bound variable to be used in the
                                 expression: Offset, Key, Value, CRC, TsType, Ts.
-                                Print nothing the evaluation result in 'ok',
+                                Print nothing if the evaluation result in 'ok',
                                 otherwise print the evaluated io-list.
                          [default: v]
 "
