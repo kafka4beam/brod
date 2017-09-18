@@ -80,7 +80,13 @@ offsets_request(SockPid, Topic, Partition, TimeOrSemanticOffset) ->
 -spec metadata_request(pid(), [topic()]) -> kpro:req().
 metadata_request(SockPid, Topics) ->
   Vsn = pick_version(metadata_request, SockPid),
-  kpro:req(metadata_request, Vsn, [{topics, Topics}]).
+  TopicsForEncoding =
+    case Vsn of
+      0                    -> Topics;
+      _ when Topics =:= [] -> ?kpro_null;
+      _                    -> Topics
+    end,
+  kpro:req(metadata_request, Vsn, [{topics, TopicsForEncoding}]).
 
 %% @private
 -spec pick_version(api(), pid()) -> vsn().

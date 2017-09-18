@@ -35,7 +35,7 @@ Make sure `{query_api_versions, false}` exists in client config.
 This is because `ApiVersionRequest` was introduced in kafka 0.10, 
 sending such request to older version brokers will cause connection failure.
 
-e.g. in sy.config:
+e.g. in sys.config:
 
 ```
 [{brod,
