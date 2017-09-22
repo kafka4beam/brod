@@ -465,8 +465,8 @@ bytes([]) -> 0;
 bytes(?undef) -> 0;
 bytes(I) when ?IS_BYTE(I) -> 1;
 bytes(B) when is_binary(B) -> erlang:size(B);
-bytes({T, K, V}) when is_integer(T) -> 8 + bytes(K) + bytes(V);
-bytes({K, V}) -> bytes(K) + bytes(V);
+bytes(?TKV(T, K, V)) when is_integer(T) -> 8 + bytes(K) + bytes(V);
+bytes(?KV(K, V)) -> bytes(K) + bytes(V);
 bytes([H | T]) -> bytes(H) + bytes(T).
 
 %%%_* Internal functions =======================================================

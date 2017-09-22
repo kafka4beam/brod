@@ -19,7 +19,7 @@
 %% from the data source (either stdin or a file)
 %% and sends the bytes to parent process.
 %% Messages sent to parent process:
-%%   {pipe, self(), [{Key :: binary(), Val :: binary()}]}
+%%   {pipe, self(), [{Ts :: integer(), Key :: binary(), Val :: binary()}]}
 %% @end
 -module(brod_cli_pipe).
 
@@ -38,6 +38,8 @@
         , init/1
         , terminate/2
         ]).
+
+-include("brod_int.hrl").
 
 -type arg_name() :: source
                   | kv_deli
@@ -58,9 +60,10 @@
 -define(PARENT_BUSY_MSG_QUEUE_LEN_THRESHOLD, 100).
 
 -type delimiter() :: binary().
+-type epoch_ms() :: integer().
 -type read_fun() ::
         fun((?STDIN | file:io_device(), [binary()]) ->
-              {[{Key :: binary(), Val :: binary()}], [binary()]}).
+              {[{epoch_ms(), Key :: binary(), Val :: binary()}], [binary()]}).
 
 -record(state, { parent :: pid()
                , source :: ?STDIN | {file, string()}
@@ -175,7 +178,7 @@ terminate(_Reason, _State) ->
 
 %% @private
 send_to_parent(Parent, Msgs0) ->
-  FilterF = fun({K, V}) -> K =/= <<>> orelse V =/= <<>> end,
+  FilterF = fun(?TKV(_T, K, V)) -> K =/= <<>> orelse V =/= <<>> end,
   case lists:filter(FilterF, Msgs0) of
     [] -> ok;
     Msgs -> Parent ! {pipe, self(), Msgs}
@@ -242,10 +245,8 @@ make_prompt_line_reader(_KvDeli = ?LINE_BREAK) ->
         eof -> eof;
         Key ->
           case read_line(?STDIN, "VAL> ") of
-            eof ->
-              {[{Key, <<>>}], []};
-            Value ->
-              {[{Key, Value}], []}
+            eof -> {[make_msg(Key, <<>>)], []};
+            Value -> {[make_msg(Key, Value)], []}
           end
       end
   end;
@@ -265,13 +266,13 @@ make_line_reader(KvDeli, Prompt) ->
             eof ->
               eof;
             Val ->
-              {[{Key, Val}], []}
+              {[make_msg(Key, Val)], []}
           end;
         Val when KvDeli =:= none ->
-          {[{<<>>, Val}], []};
+          {[make_msg(<<>>, Val)], []};
         Line ->
           [Key, Value] = binary:split(Line, bin(KvDeli)),
-          {[{Key, Value}], []}
+          {[make_msg(Key, Value)], []}
       end
   end.
 
@@ -351,20 +352,24 @@ split_messages(MsgDeliCp, [Tail | Header]) ->
 -spec split_kv_pairs([binary()], none | delimiter(), boolean()) ->
         brod:kv_list().
 split_kv_pairs(Msgs, none, _IsSameDeli) ->
-  lists:map(fun(Msg) -> {<<>>, Msg} end, Msgs);
+  lists:map(fun(Msg) -> make_msg(<<>>, Msg) end, Msgs);
 split_kv_pairs(Msgs, _KvDeliCp, _IsSameDeli = true) ->
-  make_kv_pairs(Msgs);
+  make_msgs(Msgs);
 split_kv_pairs(Msgs, KvDeliCp, _IsSameDeli = false) ->
   lists:map(fun(Msg) ->
                 [K, V] = binary:split(Msg, KvDeliCp),
-                CreateTs = brod_utils:epoch_ms(),
-                {CreateTs, K, V}
+                make_msg(K, V)
             end, Msgs).
 
 %% @private
-make_kv_pairs([]) -> [];
-make_kv_pairs([K, V | Rest]) ->
-  [{K, V} | make_kv_pairs(Rest)].
+make_msgs([]) -> [];
+make_msgs([K, V | Rest]) ->
+  [make_msg(K, V) | make_msgs(Rest)].
+
+%% @private
+make_msg(K, V) ->
+  CreateTs = brod_utils:epoch_ms(),
+  ?TKV(CreateTs, K, V).
 
 %% @private
 -spec read_line(?STDIN | file:io_device(), string()) -> eof | binary().

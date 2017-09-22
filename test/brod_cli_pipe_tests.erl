@@ -19,6 +19,7 @@
 -ifdef(BROD_CLI).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("brod_int.hrl").
 
 -define(WAIT(Pattern, Handle, Timeout),
         fun() ->
@@ -55,8 +56,8 @@ line_mode_test() ->
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
-  ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key1">>, <<"val1">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key2">>, <<"val2">>)]}, ok, 1000),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
 
@@ -75,9 +76,9 @@ line_mode_no_key_test() ->
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
-  ?WAIT({pipe, Pid, [{<<>>, <<"val1">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<>>, <<"val2">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<>>, <<"val3">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<>>, <<"val1">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<>>, <<"val2">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<>>, <<"val3">>)]}, ok, 1000),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
 
@@ -96,8 +97,8 @@ line_mode_split_test() ->
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
-  ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key1">>, <<"val1">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key2">>, <<"val2">>)]}, ok, 1000),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
 
@@ -116,9 +117,9 @@ stream_one_byte_delimiter_test() ->
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
-  ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key1">>, <<"val1">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key2">>, <<"val2">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key3">>, <<"val3">>)]}, ok, 1000),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
 
@@ -137,14 +138,14 @@ stream_test() ->
     ],
   {ok, Pid} = brod_cli_pipe:start_link(Args),
   erlang:monitor(process, Pid),
-  ?WAIT({pipe, Pid, [{<<"key1">>, <<"val1">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key2">>, <<"val2">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key1">>, <<"val1">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key2">>, <<"val2">>)]}, ok, 1000),
   ?assertError({timeout, _},
                ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 500)),
   MoreData = "#key-4::val-4###",
   ok = file:write_file(?TEST_FILE, MoreData, [append]),
-  ?WAIT({pipe, Pid, [{<<"key3">>, <<"val3">>}]}, ok, 1000),
-  ?WAIT({pipe, Pid, [{<<"key-4">>, <<"val-4">>}]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key3">>, <<"val3">>)]}, ok, 1000),
+  ?WAIT({pipe, Pid, [?TKV(_, <<"key-4">>, <<"val-4">>)]}, ok, 1000),
   ok = brod_cli_pipe:stop(Pid),
   ?WAIT({'DOWN', _Ref, process, Pid, normal}, ok, 1000),
   ok.
