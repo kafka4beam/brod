@@ -25,6 +25,7 @@
         , connect_group_coordinator/3
         , decode_messages/2
         , describe_groups/3
+        , epoch_ms/0
         , fetch/8
         , fetch_committed_offsets/2
         , fetch_committed_offsets/3
@@ -42,7 +43,6 @@
         , log/3
         , make_fetch_fun/6
         , os_time_utc_str/0
-        , os_time_milli/0
         , resolve_offset/4
         , resolve_offset/5
         , shutdown_pid/1
@@ -179,8 +179,8 @@ os_time_utc_str() ->
   lists:flatten(S).
 
 %% @doc Milliseconds since beginning of the epoch (midnight Jan 1, 1970 (UTC)).
--spec os_time_milli() -> kpro:msg_ts().
-os_time_milli() ->
+-spec epoch_ms() -> kpro:msg_ts().
+epoch_ms() ->
   {Mega, S, Micro} = os:timestamp(),
   (((Mega * 1000000)  + S) * 1000) + Micro div 1000.
 

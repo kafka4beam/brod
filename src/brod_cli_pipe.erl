@@ -357,7 +357,7 @@ split_kv_pairs(Msgs, _KvDeliCp, _IsSameDeli = true) ->
 split_kv_pairs(Msgs, KvDeliCp, _IsSameDeli = false) ->
   lists:map(fun(Msg) ->
                 [K, V] = binary:split(Msg, KvDeliCp),
-                CreateTs = brod_utils:os_time_milli(),
+                CreateTs = brod_utils:epoch_ms(),
                 {CreateTs, K, V}
             end, Msgs).
 

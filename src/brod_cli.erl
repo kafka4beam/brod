@@ -431,7 +431,7 @@ run(?SEND_CMD, Brokers, Topic, SockOpts, Args) ->
     , {default_producer_config, ProducerConfig}
     ] ++ SockOpts,
   {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, ClientConfig),
-  Msgs = [{brod_utils:os_time_milli(), Key, Value}],
+  Msgs = [{brod_utils:epoch_ms(), Key, Value}],
   ok = brod:produce_sync(?CLIENT, Topic, Partition, <<>>, Msgs);
 run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun parse_partition/1),

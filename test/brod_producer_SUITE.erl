@@ -269,7 +269,7 @@ make_unique_kv() ->
 
 make_unique_tkv() ->
   {K, V} = make_unique_kv(),
-  {brod_utils:os_time_milli(), K, V}.
+  {brod_utils:epoch_ms(), K, V}.
 
 make_ts_str() -> brod_utils:os_time_utc_str().
 

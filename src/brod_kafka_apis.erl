@@ -64,7 +64,7 @@ versions_received(ClientId, SockPid, Versions) ->
       gen_server:call(?SERVER, {versions_received, SockPid, Vsns}, infinity)
   end.
 
-%% @doc Bet default supported version for the given API.
+%% @doc Get default supported version for the given API.
 -spec default_version(api()) -> vsn().
 default_version(API) ->
   {Min, _Max} = supported_versions(API),
