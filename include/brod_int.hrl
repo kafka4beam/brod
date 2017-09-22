@@ -45,6 +45,9 @@
 %% Is kafka error code
 -define(IS_ERROR(EC), kpro_error_code:is_error(EC)).
 
+-define(KV(Key, Value), {Key, Value}).
+-define(TKV(Ts, Key, Value), {Ts, Key, Value}).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

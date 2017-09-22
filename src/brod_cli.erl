@@ -463,9 +463,9 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
     ] ++ SockOpts,
   {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, ClientConfig),
   SendFun =
-    fun({Key, Value}, PendingAcks) ->
+    fun(?TKV(Ts, Key, Value), PendingAcks) ->
         {ok, CallRef} =
-          brod:produce(?CLIENT, Topic, Partition, Key, Value),
+          brod:produce(?CLIENT, Topic, Partition, <<>>, [{Ts, Key, Value}]),
         debug("sent: ~w\n", [CallRef]),
         debug("value: ~P\n", [Value, 9]),
         queue:in(CallRef, PendingAcks)
