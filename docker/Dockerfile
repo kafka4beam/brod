@@ -1,7 +1,7 @@
 FROM java:openjdk-8-jre
 
 ENV SCALA_VERSION 2.11
-ENV KAFKA_VERSION 0.10.1.1
+ENV KAFKA_VERSION 0.10.2.1
 
 RUN apt-get update && \
     apt-get install -y zookeeper wget supervisor dnsutils && \

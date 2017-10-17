@@ -424,13 +424,14 @@ Start an Erlang shell with brod started
 ./scripts/brod meta -b localhost
 ```
 
-### Produce a message
+### Produce a Message
+
 ```
 ./scripts/brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
 
 ```
 
-### Fetch a message
+### Fetch a Message
 
 ```
 ./scripts/brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
@@ -444,4 +445,36 @@ Bound variables to be used in `--fmt` expression:
 - `CRC`: Message CRC
 - `TsType`: Timestamp type either `create` or `append`
 - `Ts`: Timestamp, `-1` as no value
+
+### Stream Messages to Kafka
+
+Send `README.md` to kafka one line per kafka message
+```
+./scripts/brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
+```
+
+### Resolve Offset
+
+```
+./scripts/brod offset -b localhost:9092 -t test-topic -p 0
+```
+
+### List or Describe Groups
+
+```
+./scripts/brod groups -b localhost:9092
+./scripts/brod groups -b localhost:9092 --describe
+```
+
+### Display Committed Offsets
+
+```
+./scripts/brod commits -b localhost:9092 --id the-group-id --describe
+```
+
+### Commit Offsets
+
+```
+./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:1111,1:222"
+```
 

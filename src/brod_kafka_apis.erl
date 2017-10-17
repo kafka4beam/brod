@@ -193,7 +193,7 @@ supported_versions(API) ->
     offsets_request           -> {0, 1};
     metadata_request          -> {0, 2};
     offset_commit_request     -> {2, 2};
-    offset_fetch_request      -> {1, 1};
+    offset_fetch_request      -> {1, 2};
     group_coordinator_request -> {0, 0};
     join_group_request        -> {0, 0};
     heartbeat_request         -> {0, 0};

@@ -262,8 +262,8 @@ assignments_revoked(Pid) ->
 -spec assign_partitions(pid(), [brod:group_member()],
                         [{brod:topic(), brod:partition()}]) ->
         [{member_id(), [brod:partition_assignment()]}].
-assign_partitions(Pid, MemberMetadataList, TopicPartitionList) ->
-  Call = {assign_partitions, MemberMetadataList, TopicPartitionList},
+assign_partitions(Pid, Members, TopicPartitionList) ->
+  Call = {assign_partitions, Members, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
 
 %% @doc Called by group coordinator when initializing the assignments
@@ -357,12 +357,11 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
       erlang:error({bad_return_value,
                     {CbModule, get_committed_offsets, Unknown}})
   end;
-handle_call({assign_partitions, MemberMetadataList, TopicPartitions}, _From,
+handle_call({assign_partitions, Members, TopicPartitions}, _From,
             #state{ cb_module = CbModule
                   , cb_state  = CbState
                   } = State) ->
-  Result = CbModule:assign_partitions(MemberMetadataList,
-                                      TopicPartitions, CbState),
+  Result = CbModule:assign_partitions(Members, TopicPartitions, CbState),
   {reply, Result, State};
 handle_call(unsubscribe_all_partitions, _From,
             #state{ consumers = Consumers

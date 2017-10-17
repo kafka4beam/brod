@@ -21,6 +21,7 @@
         , metadata_request/2
         , offsets_request/4
         , produce_request/7
+        , offset_fetch_request/3
         ]).
 
 -include("brod_int.hrl").
@@ -87,6 +88,28 @@ metadata_request(SockPid, Topics) ->
       _                    -> Topics
     end,
   kpro:req(metadata_request, Vsn, [{topics, TopicsForEncoding}]).
+
+%% @doc Make a offset fetch request.
+%% NOTE: empty topics list only works for kafka 0.10.2.0 or later
+%% @end
+-spec offset_fetch_request(pid(), brod:group_id(), Topics) -> kpro:req()
+        when Topics :: [{topic(), [partition()]}].
+offset_fetch_request(SockPid, GroupId, Topics0) ->
+  Topics =
+    lists:map(
+      fun({Topic, Partitions}) ->
+        [ {topic, Topic}
+        , {partitions, [[{partition, P}] || P <- Partitions]}
+        ]
+      end, Topics0),
+  Body = [ {group_id, GroupId}
+         , {topics, case Topics of
+                      [] -> ?kpro_null;
+                      _  -> Topics
+                    end}
+         ],
+  Vsn = pick_version(offset_fetch_request, SockPid),
+  kpro:req(offset_fetch_request, Vsn, Body).
 
 %% @private
 -spec pick_version(api(), pid()) -> vsn().

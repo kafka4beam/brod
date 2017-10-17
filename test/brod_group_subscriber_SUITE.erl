@@ -14,12 +14,6 @@
 %%%   limitations under the License.
 %%%
 
-%%%=============================================================================
-%%% @doc
-%%% @copyright 20150-2016 Klarna AB
-%%% @end
-%%% ============================================================================
-
 %% @private
 -module(brod_group_subscriber_SUITE).
 
@@ -60,10 +54,6 @@
 -define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 -define(config(Name), proplists:get_value(Name, Config)).
 
-rand_uniform(Max) ->
-  {_, _, Micro} = os:timestamp(),
-  Micro rem Max.
-
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -83,10 +73,21 @@ init_per_testcase(Case, Config) ->
   ok = brod:start_producer(ClientId, ?TOPIC1, _ProducerConfig = []),
   ok = brod:start_producer(ClientId, ?TOPIC2, _ProducerConfig = []),
   ok = brod:start_producer(ClientId, ?TOPIC3, _ProducerConfig = []),
-  Config.
+  try
+    ?MODULE:Case({init, Config})
+  catch
+    error : function_clause ->
+      Config
+  end.
 
 end_per_testcase(Case, Config) when is_list(Config) ->
   ok = brod:stop_client(?CLIENT_ID),
+  try
+    ?MODULE:Case({'end', Config})
+  catch
+    error : function_clause ->
+      ok
+  end,
   ct:pal("=== ~p end ===", [Case]),
   ok.
 
@@ -205,6 +206,23 @@ t_koc_demo_message_set(Config) when is_list(Config) ->
     ok
   end.
 
+t_async_acks({init, Config}) when is_list(Config) ->
+  PARTITION = 0,
+  CasePid = self(),
+  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(brod, subscribe,
+              fun(Client, Pid, Topic, Partition, Opts) ->
+                  Result = meck:passthrough([Client, Pid, Topic,
+                                             Partition, Opts]),
+                  case Partition =:= PARTITION of
+                    true -> CasePid ! subscribed;
+                    false -> ok
+                  end,
+                  Result
+              end),
+  [{partition, PARTITION} | Config];
+t_async_acks({'end', Config}) when is_list(Config) ->
+  meck:unload(brod);
 t_async_acks(Config) when is_list(Config) ->
   %% use consumer managed offset commit behaviour
   %% so we can control where to start fetching messages from
@@ -212,12 +230,12 @@ t_async_acks(Config) when is_list(Config) ->
   GroupConfig    = [{offset_commit_policy, consumer_managed}],
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
                    , {sleep_timeout, 0}
-                   , {max_wait_time, 1000}
+                   , {max_wait_time, 100}
                    ],
   CaseRef        = t_async_acks,
   CasePid        = self(),
   InitArgs       = {CaseRef, CasePid, _IsAsyncAck = true},
-  Partition      = 0,
+  Partition      = ?config(partition),
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
                                      GroupConfig, ConsumerConfig,
@@ -227,47 +245,61 @@ t_async_acks(Config) when is_list(Config) ->
       Value = list_to_binary(integer_to_list(I)),
       ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, Value)
     end,
+  Timeout = 4000,
   RecvFun =
-    fun Continue(Timeout, Acc) ->
+    fun Continue(Acc) ->
       receive
         ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
           ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1,
                                          Partition, Offset),
           ok = brod_group_subscriber:commit(SubscriberPid),
-          I = binary_to_list(Value),
-          NewAcc = [list_to_integer(I) | Acc],
-          Continue(0, NewAcc);
+          I = binary_to_integer(Value),
+          case I =:= MaxSeqNo of
+            true -> lists:reverse([I | Acc]);
+            false -> Continue([I | Acc])
+          end;
         Msg ->
           erlang:error({unexpected_msg, Msg})
-      after Timeout ->
-        Acc
+      after
+        Timeout ->
+          erlang:error({timeout, Acc})
       end
     end,
-  ok = SendFun(0),
-  %% wait at most 4 seconds to receive the first message
-  %% it may or may not receive the first message (0) depending on when
-  %% the consumers starts polling --- before or after the first message
-  %% is produced.
-  _ = RecvFun(4000, []),
+  %% Make sure subscriber is ready before sending messages
+  receive subscribed -> ok
+  after 4000 -> erlang:error(<<"timeout waiting for subscriber">>) end,
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
-  %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
-  Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
-  ?assertEqual(L, lists:reverse(ReceivedL)),
+  ?assertEqual(L, RecvFun([])),
   ok = brod_group_subscriber:stop(SubscriberPid),
   ok.
 
+t_2_members_subscribe_to_different_topics({init, Config}) ->
+  CasePid = self(),
+  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(brod, subscribe,
+              fun(Client, Pid, Topic, Partition, Opts) ->
+                  Result = meck:passthrough([Client, Pid, Topic,
+                                             Partition, Opts]),
+                  CasePid ! subscribed,
+                  Result
+              end),
+  Config;
+t_2_members_subscribe_to_different_topics({'end', Config}) when is_list(Config) ->
+  meck:unload(brod);
 t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   MaxSeqNo       = 100,
   GroupConfig    = [{offset_commit_policy, consumer_managed}],
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
                    , {sleep_timeout, 0}
-                   , {max_wait_time, 1000}
+                   , {max_wait_time, 100}
                    ],
   CaseRef        = t_2_members_subscribe_to_different_topics,
   CasePid        = self(),
   InitArgs       = {CaseRef, CasePid, _IsAsyncAck = false},
+  {ok, Cnt1}     = brod_client:get_partitions_count(?CLIENT_ID, ?TOPIC2),
+  {ok, Cnt2}     = brod_client:get_partitions_count(?CLIENT_ID, ?TOPIC3),
+  PartitionCount = Cnt1 + Cnt2,
   {ok, SubscriberPid1} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC2],
                                      GroupConfig, ConsumerConfig,
@@ -276,8 +308,13 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC3],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
+  lists:foreach(
+    fun(_I) ->
+        receive subscribed -> ok
+        after 4000 -> erlang:error(<<"timeout waiting for subscriber">>) end
+    end, lists:seq(1, PartitionCount)),
   Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
-                  {ok, rand_uniform(PartitionCnt)}
+                    {ok, rand_uniform(PartitionCnt)}
                 end,
   SendFun =
     fun(I) ->
@@ -290,42 +327,40 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       ok = brod:produce_sync(?CLIENT_ID, Topic, Partitioner, <<>>, Value)
     end,
   RecvFun =
-    fun Continue(Timeout, Acc) ->
+    fun Continue(Acc) ->
       receive
         ?MSG(CaseRef, SubscriberPid, Topic, _Partition, _Offset, Value) ->
           %% assert subscribers assigned with only topics in subscription list
           ?assert((SubscriberPid =:= SubscriberPid1 andalso Topic =:= ?TOPIC2)
                   orelse
                   (SubscriberPid =:= SubscriberPid2 andalso Topic =:= ?TOPIC3)),
-          I = binary_to_list(Value),
-          NewAcc = [list_to_integer(I) | Acc],
-          Continue(0, NewAcc);
+          I = binary_to_integer(Value),
+          case I =:= MaxSeqNo of
+            true -> [I | Acc];
+            false -> Continue([I | Acc])
+          end;
         Msg ->
           erlang:error({unexpected_msg, Msg})
-      after Timeout ->
-        Acc
+      after
+        4000 ->
+          erlang:error({timeout, Acc})
       end
     end,
-  ok = SendFun(0),
-  %% wait at most 4 seconds to receive the first message
-  %% it may or may not receive the first message (0) depending on when
-  %% the consumers starts polling --- before or after the first message
-  %% is produced.
-  _ = RecvFun(4000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
-  %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
-  Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
   %% since the nubmers are produced to different partitions and collected
   %% by different consumers, they have a very good chance to go out of the
   %% original order, hence we do not verify the order here
-  ?assertEqual(L, lists:sort(ReceivedL)),
+  ?assertEqual(L, lists:sort(RecvFun([]))),
   ok = brod_group_subscriber:stop(SubscriberPid1),
   ok = brod_group_subscriber:stop(SubscriberPid2),
   ok.
 
 %%%_* Help funtions ============================================================
+
+rand_uniform(Max) ->
+  {_, _, Micro} = os:timestamp(),
+  Micro rem Max.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

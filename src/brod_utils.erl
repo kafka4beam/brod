@@ -27,14 +27,16 @@
         , describe_groups/3
         , epoch_ms/0
         , fetch/8
-        , fetch_committed_offsets/2
         , fetch_committed_offsets/3
+        , fetch_committed_offsets/4
         , find_leader_in_metadata/3
         , find_struct/3
         , get_metadata/1
         , get_metadata/2
         , get_metadata/3
         , get_sasl_opt/1
+        , group_per_key/1
+        , group_per_key/2
         , init_sasl_opt/1
         , is_normal_reason/1
         , is_pid_alive/1
@@ -282,28 +284,23 @@ init_sasl_opt(Config) ->
   end.
 
 %% @doc Fethc ommitted offsets for ALL topics in the given consumer group.
--spec fetch_committed_offsets([endpoint()], sock_opts(), group_id()) ->
+-spec fetch_committed_offsets([endpoint()], sock_opts(), group_id(),
+                              ?undef | [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
-fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
+fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId, Topics) ->
   with_sock(
     connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId),
-    fun(Pid) -> fetch_committed_offsets(Pid, GroupId) end).
+    fun(Pid) -> fetch_committed_offsets(Pid, GroupId, Topics) end).
 
-%% @doc Same as `fetch_committed_offsets/3', only work on a socket
+%% @doc Same as `fetch_committed_offsets/4', only work on a socket
 %% connected to the group coordinator broker.
 %% @end
--spec fetch_committed_offsets(pid(), group_id()) ->
+-spec fetch_committed_offsets(pid(), group_id(), [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
-fetch_committed_offsets(SockPid, GroupId) ->
-  Body = [ {group_id, GroupId}
-         , {topics, ?undef} %% Fetch ALL when topics array is null
-         ],
-  %% {topics, ?undef} works only with version 2
-  Vsn = 2,
-  Req = kpro:req(offset_fetch_request, Vsn, Body),
+fetch_committed_offsets(SockPid, GroupId, Topics) ->
+  Req = brod_kafka_request:offset_fetch_request(SockPid, GroupId, Topics),
   try
     #kpro_rsp{ tag = offset_fetch_response
-             , vsn = Vsn
              , msg = Msg
              } = request_sync(SockPid, Req),
     TopicsArray = kf(responses, Msg),
@@ -468,6 +465,21 @@ bytes(B) when is_binary(B) -> erlang:size(B);
 bytes(?TKV(T, K, V)) when is_integer(T) -> 8 + bytes(K) + bytes(V);
 bytes(?KV(K, V)) -> bytes(K) + bytes(V);
 bytes([H | T]) -> bytes(H) + bytes(T).
+
+%% @doc Group values per-key in a key-value list.
+-spec group_per_key([{Key, Val}]) -> [{Key, [Val]}]
+        when Key :: term(), Val :: term().
+group_per_key(List) ->
+  lists:foldl(
+    fun({Key, Value}, Acc) ->
+        orddict:append_list(Key, [Value], Acc)
+    end, [], List).
+
+%% @doc Group values per-key for the map result of a list.
+-spec group_per_key(fun((term()) -> {Key, Val}), [term()]) -> [{Key, [Val]}]
+        when Key :: term(), Val :: term().
+group_per_key(MapFun, List) ->
+  group_per_key(lists:map(MapFun, List)).
 
 %%%_* Internal functions =======================================================
 

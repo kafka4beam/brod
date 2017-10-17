@@ -32,10 +32,13 @@
         , terminate/2
         ]).
 
+-export_type([protocol_name/0]).
+
 -include("brod_int.hrl").
 
 -define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
 
+-type protocol_name() :: string().
 -type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
                                    | consumer_managed.
 -type brod_partition_assignment_strategy() :: roundrobin
@@ -140,6 +143,7 @@
         , offset_retention_seconds       :: ?undef | integer()
         , offset_commit_policy           :: offset_commit_policy()
         , offset_commit_interval_seconds :: pos_integer()
+        , protocol_name                  :: protocol_name()
         }).
 
 -type state() :: #state{}.
@@ -201,6 +205,14 @@
 %%      The default special value -1 indicates that the __consumer_offsets
 %%      topic retention policy is used.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
+%%  - protocol_name (optional, default = roundrobin)
+%%      This is the protocol name used when join a group, if not given,
+%%      by default `partition_assignment_strategy' is used as the protocol name.
+%%      Setting a protocol name allows to interact with consumer group members
+%%      designed in other programing languages. For example, 'range' is the most
+%%      commonly used protocol name for JAVA client. However, brod only supports
+%%      roundrobin protocol out of the box, in order to mimic 'range' protocol
+%%      one will have to do it via `callback_implemented' assignment strategy
 %% @end
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
                  config(), module(), pid()) -> {ok, pid()} | {error, any()}.
@@ -260,6 +272,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   OffsetCommitPolicy = GetCfg(offset_commit_policy, ?OFFSET_COMMIT_POLICY),
   OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
                                        ?OFFSET_COMMIT_INTERVAL_SECONDS),
+  ProtocolName = GetCfg(protocol_name, PaStrategy),
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
   State =
@@ -276,6 +289,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_retention_seconds       = OffsetRetentionSeconds
           , offset_commit_policy           = OffsetCommitPolicy
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
+          , protocol_name                  = ProtocolName
           },
   {ok, State}.
 
@@ -512,12 +526,12 @@ stop_socket(SockPid) ->
   ok = brod_sock:stop(SockPid).
 
 -spec join_group(state()) -> {ok, state()}.
-join_group(#state{ groupId                       = GroupId
-                 , memberId                      = MemberId0
-                 , topics                        = Topics
-                 , sock_pid                      = SockPid
-                 , partition_assignment_strategy = PaStrategy
-                 , session_timeout_seconds       = SessionTimeoutSec
+join_group(#state{ groupId                 = GroupId
+                 , memberId                = MemberId0
+                 , topics                  = Topics
+                 , sock_pid                = SockPid
+                 , session_timeout_seconds = SessionTimeoutSec
+                 , protocol_name           = ProtocolName
                  } = State0) ->
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
@@ -525,7 +539,7 @@ join_group(#state{ groupId                       = GroupId
     , {user_data, user_data(join)}
     ],
   Protocol =
-    [ {protocol_name, PaStrategy}
+    [ {protocol_name, ProtocolName}
     , {protocol_metadata, Meta}
     ],
   SessionTimeout = timer:seconds(SessionTimeoutSec),
@@ -611,13 +625,13 @@ merge_acked_offsets(AckedOffsets, OffsetsToAck) ->
 -spec format_assignments(brod:received_assignments()) -> iodata().
 format_assignments(Assignments) ->
   Groupped =
-    lists:foldl(
+    brod_utils:group_per_key(
       fun(#brod_received_assignment{ topic        = Topic
                                    , partition    = Partition
                                    , begin_offset = Offset
-                                   }, Acc) ->
-        orddict:append_list(Topic, [{Partition, Offset}], Acc)
-      end, [], Assignments),
+                                   }) ->
+          {Topic, {Partition, Offset}}
+      end, Assignments),
   lists:map(
     fun({Topic, Partitions}) ->
       ["\n", Topic, ":", format_partition_assignments(Partitions) ]
@@ -666,15 +680,15 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          } = State) ->
   Metadata = make_offset_commit_metadata(),
   TopicOffsets0 =
-    lists:foldl(
-      fun({{Topic, Partition}, Offset}, Acc) ->
+    brod_utils:group_per_key(
+      fun({{Topic, Partition}, Offset}) ->
         PartitionOffset =
           [ {partition, Partition}
           , {offset, Offset}
           , {metadata, Metadata}
           ],
-        orddict:append_list(Topic, [PartitionOffset], Acc)
-      end, [], AckedOffsets),
+        {Topic, PartitionOffset}
+      end, AckedOffsets),
   TopicOffsets =
     lists:map(
       fun({Topic, PartitionOffsets}) ->
@@ -878,23 +892,9 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                             , groupId              = GroupId
                             , sock_pid             = SockPid
                             }, TopicPartitions) ->
-  GrouppedPartitions =
-    lists:foldl(fun({T, P}, Dict) ->
-                  orddict:append_list(T, [P], Dict)
-                end, [], TopicPartitions),
-  OffsetFetchRequestTopics =
-    lists:map(
-      fun({Topic, Partitions}) ->
-        [ {topic, Topic}
-        , {partitions, [[{partition, P}] || P <- Partitions]}
-        ]
-      end, GrouppedPartitions),
-  ReqBody =
-    [ {group_id, GroupId}
-    , {topics, OffsetFetchRequestTopics}
-    ],
-  Vsn = 1, %% TODO: pick version
-  Req = kpro:req(offset_fetch_request, Vsn, ReqBody),
+  GrouppedPartitions = brod_utils:group_per_key(TopicPartitions),
+  Req = brod_kafka_request:offset_fetch_request(SockPid, GroupId,
+                                                GrouppedPartitions),
   #kpro_rsp{ tag = offset_fetch_response
            , msg = RspBody
            } = send_sync(SockPid, Req),
@@ -1025,20 +1025,25 @@ log(#state{ groupId  = GroupId
 make_offset_commit_metadata() -> coordinator_id().
 
 %% @private Make group member's user data in join_group_request
-%% This piece of data is currently just a dummy string.
 %%
 %% user_data can be used to share state between group members.
 %% It is originally sent by group members in join_group_request:s,
-%% then received by group leader, group leader (maybe mutate) assigns
-%% it back to members.
+%% then received by group leader, group leader (may mutate it and)
+%% assigns it back to members in topic-partition assignments.
 %%
 %% Currently user_data is created in this module and terminated in this
 %% module, when needed for advanced features, we can originate it from
 %% member's init callback, and pass it to members via
 %% `brod_received_assignments()'
 %% @end
--spec user_data(_) -> binary().
-user_data(_) -> <<"nothing">>.
+-spec user_data(join | assign) -> binary().
+user_data(Action) ->
+  term_to_binary(
+    [ coordinator_info(Action)
+    ]).
+
+coordinator_info(join) -> {<<"member_coordinator">>, self()};
+coordinator_info(assign) -> {<<"leader_coordinator">>, self()}.
 
 %% @private Make a client_id() to be used in the requests sent over the group
 %% coordinator's socket (group coordinator on the other end), this id will be
