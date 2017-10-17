@@ -682,7 +682,7 @@ connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
 -spec fetch_committed_offsets([endpoint()], sock_opts(), group_id()) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
-  brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId).
+  brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId, []).
 
 %% @doc Same as `fetch_committed_offsets/3', only work on the socket
 %% connected to the group coordinator broker.
@@ -690,7 +690,7 @@ fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
 -spec fetch_committed_offsets(pid(), group_id()) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(SockPid, GroupId) ->
-  brod_utils:fetch_committed_offsets(SockPid, GroupId).
+  brod_utils:fetch_committed_offsets(SockPid, GroupId, []).
 
 -ifdef(BROD_CLI).
 main(Args) -> brod_cli:main(Args, halt).

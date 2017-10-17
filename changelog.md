@@ -42,4 +42,11 @@
     - Bind all `#kafka_message{}` fields to variables so they can be used in brod-cli `fetch` command's `--fmt` expression
   * Bug Fixes
     - Remove sasl application from dependent app list
+* 3.3.0 (not tagged yet)
+  * New Features
+    - Support offset_fetch_request version 1 - 2
+    - Provide APIs to reset committed offsets
+    - Add '--reset' option to brod-cli 'commits' command
+  * Bug Fixes
+    - Fixed brod-cli offset_fetch_request version when working with kafka 0.10.1.x or earlier
 

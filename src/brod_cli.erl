@@ -35,8 +35,9 @@ commands:
   fetch:   Fetch messages
   send:    Produce messages
   pipe:    Pipe file or stdin as messages to kafka
-  groups:  List or describe consumer group
-  commits: List consumer group offset commits
+  groups:  List/describe consumer group
+  commits: List/descibe committed offsets
+           or force overwrite existing commits
 ").
 
 %% NOTE: bad indentation at the first line is intended
@@ -135,7 +136,8 @@ options:
                          [default: v]
 "
 ?COMMAND_COMMON_OPTIONS
-"NOTE: Reaching either --count or --wait limit will cause script to exit"
+"NOTE: Reaching either --count or --wait limit will cause script to exit
+"
 ).
 
 -define(SEND_CMD, "send").
@@ -230,7 +232,8 @@ options:
   -b,--brokers=<brokers> Comma separated host:port pairs
                          [default: localhost:9092]
   --describe             Describe group status details
-  --ids=<group-id>       Comma separated group IDs to describe [default: all]
+  --ids=<group-id>       Comma separated group IDs to describe
+                         [default: all]
 "
 ?COMMAND_COMMON_OPTIONS
 ).
@@ -243,7 +246,20 @@ options:
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
                          [default: localhost:9092]
-  --id=<group-id>        Comma separated group IDs to describe
+  -d,--describe          Describe committed offsets,
+                         otherwise reset commit history
+  -i,--id=<group-id>     Group ID to describe, or to commit offsets.
+  -t,--topic=<topic>     Topic name to commit offsets
+  -o,--offsets=<offsets> latest: commit latest offset for all partitions,
+                         earliest: commit earliest offset for all partitions,
+                         Comma separated 'partition:offset' pairs.
+  -r,--retention=<time>  An integer to indicate the retention for the commit,
+                         default time unit is seconds. Accepts one char suffix
+                         as time unit, s=second m=mintue h=hour d=day.
+                         Default value -1 is to respect kafka config.
+                         [default: -1]
+  --protocol=<protocol>  Protocol name to be used when trying to join group.
+                         [default: roundrobin]
 "
 ?COMMAND_COMMON_OPTIONS
 ).
@@ -494,23 +510,70 @@ run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
   IDs = parse(Args, "--ids", fun parse_cg_ids/1),
   cg(Brokers, SockOpts, IsDesc, IDs);
 run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
-  ID = parse(Args, "--id",
-             fun(?undef) -> erlang:throw(<<"option --id missing">>);
-                (X)      -> X
-             end),
-  commits(Brokers, SockOpts, ID);
+  IsDesc = parse(Args, "--describe", fun parse_boolean/1),
+  ID = parse(Args, "--id", fun bin/1),
+  case IsDesc of
+    true -> show_commits(Brokers, SockOpts, ID);
+    false -> reset_commits(Brokers, SockOpts, ID, Args)
+  end;
 run(Cmd, Brokers, SockOpts, Args) ->
   %% Clause for all per-topic commands
   Topic = parse(Args, "--topic", fun bin/1),
   run(Cmd, Brokers, Topic, SockOpts, Args).
 
 %% @private
-commits(BootstrapEndpoints, SockOpts, GroupId) ->
-  case brod:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) of
+show_commits(BootstrapEndpoints, SockOpts, GroupId) ->
+  case brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts,
+                                          GroupId, []) of
     {ok, PerTopicStructs} ->
       lists:foreach(fun print_commits/1, PerTopicStructs);
     {error, Reason} ->
       logerr("Failed to fetch commited offsets ~p\n", [Reason])
+  end.
+
+%% @private
+reset_commits(BootstrapEndpoints, SockOpts, ID, Args) ->
+  Topic = parse(Args, "--topic", fun bin/1),
+  Retention = parse(Args, "--retention", fun parse_retention/1),
+  ProtocolName = parse(Args, "--protocol", fun(X) -> X end),
+  Offsets = parse(Args, "--offsets", fun parse_commit_offsets_input/1),
+  Group = [ {id, ID}
+          , {topic, Topic}
+          , {retention, Retention}
+          , {protocol, ProtocolName}
+          , {offsets, Offsets}
+          ],
+  brod_cg_commits:run(BootstrapEndpoints, SockOpts, Group).
+
+%% @private
+parse_commit_offsets_input("latest") -> latest;
+parse_commit_offsets_input("earliest") -> earliest;
+parse_commit_offsets_input(PartitionOffsets) ->
+  Pairs = string:tokens(PartitionOffsets, ","),
+  F = fun(Pair) ->
+          [Partition, Offset] = string:tokens(Pair, ":"),
+          {int(Partition), parse_offset_time(Offset)}
+      end,
+  lists:map(F, Pairs).
+
+%% @private
+parse_retention("-1") -> -1;
+parse_retention([_|_] = R) ->
+  case lists:last(R) of
+    X when X >= $0 andalso X =< $9 ->
+      int(R);
+    Unit ->
+      int(lists:reverse(tl(lists:reverse(R)))) *
+      case Unit of
+        $s -> 1;
+        $S -> 1;
+        $m -> 60;
+        $M -> 60;
+        $h -> 60 * 60;
+        $H -> 60 * 60;
+        $d -> 60 * 60 * 24;
+        $D -> 60 * 60 * 24
+      end
   end.
 
 %% @private
