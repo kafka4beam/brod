@@ -305,14 +305,10 @@ find_leader(CoordinatorPid, [H | T]) ->
       find_leader(CoordinatorPid, T)
   end.
 
-log(#state{ groupId  = GroupId
-          , memberId = MemberId
-          , generationId = GenerationId
-          }, Level, Fmt, Args) ->
-  brod_utils:log(
-    Level,
-    "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
-    [GroupId, MemberId, GenerationId, self() | Args]).
+log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
+  brod_utils:log(Level,
+                 "Group member (~s,coor=~p):\n" ++ Fmt,
+                 [GroupId, self() | Args]).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
