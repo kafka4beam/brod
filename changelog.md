@@ -47,6 +47,9 @@
     - Support offset_fetch_request version 1 - 2
     - Provide APIs to reset committed offsets
     - Add '--reset' option to brod-cli 'commits' command
+    - Improved group coordinator logging: 1) stop showing member ID, 2) show callback process.
   * Bug Fixes
     - Fixed brod-cli offset_fetch_request version when working with kafka 0.10.1.x or earlier
+    - Make group coordinator restart on heartbeat timeout
+
 

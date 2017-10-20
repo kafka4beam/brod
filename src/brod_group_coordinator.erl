@@ -343,9 +343,10 @@ handle_info(?LO_CMD_SEND_HB,
           %% keep waiting for heartbeat response
           {noreply, State};
         false ->
-          %% time to re-discover a new coordinator ?
-          {ok, NewState} = stabilize(State, 0, hb_timeout),
-          {noreply, NewState}
+          %% Recovery from heartbeat timeout
+          %% does not work as expected
+          %% restart socket instead
+          {stop, hb_timeout, State}
       end
   end;
 handle_info({msg, _Pid, #kpro_rsp{ tag     = heartbeat_response
@@ -388,7 +389,7 @@ terminate(Reason, #state{ sock_pid = SockPid
                         , groupId  = GroupId
                         , memberId = MemberId
                         } = State) ->
-  log(State, info, "leaving group, reason ~p\n", [Reason]),
+  log(State, info, "Leaving group, reason: ~p\n", [Reason]),
   Body = [{group_id, GroupId}, {member_id, MemberId}],
   Request = kpro:req(leave_group_request, _V = 0, Body),
   try
@@ -623,6 +624,7 @@ merge_acked_offsets(AckedOffsets, OffsetsToAck) ->
   lists:ukeymerge(1, OffsetsToAck, AckedOffsets).
 
 -spec format_assignments(brod:received_assignments()) -> iodata().
+format_assignments([]) -> "[]";
 format_assignments(Assignments) ->
   Groupped =
     brod_utils:group_per_key(
@@ -634,14 +636,14 @@ format_assignments(Assignments) ->
       end, Assignments),
   lists:map(
     fun({Topic, Partitions}) ->
-      ["\n", Topic, ":", format_partition_assignments(Partitions) ]
+      ["\n  ", Topic, ":", format_partition_assignments(Partitions) ]
     end, Groupped).
 
 -spec format_partition_assignments([{brod:partition(), brod:offset()}]) ->
                                       iodata().
 format_partition_assignments([]) -> [];
 format_partition_assignments([{Partition, BeginOffset} | Rest]) ->
-  [ io_lib:format("~n    partition=~p begin_offset=~p",
+  [ io_lib:format("\n    partition=~p begin_offset=~p",
                   [Partition, BeginOffset])
   , format_partition_assignments(Rest)
   ].
@@ -1012,13 +1014,13 @@ send_sync(SockPid, Request, Timeout) ->
   ?ESCALATE(brod_sock:request_sync(SockPid, Request, Timeout)).
 
 log(#state{ groupId  = GroupId
-          , memberId = MemberId
           , generationId = GenerationId
+          , member_pid = MemberPid
           }, Level, Fmt, Args) ->
   brod_utils:log(
     Level,
-    "group coordinator (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
-    [GroupId, MemberId, GenerationId, self() | Args]).
+    "Group member (~s,coor=~p,cb=~p,generation=~p):\n" ++ Fmt,
+    [GroupId, self(), MemberPid, GenerationId | Args]).
 
 %% @private Make metata to be committed together with offsets.
 -spec make_offset_commit_metadata() -> binary().
