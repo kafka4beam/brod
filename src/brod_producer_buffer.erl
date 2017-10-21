@@ -47,7 +47,8 @@
         }).
 -type req() :: #req{}.
 
--type send_fun() :: fun((pid(), [{brod:key(), brod:value()}]) ->
+-type vsn() :: brod_kafka_apis:vsn().
+-type send_fun() :: fun((pid(), [{brod:key(), brod:value()}], vsn()) ->
                         ok |
                         {ok, brod:corr_id()} |
                         {error, any()}).
@@ -125,7 +126,7 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
 %% retry:
 %%   Failed to send a batch, caller should schedule a delayed retry.
 %% @end
--spec maybe_send(buf(), pid(), brod_kafka_apis:vsn()) -> {Action, buf()}
+-spec maybe_send(buf(), pid(), vsn()) -> {Action, buf()}
         when Action :: ok | retry | {delay, milli_sec()}.
 maybe_send(#buf{} = Buf, SockPid, Vsn) ->
   case take_reqs(Buf) of

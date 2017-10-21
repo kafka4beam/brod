@@ -45,7 +45,7 @@
 -type cb_state() :: term().
 -type cb_ret() :: {ok, cb_state()} | {ok, ack, cb_state()}.
 -type cb_fun() :: fun(( brod:partition()
-                      , brod:message()
+                      , brod:message() | brod:message_set()
                       , cb_state()) -> cb_ret()).
 -type committed_offsets() :: [{brod:partition(), brod:offset()}].
 -type ack_ref()  :: {brod:partition(), brod:offset()}.

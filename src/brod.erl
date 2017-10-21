@@ -118,6 +118,7 @@
              , kv_list/0
              , msg_ts/0
              , message/0
+             , message_set/0
              , offset/0
              , offset_time/0
              , partition/0
@@ -155,6 +156,7 @@
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
 -type message() :: kpro:message().
+-type message_set() :: #kafka_message_set{}.
 -type error_code() :: kpro:error_code().
 
 %% producers
@@ -589,20 +591,20 @@ get_metadata(Hosts, Topics, Options) ->
 
 %% @equiv resolve_offset(Hosts, Topic, Partition, latest, 1)
 -spec resolve_offset([endpoint()], topic(), partition()) ->
-        {ok, [offset()]} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition) ->
   resolve_offset(Hosts, Topic, Partition, ?OFFSET_LATEST).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(), offset_time()) ->
-        {ok, [offset()]} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time) ->
   resolve_offset(Hosts, Topic, Partition, Time, []).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), sock_opts()) ->
-        {ok, [offset()]} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
   brod_utils:resolve_offset(Hosts, Topic, Partition, Time, Options).
 
