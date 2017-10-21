@@ -42,14 +42,17 @@
     - Bind all `#kafka_message{}` fields to variables so they can be used in brod-cli `fetch` command's `--fmt` expression
   * Bug Fixes
     - Remove sasl application from dependent app list
-* 3.3.0 (not tagged yet)
+* 3.3.0
   * New Features
     - Support offset_fetch_request version 1 - 2
     - Provide APIs to reset committed offsets
-    - Add '--reset' option to brod-cli 'commits' command
+    - Support offset commit in brod-cli
     - Improved group coordinator logging: 1) stop showing member ID, 2) show callback process.
     - Cache queried version ranges per kafka host
-    - Brod-cli 'offset' command by default resolves offsets for all partitions if '--partition' option is 'all' or is missing
+    - Brod-cli 'offset' command by default resolves offsets for all partitions if '--partition' option is 'all' or missing
+  * Enhancements
+    - Brod rock with elvis with travis
+    - Travis run dialyzer check
   * Bug Fixes
     - Fixed brod-cli offset_fetch_request version when working with kafka 0.10.1.x or earlier
     - Make group coordinator restart on heartbeat timeout
