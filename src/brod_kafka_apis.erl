@@ -43,7 +43,7 @@
 -type vsn() :: non_neg_integer().
 -type range() :: {vsn(), vsn()}.
 -type api() :: kpro:req_tag().
--type client_id() :: brod:client_id().
+-type client_id() :: binary(). %% not brod:client_id()
 
 %% @doc Start process.
 -spec start_link() -> {ok, pid()}.
@@ -76,7 +76,7 @@ pick_version(SockPid, API) ->
   do_pick_version(SockPid, API, supported_versions(API)).
 
 init([]) ->
-  ets:new(?ETS, [named_table, protected]),
+  ?ETS = ets:new(?ETS, [named_table, protected]),
   {ok, #state{}}.
 
 handle_info({'DOWN', _Mref, process, Pid, _Reason}, State) ->
