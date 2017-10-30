@@ -49,6 +49,7 @@
     - Add '--reset' option to brod-cli 'commits' command
     - Improved group coordinator logging: 1) stop showing member ID, 2) show callback process.
     - Cache queried version ranges per kafka host
+    - Brod-cli 'offset' command by default resolves offsets for all partitions if '--partition' option is 'all' or is missing
   * Bug Fixes
     - Fixed brod-cli offset_fetch_request version when working with kafka 0.10.1.x or earlier
     - Make group coordinator restart on heartbeat timeout

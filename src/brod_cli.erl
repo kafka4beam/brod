@@ -89,6 +89,7 @@ options:
                          [default: localhost:9092]
   -t,--topic=<topic>     Topic name
   -p,--partition=<parti> Partition number
+                         [default: all]
   -T,--time=<time>       Unix epoch (in milliseconds) of the correlated offset
                          to fetch. Special values:
                            'latest' or -1 for latest offset
@@ -386,13 +387,15 @@ run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
   {ok, Metadata} = brod:get_metadata(Brokers, Topics, SockOpts),
   format_metadata(Metadata, Format, IsList, IsUrp);
 run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
-  Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
+  Partition = parse(Args, "--partition", fun("all") -> all;
+                                            (Num) -> int(Num)
+                                         end),
   Time = parse(Args, "--time", fun parse_offset_time/1),
-  case brod:resolve_offset(Brokers, Topic, Partition, Time, SockOpts) of
-    {ok, Offset} ->
-      print(integer_to_list(Offset));
-    {error, not_found} ->
-      print("no such offset")
+  {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, SockOpts),
+  try
+    resolve_offsets(Topic, Partition, Time)
+  after
+    brod_client:stop(?CLIENT)
   end;
 run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
@@ -520,6 +523,32 @@ run(Cmd, Brokers, SockOpts, Args) ->
   %% Clause for all per-topic commands
   Topic = parse(Args, "--topic", fun bin/1),
   run(Cmd, Brokers, Topic, SockOpts, Args).
+
+%% @private
+resolve_offsets(Topic, all, Time) ->
+  {ok, Count} = brod_client:get_partitions_count(?CLIENT, Topic),
+  Partitions = lists:seq(0, Count - 1),
+  lists:foreach(
+    fun(Partition) ->
+        case resolve_offset(Topic, Partition, Time) of
+          {ok, Offset} ->
+            print("~p: ~p\n", [Partition, Offset]);
+          {error, not_found} ->
+            print("~p: no such offset\n", [Partition])
+        end
+    end, Partitions);
+resolve_offsets(Topic, Partition, Time) when is_integer(Partition) ->
+  case resolve_offset(Topic, Partition, Time) of
+    {ok, Offset} ->
+      print(integer_to_list(Offset));
+    {error, not_found} ->
+      print("no such offset")
+  end.
+
+%% @private
+resolve_offset(Topic, Partition, Time) ->
+  {ok, SockPid} = brod_client:get_leader_connection(?CLIENT, Topic, Partition),
+  brod_utils:resolve_offset(SockPid, Topic, Partition, Time).
 
 %% @private
 show_commits(BootstrapEndpoints, SockOpts, GroupId) ->
