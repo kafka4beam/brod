@@ -56,7 +56,8 @@
 
 -type opt_key() :: connect_timeout
                  | request_timeout
-                 | ssl.
+                 | ssl
+                 | sasl.
 -type opt_val() :: term().
 -type options() :: [{opt_key(), opt_val()}].
 -type requests() :: brod_kafka_requests:requests().
@@ -78,6 +79,7 @@
                , req_timeout :: ?undef | timeout()
                }).
 
+-type state() :: #state{}.
 -type client_id() :: brod:client_id() | binary().
 
 %%%_* API ======================================================================
@@ -159,41 +161,22 @@ debug(Pid, File) when is_list(File) ->
 
 %%%_* Internal functions =======================================================
 
+%% @private
 -spec init(pid(), brod:hostname(), brod:portnum(),
-           binary(), [any()]) -> no_return().
+           binary(), options()) -> no_return().
 init(Parent, Host, Port, ClientId, Options) ->
-  Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
   Timeout = get_connect_timeout(Options),
   SockOpts = [{active, once}, {packet, raw}, binary, {nodelay, true}],
   case gen_tcp:connect(Host, Port, SockOpts, Timeout) of
     {ok, Sock} ->
-      State0 = #state{ client_id = ClientId
-                     , parent    = Parent
-                     },
-      %% adjusting buffer size as per recommendation at
-      %% http://erlang.org/doc/man/inet.html#setopts-2
-      %% idea is from github.com/epgsql/epgsql
-      {ok, [{recbuf, RecBufSize}, {sndbuf, SndBufSize}]} =
-        inet:getopts(Sock, [recbuf, sndbuf]),
-      ok = inet:setopts(Sock, [{buffer, max(RecBufSize, SndBufSize)}]),
-      SslOpts = proplists:get_value(ssl, Options, false),
-      Mod = get_tcp_mod(SslOpts),
-      {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
-      ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
-                           brod_utils:get_sasl_opt(Options)),
-      MaybeQuery = proplists:get_value(query_api_versions, Options),
-      ok = maybe_query_api_versions(MaybeQuery, ClientId,
-                                    NewSock, Mod, Timeout),
-      State = State0#state{mod = Mod, sock = NewSock},
-      proc_lib:init_ack(Parent, {ok, self()}),
-      ReqTimeout = get_request_timeout(Options),
-      ok = send_assert_max_req_age(self(), ReqTimeout),
+      State = #state{ client_id = ClientId
+                    , parent    = Parent
+                    },
       try
-        Requests = brod_kafka_requests:new(),
-        loop(State#state{requests = Requests, req_timeout = ReqTimeout}, Debug)
-      catch error : E ->
-        Stack = erlang:get_stacktrace(),
-        exit({E, Stack})
+        do_init(State, Sock, Host, Options)
+      catch
+        error : Reason ->
+          erlang:exit({Reason, erlang:get_stacktrace()})
       end;
     {error, Reason} ->
       %% exit instead of {error, Reason}
@@ -202,10 +185,44 @@ init(Parent, Host, Port, ClientId, Options) ->
   end.
 
 %% @private
-maybe_query_api_versions(false, _ClientId, _Sock, _Mod, _Timeout) -> ok;
-maybe_query_api_versions(_TrueOrUndefined, ClientId, Sock, Mod, Timeout) ->
-  Versions = query_api_versions(ClientId, Sock, Mod, Timeout),
-  ok = brod_kafka_apis:versions_received(ClientId, self(), Versions).
+-spec do_init(state(), port(), brod:hostname(), options()) -> no_return().
+do_init(State0, Sock, Host, Options) ->
+  #state{parent = Parent, client_id = ClientId} = State0,
+  Debug = sys:debug_options(proplists:get_value(debug, Options, [])),
+  Timeout = get_connect_timeout(Options),
+  %% adjusting buffer size as per recommendation at
+  %% http://erlang.org/doc/man/inet.html#setopts-2
+  %% idea is from github.com/epgsql/epgsql
+  {ok, [{recbuf, RecBufSize}, {sndbuf, SndBufSize}]} =
+    inet:getopts(Sock, [recbuf, sndbuf]),
+    ok = inet:setopts(Sock, [{buffer, max(RecBufSize, SndBufSize)}]),
+  SslOpts = proplists:get_value(ssl, Options, false),
+  Mod = get_tcp_mod(SslOpts),
+  {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
+  ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
+                       brod_utils:get_sasl_opt(Options)),
+  MaybeQuery = proplists:get_value(query_api_versions, Options),
+  ok = maybe_query_api_versions(MaybeQuery, Host, ClientId,
+                                NewSock, Mod, Timeout),
+  State = State0#state{mod = Mod, sock = NewSock},
+  proc_lib:init_ack(Parent, {ok, self()}),
+  ReqTimeout = get_request_timeout(Options),
+  ok = send_assert_max_req_age(self(), ReqTimeout),
+  Requests = brod_kafka_requests:new(),
+  loop(State#state{requests = Requests, req_timeout = ReqTimeout}, Debug).
+
+%% @private
+maybe_query_api_versions(false, _Host, _ClientId, _Sock, _Mod, _Timeout) ->
+  %% do not query
+  ok;
+maybe_query_api_versions(_, Host, ClientId, Sock, Mod, Timeout) ->
+  case brod_kafka_apis:maybe_add_sock_pid(Host, self()) of
+    ok ->
+      ok;
+    {error, unknown_host} ->
+      Versions = query_api_versions(ClientId, Sock, Mod, Timeout),
+      ok = brod_kafka_apis:versions_received(ClientId, self(), Versions, Host)
+  end.
 
 %% @private Query API version ranges.
 query_api_versions(ClientId, Sock, Mod, Timeout) ->
