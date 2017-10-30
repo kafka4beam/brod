@@ -14,13 +14,16 @@
 %%%   limitations under the License.
 %%%
 
+%% Version ranges are cached per host and per brod_sock pid in ets
+
 -module(brod_kafka_apis).
 
 -export([ default_version/1
+        , maybe_add_sock_pid/2
         , pick_version/2
         , start_link/0
         , stop/0
-        , versions_received/3
+        , versions_received/4
         ]).
 
 -export([ code_change/3
@@ -44,6 +47,8 @@
 -type range() :: {vsn(), vsn()}.
 -type api() :: kpro:req_tag().
 -type client_id() :: binary(). %% not brod:client_id()
+-type host() :: brod:hostname().
+-type versions() :: [{api(), range()}].
 
 %% @doc Start process.
 -spec start_link() -> {ok, pid()}.
@@ -55,20 +60,28 @@ stop() ->
   gen_server:call(?SERVER, stop, infinity).
 
 %% @doc Report API version ranges for a given `brod_sock' pid.
--spec versions_received(client_id(), pid(), [{atom(), range()}]) -> ok.
-versions_received(ClientId, SockPid, Versions) ->
-  case resolve_version_ranges(ClientId, Versions, []) of
-    [] ->
-      ok;
-    Vsns ->
-      gen_server:call(?SERVER, {versions_received, SockPid, Vsns}, infinity)
-  end.
+-spec versions_received(client_id(), pid(), versions(), host()) -> ok.
+versions_received(ClientId, SockPid, Versions, Host) ->
+  Vsns = resolve_version_ranges(ClientId, Versions, []),
+  gen_server:call(?SERVER, {versions_received, SockPid, Vsns, Host}, infinity).
 
 %% @doc Get default supported version for the given API.
 -spec default_version(api()) -> vsn().
 default_version(API) ->
   {Min, _Max} = supported_versions(API),
   Min.
+
+%% @doc Try add pid with existing version ranges.
+%% Return `{error, unknow_host}' if the host is not cached already.
+%% @end
+-spec maybe_add_sock_pid(host(), pid()) -> ok | {error, unknown_host}.
+maybe_add_sock_pid(Host, SockPid) ->
+  case ets:lookup(?ETS, Host) of
+    [] ->
+      {error, unknown_host};
+    [{_, ResolvedVersions}] ->
+      gen_server:call(?SERVER, {add_sock_pid, SockPid, ResolvedVersions})
+  end.
 
 %% @doc Pick API version for the given API.
 -spec pick_version(pid(), api()) -> vsn().
@@ -93,8 +106,13 @@ handle_cast(Cast, State) ->
 handle_call(stop, From, State) ->
   gen_server:reply(From, ok),
   {stop, normal, State};
-handle_call({versions_received, SockPid, Versions}, _From, State) ->
+handle_call({add_sock_pid, SockPid, ResolvedVersions}, _From, State) ->
   _ = erlang:monitor(process, SockPid),
+  ets:insert(?ETS, {SockPid, ResolvedVersions}),
+  {reply, ok, State};
+handle_call({versions_received, SockPid, Versions, Host}, _From, State) ->
+  _ = erlang:monitor(process, SockPid),
+  ets:insert(?ETS, {Host, Versions}),
   ets:insert(?ETS, {SockPid, Versions}),
   {reply, ok, State};
 handle_call(Call, _From, State) ->

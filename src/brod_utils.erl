@@ -425,7 +425,7 @@ describe_groups(Coordinator, SockOpts, IDs) ->
         {ok, pid()} | {error, any()}.
 connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
   case resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) of
-    {ok, Endpoint} -> try_connect([Endpoint]);
+    {ok, Endpoint} -> try_connect([Endpoint], SockOpts);
     {error, Reason} -> {error, Reason}
   end.
 
