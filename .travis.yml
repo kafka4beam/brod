@@ -12,6 +12,7 @@ before_install:
   - chmod +x docker-compose
   - sudo mv docker-compose /usr/local/bin/
   - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; sudo cp rebar3 /usr/bin; cd ..
+  - git clone https://github.com/inaka/elvis.git; cd elvis; rebar3 escriptize; sudo cp _build/default/bin/elvis /usr/bin; cd ..
 
 notifications:
   email: false
@@ -25,7 +26,7 @@ otp_release:
 script:
   - set -e
   - make vsn-check
-  - scripts/line-width-check.sh
+  - elvis rock
 
   - echo "verifying rebar compilation"
   - rebar get-deps
@@ -42,4 +43,3 @@ script:
   - make xref
   - make test-env
   - make t
-

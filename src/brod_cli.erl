@@ -588,11 +588,11 @@ pp_fmt_struct_value(_Indent, X) when is_integer(X) orelse
                                      is_binary(X) orelse
                                      X =:= [] ->
   [pp_fmt_prim(X), "\n"];
-pp_fmt_struct_value(Indent, [{_,_}|_] = SubStruct) ->
+pp_fmt_struct_value(Indent, [{_, _}|_] = SubStruct) ->
   ["\n", pp_fmt_struct(Indent + 1, SubStruct)];
 pp_fmt_struct_value(Indent, Array) when is_list(Array) ->
   case hd(Array) of
-    [{_,_}|_] ->
+    [{_, _}|_] ->
       %% array of sub struct
       ["\n",
        lists:map(fun(Item) ->

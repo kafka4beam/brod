@@ -65,9 +65,9 @@
         , send_fun          = ?ERR_FUN   :: send_fun()
         , buffer_count      = 0          :: non_neg_integer()
         , onwire_count      = 0          :: non_neg_integer()
-        , pending           = ?NEW_QUEUE :: queue:queue(#req{})
-        , buffer            = ?NEW_QUEUE :: queue:queue(#req{})
-        , onwire            = []         :: [{brod:corr_id(), [#req{}]}]
+        , pending           = ?NEW_QUEUE :: queue:queue(req())
+        , buffer            = ?NEW_QUEUE :: queue:queue(req())
+        , onwire            = []         :: [{brod:corr_id(), [req()]}]
         }).
 
 -opaque buf() :: #buf{}.
@@ -192,7 +192,7 @@ is_empty(#buf{ pending = Pending
 %% produce requests were received from clients.
 %% Return expected correlation ID, or otherwise raise an 'exit' exception.
 %% @end
--spec assert_corr_id([{corr_id(), [#req{}]}], corr_id()) -> none | corr_id().
+-spec assert_corr_id([{corr_id(), [req()]}], corr_id()) -> none | corr_id().
 assert_corr_id(_OnWireRequests = [], _CorrIdReceived) ->
   none;
 assert_corr_id([{CorrId, _Req} | _], CorrIdReceived) ->
@@ -333,7 +333,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
 %% raise an 'exit' exception if the first request to send has reached
 %% retry limit
 %% @end
--spec rebuffer_or_crash([#req{}], buf(), any()) -> buf() | no_return().
+-spec rebuffer_or_crash([req()], buf(), any()) -> buf() | no_return().
 rebuffer_or_crash([#req{failures = Failures} | _],
                   #buf{max_retries = MaxRetries}, Reason)
   when MaxRetries >= 0 andalso Failures >= MaxRetries ->
@@ -372,14 +372,14 @@ maybe_buffer(#buf{ buffer_limit = BufferLimit
 maybe_buffer(#buf{} = Buf) ->
   {ok, Buf}.
 
--spec reply_buffered(#req{}) -> ok.
+-spec reply_buffered(req()) -> ok.
 reply_buffered(#req{call_ref = CallRef}) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
                              , result   = brod_produce_req_buffered
                              },
   cast(CallRef#brod_call_ref.caller, Reply).
 
--spec reply_acked(#req{}) -> ok.
+-spec reply_acked(req()) -> ok.
 reply_acked(#req{call_ref = CallRef}) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
                              , result   = brod_produce_req_acked

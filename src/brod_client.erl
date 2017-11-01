@@ -106,11 +106,13 @@
         , sock_pid :: ?undef | pid() | dead_socket()
         }).
 
+-type sock() :: #sock{}.
+
 -record(state,
         { client_id            :: client_id()
         , bootstrap_endpoints  :: [endpoint()]
         , meta_sock_pid        :: ?undef | pid() | dead_socket()
-        , payload_sockets = [] :: [#sock{}]
+        , payload_sockets = [] :: [sock()]
         , producers_sup        :: ?undef | pid()
         , consumers_sup        :: ?undef | pid()
         , config               :: ?undef | config()
@@ -660,7 +662,7 @@ handle_socket_down(#state{ client_id       = ClientId
   end.
 
 %% @private
--spec mark_socket_dead(#sock{}, any()) -> {ok, #sock{}}.
+-spec mark_socket_dead(sock(), any()) -> {ok, sock()}.
 mark_socket_dead(Socket, Reason) ->
   {ok, Socket#sock{sock_pid = ?dead_since(os:timestamp(), Reason)}}.
 

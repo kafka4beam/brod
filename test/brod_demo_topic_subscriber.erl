@@ -99,7 +99,7 @@ handle_message(Partition, MessageSet,
 
 %%%_* Internal Functions =======================================================
 
--spec process_message(file:fd(), brod:partition(), brod:kafka_message()) -> ok.
+-spec process_message(file:fd(), brod:partition(), brod:message()) -> ok.
 process_message(Dir, Partition, Message) ->
   #kafka_message{ offset = Offset
                 , value  = Value

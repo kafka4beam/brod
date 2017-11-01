@@ -336,8 +336,8 @@ handle_info(_Info, #state{} = State) ->
 
 handle_call(stop, _From, #state{} = State) ->
   {stop, normal, ok, State};
-handle_call(_Call, _From, #state{} = State) ->
-  {reply, {error, {unsupported_call, _Call}}, State}.
+handle_call(Call, _From, #state{} = State) ->
+  {reply, {error, {unsupported_call, Call}}, State}.
 
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
