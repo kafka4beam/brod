@@ -63,6 +63,8 @@
                       , offsets_queue = queue:new()  :: offsets_queue()
                       }).
 
+-type pending_acks() :: #pending_acks{}.
+
 -record(state, { client_pid          :: pid()
                , socket_pid          :: ?undef | pid()
                , topic               :: binary()
@@ -76,7 +78,7 @@
                , last_corr_id        :: ?undef | corr_id()
                , subscriber          :: ?undef | pid()
                , subscriber_mref     :: ?undef | reference()
-               , pending_acks        :: #pending_acks{}
+               , pending_acks        :: pending_acks()
                , is_suspended        :: boolean()
                , offset_reset_policy :: offset_reset_policy()
                , avg_bytes           :: number()

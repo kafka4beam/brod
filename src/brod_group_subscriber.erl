@@ -126,6 +126,8 @@
         , acked_offset    :: ?undef | brod:offset()
         }).
 
+-type consumer() :: #consumer{}.
+
 -type ack_ref() :: {brod:topic(), brod:partition(), brod:offset()}.
 
 -record(state,
@@ -135,7 +137,7 @@
         , memberId           :: ?undef | member_id()
         , generationId       :: ?undef | brod:group_generation_id()
         , coordinator        :: pid()
-        , consumers = []     :: [#consumer{}]
+        , consumers = []     :: [consumer()]
         , consumer_config    :: brod:consumer_config()
         , is_blocked = false :: boolean()
         , subscribe_tref     :: ?undef | reference()
@@ -143,6 +145,8 @@
         , cb_state           :: cb_state()
         , message_type       :: message | message_set
         }).
+
+-type state() :: #state{}.
 
 %% delay 2 seconds retry the failed subscription to partiton consumer process
 -define(RESUBSCRIBE_DELAY, 2000).
@@ -491,7 +495,7 @@ handle_messages(Topic, Partition, [Msg | Rest], State) ->
     end,
   handle_messages(Topic, Partition, Rest, NewState).
 
--spec handle_ack(ack_ref(), #state{}) -> #state{}.
+-spec handle_ack(ack_ref(), state()) -> state().
 handle_ack(AckRef, #state{ generationId = GenerationId
                          , consumers    = Consumers
                          , coordinator  = Coordinator

@@ -608,7 +608,7 @@ resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
 
 %% @equiv fetch(Hosts, Topic, Partition, Offset, 1000, 0, 100000)
 -spec fetch([endpoint()], topic(), partition(), integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [message()]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset) ->
   fetch(Hosts, Topic, Partition, Offset,
         _MaxWaitTime = 1000, _MinBytes = 0, _MaxBytes = 100000).
@@ -616,14 +616,14 @@ fetch(Hosts, Topic, Partition, Offset) ->
 %% @equiv fetch(Hosts, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer()) ->
-               {ok, [#kafka_message{}]} | {error, any()}.
+               {ok, [message()]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes) ->
   fetch(Hosts, Topic, Partition, Offset, MaxWaitTime, MinBytes, MaxBytes, []).
 
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch([endpoint()], topic(), partition(), offset(),
             non_neg_integer(), non_neg_integer(), pos_integer(),
-            sock_opts()) -> {ok, [#kafka_message{}]} | {error, any()}.
+            sock_opts()) -> {ok, [message()]} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset,
       MaxWaitTime, MinBytes, MaxBytes, Options) ->
   brod_utils:fetch(Hosts, Topic, Partition, Offset,

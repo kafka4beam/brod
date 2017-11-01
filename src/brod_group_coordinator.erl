@@ -142,6 +142,8 @@
         , offset_commit_interval_seconds :: pos_integer()
         }).
 
+-type state() :: #state{}.
+
 -define(IS_LEADER(S), (S#state.leaderId =:= S#state.memberId)).
 
 %%%_* APIs =====================================================================
@@ -386,7 +388,7 @@ terminate(Reason, #state{ sock_pid = SockPid
 
 %%%_* Internal Functions =======================================================
 
--spec discover_coordinator(#state{}) -> {ok, #state{}}.
+-spec discover_coordinator(state()) -> {ok, state()}.
 discover_coordinator(#state{ client      = Client
                            , coordinator = Coordinator
                            , sock_pid    = SockPid
@@ -414,7 +416,7 @@ discover_coordinator(#state{ client      = Client
       {ok, NewState}
   end.
 
--spec stabilize(#state{}, integer(), any()) -> {ok, #state{}}.
+-spec stabilize(state(), integer(), any()) -> {ok, state()}.
 stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
                 , member_module        = MemberModule
                 , member_pid           = MemberPid
@@ -509,7 +511,7 @@ stop_socket(SockPid) ->
   catch unlink(SockPid),
   ok = brod_sock:stop(SockPid).
 
--spec join_group(#state{}) -> {ok, #state{}}.
+-spec join_group(state()) -> {ok, state()}.
 join_group(#state{ groupId                       = GroupId
                  , memberId                      = MemberId0
                  , topics                        = Topics
@@ -544,7 +546,7 @@ join_group(#state{ groupId                       = GroupId
            , msg = RspBody
            } = send_sync(SockPid, Req, SessionTimeout),
   ?ESCALATE_EC(kpro:find(error_code, RspBody)),
-  GenerationId = kpro:find(generation_id,RspBody),
+  GenerationId = kpro:find(generation_id, RspBody),
   LeaderId = kpro:find(leader_id, RspBody),
   MemberId = kpro:find(member_id, RspBody),
   Members = kpro:find(members, RspBody),
@@ -559,7 +561,7 @@ join_group(#state{ groupId                       = GroupId
   {ok, State}.
 
 %% @private
--spec sync_group(#state{}) -> {ok, #state{}}.
+-spec sync_group(state()) -> {ok, state()}.
 sync_group(#state{ groupId       = GroupId
                  , generationId  = GenerationId
                  , memberId      = MemberId
@@ -592,8 +594,8 @@ sync_group(#state{ groupId       = GroupId
   start_offset_commit_timer(NewState).
 
 %% @private
--spec handle_ack(#state{}, brod:topic(), brod:partition(), brod:offset()) ->
-        {ok, #state{}}.
+-spec handle_ack(state(), brod:topic(), brod:partition(), brod:offset()) ->
+        {ok, state()}.
 handle_ack(#state{ acked_offsets = AckedOffsets
                  } = State, Topic, Partition, Offset) ->
   NewAckedOffsets =
@@ -636,7 +638,7 @@ format_partition_assignments([{Partition, BeginOffset} | Rest]) ->
 %%       refresh their start point offsets when new assignment is
 %%       received.
 %% @end
--spec try_commit_offsets(#state{}) -> {ok, #state{}}.
+-spec try_commit_offsets(state()) -> {ok, state()}.
 try_commit_offsets(#state{} = State) ->
   try
     {ok, #state{}} = do_commit_offsets(State)
@@ -645,12 +647,12 @@ try_commit_offsets(#state{} = State) ->
   end.
 
 %% @private Commit collected offsets, stop old commit timer, start new timer.
--spec do_commit_offsets(#state{}) -> {ok, #state{}}.
+-spec do_commit_offsets(state()) -> {ok, state()}.
 do_commit_offsets(State) ->
   {ok, NewState} = do_commit_offsets_(State),
   start_offset_commit_timer(NewState).
 
--spec do_commit_offsets_(#state{}) -> {ok, #state{}}.
+-spec do_commit_offsets_(state()) -> {ok, state()}.
 do_commit_offsets_(#state{acked_offsets = []} = State) ->
   {ok, State};
 do_commit_offsets_(#state{offset_commit_policy = consumer_managed} = State) ->
@@ -732,7 +734,7 @@ collect_commit_response_error_codes(Topics) ->
       end, gb_sets:new(), Topics).
 
 %% @private
--spec assign_partitions(#state{}) -> [kpro:struct()].
+-spec assign_partitions(state()) -> [kpro:struct()].
 assign_partitions(State) when ?IS_LEADER(State) ->
   #state{ client                        = Client
         , members                       = Members
@@ -846,7 +848,7 @@ roundrobin_assign_loop([{Topic, Partition} | Rest] = TopicPartitions,
 %% @private Extract the partition assignemts from SyncGroupResponse
 %% then fetch the committed offsets of each partition.
 %% @end
--spec get_topic_assignments(#state{}, binary() | [kpro:struct()]) ->
+-spec get_topic_assignments(state(), binary() | [kpro:struct()]) ->
         brod:received_assignments().
 get_topic_assignments(#state{}, ?kpro_cg_no_assignment) -> []; %% no assignments
 get_topic_assignments(#state{} = State, Assignment) ->
@@ -865,7 +867,7 @@ get_topic_assignments(#state{} = State, Assignment) ->
 %% @private Fetch committed offsets from kafka,
 %% or call the consumer callback to read committed offsets.
 %% @end
--spec get_committed_offsets(#state{}, [{brod:topic(), brod:partition()}]) ->
+-spec get_committed_offsets(state(), [{brod:topic(), brod:partition()}]) ->
         [{{brod:topic(), brod:partition()}, brod:offset()}].
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , member_pid           = MemberPid
@@ -960,7 +962,7 @@ start_heartbeat_timer(HbRateSec) ->
 %% @private Start a timer to send a loopback command to self() to trigger
 %% a offset commit request to group coordinator broker.
 %% @end
--spec start_offset_commit_timer(#state{}) -> {ok, #state{}}.
+-spec start_offset_commit_timer(state()) -> {ok, state()}.
 start_offset_commit_timer(#state{offset_commit_timer = OldTimer} = State) ->
   #state{ offset_commit_policy           = Policy
         , offset_commit_interval_seconds = Seconds
@@ -983,7 +985,7 @@ start_offset_commit_timer(#state{offset_commit_timer = OldTimer} = State) ->
   end.
 
 %% @private Send heartbeat request if it has joined the group.
--spec maybe_send_heartbeat(#state{}) -> {ok, #state{}}.
+-spec maybe_send_heartbeat(state()) -> {ok, state()}.
 maybe_send_heartbeat(#state{ is_in_group  = true
                            , groupId      = GroupId
                            , memberId     = MemberId
