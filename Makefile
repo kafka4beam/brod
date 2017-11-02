@@ -14,6 +14,7 @@ dep_kafka_protocol_commit = 1.1.0
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
 ESCRIPT_FILE = scripts/brod
+ESCRIPT_EMU_ARGS = -sname brod_cli
 
 COVER = true
 

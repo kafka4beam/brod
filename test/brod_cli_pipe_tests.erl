@@ -22,8 +22,11 @@
 -include("brod_int.hrl").
 
 -define(WAIT(Pattern, Handle, Timeout),
-        fun() ->
+        fun Wait() ->
           receive
+            {'EXIT', _Pid, normal} ->
+              %% discard normal exits of linked pid
+              Wait();
             Pattern ->
               Handle;
             Msg ->

@@ -469,12 +469,28 @@ Send `README.md` to kafka one line per kafka message
 ### Display Committed Offsets
 
 ```
+# all topics
 ./scripts/brod commits -b localhost:9092 --id the-group-id --describe
+
+# a specific topic
+./scripts/brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
 ```
 
 ### Commit Offsets
 
+NOTE: This feature is designed for force overwriting commits, not for regular use of offset commit.
+
 ```
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:1111,1:222"
+# Commit 'latest' offsets of all partitions with 2 days retention
+./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
+
+# Commit offset=100 for partition 0 and 200 for partition 1
+./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
+
+# Use --retention 0 to delete commits (may linger in kafka before cleaner does it job)
+./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
+
+# Try join an active consumer group using 'range' protocol and steal one partition assignment then commit offset=10000
+./scripts/brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
 ```
 
