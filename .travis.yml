@@ -43,3 +43,5 @@ script:
   - make xref
   - make test-env
   - make t
+  - if [ "$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)')" -gt 18 ]; then make dialyze; fi
+
