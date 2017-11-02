@@ -15,7 +15,7 @@
 %%%
 
 %%%=============================================================================
-%%% @doc This is a utility module to help force commit offsets to kafak.
+%%% @doc This is a utility module to help force commit offsets to kafka.
 %%% @end
 %%%=============================================================================
 
@@ -24,7 +24,8 @@
 -behaviour(gen_server).
 -behaviour(brod_group_member).
 
--export([ run/3
+-export([ run/2
+        , run/3
         ]).
 
 -export([ start_link/2
@@ -81,7 +82,11 @@
         ok | no_return().
 run(BootstrapHosts, SockOpts, GroupInput) ->
   ClientId = ?MODULE,
-  ok = brod:start_client(BootstrapHosts, ClientId, SockOpts),
+  {ok, _} = brod_client:start_link(BootstrapHosts, ClientId, SockOpts),
+  run(ClientId, GroupInput).
+
+%% @doc Force commit offsets.
+run(ClientId, GroupInput) ->
   {ok, Pid} = start_link(ClientId, GroupInput),
   ok = sync(Pid),
   ok = stop(Pid).
@@ -159,7 +164,7 @@ init({Client, GroupInput}) ->
   Retention = proplists:get_value(retention, GroupInput),
   Offsets = proplists:get_value(offsets, GroupInput),
   %% use callback_implemented strategy so I know I am elected leader
-  %% when this assign_partitions is called.
+  %% when `assign_partitions' callback is called.
   Config = [ {partition_assignment_strategy, callback_implemented}
            , {offset_retention_seconds, Retention}
            , {protocol_name, ProtocolName}
@@ -190,7 +195,17 @@ handle_call({assign_partitions, Members, TopicPartitions}, _From,
   MyTP = [{MyTopic, P} || {P, _} <- Offsets],
   %% Assert that my topic partitions are included in
   %% subscriptions collected from ALL members
-  true = lists:all(fun(TP) -> lists:member(TP, TopicPartitions) end, MyTP),
+  Pred = fun(TP) -> not lists:member(TP, TopicPartitions) end,
+  case lists:filter(Pred, MyTP) of
+    [] ->
+      %% all of the give partitions are valid
+      ok;
+    BadPartitions ->
+      PartitionNumbers = [P || {_T, P} <- BadPartitions],
+      log(State, error, "Nonexisting partitions in input: ~p",
+          [PartitionNumbers]),
+      erlang:exit({non_existing_partitions, PartitionNumbers})
+  end,
   %% To keep it simple, assign all my topic-partitions to self
   %% but discard all other topic-partitions.
   %% After all, I will leave group as soon as offsets are committed
@@ -286,15 +301,19 @@ maybe_reply_sync(#state{pending_sync = From} = State) ->
                          [{topic(), partition()}]) ->
         [{member_id(), [brod:partition_assignment()]}].
 assign_all_to_self(CoordinatorPid, Members, TopicPartitions) ->
-  MyMemberId = find_leader(CoordinatorPid, Members),
+  MyMemberId = find_my_member_id(CoordinatorPid, Members),
   Groupped = brod_utils:group_per_key(TopicPartitions),
   [{MyMemberId, Groupped}].
 
-%% @private Leader's member ID is kept in `brod_group_coordinator' looping
-%% state, but not exposed to callback module. Here we make use of the leader's
-%% pid in `user_data' to locate it.
+%% @private I am the current leader because I am assigning partitions,
+%% however my member ID is kept in `brod_group_coordinator' looping state,
+%% i.e. not exposed to callback module. So I make use of the coordinator
+%% pid in member's `user_data' to find my member ID.
+%%
+%% NOTE: I can not make a gen_server call to `brod_group_coordinator' because
+%% I am currently being called by coordinator -- deadlock otherwise.
 %% @end
-find_leader(CoordinatorPid, [H | T]) ->
+find_my_member_id(CoordinatorPid, [H | T]) ->
   {MemberId, #kafka_group_member_metadata{user_data = UD}} = H,
   try
     L = binary_to_term(UD),
@@ -302,9 +321,10 @@ find_leader(CoordinatorPid, [H | T]) ->
     MemberId
   catch
     _ : _ ->
-      find_leader(CoordinatorPid, T)
+      find_my_member_id(CoordinatorPid, T)
   end.
 
+%% @private
 log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
   brod_utils:log(Level,
                  "Group member (~s,coor=~p):\n" ++ Fmt,

@@ -23,6 +23,14 @@
 -include("brod_int.hrl").
 
 -define(CLIENT, brod_cli_client).
+-define(STOP(How),
+        begin
+          application:stop(brod),
+          case How of
+            'exit' -> erlang:exit(?LINE);
+            'halt' -> erlang:halt(?LINE)
+          end
+        end).
 
 -define(MAIN_DOC, "usage:
   brod -h|--help
@@ -95,6 +103,9 @@ options:
                            'latest' or -1 for latest offset
                            'earliest' or -2 for earliest offset
                          [default: latest]
+  --one-line             If it is to resolve 'all' offsets,
+                         Print results in one line.
+                         e.g. 0:111,1:222
 "
 ?COMMAND_COMMON_OPTIONS
 ).
@@ -294,7 +305,7 @@ main(["--version" | _], _Stop) ->
 main(["-" ++ _ = Arg | _], Stop) ->
   logerr("Unknown option: ~s\n", [Arg]),
   print(?MAIN_DOC),
-  erlang:Stop(?LINE);
+  ?STOP(Stop);
 main([Command | _] = Args, Stop) ->
   case lists:keyfind(Command, 1, ?DOCS) of
     {_, Doc} ->
@@ -302,11 +313,11 @@ main([Command | _] = Args, Stop) ->
     false ->
       logerr("Unknown command: ~s\n", [Command]),
       print(?MAIN_DOC),
-      erlang:Stop(?LINE)
+      ?STOP(Stop)
   end;
 main(_, Stop) ->
   print(?MAIN_DOC),
-  erlang:Stop(?LINE).
+  ?STOP(Stop).
 
 %% @private
 -spec main(command(), string(), [string()], halt | exit) -> _ | no_return().
@@ -339,7 +350,7 @@ main(Command, Doc, Args, Stop, LogLevel) ->
         Stack1 = erlang:get_stacktrace(),
         verbose("~p:~p\n~p\n", [C1, E1, Stack1]),
         print(Doc),
-        erlang:Stop(?LINE)
+        ?STOP(Stop)
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
     true ->
@@ -348,7 +359,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     false ->
       ok
   end,
-  {ok, _} = application:ensure_all_started(sasl),
+  %% So the linked processes won't take me with them
+  process_flag(trap_exit, true),
   {ok, _} = application:ensure_all_started(brod),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
@@ -361,13 +373,12 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     throw : Reason when is_binary(Reason) ->
       %% invalid options etc.
       logerr([Reason, "\n"]),
-      logerr(Doc),
-      erlang:Stop(?LINE);
+      ?STOP(Stop);
     C2 : E2 ->
-      %% crashed on desensive matches etc.
+      %% crashed
       Stack2 = erlang:get_stacktrace(),
       logerr("~p:~p\n~p\n", [C2, E2, Stack2]),
-      erlang:Stop(?LINE)
+      ?STOP(Stop)
   end.
 
 %% @private
@@ -390,10 +401,11 @@ run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun("all") -> all;
                                             (Num) -> int(Num)
                                          end),
+  IsOneLine = parse(Args, "--one-line", fun parse_boolean/1),
   Time = parse(Args, "--time", fun parse_offset_time/1),
-  {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, SockOpts),
+  ok = start_client(Brokers, SockOpts),
   try
-    resolve_offsets(Topic, Partition, Time)
+    resolve_offsets_print(Topic, Partition, Time, IsOneLine)
   after
     brod_client:stop(?CLIENT)
   end;
@@ -449,7 +461,7 @@ run(?SEND_CMD, Brokers, Topic, SockOpts, Args) ->
     [ {auto_start_producers, true}
     , {default_producer_config, ProducerConfig}
     ] ++ SockOpts,
-  {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, ClientConfig),
+  ok = start_client(Brokers, ClientConfig),
   Msgs = [{brod_utils:epoch_ms(), Key, Value}],
   ok = brod:produce_sync(?CLIENT, Topic, Partition, <<>>, Msgs);
 run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
@@ -480,7 +492,7 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
     [ {auto_start_producers, true}
     , {default_producer_config, ProducerConfig}
     ] ++ SockOpts,
-  {ok, _Pid} = brod_client:start_link(Brokers, ?CLIENT, ClientConfig),
+  ok = start_client(Brokers, ClientConfig),
   SendFun =
     fun(?TKV(Ts, Key, Value), PendingAcks) ->
         {ok, CallRef} =
@@ -515,9 +527,13 @@ run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
 run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
   IsDesc = parse(Args, "--describe", fun parse_boolean/1),
   ID = parse(Args, "--id", fun bin/1),
+  Topic = parse(Args, "--topic",
+                fun(?undef) -> ?undef;
+                   (Name) -> bin(Name)
+                end),
   case IsDesc of
-    true -> show_commits(Brokers, SockOpts, ID);
-    false -> reset_commits(Brokers, SockOpts, ID, Args)
+    true -> show_commits(Brokers, SockOpts, ID, Topic);
+    false -> reset_commits(Brokers, SockOpts, ID, Topic, Args)
   end;
 run(Cmd, Brokers, SockOpts, Args) ->
   %% Clause for all per-topic commands
@@ -525,25 +541,31 @@ run(Cmd, Brokers, SockOpts, Args) ->
   run(Cmd, Brokers, Topic, SockOpts, Args).
 
 %% @private
-resolve_offsets(Topic, all, Time) ->
+resolve_offsets_print(Topic, all, Time, IsOneLine) ->
+  Offsets = resolve_offsets(Topic, Time),
+  Outputs =
+    lists:map(
+      fun({Partition, Offset}) ->
+          io_lib:format("~p:~p", [Partition, Offset])
+      end, Offsets),
+  Delimiter = case IsOneLine of
+                true -> ",";
+                false -> "\n"
+              end,
+  print(infix(Outputs, Delimiter));
+resolve_offsets_print(Topic, Partition, Time, _) when is_integer(Partition) ->
+  {ok, Offset} = resolve_offset(Topic, Partition, Time),
+  print(integer_to_list(Offset)).
+
+%% @private
+resolve_offsets(Topic, Time) ->
   {ok, Count} = brod_client:get_partitions_count(?CLIENT, Topic),
   Partitions = lists:seq(0, Count - 1),
-  lists:foreach(
-    fun(Partition) ->
-        case resolve_offset(Topic, Partition, Time) of
-          {ok, Offset} ->
-            print("~p: ~p\n", [Partition, Offset]);
-          {error, not_found} ->
-            print("~p: no such offset\n", [Partition])
-        end
-    end, Partitions);
-resolve_offsets(Topic, Partition, Time) when is_integer(Partition) ->
-  case resolve_offset(Topic, Partition, Time) of
-    {ok, Offset} ->
-      print(integer_to_list(Offset));
-    {error, not_found} ->
-      print("no such offset")
-  end.
+  lists:map(
+    fun(P) ->
+        {ok, Offset} = resolve_offset(Topic, P, Time),
+        {P, Offset}
+    end, Partitions).
 
 %% @private
 resolve_offset(Topic, Partition, Time) ->
@@ -551,21 +573,28 @@ resolve_offset(Topic, Partition, Time) ->
   brod_utils:resolve_offset(SockPid, Topic, Partition, Time).
 
 %% @private
-show_commits(BootstrapEndpoints, SockOpts, GroupId) ->
+show_commits(BootstrapEndpoints, SockOpts, GroupId, Topic) ->
   case brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts,
                                           GroupId, []) of
-    {ok, PerTopicStructs} ->
+    {ok, PerTopicStructs0} ->
+      Pred = fun(S) -> Topic =:= ?undef orelse Topic =:= kf(topic, S) end,
+      PerTopicStructs = lists:filter(Pred, PerTopicStructs0),
       lists:foreach(fun print_commits/1, PerTopicStructs);
     {error, Reason} ->
       logerr("Failed to fetch commited offsets ~p\n", [Reason])
   end.
 
 %% @private
-reset_commits(BootstrapEndpoints, SockOpts, ID, Args) ->
-  Topic = parse(Args, "--topic", fun bin/1),
+reset_commits(BootstrapEndpoints, SockOpts, ID, Topic, Args) ->
   Retention = parse(Args, "--retention", fun parse_retention/1),
   ProtocolName = parse(Args, "--protocol", fun(X) -> X end),
-  Offsets = parse(Args, "--offsets", fun parse_commit_offsets_input/1),
+  Offsets0 = parse(Args, "--offsets", fun parse_commit_offsets_input/1),
+  ok = start_client(BootstrapEndpoints, SockOpts),
+  Offsets =
+    case is_atom(Offsets0) of
+      true -> resolve_offsets(Topic, Offsets0);
+      false -> Offsets0
+    end,
   Group = [ {id, ID}
           , {topic, Topic}
           , {retention, Retention}
@@ -1244,7 +1273,14 @@ debug(Fmt, Args) ->
   end.
 
 %% @private
-int(Str) -> list_to_integer(Str).
+int(Str) -> list_to_integer(trim(Str)).
+
+%% @private
+trim_h([$\s | Rest]) -> trim(Rest);
+trim_h(X) -> X.
+
+%% @private
+trim(Str) -> trim_h(lists:reverse(trim_h(lists:reverse(Str)))).
 
 %% @private
 bin(IoData) -> iolist_to_binary(IoData).
@@ -1283,6 +1319,11 @@ kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
         kpro:field_value().
 kf(FieldName, Struct, Default) ->
   kpro:find(FieldName, Struct, Default).
+
+%% @private
+start_client(BootstrapEndpoints, ClientConfig) ->
+  {ok, _} = brod_client:start_link(BootstrapEndpoints, ?CLIENT, ClientConfig),
+  ok.
 
 -endif.
 
