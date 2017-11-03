@@ -913,8 +913,7 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
             Partition = kpro:find(partition, PartitionOffset),
             Offset = kpro:find(offset, PartitionOffset),
             EC = kpro:find(error_code, PartitionOffset),
-            case (EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION) orelse
-                 (EC =:= ?EC_NONE andalso Offset =:= -1) of
+            case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
               true ->
                 %% EC_UNKNOWN_TOPIC_OR_PARTITION is kept for version 0
                 Acc;
@@ -940,7 +939,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets) ->
         %% No commit history found
         ?undef
     end,
-  BeginOffset = case is_integer(Offset) andalso Offset >= 0 of
+  BeginOffset = case is_integer(Offset) of
                   true  -> Offset + 1;
                   false -> Offset
                 end,
