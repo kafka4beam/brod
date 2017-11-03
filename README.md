@@ -462,8 +462,11 @@ Send `README.md` to kafka one line per kafka message
 ### List or Describe Groups
 
 ```
+# List all groups
 ./scripts/brod groups -b localhost:9092
-./scripts/brod groups -b localhost:9092 --describe
+
+# Describe groups
+./scripts/brod groups -b localhost:9092 --ids group-1,group-2
 ```
 
 ### Display Committed Offsets
@@ -487,7 +490,7 @@ NOTE: This feature is designed for force overwriting commits, not for regular us
 # Commit offset=100 for partition 0 and 200 for partition 1
 ./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
 
-# Use --retention 0 to delete commits (may linger in kafka before cleaner does it job)
+# Use --retention 0 to delete commits (may linger in kafka before cleaner does its job)
 ./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
 
 # Try join an active consumer group using 'range' protocol and steal one partition assignment then commit offset=10000
