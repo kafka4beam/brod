@@ -567,7 +567,8 @@ resolve_offsets(Topic, Time) ->
   lists:map(
     fun(P) ->
         {ok, Offset} = resolve_offset(Topic, P, Time),
-        {P, Offset}
+        %% - 1 here because the consumers should start fetching from + 1
+        {P, Offset - 1}
     end, Partitions).
 
 %% @private
