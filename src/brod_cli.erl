@@ -23,12 +23,15 @@
 -include("brod_int.hrl").
 
 -define(CLIENT, brod_cli_client).
+
+%% 'halt' is for escript, stop the vm immediately
+%% 'exit' is for testing, we want eunit or ct to be able to capture
 -define(STOP(How),
         begin
           application:stop(brod),
           case How of
-            'exit' -> erlang:exit(?LINE);
-            'halt' -> erlang:halt(?LINE)
+            'halt' -> erlang:halt(?LINE);
+            'exit' -> erlang:exit(?LINE)
           end
         end).
 
@@ -243,7 +246,6 @@ options:
 options:
   -b,--brokers=<brokers> Comma separated host:port pairs
                          [default: localhost:9092]
-  --describe             Describe group status details
   --ids=<group-id>       Comma separated group IDs to describe
                          [default: all]
 "
@@ -360,6 +362,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
       ok
   end,
   %% So the linked processes won't take me with them
+  %% This is to allow error_logger to write more logs
+  %% before stopping init process immediately
   process_flag(trap_exit, true),
   {ok, _} = application:ensure_all_started(brod),
   try
@@ -521,9 +525,8 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
 
 %% @private
 run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
-  IsDesc = parse(Args, "--describe", fun parse_boolean/1),
   IDs = parse(Args, "--ids", fun parse_cg_ids/1),
-  cg(Brokers, SockOpts, IsDesc, IDs);
+  cg(Brokers, SockOpts, IDs);
 run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
   IsDesc = parse(Args, "--describe", fun parse_boolean/1),
   ID = parse(Args, "--id", fun bin/1),
@@ -581,7 +584,7 @@ show_commits(BootstrapEndpoints, SockOpts, GroupId, Topic) ->
       PerTopicStructs = lists:filter(Pred, PerTopicStructs0),
       lists:foreach(fun print_commits/1, PerTopicStructs);
     {error, Reason} ->
-      logerr("Failed to fetch commited offsets ~p\n", [Reason])
+      throw_bin("Failed to fetch commited offsets ~p\n", [Reason])
   end.
 
 %% @private
@@ -642,21 +645,12 @@ print_commits(Struct) ->
   print([pp_fmt_struct(1, P) || P <- PartRsps]).
 
 %% @private
-cg(BootstrapEndpoints, SockOpts, _IsDesc = false, _IDs) ->
-  %% Describe all groups
+cg(BootstrapEndpoints, SockOpts, all) ->
+  %% List all groups
   All = list_groups(BootstrapEndpoints, SockOpts),
   lists:foreach(fun print_cg_cluster/1, All);
-cg(BootstrapEndpoints, SockOpts, _IsDesc = true, IDs0) ->
+cg(BootstrapEndpoints, SockOpts, IDs) ->
   CgClusters = list_groups(BootstrapEndpoints, SockOpts),
-  IDs =
-    case IDs0 =:= all of
-      true ->
-        lists:foldl(fun({_, Cgs}, Acc) ->
-                        [ID || #brod_cg{id = ID} <- Cgs] ++ Acc
-                    end, [], CgClusters);
-      false ->
-        IDs0
-    end,
   describe_cgs(CgClusters, SockOpts, IDs).
 
 %% @private
@@ -1276,7 +1270,7 @@ debug(Fmt, Args) ->
 int(Str) -> list_to_integer(trim(Str)).
 
 %% @private
-trim_h([$\s | Rest]) -> trim(Rest);
+trim_h([$\s | T]) -> trim_h(T);
 trim_h(X) -> X.
 
 %% @private
@@ -1324,6 +1318,10 @@ kf(FieldName, Struct, Default) ->
 start_client(BootstrapEndpoints, ClientConfig) ->
   {ok, _} = brod_client:start_link(BootstrapEndpoints, ?CLIENT, ClientConfig),
   ok.
+
+%% @private
+throw_bin(Fmt, Args) ->
+  erlang:throw(bin(io_lib:format(Fmt, Args))).
 
 -endif.
 
