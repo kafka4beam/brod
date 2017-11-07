@@ -646,13 +646,13 @@ connect_leader(Hosts, Topic, Partition, Options) ->
 %% @end
 -spec list_all_groups([endpoint()], sock_opts()) ->
         [{endpoint(), [cg()] | {error, any()}}].
-list_all_groups(Hosts, Options) ->
-  brod_utils:list_all_groups(Hosts, Options).
+list_all_groups(Endpoints, SockOpts) ->
+  brod_utils:list_all_groups(Endpoints, SockOpts).
 
 %% @doc List consumer groups in the given group coordinator broker.
 -spec list_groups(endpoint(), sock_opts()) -> {ok, [cg()]} | {error, any()}.
-list_groups(Hosts, Options) ->
-  brod_utils:list_groups(Hosts, Options).
+list_groups(CoordinatorEndpoint, SockOpts) ->
+  brod_utils:list_groups(CoordinatorEndpoint, SockOpts).
 
 %% @doc Describe consumer groups. The given consumer group IDs should be all
 %% managed by the coordinator-broker running at the given endpoint.
@@ -684,13 +684,13 @@ connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
 fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
   brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId, []).
 
-%% @doc Same as `fetch_committed_offsets/3', only work on the socket
-%% connected to the group coordinator broker.
+%% @doc Same as `fetch_committed_offsets/3',
+%% but works with a started `brod_client'
 %% @end
--spec fetch_committed_offsets(pid(), group_id()) ->
+-spec fetch_committed_offsets(client(), group_id()) ->
         {ok, [kpro:struct()]} | {error, any()}.
-fetch_committed_offsets(SockPid, GroupId) ->
-  brod_utils:fetch_committed_offsets(SockPid, GroupId, []).
+fetch_committed_offsets(Client, GroupId) ->
+  brod_utils:fetch_committed_offsets(Client, GroupId, []).
 
 -ifdef(BROD_CLI).
 main(Args) -> brod_cli:main(Args, halt).
