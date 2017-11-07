@@ -534,9 +534,10 @@ run(?COMMITS_CMD, Brokers, SockOpts, Args) ->
                 fun(?undef) -> ?undef;
                    (Name) -> bin(Name)
                 end),
+  ok = start_client(Brokers, SockOpts),
   case IsDesc of
-    true -> show_commits(Brokers, SockOpts, ID, Topic);
-    false -> reset_commits(Brokers, SockOpts, ID, Topic, Args)
+    true -> show_commits(ID, Topic);
+    false -> reset_commits(ID, Topic, Args)
   end;
 run(Cmd, Brokers, SockOpts, Args) ->
   %% Clause for all per-topic commands
@@ -577,9 +578,8 @@ resolve_offset(Topic, Partition, Time) ->
   brod_utils:resolve_offset(SockPid, Topic, Partition, Time).
 
 %% @private
-show_commits(BootstrapEndpoints, SockOpts, GroupId, Topic) ->
-  case brod_utils:fetch_committed_offsets(BootstrapEndpoints, SockOpts,
-                                          GroupId, []) of
+show_commits(GroupId, Topic) ->
+  case brod:fetch_committed_offsets(?CLIENT, GroupId) of
     {ok, PerTopicStructs0} ->
       Pred = fun(S) -> Topic =:= ?undef orelse Topic =:= kf(topic, S) end,
       PerTopicStructs = lists:filter(Pred, PerTopicStructs0),
@@ -589,11 +589,10 @@ show_commits(BootstrapEndpoints, SockOpts, GroupId, Topic) ->
   end.
 
 %% @private
-reset_commits(BootstrapEndpoints, SockOpts, ID, Topic, Args) ->
+reset_commits(ID, Topic, Args) ->
   Retention = parse(Args, "--retention", fun parse_retention/1),
   ProtocolName = parse(Args, "--protocol", fun(X) -> X end),
   Offsets0 = parse(Args, "--offsets", fun parse_commit_offsets_input/1),
-  ok = start_client(BootstrapEndpoints, SockOpts),
   Offsets =
     case is_atom(Offsets0) of
       true -> resolve_offsets(Topic, Offsets0);
@@ -605,7 +604,7 @@ reset_commits(BootstrapEndpoints, SockOpts, ID, Topic, Args) ->
           , {protocol, ProtocolName}
           , {offsets, Offsets}
           ],
-  brod_cg_commits:run(BootstrapEndpoints, SockOpts, Group).
+  brod_cg_commits:run(?CLIENT, Group).
 
 %% @private
 parse_commit_offsets_input("latest") -> latest;

@@ -56,4 +56,6 @@
   * Bug Fixes
     - Fixed brod-cli offset_fetch_request version when working with kafka 0.10.1.x or earlier
     - Make group coordinator restart on heartbeat timeout
+* 3.3.1
+  * Fix brod-cli commits command redandunt socket usage.
 

@@ -283,21 +283,42 @@ init_sasl_opt(Config) ->
       Config
   end.
 
-%% @doc Fethc ommitted offsets for ALL topics in the given consumer group.
--spec fetch_committed_offsets([endpoint()], sock_opts(), group_id(),
-                              ?undef | [topic()]) ->
+%% @doc Fetch ommitted offsets for the given topics in a consumer group.
+%% 1. try find out the group coordinator broker from the bootstrap hosts
+%% 2. send `offset_fetch_request' and wait for `offset_fetch_response'
+%% If Topics is an empty list, fetch offsets for all topics in the group
+%% @end
+-spec fetch_committed_offsets([endpoint()], sock_opts(),
+                              group_id(), [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId, Topics) ->
   with_sock(
     connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId),
-    fun(Pid) -> fetch_committed_offsets(Pid, GroupId, Topics) end).
+    fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
 
-%% @doc Same as `fetch_committed_offsets/4', only work on a socket
-%% connected to the group coordinator broker.
+%% @doc Fetch commited offsts for the given topics in a consumer group.
+%% 1. locate the group coordinator broker by calling
+%%    `brod_client:get_group_coordinator'
+%% 2. connect group coordinator broker
+%% 3. send `offset_fetch_request' and wait for `offset_fetch_response'
+%% If Topics is an empty list, fetch offsets for all topics in the group
 %% @end
--spec fetch_committed_offsets(pid(), group_id(), [topic()]) ->
+-spec fetch_committed_offsets(brod:client(), group_id(), [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
-fetch_committed_offsets(SockPid, GroupId, Topics) ->
+fetch_committed_offsets(Client, GroupId, Topics) ->
+  with_sock(
+    connect_group_coordinator(Client, GroupId),
+    fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
+
+%%%_* Internal Functions =======================================================
+
+%% @private With a socket connected to the group coordinator broker, send
+%% `offset_fetch_request' and wait for `offset_fetch_response'
+%% @end
+-spec do_fetch_committed_offsets(brod:client_id() | pid(),
+                                 group_id(), [topic()]) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+do_fetch_committed_offsets(SockPid, GroupId, Topics) when is_pid(SockPid) ->
   Req = brod_kafka_request:offset_fetch_request(SockPid, GroupId, Topics),
   try
     #kpro_rsp{ tag = offset_fetch_response
@@ -309,8 +330,6 @@ fetch_committed_offsets(SockPid, GroupId, Topics) ->
     throw : Reason ->
       {error, Reason}
   end.
-
-%%%_* Internal Functions =======================================================
 
 %% @private Make a function to build fetch requests.
 %% The function takes offset and max_bytes as input as these two parameters
@@ -418,14 +437,26 @@ describe_groups(Coordinator, SockOpts, IDs) ->
 
 %% @doc Connect to consumer group coordinator broker.
 %% Done in steps: 1) connect to any of the given bootstrap ednpoints;
-%% 2) send group_coordinator_request to resolve group coordinator endpoint;
-%% 3) connect to the resolved endpoint and return the brod_sock pid
+%% 2) send `group_coordinator_request' to resolve group coordinator endpoint;
+%% 3) connect to the resolved endpoint and return the `brod_sock' pid
 %% @end
 -spec connect_group_coordinator([endpoint()], sock_opts(), group_id()) ->
         {ok, pid()} | {error, any()}.
 connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
   case resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) of
     {ok, Endpoint} -> try_connect([Endpoint], SockOpts);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @doc Connect to consumer group coordinator broker.
+%% Done in steps: 1) make use of `brod_client' metadata socket to resolve
+%% group coordinator broker endpoint, 2) connect to the resolved endpoint
+%% and return the `brod_sock' pid
+-spec connect_group_coordinator(brod:client(), brod:group_id()) ->
+        {ok, pid()} | {error, any()}.
+connect_group_coordinator(Client, GroupId) ->
+  case brod_client:get_group_coordinator(Client, GroupId) of
+    {ok, {Endpoint, SockOpts}} -> try_connect([Endpoint], SockOpts);
     {error, Reason} -> {error, Reason}
   end.
 

@@ -122,6 +122,13 @@ groups_test() ->
   assert_no_error(cmd("groups --describe")),
   assert_no_error(cmd("groups --describe --ids all")).
 
+commits_describe_test() ->
+  assert_no_error(cmd("commits --id test-group --describe")).
+
+commits_overwrite_test() ->
+  assert_no_error(cmd("commits --id test-group -t test-topic "
+                      "-o \"0:1\" -r 1d -p range")).
+
 assert_no_error(Result) ->
   case binary:match(iolist_to_binary(Result), <<"***">>) of
     nomatch -> ok;

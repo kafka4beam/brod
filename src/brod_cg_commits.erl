@@ -25,7 +25,6 @@
 -behaviour(brod_group_member).
 
 -export([ run/2
-        , run/3
         ]).
 
 -export([ start_link/2
@@ -76,14 +75,6 @@
         }).
 
 %%%_* APIs =====================================================================
-
-%% @doc Force commit offsets.
--spec run([brod:endpoint()], brod:client_config(), group_input()) ->
-        ok | no_return().
-run(BootstrapHosts, SockOpts, GroupInput) ->
-  ClientId = ?MODULE,
-  {ok, _} = brod_client:start_link(BootstrapHosts, ClientId, SockOpts),
-  run(ClientId, GroupInput).
 
 %% @doc Force commit offsets.
 run(ClientId, GroupInput) ->
