@@ -1235,7 +1235,7 @@ parse(Args, OptName, ParseFun) ->
 print_version() ->
   _ = application:load(brod),
   {_, _, V} = lists:keyfind(brod, 1, application:loaded_applications()),
-  print(V).
+  print([V, "\n"]).
 
 %% @private
 print(IoData) -> io:put_chars(IoData).
