@@ -61,4 +61,5 @@
 * 3.?.?
   * Enhancements
     - Add sh script to wrap brod-cli escript for erts dir auto discover
+    - Detailed log for connection estabilishment failures
 

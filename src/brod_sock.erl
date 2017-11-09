@@ -176,6 +176,9 @@ init(Parent, Host, Port, ClientId, Options) ->
         do_init(State, Sock, Host, Options)
       catch
         error : Reason ->
+          IsSsl = proplists:get_value(ssl, Options, false),
+          SaslOpt = brod_utils:get_sasl_opt(Options),
+          ok = maybe_log_hint(Host, Port, Reason, IsSsl, SaslOpt),
           erlang:exit({Reason, erlang:get_stacktrace()})
       end;
     {error, Reason} ->
@@ -198,9 +201,9 @@ do_init(State0, Sock, Host, Options) ->
     ok = inet:setopts(Sock, [{buffer, max(RecBufSize, SndBufSize)}]),
   SslOpts = proplists:get_value(ssl, Options, false),
   Mod = get_tcp_mod(SslOpts),
-  {ok, NewSock} = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
-  ok = maybe_sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
-                       brod_utils:get_sasl_opt(Options)),
+  NewSock = maybe_upgrade_to_ssl(Sock, Mod, SslOpts, Timeout),
+  ok = sasl_auth(Host, NewSock, Mod, ClientId, Timeout,
+                 brod_utils:get_sasl_opt(Options)),
   MaybeQuery = proplists:get_value(query_api_versions, Options),
   ok = maybe_query_api_versions(MaybeQuery, Host, ClientId,
                                 NewSock, Mod, Timeout),
@@ -229,12 +232,13 @@ query_api_versions(ClientId, Sock, Mod, Timeout) ->
   ok = setopts(Sock, Mod, [{active, false}]),
   Req = kpro:req(api_versions_request, _Vsn = 0, []),
   ReqBin = kpro:encode_request(ClientId, ?API_VERSIONS_REQ_CORRID, Req),
-  Rsp = inactive_request_sync(Sock, Mod, ReqBin, Timeout),
+  Rsp = inactive_request_sync(Sock, Mod, ReqBin, Timeout,
+                              query_api_versions_error),
   #kpro_rsp{tag = api_versions_response, vsn = 0, msg = Body} = Rsp,
   ErrorCode = kpro:find(error_code, Body),
   case ?IS_ERROR(ErrorCode) of
     true ->
-      exit({failed_to_query_api_versions, ErrorCode});
+      erlang:error({failed_to_query_api_versions, ErrorCode});
     false ->
       Versions = kpro:find(api_versions, Body),
       F = fun(S) ->
@@ -247,57 +251,61 @@ query_api_versions(ClientId, Sock, Mod, Timeout) ->
   end.
 
 %% @private Send request to active = false socket, and wait for response.
-inactive_request_sync(Sock, Mod, ReqBin, Timeout) ->
-  ok = Mod:send(Sock, ReqBin),
-  {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
-  {ok, RspBin} = Mod:recv(Sock, Len, Timeout),
-  {[Rsp], <<>>} = kpro:decode_response(<<Len:32, RspBin/binary>>),
-  Rsp.
+inactive_request_sync(Sock, Mod, ReqBin, Timeout, ErrorTag) ->
+  try
+    ok = Mod:send(Sock, ReqBin),
+    {ok, <<Len:32>>} = Mod:recv(Sock, 4, Timeout),
+    {ok, RspBin} = Mod:recv(Sock, Len, Timeout),
+    {[Rsp], <<>>} = kpro:decode_response(<<Len:32, RspBin/binary>>),
+    Rsp
+  catch
+    error : Reason ->
+      Stack = erlang:get_stacktrace(),
+      erlang:raise(error, {ErrorTag, Reason}, Stack)
+  end.
 
 get_tcp_mod(_SslOpts = true)  -> ssl;
 get_tcp_mod(_SslOpts = [_|_]) -> ssl;
 get_tcp_mod(_)                -> gen_tcp.
 
-maybe_upgrade_to_ssl(Sock, _Mod = ssl, _SslOpts = true, Timeout) ->
-  ssl:connect(Sock, [], Timeout);
-maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts = [_|_], Timeout) ->
-  ssl:connect(Sock, SslOpts, Timeout);
+maybe_upgrade_to_ssl(Sock, _Mod = ssl, SslOpts0, Timeout) ->
+  SslOpts = case SslOpts0 of
+              true -> [];
+              [_|_] -> SslOpts0
+            end,
+  case ssl:connect(Sock, SslOpts, Timeout) of
+    {ok, NewSock} -> NewSock;
+    {error, Reason} -> erlang:error({failed_to_upgrade_to_ssl, Reason})
+  end;
 maybe_upgrade_to_ssl(Sock, _Mod, _SslOpts, _Timeout) ->
-  {ok, Sock}.
+  Sock.
 
 %% @private
-maybe_sasl_auth(_Host, _Sock, _SockMod, _ClientId, _Timeout, ?undef) ->
+sasl_auth(_Host, _Sock, _Mod, _ClientId, _Timeout, ?undef) ->
+  %% no auth
   ok;
-maybe_sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts) ->
-  try
-    ok = sasl_auth(Host, Sock, SockMod, ClientId, Timeout, SaslOpts)
-  catch
-    error : Reason ->
-      exit({Reason, erlang:get_stacktrace()})
-  end.
-
-%% @private
 sasl_auth(_Host, Sock, Mod, ClientId, Timeout,
           {_Method = plain, SaslUser, SaslPassword}) ->
   ok = setopts(Sock, Mod, [{active, false}]),
   Req = kpro:req(sasl_handshake_request, _V = 0, [{mechanism, <<"PLAIN">>}]),
   HandshakeRequestBin =
     kpro:encode_request(ClientId, ?SASL_AUTH_REQ_CORRID, Req),
-  Rsp = inactive_request_sync(Sock, Mod, HandshakeRequestBin, Timeout),
+  Rsp = inactive_request_sync(Sock, Mod, HandshakeRequestBin, Timeout,
+                              sasl_auth_error),
   #kpro_rsp{tag = sasl_handshake_response, vsn = 0, msg = Body} = Rsp,
   ErrorCode = kpro:find(error_code, Body),
   case ?IS_ERROR(ErrorCode) of
     true ->
-      exit({sasl_auth_error, ErrorCode});
+      erlang:error({sasl_auth_error, ErrorCode});
     false ->
       ok = Mod:send(Sock, sasl_plain_token(SaslUser, SaslPassword)),
       case Mod:recv(Sock, 4, Timeout) of
         {ok, <<0:32>>} ->
           ok;
         {error, closed} ->
-          exit({sasl_auth_error, bad_credentials});
+          erlang:error({sasl_auth_error, bad_credentials});
         Unexpected ->
-          exit({sasl_auth_error, Unexpected})
+          erlang:error({sasl_auth_error, Unexpected})
       end
   end;
 sasl_auth(Host, Sock, Mod, ClientId, Timeout,
@@ -307,7 +315,7 @@ sasl_auth(Host, Sock, Mod, ClientId, Timeout,
     ok ->
       ok;
     {error, Reason} ->
-      exit({callback_auth_error, Reason})
+      erlang:error({sasl_auth_error, Reason})
   end.
 
 %% @private
@@ -578,6 +586,49 @@ decode_response(#acc{expected_size = ExpectedSize,
   kpro:decode_response(iolist_to_binary(lists:reverse(AccBuffer)));
 decode_response(Acc) ->
   {[], Acc}.
+
+%% @private brod supported endpoint is tuple {Hostname, Port}
+%% which lacks of hint on which protocol to use.
+%% It would be a bit nicer if we support endpoint formats like below:
+%%    PLAINTEX://hostname:port
+%%    SSL://hostname:port
+%%    SASL_PLAINTEXT://hostname:port
+%%    SASL_SSL://hostname:port
+%% which may give some hint for early config validation before trying to
+%% connect to the endpoint.
+%%
+%% However, even with the hint, it is still quite easy to misconfig and endup
+%% with a clueless crash report.  Here we try to make a guess on what went
+%% wrong in case there was an error during connection estabilishment.
+%% @end
+maybe_log_hint(Host, Port, Reason, IsSsl, SaslOpt) ->
+  case hint_msg(Reason, IsSsl, SaslOpt) of
+    ?undef ->
+      ok;
+    Msg ->
+      error_logger:error_msg("Failed to connect to ~s:~p\n~s\n",
+                             [Host, Port, Msg])
+  end.
+
+%% @private
+hint_msg({failed_to_upgrade_to_ssl, R}, _IsSsl, SaslOpt) when R =:= closed;
+                                                              R =:= timeout ->
+  case SaslOpt of
+    ?undef -> "Make sure connecting to a 'SSL://' listener";
+    _      -> "Make sure connecting to 'SASL_SSL://' listener"
+  end;
+hint_msg({sasl_auth_error, 'IllegalSaslState'}, true, _SaslOpt) ->
+  "Make sure connecting to 'SASL_SSL://' listener";
+hint_msg({sasl_auth_error, 'IllegalSaslState'}, false, _SaslOpt) ->
+  "Make sure connecting to 'SASL_PLAINTEXT://' listener";
+hint_msg({sasl_auth_error, {badmatch, {error, enomem}}}, false, _SaslOpts) ->
+  %% This happens when KAFKA is expecting SSL handshake
+  %% but client started SASL handshake instead
+  "Make sure 'ssl' option is in client config, \n"
+  "or make sure connecting to 'SASL_PLAINTEXT://' listener";
+hint_msg(_, _, _) ->
+  %% Sorry, I have no clue, please read the crash log
+  ?undef.
 
 %%%_* Eunit ====================================================================
 
