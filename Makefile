@@ -13,7 +13,8 @@ dep_supervisor3_commit = 1.1.5
 dep_kafka_protocol_commit = 1.1.0
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
-ESCRIPT_FILE = scripts/brod
+ERTS_VSN = $(shell erl -noshell -eval 'io:put_chars(erlang:system_info(version)), halt()')
+ESCRIPT_FILE = scripts/brod_cli
 ESCRIPT_EMU_ARGS = -sname brod_cli
 
 COVER = true
@@ -44,8 +45,10 @@ app::
 include erlang.mk
 
 rel:: escript
-	cp $(ESCRIPT_FILE) _rel/brod/bin/brod
-	tar -pczf _rel/brod.tar.gz -C _rel brod
+	@cp scripts/brod _rel/brod/bin/brod
+	@cp $(ESCRIPT_FILE) _rel/brod/bin/brod_cli
+	@ln -sf erts-$(ERTS_VSN) _rel/brod/erts
+	@tar -pczf _rel/brod.tar.gz -C _rel brod
 
 test-env:
 	./scripts/setup-test-env.sh

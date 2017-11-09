@@ -1,0 +1,22 @@
+#!/bin/sh -e
+
+# can not readlink -f because mac version readlink does not support -f
+LINK="$(readlink "$0")" || true
+if [ -z $LINK ]; then
+  # not a symlink
+  BINDIR="$(dirname "$0")"
+else
+  # get the link target's dir
+  BINDIR="$(dirname "$LINK")"
+fi
+
+ERTS_BIN="$BINDIR/../erts/bin"
+
+if [ -d  "$ERTS_BIN" ]; then
+  # this is a release, try to use erts in release
+  exec $ERTS_BIN/escript $BINDIR/brod_cli "$@"
+else
+  # hoping the user has erts in PATH
+  exec $BINDIR/brod_cli "$@"
+fi
+

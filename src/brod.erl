@@ -90,11 +90,6 @@
         , fetch_committed_offsets/3
         ]).
 
-%% escript
--ifdef(BROD_CLI).
--export([main/1]).
--endif.
-
 -export_type([ call_ref/0
              , cg/0
              , cg_protocol_type/0
@@ -691,10 +686,6 @@ fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(Client, GroupId) ->
   brod_utils:fetch_committed_offsets(Client, GroupId, []).
-
--ifdef(BROD_CLI).
-main(Args) -> brod_cli:main(Args, halt).
--endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
