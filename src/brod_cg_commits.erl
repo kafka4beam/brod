@@ -159,6 +159,7 @@ init({Client, GroupInput}) ->
   Config = [ {partition_assignment_strategy, callback_implemented}
            , {offset_retention_seconds, Retention}
            , {protocol_name, ProtocolName}
+           , {rejoin_delay_seconds, 2}
            ],
   {ok, Pid} = brod_group_coordinator:start_link(Client, GroupId, [Topic],
                                                 Config, ?MODULE, self()),

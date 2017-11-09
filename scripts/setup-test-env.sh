@@ -39,3 +39,5 @@ create_topic "brod-demo-group-subscriber-loc" 3 2
 create_topic "brod_compression_SUITE"
 create_topic "test-topic"
 
+# this is to warm-up kafka group coordinator for deterministic in tests
+sudo docker exec kafka_1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --new-consumer --group test-group --describe > /dev/null 2>&1
