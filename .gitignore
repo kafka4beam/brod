@@ -7,14 +7,13 @@ cover/
 test/*.beam
 test/ct.cover.spec
 brod.d
-scripts/brod
+scripts/brod_cli
 .brod.plt
 .erlang.mk
 *.coverdata
 ct.coverdata
 sys.config
 xrefr
-brod
 brod.plt
 _build/
 _rel/

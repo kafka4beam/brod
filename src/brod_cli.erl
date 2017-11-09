@@ -18,7 +18,7 @@
 
 -ifdef(BROD_CLI).
 
--export([main/2]).
+-export([main/1, main/2]).
 
 -include("brod_int.hrl").
 
@@ -295,6 +295,8 @@ options:
 -type log_level() :: non_neg_integer().
 
 -type command() :: string().
+
+main(Args) -> main(Args, halt).
 
 main(["-h" | _], _Stop) ->
   print(?MAIN_DOC);
