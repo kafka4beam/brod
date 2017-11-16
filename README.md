@@ -72,7 +72,7 @@ with some non-important printouts trimmed.
 > Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end.
 > brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                    _ConsumerConfig=[{begin_offset, earliest}],
-                                   _CommittdOffsets=[], SubscriberCallbackFun,
+                                   _CommittdOffsets=[], message, SubscriberCallbackFun,
                                    _CallbackState=self()).
 > Receive().
 #kafka_message{offset = 0,magic_byte = 0,attributes = 0,
