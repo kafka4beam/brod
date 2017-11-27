@@ -58,8 +58,10 @@
     - Make group coordinator restart on heartbeat timeout
 * 3.3.1
   * Fix brod-cli commits command redandunt socket usage.
-* 3.?.?
+* 3.3.2
   * Enhancements
     - Add sh script to wrap brod-cli escript for erts dir auto discover
     - Detailed log for connection estabilishment failures
+  * Bug Fixes
+    - Demonitor producer pid after sync_produce_request timeout
 
