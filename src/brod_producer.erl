@@ -207,6 +207,7 @@ sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
       {error, {producer_down, Reason}}
   after
     Timeout ->
+      erlang:demonitor(Mref, [flush]),
       {error, timeout}
   end.
 
