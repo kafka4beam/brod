@@ -558,13 +558,13 @@ send_fetch_request(#state{ begin_offset = BeginOffset
   (is_integer(BeginOffset) andalso BeginOffset >= 0) orelse
     erlang:error({bad_begin_offset, BeginOffset}),
   Request =
-    kpro:fetch_request(_Vsn = 0, %% TODO: pick version
-                       State#state.topic,
-                       State#state.partition,
-                       State#state.begin_offset,
-                       State#state.max_wait_time,
-                       State#state.min_bytes,
-                       State#state.max_bytes),
+    brod_kafka_request:fetch_request(SocketPid,
+                                     State#state.topic,
+                                     State#state.partition,
+                                     State#state.begin_offset,
+                                     State#state.max_wait_time,
+                                     State#state.min_bytes,
+                                     State#state.max_bytes),
   brod_sock:request_async(SocketPid, Request).
 
 %% @private
