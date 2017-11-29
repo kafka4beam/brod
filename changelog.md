@@ -67,4 +67,7 @@
 * 3.3.3
   * Bug Fixes
     - Add a --no-api-vsn-query option for brod-cli to support kafka 0.9
+    - Bump kafka_protocol to 1.1.1 to fix relative offsets issue
+      so brod-cli can fetch compressed batches as expected,
+      also brod_consumer can start picking fetch request version
 

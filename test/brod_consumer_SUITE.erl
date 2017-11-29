@@ -34,6 +34,7 @@
 
 %% Test cases
 -export([ t_direct_fetch/1
+        , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
         , t_consumer_socket_restart/1
@@ -83,13 +84,9 @@ init_per_testcase(Case, Config0) ->
   Topic = ?TOPIC,
   CooldownSecs = 2,
   ProducerRestartDelay = 1,
-  ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
+  ClientConfig0 = [{reconnect_cool_down_seconds, CooldownSecs}],
   ProducerConfig = [ {partition_restart_delay_seconds, ProducerRestartDelay}
                    , {max_retries, 0}],
-  brod:stop_client(Client),
-  ok = brod:start_client(?HOSTS, Client, ClientConfig),
-  ok = brod:start_producer(Client, Topic, ProducerConfig),
-  ok = brod:start_consumer(Client, Topic, []),
   Config =
     try
       ?MODULE:Case({init, Config0})
@@ -97,6 +94,11 @@ init_per_testcase(Case, Config0) ->
       error : function_clause ->
         Config0
     end,
+  ClientConfig1 = proplists:get_value(client_config, Config, []),
+  brod:stop_client(Client),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig0 ++ ClientConfig1),
+  ok = brod:start_producer(Client, Topic, ProducerConfig),
+  ok = brod:start_consumer(Client, Topic, []),
   [{client, Client} | Config].
 
 end_per_testcase(Case, Config) ->
@@ -140,6 +142,25 @@ t_direct_fetch(Config) when is_list(Config) ->
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
+t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key = make_unique_key(),
+  Value = crypto:strong_rand_bytes(100),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST),
+  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1,
+                           _Timeout = 1000, _MinBytes = 0, _MaxBytes = 1),
+  ?assertEqual(Key, Msg#kafka_message.key),
+  ok.
+
+t_direct_fetch_expand_max_bytes({init, Config}) when is_list(Config) ->
+  %% kafka returns empty message set when it's 0.9
+  %% or when fetch request sent was version 0
+  %% Avoid querying api version will make brod send v0 requests
+  [{client_config, [{query_api_versions, false}]} | Config];
 t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
   Client = ?config(client),
   Topic = ?TOPIC,
@@ -159,7 +180,10 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
 %% @end
 t_consumer_max_bytes_too_small({init, Config}) ->
   meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
-  Config;
+  %% kafka returns empty message set when it's 0.9
+  %% or when fetch request sent was version 0
+  %% Avoid querying api version will make brod send v0 requests
+  [{client_config, [{query_api_versions, false}]} | Config];
 t_consumer_max_bytes_too_small({'end', _Config}) ->
   meck:unload(kpro);
 t_consumer_max_bytes_too_small(Config) ->

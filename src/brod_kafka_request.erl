@@ -52,14 +52,14 @@ produce_request(MaybePid, Topic, Partition, KvList,
 %% `brod_kafka_apis:pick_version/2' to resolve version.
 %%
 %% NOTE: `pick_version' is essentially a ets lookup, for intensive callers
-%%       like `brod_producer', we should pick version before hand
+%%       like `brod_producer', we should pick version beforehand
 %%       and re-use it for each produce request.
 %% @end
--spec fetch_request(pid() | vsn(), topic(), partition(), offset(),
+-spec fetch_request(pid(), topic(), partition(), offset(),
                     kpro:wait(), kpro:count(), kpro:count()) -> kpro:req().
-fetch_request(MaybePid, Topic, Partition, Offset,
+fetch_request(Pid, Topic, Partition, Offset,
               WaitTime, MinBytes, MaxBytes) ->
-  Vsn = pick_version(fetch_request, MaybePid),
+  Vsn = pick_version(fetch_request, Pid),
   kpro:fetch_request(Vsn, Topic, Partition, Offset,
                      WaitTime, MinBytes, MaxBytes).
 
