@@ -64,4 +64,7 @@
     - Detailed log for connection estabilishment failures
   * Bug Fixes
     - Demonitor producer pid after sync_produce_request timeout
+* 3.3.3
+  * Bug Fixes
+    - Add a --no-api-vsn-query option for brod-cli to support kafka 0.9
 
