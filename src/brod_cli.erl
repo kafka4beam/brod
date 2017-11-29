@@ -64,6 +64,7 @@ commands:
                          password in two lines.
   --ebin-paths=<dirs>    Comma separated directory names for extra beams,
                          This is to support user compiled message formatters
+  --no-api-vsn-query     Do not query api version (for kafka 0.9 or earlier)
 "
 ).
 
@@ -372,9 +373,11 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
     SockOpts = parse_sock_opts(ParsedArgs),
     Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
+    NoApiQuery = parse(ParsedArgs, "--no-api-vsn-query", fun parse_boolean/1),
     ok = code:add_pathsa(Paths),
     verbose("sock opts: ~p\n", [SockOpts]),
-    run(Command, Brokers, SockOpts, ParsedArgs)
+    ClientConfig = [{query_api_versions, not NoApiQuery} |  SockOpts],
+    run(Command, Brokers, ClientConfig, ParsedArgs)
   catch
     throw : Reason when is_binary(Reason) ->
       %% invalid options etc.
