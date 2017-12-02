@@ -100,9 +100,9 @@
 %-callback get_committed_offsets(brod:group_id(),
 %                                [{brod:topic(), brod:partition()}],
 %                                cb_state()) ->  {ok,
-%                                                 [{{brod:topic()
-%                                                   , brod:partition()}
-%                                                  , brod:offset()}],
+%                                                 [{{brod:topic(),
+%                                                    brod:partition()},
+%                                                   brod:offset()}],
 %                                                 cb_state()}.
 %
 %% This function is called only when 'partition_assignment_strategy' is
@@ -268,8 +268,12 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
 
 %% @doc Called by group coordinator when initializing the assignments
 %% for subscriber.
-%% NOTE: this function is called only when it is DISABLED to commit offsets
-%%       to kafka.
+%%
+%% NOTE: This function is called only when `offset_commit_policy' is set to
+%%       `consumer_managed' in group config.
+%%
+%% NOTE: The committed offsets should be the offsets for successfully processed
+%%       (acknowledged) messages, not the begin-offset to start fetching from.
 %% @end
 -spec get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
         {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
@@ -352,7 +356,7 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
   case CbModule:get_committed_offsets(GroupId, TopicPartitions, CbState) of
     {ok, Result, NewCbState} ->
       NewState = State#state{cb_state = NewCbState},
-      {reply, Result, NewState};
+      {reply, {ok, Result}, NewState};
     Unknown ->
       erlang:error({bad_return_value,
                     {CbModule, get_committed_offsets, Unknown}})
@@ -545,8 +549,8 @@ subscribe_partition(Client, Consumer) ->
     true ->
       Consumer;
     false ->
-      %% fetch from the last committed offset + 1
-      %% otherwise fetch from the begin offset
+      %% fetch from the last acked offset + 1
+      %% otherwise fetch from the assigned begin_offset
       BeginOffset = case AckedOffset of
                       ?undef        -> BeginOffset0;
                       N when N >= 0 -> N + 1

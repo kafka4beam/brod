@@ -137,12 +137,11 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
 %% @doc Called by group coordinator when initializing the assignments
 %% for subscriber.
 %% NOTE: this function is called only when it is DISABLED to commit offsets
-%%       to kafka.
+%%       to kafka. i.e. offset_commit_policy is set to consumer_managed
 %% @end
 -spec get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
         {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
-get_committed_offsets(_Pid, _TopicPartitions) ->
-  {ok, []}.
+get_committed_offsets(_Pid, _TopicPartitions) -> {ok, []}.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -252,8 +251,10 @@ handle_cast({new_assignments, _MemberId, GenerationId, Assignments},
   %% Stage all offsets in coordinator process
   lists:foreach(
     fun({Partition, Offset}) ->
-        brod_group_coordinator:ack(Pid, GenerationId,
-                                   MyTopic, Partition, Offset)
+        %% -1 here, because brod_group_coordinator +1 to commit
+        OffsetToCommit = Offset - 1,
+        brod_group_coordinator:ack(Pid, GenerationId, MyTopic,
+                                   Partition, OffsetToCommit)
     end, OffsetsToCommit),
   %% Now force it to commit
   case brod_group_coordinator:commit_offsets(Pid) of
@@ -309,7 +310,7 @@ find_my_member_id(CoordinatorPid, [H | T]) ->
   {MemberId, #kafka_group_member_metadata{user_data = UD}} = H,
   try
     L = binary_to_term(UD),
-    {_, CoordinatorPid} = lists:keyfind(<<"member_coordinator">>, 1, L),
+    {_, CoordinatorPid} = lists:keyfind(member_coordinator, 1, L),
     MemberId
   catch
     _ : _ ->
