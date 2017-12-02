@@ -36,12 +36,12 @@
 
 -include("brod_int.hrl").
 
--define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin). %% default
+-define(PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN, roundrobin_v2). %% default
 
 -type protocol_name() :: string().
 -type brod_offset_commit_policy() :: commit_to_kafka_v2 % default
                                    | consumer_managed.
--type brod_partition_assignment_strategy() :: roundrobin
+-type brod_partition_assignment_strategy() :: roundrobin_v2
                                             | callback_implemented.
 -type partition_assignment_strategy() :: brod_partition_assignment_strategy().
 
@@ -159,8 +159,8 @@
 %% CbModule:  The module which implements group coordinator callbacks
 %% MemberPid: The member process pid.
 %% Config: The group coordinator configs in a proplist, possible entries:
-%%  - partition_assignment_strategy  (optional, default = roundrobin)
-%%      roundrobin (topic-sticky):
+%%  - partition_assignment_strategy  (optional, default = roundrobin_v2)
+%%      roundrobin_v2 (topic-sticky):
 %%        Take all topic-offset (sorted [{TopicName, Partition}] list)
 %%        assign one to each member in a roundrobin fashion. However only
 %%        partitions in the subscription topic list are assiged.
@@ -205,7 +205,7 @@
 %%      The default special value -1 indicates that the __consumer_offsets
 %%      topic retention policy is used.
 %%      This config is irrelevant if offset_commit_policy is consumer_managed.
-%%  - protocol_name (optional, default = roundrobin)
+%%  - protocol_name (optional, default = roundrobin_v2)
 %%      This is the protocol name used when join a group, if not given,
 %%      by default `partition_assignment_strategy' is used as the protocol name.
 %%      Setting a protocol name allows to interact with consumer group members
@@ -686,7 +686,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
       fun({{Topic, Partition}, Offset}) ->
         PartitionOffset =
           [ {partition, Partition}
-          , {offset, Offset}
+          , {offset, Offset + 1} %% +1 since roundrobin_v2 protocol
           , {metadata, Metadata}
           ],
         {Topic, PartitionOffset}
@@ -820,13 +820,13 @@ all_topics(Members) ->
 -spec get_partitions(brod:client(), brod:topic()) -> [brod:partition()].
 get_partitions(Client, Topic) ->
   Count = ?ESCALATE(brod_client:get_partitions_count(Client, Topic)),
-  lists:seq(0, Count-1).
+  lists:seq(0, Count - 1).
 
 %% @private
--spec do_assign_partitions(roundrobin, [member()],
+-spec do_assign_partitions(roundrobin_v2, [member()],
                            [{brod:topic(), brod:partition()}]) ->
                               [{member_id(), [brod:partition_assignment()]}].
-do_assign_partitions(roundrobin, Members, AllPartitions) ->
+do_assign_partitions(roundrobin_v2, Members, AllPartitions) ->
   F = fun({MemberId, M}) ->
         SubscribedTopics = M#kafka_group_member_metadata.topics,
         IsValidAssignment = fun(Topic, _Partition) ->
@@ -878,7 +878,8 @@ get_topic_assignments(#state{} = State, Assignment) ->
       end, PartitionAssignments),
   TopicPartitions = lists:append(TopicPartitions0),
   CommittedOffsets = get_committed_offsets(State, TopicPartitions),
-  resolve_begin_offsets(TopicPartitions, CommittedOffsets).
+  IsConsumerManaged = State#state.offset_commit_policy =:= consumer_managed,
+  resolve_begin_offsets(TopicPartitions, CommittedOffsets, IsConsumerManaged).
 
 %% @private Fetch committed offsets from kafka,
 %% or call the consumer callback to read committed offsets.
@@ -889,7 +890,8 @@ get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , member_pid           = MemberPid
                             , member_module        = MemberModule
                             }, TopicPartitions) ->
-  MemberModule:get_committed_offsets(MemberPid, TopicPartitions);
+  {ok, R} = MemberModule:get_committed_offsets(MemberPid, TopicPartitions),
+  R;
 get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                             , groupId              = GroupId
                             , sock_pid             = SockPid
@@ -911,7 +913,8 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
         lists:foldl(
           fun(PartitionOffset, Acc) ->
             Partition = kpro:find(partition, PartitionOffset),
-            Offset = kpro:find(offset, PartitionOffset),
+            Offset0 = kpro:find(offset, PartitionOffset),
+            Metadata = kpro:find(metadata, PartitionOffset),
             EC = kpro:find(error_code, PartitionOffset),
             case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
               true ->
@@ -919,6 +922,7 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                 Acc;
               false ->
                 ?ESCALATE_EC(EC),
+                Offset = maybe_upgrade_from_roundrobin_v1(Offset0, Metadata),
                 [{{Topic, Partition}, Offset} | Acc]
             end
           end, [], PartitionOffsets)
@@ -926,29 +930,36 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
   lists:append(CommittedOffsets0).
 
 %% @private
--spec resolve_begin_offsets([TP], [{TP, brod:offset()}]) ->
+-spec resolve_begin_offsets([TP], [{TP, brod:offset()}], boolean()) ->
         brod:received_assignments()
           when TP :: {brod:topic(), brod:partition()}.
-resolve_begin_offsets([], _) -> [];
-resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets) ->
-  Offset =
+resolve_begin_offsets([], _CommittedOffsets, _IsConsumerManaged) -> [];
+resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
+                      IsConsumerManaged) ->
+  BeginOffset =
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
-      {_, Offset_} when is_integer(Offset_) ->
-        Offset_;
+      {_, Offset} when IsConsumerManaged ->
+        %% roundrobin_v2 is only for kafka commits
+        %% for consumer managed offsets, it's still acked offsets
+        %% therefore we need to +1 as begin_offset
+        Offset + 1;
+      {_, Offset} ->
+        %% offsets committed to kafka is already begin_offset
+        %% since the introduction of 'roundrobin_v2' protocol
+        Offset;
       false  ->
         %% No commit history found
+        %% Should use default begin_offset in consumer config
         ?undef
     end,
-  BeginOffset = case is_integer(Offset) of
-                  true  -> Offset + 1;
-                  false -> Offset
-                end,
   Assignment =
     #brod_received_assignment{ topic        = Topic
                              , partition    = Partition
                              , begin_offset = BeginOffset
                              },
-  [Assignment | resolve_begin_offsets(Rest, CommittedOffsets)].
+  [ Assignment
+  | resolve_begin_offsets(Rest, CommittedOffsets, IsConsumerManaged)
+  ].
 
 %% @private Start a timer to send a loopback command to self() to trigger
 %% a heartbeat request to the group coordinator.
@@ -1023,7 +1034,10 @@ log(#state{ groupId  = GroupId
 
 %% @private Make metata to be committed together with offsets.
 -spec make_offset_commit_metadata() -> binary().
-make_offset_commit_metadata() -> coordinator_id().
+make_offset_commit_metadata() ->
+  %% Use a '+1/' prefix as a commit from group member which supports
+  %% roundrobin_v2 protocol
+  bin(["+1/", coordinator_id()]).
 
 %% @private Make group member's user data in join_group_request
 %%
@@ -1043,8 +1057,10 @@ user_data(Action) ->
     [ coordinator_info(Action)
     ]).
 
-coordinator_info(join) -> {<<"member_coordinator">>, self()};
-coordinator_info(assign) -> {<<"leader_coordinator">>, self()}.
+%% @private
+-spec coordinator_info(join | assign) -> {atom(), pid()}.
+coordinator_info(join) -> {member_coordinator, self()};
+coordinator_info(assign) -> {leader_coordinator, self()}.
 
 %% @private Make a client_id() to be used in the requests sent over the group
 %% coordinator's socket (group coordinator on the other end), this id will be
@@ -1063,6 +1079,37 @@ coordinator_id() ->
 -spec bin(iodata()) -> binary().
 bin(X) -> iolist_to_binary(X).
 
+%% @private Before roundrobin_v2, brod had two versions of commit metadata:
+%% 1. "ts() node() pid()"
+%%    e.g. "2017-10-24:18:20:55.475670 'nodename@host-name' <0.18980.6>"
+%% 2. "node()/pid()"
+%%    e.g. "'nodename@host-name'/<0.18980.6>"
+%% Then roundrobin_v2:
+%%    "+1/node()/pid()"
+%%    e.g. "+1/'nodename@host-name'/<0.18980.6>"
+%% Here we try to recognize brod commits using a regexp,
+%% then check the +1 prefix to exclude roundrobin_v2.
+%% @end
+-spec is_roundrobin_v1_commit(?kpro_null | binary()) -> boolean().
+is_roundrobin_v1_commit(?kpro_null) -> false;
+is_roundrobin_v1_commit(<<"+1/", _/binary>>) -> false;
+is_roundrobin_v1_commit(Metadata) ->
+  case re:run(Metadata, ".*@.*[/|\s]<0\.[0-9]+\.[0-9]+>$") of
+    nomatch -> false;
+    {match, _} -> true
+  end.
+
+%% @private Upgrade offset from old roundrobin protocol to new.
+%% old (before roundrobin_v2) brod commits acked offsets not begin_offset
+%% @end
+-spec maybe_upgrade_from_roundrobin_v1(brod:offset(), binary()) ->
+        brod:offset().
+maybe_upgrade_from_roundrobin_v1(Offset, Metadata) ->
+  case is_roundrobin_v1_commit(Metadata) of
+    true  -> Offset + 1;
+    false -> Offset
+  end.
+
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -1077,6 +1124,17 @@ merge_acked_offsets_test() ->
                merge_acked_offsets([{{<<"topic1">>, 1}, 1},
                                     {{<<"topic1">>, 2}, 1}],
                                    [{{<<"topic1">>, 1}, 2}])),
+  ok.
+
+is_roundrobin_v1_commit_test() ->
+  M1 = bin("2017-10-24:18:20:55.475670 'nodename@host-name' <0.18980.6>"),
+  M2 = bin("'nodename@host-name'/<0.18980.6>"),
+  ?assert(is_roundrobin_v1_commit(M1)),
+  ?assert(is_roundrobin_v1_commit(M2)),
+  ?assertNot(is_roundrobin_v1_commit(<<"">>)),
+  ?assertNot(is_roundrobin_v1_commit(?kpro_null)),
+  ?assertNot(is_roundrobin_v1_commit(<<"+1/not-node()-pid()">>)),
+  ?assertNot(is_roundrobin_v1_commit(make_offset_commit_metadata())),
   ok.
 
 -endif. % TEST

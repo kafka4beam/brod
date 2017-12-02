@@ -47,9 +47,11 @@
 -include("brod_int.hrl").
 
 %% Call the callback module to initialize assignments.
-%% NOTE: this function is called only when 'offset_commit_policy' is
-%% 'consumer_managed' in group config.
-%% see brod_group_coordinator:start_link/6. for more group config details.
+%% NOTE: This function is called only when `offset_commit_policy' is
+%%       `consumer_managed' in group config.
+%%       see brod_group_coordinator:start_link/6. for more group config details
+%% NOTE: The committed offsets should be the offsets for successfully processed
+%%       (acknowledged) messages, not the begin-offset to start fetching from.
 -callback get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
             {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
 

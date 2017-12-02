@@ -144,6 +144,9 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages from the given partition set. Use atom 'all' to subscribe to all
 %% partitions. Messages are handled by calling the callback function.
+%%
+%% NOTE: CommittedOffsets are the offsets for the messages that are successfully
+%%       processed (acknoledged), not the begin-offset ot start fetching from.
 %% @end
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), committed_offsets(),

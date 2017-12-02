@@ -265,6 +265,13 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%       Timeout when trying to connect to one endpoint.
 %%     request_timeout (optional, default=240000, constraint: >= 1000)
 %%       Timeout when waiting for a response, socket restart when timedout.
+%%     query_api_versions (optional, default=true)
+%%       Must be set to false to work with kafka versions prior to 0.10,
+%%       When set to 'true', brod_sock will send a query request to get
+%%       the broker supported API version ranges. When set to 'false', brod
+%%       will alway use the lowest supported API version when sending requests
+%%       to kafka. Supported API version ranges can be found in:
+%%       `brod_kafka_apis:supported_versions/1'
 %% @end
 -spec start_client([endpoint()], client_id(), client_config()) ->
                       ok | {error, any()}.
