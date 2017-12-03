@@ -941,7 +941,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
       {_, Offset} when IsConsumerManaged ->
         %% roundrobin_v2 is only for kafka commits
         %% for consumer managed offsets, it's still acked offsets
-        %% therefor we need to +1 as begin-offset
+        %% therefore we need to +1 as begin-offset
         Offset + 1;
       {_, Offset} ->
         %% offsets committed to kafka is already begin offset
