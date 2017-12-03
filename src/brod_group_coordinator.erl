@@ -941,15 +941,15 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
       {_, Offset} when IsConsumerManaged ->
         %% roundrobin_v2 is only for kafka commits
         %% for consumer managed offsets, it's still acked offsets
-        %% therefore we need to +1 as begin-offset
+        %% therefore we need to +1 as begin_offset
         Offset + 1;
       {_, Offset} ->
-        %% offsets committed to kafka is already begin offset
+        %% offsets committed to kafka is already begin_offset
         %% since the introduction of 'roundrobin_v2' protocol
         Offset;
       false  ->
         %% No commit history found
-        %% Should use default begin offset in consumer config
+        %% Should use default begin_offset in consumer config
         ?undef
     end,
   Assignment =
@@ -1100,8 +1100,7 @@ is_roundrobin_v1_commit(Metadata) ->
   end.
 
 %% @private Upgrade offset from old roundrobin protocol to new.
-%% old (before roundrobin_v2) brod commits acked offsets
-%% not the next offset (begin offset) to fetch
+%% old (before roundrobin_v2) brod commits acked offsets not begin_offset
 %% @end
 -spec maybe_upgrade_from_roundrobin_v1(brod:offset(), binary()) ->
         brod:offset().

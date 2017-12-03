@@ -218,6 +218,7 @@ start_link(Client, GroupId, Topics, GroupConfig,
           ConsumerConfig, MessageType, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
 
+%% @doc Stop group subscriber, wait for pid DOWN before return.
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),
@@ -273,7 +274,7 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
 %%       `consumer_managed' in group config.
 %%
 %% NOTE: The committed offsets should be the offsets for successfully processed
-%%       (acknowledged) messages, not the begin-offset to start fetching from.
+%%       (acknowledged) messages, not the `begin_offset' to start fetching from.
 %% @end
 -spec get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
         {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
@@ -382,8 +383,8 @@ handle_call(unsubscribe_all_partitions, _From,
             ok
         end
     end, Consumers),
-  {reply, ok, State#state{ consumers        = []
-                         , is_blocked       = true
+  {reply, ok, State#state{ consumers  = []
+                         , is_blocked = true
                          }};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.

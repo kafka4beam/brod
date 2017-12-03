@@ -276,22 +276,21 @@ t_async_acks(Config) when is_list(Config) ->
 
 t_2_members_subscribe_to_different_topics({init, Config}) ->
   CasePid = self(),
-  Ref = make_ref(),
   meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
   meck:expect(brod, subscribe,
               fun(Client, Pid, Topic, Partition, Opts) ->
                   {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
                                                        Partition, Opts]),
-                  CasePid ! {subscribed, Ref, {Topic, Partition}, Pid},
+                  CasePid ! {subscribed, {Topic, Partition}, ConsumerPid},
                   {ok, ConsumerPid}
               end),
   meck:expect(brod, unsubscribe,
               fun(ConsumerPid, SubscriberPid) ->
                   meck:passthrough([ConsumerPid, SubscriberPid]),
-                  CasePid ! {unsubscribed, Ref, ConsumerPid},
+                  CasePid ! {unsubscribed, ConsumerPid},
                   ok
               end),
-  [{ref, Ref} | Config];
+  Config;
 t_2_members_subscribe_to_different_topics({'end', Config}) when is_list(Config) ->
   meck:unload(brod);
 t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
@@ -314,8 +313,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC3],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
-  Ref = ?config(ref),
-  ok = wait_for_subscribers(Ref, [?TOPIC2, ?TOPIC3]),
+  ok = wait_for_subscribers([?TOPIC2, ?TOPIC3]),
   Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
                     {ok, rand_uniform(PartitionCnt)}
                 end,
@@ -370,7 +368,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
 %%
 %% This function maintains a list of subscription states,
 %% and returns once all topic-partitions reach 'subscribed' state.
-wait_for_subscribers(Ref, Topics) ->
+wait_for_subscribers(Topics) ->
   PerTopic =
     fun(Topic) ->
         {ok, Count} = brod_client:get_partitions_count(?CLIENT_ID, Topic),
@@ -379,20 +377,20 @@ wait_for_subscribers(Ref, Topics) ->
                   end, lists:seq(0, Count - 1))
     end,
   States = lists:flatten(lists:map(PerTopic, Topics)),
-  do_wait_for_subscribers(Ref, States).
+  do_wait_for_subscribers(States).
 
-do_wait_for_subscribers(Ref, States) ->
+do_wait_for_subscribers(States) ->
   case lists:all(fun({_, Pid}) -> is_pid(Pid) end, States) of
     true -> ok;
     false ->
       receive
-        {subscribed, Ref, TP, ConsumerPid} ->
+        {subscribed, TP, ConsumerPid} ->
           NewStates = lists:keystore(TP, 1, States, {TP, ConsumerPid}),
-          do_wait_for_subscribers(Ref, NewStates);
-        {unsubscribed, Ref, ConsumerPid} ->
+          do_wait_for_subscribers(NewStates);
+        {unsubscribed, ConsumerPid} ->
           {TP, ConsumerPid} = lists:keyfind(ConsumerPid, 2, States),
           NewStates = lists:keystore(TP, 1, States, {TP, undefined}),
-          do_wait_for_subscribers(Ref, NewStates)
+          do_wait_for_subscribers(NewStates)
         after
           4000 ->
             erlang:error({timeout, States})
