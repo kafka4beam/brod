@@ -65,11 +65,12 @@
   * Bug Fixes
     - Demonitor producer pid after sync_produce_request timeout
 * 3.3.3
-  * Bug Fixes
-    - Add a --no-api-vsn-query option for brod-cli to support kafka 0.9
-    - Bump kafka_protocol to 1.1.1 to fix relative offsets issue
-      so brod-cli can fetch compressed batches as expected,
-      also brod_consumer can start picking fetch request version
-    - Upgrade roundrobin group protocol to roundrobin_v2 to fix offset commit incompatiblility
-      with kafka spec and monitoring tools etc. see https://github.com/klarna/brod/issues/241 for details
-
+  * Add a --no-api-vsn-query option for brod-cli to support kafka 0.9
+  * Bump kafka_protocol to 1.1.1 to fix relative offsets issue
+    so brod-cli can fetch compressed batches as expected,
+    also brod_consumer can start picking fetch request version
+  * Upgrade roundrobin group protocol to roundrobin_v2 to fix offset commit incompatiblility
+    with kafka spec and monitoring tools etc. see https://github.com/klarna/brod/issues/241 for details
+* 3.3.4
+  * Fix issue #247 -- revert the handling of offset = -1 in offset_fetch_response, bug introduced in 3.3.0
+    offset = -1 in offset_fetch_response is an indicator of 'no commit' should be ignored (not taken as 'latest')
