@@ -916,12 +916,12 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
             Offset0 = kpro:find(offset, PartitionOffset),
             Metadata = kpro:find(metadata, PartitionOffset),
             EC = kpro:find(error_code, PartitionOffset),
-            case EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION of
+            ?ESCALATE_EC(EC),
+            %% Offset -1 in offset_fetch_response is an indicator of 'no-value'
+            case EC =:= ?EC_NONE andalso Offset0 =:= -1 of
               true ->
-                %% EC_UNKNOWN_TOPIC_OR_PARTITION is kept for version 0
                 Acc;
               false ->
-                ?ESCALATE_EC(EC),
                 Offset = maybe_upgrade_from_roundrobin_v1(Offset0, Metadata),
                 [{{Topic, Partition}, Offset} | Acc]
             end
