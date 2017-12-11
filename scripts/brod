@@ -1,14 +1,17 @@
-#!/bin/sh -e
+#!/bin/sh -eu
 
-# can not readlink -f because mac version readlink does not support -f
-LINK="$(readlink "$0")" || true
-if [ -z $LINK ]; then
-  # not a symlink
-  BINDIR="$(dirname "$0")"
-else
-  # get the link target's dir
-  BINDIR="$(dirname "$LINK")"
-fi
+THIS=$0
+
+CUR_DIR=`pwd`
+cd `dirname $THIS`
+TARGET_FILE=`basename $THIS`
+while [ -L "$TARGET_FILE" ]; do
+    TARGET_FILE=`readlink $TARGET_FILE`
+    cd `dirname $TARGET_FILE`
+    TARGET_FILE=`basename $TARGET_FILE`
+done
+BINDIR=`pwd -P`
+cd "$CUR_DIR"
 
 ERTS_BIN="$BINDIR/../erts/bin"
 

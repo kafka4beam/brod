@@ -918,7 +918,7 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
             EC = kpro:find(error_code, PartitionOffset),
             ?ESCALATE_EC(EC),
             %% Offset -1 in offset_fetch_response is an indicator of 'no-value'
-            case EC =:= ?EC_NONE andalso Offset0 =:= -1 of
+            case Offset0 =:= -1 of
               true ->
                 Acc;
               false ->
