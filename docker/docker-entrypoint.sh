@@ -38,6 +38,7 @@ else
 fi
 
 echo "sasl.enabled.mechanisms=PLAIN" >> $prop_file
+echo "offsets.topic.replication.factor=1" >> $prop_file
 
 if [[ "$KAFKA_VERSION" = 0.9* ]]; then
   JAAS_CONF=""

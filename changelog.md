@@ -74,3 +74,6 @@
 * 3.3.4
   * Fix issue #247 -- revert the handling of offset = -1 in offset_fetch_response, bug introduced in 3.3.0
     offset = -1 in offset_fetch_response is an indicator of 'no commit' should be ignored (not taken as 'latest')
+* 3.3.5
+  * Fix issue #252 -- Kafka 0.11 and 1.0 have more strict validations on compressed batch wrapper message.
+    Changed kafka_protocol 1.1.2 has the wrapper timestamp and offsets fixed.

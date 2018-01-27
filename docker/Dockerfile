@@ -1,7 +1,9 @@
 FROM java:openjdk-8-jre
 
 ENV SCALA_VERSION 2.11
-ENV KAFKA_VERSION 0.10.2.1
+
+# can also be 0.11.0.2 or 0.10.2.1
+ENV KAFKA_VERSION 1.0.0
 ENV KAFKA_DOWNLOAD_URL="https://apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
 #ENV KAFKA_VERSION 0.9.0.0
 #ENV KAFKA_DOWNLOAD_URL="https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
