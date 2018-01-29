@@ -570,18 +570,17 @@ send_fetch_request(#state{ begin_offset = BeginOffset
 %% @private
 handle_subscribe_call(Pid, Options,
                       #state{subscriber_mref = OldMref} = State0) ->
-  case update_options(Options, State0) of
+  %% always reset buffer to fetch again
+  case update_options(Options, reset_buffer(State0)) of
     {ok, State1} ->
       %% demonitor in case the same process tries to subscribe again
       is_reference(OldMref) andalso erlang:demonitor(OldMref, [flush]),
       Mref = erlang:monitor(process, Pid),
       State2 = State1#state{ subscriber      = Pid
                            , subscriber_mref = Mref
+                           , is_suspended    = false
                            },
-      %% always reset buffer to fetch again
-      State3 = reset_buffer(State2),
-      State4 = State3#state{is_suspended = false},
-      State  = maybe_send_fetch_request(State4),
+      State  = maybe_send_fetch_request(State2),
       {reply, ok, State};
     {error, Reason} ->
       {reply, {error, Reason}, State0}
@@ -593,7 +592,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
   NewBeginOffset = F(begin_offset, OldBeginOffset),
   OffsetResetPolicy = F(offset_reset_policy, State#state.offset_reset_policy),
-  State1 = State#state
+  NewState = State#state
     { begin_offset        = NewBeginOffset
     , min_bytes           = F(min_bytes, State#state.min_bytes)
     , max_bytes_orig      = F(max_bytes, State#state.max_bytes_orig)
@@ -604,14 +603,6 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     , max_bytes           = F(max_bytes, State#state.max_bytes)
     , size_stat_window    = F(size_stat_window, State#state.size_stat_window)
     },
-  NewState =
-    case NewBeginOffset =/= OldBeginOffset of
-      true ->
-        %% reset buffer in case subscriber wants to fetch from a new offset
-        State1#state{pending_acks = #pending_acks{}};
-      false ->
-        State1
-    end,
   resolve_begin_offset(NewState).
 
 %% @private
