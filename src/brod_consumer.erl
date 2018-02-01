@@ -124,7 +124,7 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%  sleep_timeout (optional, default = 1000 ms):
 %%     Allow consumer process to sleep this amout of ms if kafka replied
 %%     'empty' message-set.
-%%  prefetch_count (optional, default = 1):
+%%  prefetch_count (optional, default = 10):
 %%     The window size (number of messages) allowed to fetch-ahead.
 %%  begin_offset (optional, default = latest):
 %%     The offset from which to begin fetch requests.
@@ -160,6 +160,22 @@ stop(Pid) -> safe_gen_call(Pid, stop, infinity).
 %%     offset to a persistent storage, then start (or restart) with
 %%     last_processed_offset + 1 as the begin_offset to proceed.
 %%     By default, it fetches from the latest available offset.
+%%   acked_offset (optional, default = begin_offset - 1)
+%%     A subscriber may limit the prefetch window on startup with this
+%%     option. The consumer will assume offsets from acked_offset up
+%%     to but not including the effective begin_offset it calculates
+%%     will be acked in the future by the subscriber. It will reduce
+%%     the prefetch window with the number of such offsets.
+%%
+%%     This feature is most useful when the brod_consumer process
+%%     crashes, but the subscriber process survives and attempts to
+%%     subscribe again once the brod_consumer is restarted. In this
+%%     case the subscriber may still have some unacked messages
+%%     received from the crashed brod_conumser. It needs to restart
+%%     from the last offset + 1 it has seen, so it won't receive
+%%     duplicated messages, but also needs to reduce the initial
+%%     prefetch window, otherwise a frequently crashing brod_consumer
+%%     may flood it with messages.
 %% @end
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
@@ -588,22 +604,41 @@ handle_subscribe_call(Pid, Options,
 
 %% @private
 -spec update_options(options(), state()) -> {ok, state()} | {error, any()}.
-update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
+update_options(Options, #state{begin_offset = OldBeginOffset} = State0) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
   NewBeginOffset = F(begin_offset, OldBeginOffset),
-  OffsetResetPolicy = F(offset_reset_policy, State#state.offset_reset_policy),
-  NewState = State#state
+  OffsetResetPolicy = F(offset_reset_policy, State0#state.offset_reset_policy),
+  State1 = State0#state
     { begin_offset        = NewBeginOffset
-    , min_bytes           = F(min_bytes, State#state.min_bytes)
-    , max_bytes_orig      = F(max_bytes, State#state.max_bytes_orig)
-    , max_wait_time       = F(max_wait_time, State#state.max_wait_time)
-    , sleep_timeout       = F(sleep_timeout, State#state.sleep_timeout)
-    , prefetch_count      = F(prefetch_count, State#state.prefetch_count)
+    , min_bytes           = F(min_bytes, State0#state.min_bytes)
+    , max_bytes_orig      = F(max_bytes, State0#state.max_bytes_orig)
+    , max_wait_time       = F(max_wait_time, State0#state.max_wait_time)
+    , sleep_timeout       = F(sleep_timeout, State0#state.sleep_timeout)
+    , prefetch_count      = F(prefetch_count, State0#state.prefetch_count)
     , offset_reset_policy = OffsetResetPolicy
-    , max_bytes           = F(max_bytes, State#state.max_bytes)
-    , size_stat_window    = F(size_stat_window, State#state.size_stat_window)
+    , max_bytes           = F(max_bytes, State0#state.max_bytes)
+    , size_stat_window    = F(size_stat_window, State0#state.size_stat_window)
     },
-  resolve_begin_offset(NewState).
+  case resolve_begin_offset(State1) of
+    {ok, #state{begin_offset = ResolvedBeginOffset} = State2} ->
+      AckedOffset = F(acked_offset, ResolvedBeginOffset - 1),
+      PendingAcks = make_pending_acks(AckedOffset, ResolvedBeginOffset),
+      {ok, State2#state{pending_acks = PendingAcks}};
+    {error, _Reason} = Error ->
+      Error
+  end.
+
+%% @private
+-spec make_pending_acks(offset(), offset()) -> pending_acks().
+make_pending_acks(AckedOffset, BeginOffset) when
+    AckedOffset >= BeginOffset - 1 ->
+  #pending_acks{};
+make_pending_acks(AckedOffset, BeginOffset) ->
+  Begin = AckedOffset + 1,
+  End = BeginOffset - 1,
+  Count = End - Begin + 1,
+  Queue = queue:in({Begin, End}, queue:new()),
+  #pending_acks{offsets_queue = Queue, count = Count}.
 
 %% @private
 -spec resolve_begin_offset(state()) -> {ok, state()} | {error, any()}.

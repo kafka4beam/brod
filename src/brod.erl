@@ -167,6 +167,7 @@
 
 %% consumers
 -type consumer_option() :: begin_offset
+                         | acked_offset
                          | min_bytes
                          | max_bytes
                          | max_wait_time
