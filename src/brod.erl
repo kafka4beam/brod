@@ -521,7 +521,7 @@ start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
 %% @equiv brod_group_subscriber:start_link/8
 -spec start_link_group_subscriber(
         client(), group_id(), [topic()], group_config(),
-        consumer_config(), message | message_type,
+        consumer_config(), message | message_set,
         module(), term()) ->
           {ok, pid()} | {error, any()}.
 start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
