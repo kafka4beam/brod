@@ -262,7 +262,7 @@ t_ssl({'end', Config}) ->
   Config;
 t_ssl(Config) when is_list(Config) ->
   ClientConfig = [ {ssl, ssl_options()}
-                 , {get_metadata_timout_seconds, 10}],
+                 , {get_metadata_timeout_seconds, 10}],
   produce_and_consume_message(?HOSTS_SSL, t_ssl, ClientConfig).
 
 t_sasl_plain_ssl({init, Config}) ->
@@ -272,7 +272,7 @@ t_sasl_plain_ssl({'end', Config}) ->
   Config;
 t_sasl_plain_ssl(Config) when is_list(Config) ->
   ClientConfig = [ {ssl, ssl_options()}
-                 , {get_metadata_timout_seconds, 10}
+                 , {get_metadata_timeout_seconds, 10}
                  , {sasl, {plain, "alice", "alice-secret"}}
                  ],
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
@@ -285,7 +285,7 @@ t_sasl_plain_file_ssl({'end', Config}) ->
   Config;
 t_sasl_plain_file_ssl(Config) when is_list(Config) ->
   ClientConfig = [ {ssl, ssl_options()}
-                 , {get_metadata_timout_seconds, 10}
+                 , {get_metadata_timeout_seconds, 10}
                  , {sasl, {plain, "sasl-plain-user-pass-file"}}
                  ],
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
@@ -296,7 +296,7 @@ t_sasl_callback({'end', Config}) ->
   brod:stop_client(t_sasl_callback),
   Config;
 t_sasl_callback(Config) when is_list(Config) ->
-  ClientConfig = [ {get_metadata_timout_seconds, 10}
+  ClientConfig = [ {get_metadata_timeout_seconds, 10}
                  , {sasl, {callback, ?MODULE, []}}
                  ],
   produce_and_consume_message(?HOSTS, t_sasl_callback, ClientConfig).
