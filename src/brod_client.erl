@@ -350,7 +350,7 @@ handle_call({stop_consumer, Topic}, _From, State) ->
   {reply, ok, State};
 handle_call({get_group_coordinator, GroupId}, _From, State) ->
   #state{config = Config} = State,
-  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
+  Timeout = proplists:get_value(get_metadata_timeout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} =
     do_get_group_coordinator(State, GroupId, timer:seconds(Timeout)),
@@ -543,7 +543,7 @@ do_get_metadata(Topic, #state{ client_id     = ClientId
              _      -> [Topic]
            end,
   Request = brod_kafka_request:metadata_request(SockPid, Topics),
-  Timeout = proplists:get_value(get_metadata_timout_seconds, Config,
+  Timeout = proplists:get_value(get_metadata_timeout_seconds, Config,
                                 ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   {Result, NewState} = request_sync(State, Request, timer:seconds(Timeout)),
   case Result of
