@@ -39,6 +39,7 @@
         , t_consumer_max_bytes_too_small/1
         , t_consumer_socket_restart/1
         , t_consumer_resubscribe/1
+        , t_consumer_restart_with_prefetch_window/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
         , t_offset_reset_policy/1
@@ -391,6 +392,129 @@ t_subscriber_restart(Config) when is_list(Config) ->
   Subscriber1 = erlang:spawn_link(SubscriberFun),
   receive {subscribed, Subscriber1} -> ok end,
   ok = ReceiveFun(Subscriber1, 1),
+  ok.
+
+%% @doc When a consumer restarts with unacked messages pending, the
+%% prefetch window is shrunk with the number of pending messages upon
+%% resubscribe.
+t_consumer_restart_with_prefetch_window(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  ProduceFun =
+    fun(I) ->
+        Key = list_to_binary(integer_to_list(I)),
+        Value = Key,
+        brod:produce_sync(Client, Topic, Partition, Key, Value)
+    end,
+  ParseFun =
+    fun (#kafka_message{ offset = Offset
+                       , key    = SeqNoBin
+                       , value  = SeqNoBin
+                       }) ->
+        {Offset, list_to_integer(binary_to_list(SeqNoBin))}
+    end,
+  ReceiveOneFun =
+    fun (Line) ->
+        receive
+          {_ConsumerPid, #kafka_message_set{messages = Messages}} ->
+            {_, FirstSeqNo} = ParseFun(hd(Messages)),
+            {ROffsets, NextSeqNo} =
+              lists:foldl(
+                fun (Msg, {Ack, SeqNo}) ->
+                    case ParseFun(Msg) of
+                      {Offset, SeqNo} ->
+                        {[Offset | Ack], SeqNo + 1};
+                      {Offset, BadSeqNo} ->
+                        ct:fail("unexpected message at line ~p, "
+                                "key=value=~p, offset=~p",
+                                [Line, BadSeqNo, Offset])
+                    end
+                end,
+                {[], FirstSeqNo},
+                Messages),
+            ct:log("ReceiveOneFun -> ~p", [{ok, FirstSeqNo, NextSeqNo, lists:reverse(ROffsets)}]),
+            {ok, FirstSeqNo, NextSeqNo, lists:reverse(ROffsets)}
+        after 2000 ->
+            ct:log("ReceiveOneFun -> ~p", [false]),
+            false
+        end
+    end,
+  ReceiveAllFun =
+    fun F(ExpectedSeqNo, Line) ->
+        ct:log("ReceiveAllFun(~p)", [ExpectedSeqNo]),
+        case ReceiveOneFun(Line) of
+          {ok, ExpectedSeqNo, NextSeqNo, Offsets} ->
+            Offsets ++ F(NextSeqNo, Line);
+          {ok, FirstSeqNo, _NextSeqNo, [FirstOffset | _]} ->
+            ct:fail("unexpected message at line ~p, "
+                    "key=value=~p, offset=~p",
+                    [Line, FirstSeqNo, FirstOffset]);
+          false ->
+            []
+        end
+    end,
+  ReceiveFun =
+    fun (ExpectedSeqNo, Line) ->
+        case ReceiveAllFun(ExpectedSeqNo, Line) of
+          [] ->
+            ct:fail("timed out receiving kafka message set at line ~p", [Line]);
+          Offsets ->
+            Offsets
+        end
+    end,
+  %% set `prefetch_count' to 1, which means at most 2 unacked messages
+  %% being delivered to the subscriber), and use a very small
+  %% `max_bytes' to guarantee messages are received one-by-one
+  %% (otherwise the tests may accidentally exceed the `prefetch_count'
+  %% when Kafka delivers multiple messages in a single response)
+  Opts = [{prefetch_count, 1}, {max_bytes, 10}],
+  {ok, ConsumerPid1} = brod:subscribe(Client, self(), Topic, Partition, Opts),
+  ok = ProduceFun(0),
+  ok = ProduceFun(1),
+  ok = ProduceFun(2),
+  ok = ProduceFun(3),
+  %% due to the prefetch window size only two messages are delivered
+  [Offset0, _Offset1] = ReceiveFun(0, ?LINE),
+  %% ack 0 and receive one more message
+  ok = brod:consume_ack(ConsumerPid1, Offset0),
+  [Offset2] = ReceiveFun(2, ?LINE),
+  %% ack 2 and receive one more message (because the prefetch window
+  %% is 2, but there's only one more message left in the partition)
+  ok = brod:consume_ack(ConsumerPid1, Offset2),
+  [Offset3] = ReceiveFun(3, ?LINE),
+  %% kill the consumer process, produce 2 more messages and resubscribe
+  Mon = monitor(process, ConsumerPid1),
+  exit(ConsumerPid1, test_consumer_restart),
+  receive {'DOWN', Mon, process, ConsumerPid1, test_consumer_restart} -> ok
+  after 1000 -> ct:fail("timed out waiting for the consumer process to die")
+  end,
+  ok = ProduceFun(4),
+  ok = ProduceFun(5),
+  TrySubscribeFun =
+    fun T(0) ->
+        ct:fail("timed out waiting for the consumer process to restart");
+        T(N) when N > 0 ->
+        timer:sleep(200),
+        case brod:subscribe(Client, self(), Topic, Partition,
+                            [ {begin_offset, Offset3 + 1}
+                            , {acked_offset, Offset2}
+                            | Opts
+                            ]) of
+          {error, Reason} ->
+            ct:log("failed to resubscribe after consumer process' crash: ~p",
+                   [Reason]),
+            T(N - 1);
+          {ok, Pid} ->
+            {ok, Pid}
+        end
+    end,
+  {ok, ConsumerPid2} = TrySubscribeFun(30), % 30 * 200ms = 6s timeout
+  %% as 3 is not yet acked, the prefetch window size shall be only 1
+  [_Offset4] = ReceiveFun(4, ?LINE),
+  %% ack 3 and receive the last message
+  ok = brod:consume_ack(ConsumerPid2, Offset3),
+  [_Offset5] = ReceiveFun(5, ?LINE),
   ok.
 
 t_subscribe_with_unknown_offset(Config) when is_list(Config) ->

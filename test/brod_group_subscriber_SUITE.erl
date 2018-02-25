@@ -40,6 +40,7 @@
         , t_loc_demo/1
         , t_loc_demo_message_set/1
         , t_2_members_subscribe_to_different_topics/1
+        , t_consumer_crash/1
         ]).
 
 
@@ -356,6 +357,68 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   ok = brod_group_subscriber:stop(SubscriberPid1),
   ok = brod_group_subscriber:stop(SubscriberPid2),
   ok.
+
+t_consumer_crash(Config) when is_list(Config) ->
+  %% use consumer managed offset commit behaviour
+  %% so we can control where to start fetching messages from
+  GroupConfig = [{offset_commit_policy, consumer_managed}],
+  ConsumerConfig = [ {prefetch_count, 10}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   ],
+  CaseRef        = t_consumer_crash,
+  CasePid        = self(),
+  InitArgs       = {CaseRef, CasePid, _IsAsyncAck = true},
+  Partition      = 0,
+  {ok, SubscriberPid} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  SendFun =
+    fun(I) ->
+        ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, <<I>>)
+    end,
+  ReceiveFun =
+    fun F(MaxI, Acc) ->
+        receive
+          ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, <<MaxI>>) ->
+            lists:unzip(lists:reverse([{Offset, MaxI} | Acc]));
+          ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, <<I>>) when
+              I < MaxI ->
+            F(MaxI, [{Offset, I} | Acc]);
+          Msg ->
+            ct:fail("Unexpected msg: ~p", [Msg])
+        after 5000 ->
+            lists:unzip(lists:reverse(Acc))
+        end
+    end,
+  SendFun(0),
+  %% the first message may or may not be received depending on when
+  %% the consumer starts polling
+  ReceiveFun(0, []),
+  %% send and receive some messages, ack some of them
+  [SendFun(I) || I <- lists:seq(1, 5)],
+  {[_, _, O3, _, _], [1, 2, 3, 4, 5]} = ReceiveFun(5, []),
+  ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1, Partition, O3),
+  %% do a sync request to the subscriber, so that we know it has
+  %% processed the ack, then kill the brod_consumer process
+  sys:get_state(SubscriberPid),
+  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC1, Partition),
+  Mon = monitor(process, ConsumerPid),
+  exit(ConsumerPid, test_consumer_restart),
+  receive {'DOWN', Mon, process, ConsumerPid, test_consumer_restart} -> ok
+  after 1000 -> ct:fail("timed out waiting for the consumer process to die")
+  end,
+  %% send and receive some more messages, check each message arrives only once
+  [SendFun(I) || I <- lists:seq(6, 8)],
+  {_, [6, 7, 8]} = ReceiveFun(8, []),
+  %% stop the subscriber and check there are no more late messages delivered
+  ok = brod_group_subscriber:stop(SubscriberPid),
+  receive
+    ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
+      ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
+  after 0 -> ok
+  end.
 
 %%%_* Help funtions ============================================================
 

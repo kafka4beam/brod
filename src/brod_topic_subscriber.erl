@@ -85,6 +85,7 @@
         { partition     :: brod:partition()
         , consumer_pid  :: ?undef | pid() | {down, string(), any()}
         , consumer_mref :: ?undef | reference()
+        , begin_offset  :: ?undef | brod:offset()
         , acked_offset  :: ?undef | brod:offset()
         }).
 
@@ -234,12 +235,14 @@ handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
   Consumers =
     lists:map(
       fun(Partition) ->
-        AckedOffset = case lists:keyfind(Partition, 1, CommittedOffsets) of
-                        {Partition, Offset} -> Offset;
-                        false               -> ?undef
-                      end,
+        BeginOffset =
+            case lists:keyfind(Partition, 1, CommittedOffsets) of
+              {Partition, Offset} when ?IS_SPECIAL_OFFSET(Offset) -> Offset;
+              {Partition, Offset} -> Offset + 1;
+              false               -> ?undef
+            end,
         #consumer{ partition    = Partition
-                 , acked_offset = AckedOffset
+                 , begin_offset = BeginOffset
                  }
       end, Partitions),
   NewState = State#state{consumers = Consumers},
@@ -304,6 +307,7 @@ subscribe_partitions(#state{ client    = Client
 subscribe_partition(Client, Topic, Consumer) ->
   #consumer{ partition    = Partition
            , consumer_pid = Pid
+           , begin_offset = BeginOffset
            , acked_offset = AckedOffset
            } = Consumer,
   case brod_utils:is_pid_alive(Pid) of
@@ -312,13 +316,23 @@ subscribe_partition(Client, Topic, Consumer) ->
       Consumer;
     false ->
       Options =
-        case AckedOffset =:= ?undef of
-          true ->
+        if BeginOffset =:= ?undef andalso
+           AckedOffset =:= ?undef ->
             %% the default or configured 'begin_offset' will be used
             [];
-          false ->
-            AckedOffset >= 0 orelse erlang:error({invalid_offset, AckedOffset}),
-            [{begin_offset, AckedOffset + 1}]
+           BeginOffset =/= ?undef andalso
+           (AckedOffset =:= ?undef orelse ?IS_SPECIAL_OFFSET(BeginOffset)) ->
+            %% restart from BeginOffset, do not limit the prefetch window
+            [{begin_offset, BeginOffset}];
+           BeginOffset =/= ?undef andalso
+           AckedOffset =/= ?undef andalso
+           AckedOffset =< BeginOffset->
+            %% restart from BeginOffset, but start with a smaller
+            %% prefetch window due to outstanding unacknowledged
+            %% messages
+            [{begin_offset, BeginOffset}, {acked_offset, AckedOffset}];
+           true ->
+            erlang:error({invalid_offsets, {BeginOffset, AckedOffset}})
         end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
@@ -345,19 +359,26 @@ handle_message_set(MessageSet, State) ->
       {ok, ack, NewCbState_} ->
         {true, NewCbState_}
     end,
+  LastOffset = (lists:last(Messages))#kafka_message.offset,
   State1 = State#state{cb_state = NewCbState},
+  State2 = handle_seen_offset(Partition, LastOffset, State1),
   case AckNow of
     true  ->
-      LastMessage = lists:last(Messages),
-      LastOffset  = LastMessage#kafka_message.offset,
-      AckRef      = {Partition, LastOffset},
-      handle_ack(AckRef, State1);
-    false -> State1
+      AckRef = {Partition, LastOffset},
+      handle_ack(AckRef, State2);
+    false -> State2
   end.
 
 handle_messages(_Partition, [], State) ->
   State;
-handle_messages(Partition, [Msg | Rest], State) ->
+handle_messages(Partition, Messages, State) ->
+  LastOffset = (lists:last(Messages))#kafka_message.offset,
+  NewState = handle_seen_offset(Partition, LastOffset, State),
+  handle_messages_with_cb(Partition, Messages, NewState).
+
+handle_messages_with_cb(_Partition, [], State) ->
+  State;
+handle_messages_with_cb(Partition, [Msg | Rest], State) ->
   #kafka_message{offset = Offset} = Msg,
   #state{cb_fun = CbFun, cb_state = CbState} = State,
   AckRef = {Partition, Offset},
@@ -374,20 +395,21 @@ handle_messages(Partition, [Msg | Rest], State) ->
       true  -> handle_ack(AckRef, State1);
       false -> State1
     end,
-  handle_messages(Partition, Rest, NewState).
+  handle_messages_with_cb(Partition, Rest, NewState).
 
 -spec handle_ack(ack_ref(), state()) -> state().
 handle_ack(AckRef, #state{consumers = Consumers} = State) ->
   {Partition, Offset} = AckRef,
   case lists:keyfind(Partition, #consumer.partition, Consumers) of
-    #consumer{consumer_pid = ConsumerPid} = Consumer ->
+    #consumer{consumer_pid = ConsumerPid,
+              acked_offset = OldOffset} = Consumer when OldOffset < Offset ->
       ok = consume_ack(ConsumerPid, Offset),
       NewConsumer = Consumer#consumer{acked_offset = Offset},
       NewConsumers = lists:keyreplace(Partition,
                                       #consumer.partition,
                                       Consumers, NewConsumer),
       State#state{consumers = NewConsumers};
-    false ->
+    _Other ->
       State
   end.
 
@@ -397,6 +419,21 @@ consume_ack(Pid, Offset) when is_pid(Pid) ->
 consume_ack(_Down, _Offset) ->
   %% consumer is down, should be restarted by its supervisor
   ok.
+
+%% @private
+handle_seen_offset(Partition, Offset, #state{consumers = Consumers} = State) ->
+  Consumer = lists:keyfind(Partition, #consumer.partition, Consumers),
+  NewAckedOffset = case Consumer#consumer.acked_offset of
+                     ?undef      -> Offset - 1;
+                     AckedOffset -> AckedOffset
+                   end,
+  NewConsumer = Consumer#consumer{ begin_offset = Offset + 1
+                                 , acked_offset = NewAckedOffset
+                                 },
+  NewConsumers = lists:keyreplace(Partition,
+                                  #consumer.partition,
+                                  Consumers, NewConsumer),
+  State#state{consumers = NewConsumers}.
 
 send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 

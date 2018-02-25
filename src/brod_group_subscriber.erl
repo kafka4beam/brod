@@ -465,19 +465,26 @@ handle_message_set(MessageSet, State) ->
         erlang:error({bad_return_value,
                       {CbModule, handle_message, Unknown}})
     end,
+  LastOffset = (lists:last(Messages))#kafka_message.offset,
   State1 = State#state{cb_state = NewCbState},
+  State2 = handle_seen_offset(Topic, Partition, LastOffset, State1),
   case AckNow of
     true  ->
-      LastMessage = lists:last(Messages),
-      LastOffset  = LastMessage#kafka_message.offset,
-      AckRef      = {Topic, Partition, LastOffset},
-      handle_ack(AckRef, State1);
-    false -> State1
+      AckRef = {Topic, Partition, LastOffset},
+      handle_ack(AckRef, State2);
+    false -> State2
   end.
 
 handle_messages(_Topic, _Partition, [], State) ->
   State;
-handle_messages(Topic, Partition, [Msg | Rest], State) ->
+handle_messages(Topic, Partition, Messages, State) ->
+  LastOffset = (lists:last(Messages))#kafka_message.offset,
+  NewState = handle_seen_offset(Topic, Partition, LastOffset, State),
+  handle_messages_with_cb(Topic, Partition, Messages, NewState).
+
+handle_messages_with_cb(_Topic, _Partition, [], State) ->
+  State;
+handle_messages_with_cb(Topic, Partition, [Msg | Rest], State) ->
   #kafka_message{offset = Offset} = Msg,
   #state{cb_module = CbModule, cb_state = CbState} = State,
   AckRef = {Topic, Partition, Offset},
@@ -497,7 +504,7 @@ handle_messages(Topic, Partition, [Msg | Rest], State) ->
       true  -> handle_ack(AckRef, State1);
       false -> State1
     end,
-  handle_messages(Topic, Partition, Rest, NewState).
+  handle_messages_with_cb(Topic, Partition, Rest, NewState).
 
 -spec handle_ack(ack_ref(), state()) -> state().
 handle_ack(AckRef, #state{ generationId = GenerationId
@@ -532,6 +539,24 @@ commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
 %% @private
+handle_seen_offset(Topic, Partition, Offset, State) ->
+  #state{consumers = Consumers} = State,
+  Consumer = lists:keyfind({Topic, Partition},
+                           #consumer.topic_partition,
+                           Consumers),
+  NewAckedOffset = case Consumer#consumer.acked_offset of
+                     ?undef      -> Offset - 1;
+                     AckedOffset -> AckedOffset
+                   end,
+  NewConsumer = Consumer#consumer{ begin_offset = Offset + 1
+                                 , acked_offset = NewAckedOffset
+                                 },
+  NewConsumers = lists:keyreplace({Topic, Partition},
+                                  #consumer.topic_partition,
+                                  Consumers, NewConsumer),
+  State#state{consumers = NewConsumers}.
+
+%% @private
 subscribe_partitions(#state{ client    = Client
                            , consumers = Consumers0
                            } = State) ->
@@ -543,23 +568,31 @@ subscribe_partitions(#state{ client    = Client
 subscribe_partition(Client, Consumer) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid
-           , begin_offset    = BeginOffset0
+           , begin_offset    = BeginOffset
            , acked_offset    = AckedOffset
            } = Consumer,
   case brod_utils:is_pid_alive(Pid) of
     true ->
       Consumer;
     false ->
-      %% fetch from the last acked offset + 1
-      %% otherwise fetch from the assigned begin_offset
-      BeginOffset = case AckedOffset of
-                      ?undef        -> BeginOffset0;
-                      N when N >= 0 -> N + 1
-                    end,
       Options =
-        case BeginOffset =:= ?undef of
-          true  -> []; %% fetch from 'begin_offset' in consumer config
-          false -> [{begin_offset, BeginOffset}]
+        if BeginOffset =:= ?undef andalso
+           AckedOffset =:= ?undef ->
+            %% the default or configured 'begin_offset' will be used
+            [];
+           BeginOffset =/= ?undef andalso
+           (AckedOffset =:= ?undef orelse ?IS_SPECIAL_OFFSET(BeginOffset)) ->
+            %% restart from BeginOffset, do not limit the prefetch window
+            [{begin_offset, BeginOffset}];
+           BeginOffset =/= ?undef andalso
+           AckedOffset =/= ?undef andalso
+           AckedOffset =< BeginOffset->
+            %% restart from BeginOffset, but start with a smaller
+            %% prefetch window due to outstanding unacknowledged
+            %% messages
+            [{begin_offset, BeginOffset}, {acked_offset, AckedOffset}];
+           true ->
+            erlang:error({invalid_offsets, {BeginOffset, AckedOffset}})
         end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
