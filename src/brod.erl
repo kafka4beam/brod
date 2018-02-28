@@ -171,7 +171,10 @@
                          | max_bytes
                          | max_wait_time
                          | sleep_timeout
-                         | prefetch_count.
+                         | prefetch_count
+                         | prefetch_bytes
+                         | offset_reset_policy
+                         | size_stat_window.
 -type consumer_options() :: [{consumer_option(), integer()}].
 -type consumer_config() :: brod_consumer:config().
 

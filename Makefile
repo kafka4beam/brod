@@ -1,6 +1,6 @@
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 3.3.5
+PROJECT_VERSION = 3.4.0
 
 DEPS = supervisor3 kafka_protocol
 TEST_DEPS = docopt jsone meck proper

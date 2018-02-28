@@ -74,7 +74,8 @@
 %%
 %% NOTE: While this callback function is being evaluated, the fetch-ahead
 %%       partition-consumers are polling for more messages behind the scene
-%%       unless prefetch_count is set to 0 in consumer config.
+%%       unless prefetch_count and prefetch_bytes are set to 0 in consumer
+%%       config.
 -callback handle_message(brod:partition(),
                          brod:message() | brod:message_set(),
                          cb_state()) -> cb_ret().
