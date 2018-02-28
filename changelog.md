@@ -77,3 +77,6 @@
 * 3.3.5
   * Fix issue #252 -- Kafka 0.11 and 1.0 have more strict validations on compressed batch wrapper message.
     Changed kafka_protocol 1.1.2 has the wrapper timestamp and offsets fixed.
+* 3.4.0
+  * Add `prefetch_bytes' consumer config. `brod_consumer' should stop fetch-ahead only when
+    both `prefetch_count' and `prefetch_bytes' limits are exceeded

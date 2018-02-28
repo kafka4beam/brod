@@ -1,4 +1,4 @@
-%%%   Copyright (c) 2014-2017, Klarna AB
+%%%   Copyright (c) 2014-2018, Klarna AB
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -55,12 +55,14 @@
                              | reset_to_latest.
 
 -type bytes() :: non_neg_integer().
--type offset_range() :: {offset(), offset()}.
--type offsets_queue() :: queue:queue(offset_range()).
+-define(PENDING(Offset, Bytes), {Offset, Bytes}).
+-type pending() :: ?PENDING(offset(), bytes()).
+-type pending_queue() :: queue:queue(pending()).
 -type config() :: proplists:proplist().
 
--record(pending_acks, { count         = 0            :: integer()
-                      , offsets_queue = queue:new()  :: offsets_queue()
+-record(pending_acks, { count = 0 :: non_neg_integer()
+                      , bytes = 0 :: bytes()
+                      , queue = queue:new() :: pending_queue()
                       }).
 
 -type pending_acks() :: #pending_acks{}.
@@ -84,6 +86,7 @@
                , avg_bytes           :: number()
                , max_bytes           :: bytes()
                , size_stat_window    :: non_neg_integer()
+               , prefetch_bytes      :: non_neg_integer()
                }).
 
 -type state() :: #state{}.
@@ -94,6 +97,10 @@
 -define(DEFAULT_MAX_WAIT_TIME, 10000). % 10 sec
 -define(DEFAULT_SLEEP_TIMEOUT, 1000). % 1 sec
 -define(DEFAULT_PREFETCH_COUNT, 10).
+%% For backward-compatibility,
+%% keep default prefetch-bytes small
+%% so prefetch-count can dominate fetch-ahead limit
+-define(DEFAULT_PREFETCH_BYTES, 102400). % 100 KB
 -define(DEFAULT_OFFSET_RESET_POLICY, reset_by_subscriber).
 -define(ERROR_COOLDOWN, 1000).
 -define(SOCKET_RETRY_DELAY_MS, 1000).
@@ -124,8 +131,13 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%  sleep_timeout (optional, default = 1000 ms):
 %%     Allow consumer process to sleep this amout of ms if kafka replied
 %%     'empty' message-set.
-%%  prefetch_count (optional, default = 1):
+%%  prefetch_count (optional, default = 10):
 %%     The window size (number of messages) allowed to fetch-ahead.
+%%  prefetch_bytes (optional, default = 100KB):
+%%     The total number of bytes allowed to fetch-ahead.
+%%     brod_consumer is greed, it only stops fetching more messages in
+%%     when number of unacked messages has exceeded prefetch_count AND
+%%     the unacked total volume has exceeded prefetch_bytes
 %%  begin_offset (optional, default = latest):
 %%     The offset from which to begin fetch requests.
 %%  offset_reset_policy (optional, default = reset_by_subscriber)
@@ -136,9 +148,13 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %%     reset_to_earliest: consume from the earliest offset.
 %%     reset_to_latest: consume from the last available offset.
 %%  size_stat_window: (optional, default = 5)
-%%     The moving-average window size when shrinking 'max_bytes' after it has
-%%     been expanded to fetch a large message. Use 0 to immediately shrink
-%%     back to original 'max_bytes' from config.
+%%     The moving-average window size to caculate average message size.
+%%     Average message size is used to shrink max_bytes in fetch requests
+%%     after it has been expanded to fetch a large message.
+%%     Use 0 to immediately shrink back to original max_bytes from config.
+%%     A size esitmation allows users to set a relatively small max_bytes,
+%%     then let it dynamically adjust to a number around
+%%     PrefetchCount * AverageSize
 %% @end
 -spec start_link(pid(), topic(), partition(), config(), [any()]) ->
                     {ok, pid()} | {error, any()}.
@@ -197,7 +213,8 @@ init({ClientPid, Topic, Partition, Config}) ->
   MaxBytes = Cfg(max_bytes, ?DEFAULT_MAX_BYTES),
   MaxWaitTime = Cfg(max_wait_time, ?DEFAULT_MAX_WAIT_TIME),
   SleepTimeout = Cfg(sleep_timeout, ?DEFAULT_SLEEP_TIMEOUT),
-  PrefetchCount = erlang:max(Cfg(prefetch_count, ?DEFAULT_PREFETCH_COUNT), 1),
+  PrefetchCount = erlang:max(Cfg(prefetch_count, ?DEFAULT_PREFETCH_COUNT), 0),
+  PrefetchBytes = erlang:max(Cfg(prefetch_bytes, ?DEFAULT_PREFETCH_BYTES), 0),
   BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
   ok = brod_client:register_consumer(ClientPid, Topic, Partition),
@@ -210,6 +227,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , max_bytes_orig      = MaxBytes
              , sleep_timeout       = SleepTimeout
              , prefetch_count      = PrefetchCount
+             , prefetch_bytes      = PrefetchBytes
              , socket_pid          = ?undef
              , pending_acks        = #pending_acks{}
              , is_suspended        = false
@@ -366,68 +384,65 @@ handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                          , pending_acks  = PendingAcks
                          } = State0) ->
   ok = cast_to_subscriber(Subscriber, MsgSet),
-  MapFun = fun(#kafka_message{offset = Offset}) -> Offset end,
-  Offsets = lists:map(MapFun, Messages),
-  LastOffset = lists:last(Offsets),
-  NewPendingAcks = handle_add_offset(PendingAcks, Offsets),
-  State = State0#state{ pending_acks = NewPendingAcks
-                      , begin_offset = LastOffset + 1
-                      },
-  State1 = maybe_shrink_max_bytes(State, MsgSet#kafka_message_set.messages),
-  NewState = maybe_send_fetch_request(State1),
-  {noreply, NewState}.
+  NewPendingAcks = add_pending_acks(PendingAcks, Messages),
+  {value, ?PENDING(LastOffset, _LastMsgSize)} =
+    queue:peek_r(NewPendingAcks#pending_acks.queue),
+  State1 = State0#state{ pending_acks = NewPendingAcks
+                       , begin_offset = LastOffset + 1
+                       },
+  State2 = maybe_shrink_max_bytes(State1, MsgSet#kafka_message_set.messages),
+  State = maybe_send_fetch_request(State2),
+  {noreply, State}.
 
-%% @private Add received offsets to offset range queue.
-handle_add_offset(#pending_acks{} = PendingAcks, []) ->
-  PendingAcks;
-handle_add_offset(#pending_acks{ offsets_queue = Queue
-                               , count = Count
-                               } = PendingAcks, [Offset | Offsets]) ->
-  NewQueue =
-    case queue:out_r(Queue) of
-      {{value, {Begin, End}}, Queue1} when End + 1 =:= Offset ->
-        %% the incoming offset is successive to the offset range at queue rear
-        %% expand the range
-        queue:in({Begin, Offset}, Queue1);
-      _ ->
-        %% either the queue is empty or non-successive offset
-        queue:in({Offset, Offset}, Queue)
-    end,
-  handle_add_offset(PendingAcks#pending_acks{ offsets_queue = NewQueue
-                                            , count = Count + 1
-                                            }, Offsets).
+%% Add received offsets to pending queue.
+add_pending_acks(PendingAcks, Messages) ->
+  lists:foldl(fun add_pending_ack/2, PendingAcks, Messages).
 
-%% @private
+add_pending_ack(#kafka_message{offset = Offset, key = Key, value = Value},
+                #pending_acks{ queue = Queue
+                             , count = Count
+                             , bytes = Bytes
+                             } = PendingAcks) ->
+  Size = bytes(Key) + bytes(Value),
+  NewQueue = queue:in(?PENDING(Offset, Size), Queue),
+  PendingAcks#pending_acks{ queue = NewQueue
+                          , count = Count + 1
+                          , bytes = Bytes + Size
+                          }.
+
+%% In case max_bytes has been expanded to fetch a large message
+%% try to shrink back to the original max_bytes from consumer config
 maybe_shrink_max_bytes(#state{ size_stat_window = W
                              , max_bytes_orig = MaxBytesOrig
                              } = State, _) when W < 1 ->
   %% Configured to not collect average message size,
-  %% shrink back to original max_bytes immediately
+  %% Shrink back to original max_bytes immediately
   State#state{max_bytes = MaxBytesOrig};
-maybe_shrink_max_bytes(#state{ prefetch_count = PrefetchCount
-                             , max_bytes_orig = MaxBytesOrig
-                             , max_bytes      = MaxBytes
-                             , avg_bytes      = AvgBytes
-                             } = State, []) ->
+maybe_shrink_max_bytes(State0, Messages) ->
+  #state{ prefetch_count = PrefetchCount
+        , max_bytes_orig = MaxBytesOrig
+        , max_bytes      = MaxBytes
+        , avg_bytes      = AvgBytes
+        } = State = update_avg_size(State0, Messages),
   %% This is the estimated size of a message set based on the
   %% average size of the last X messages.
   EstimatedSetSize = erlang:round(PrefetchCount * AvgBytes),
   %% respect the original max_bytes config
   NewMaxBytes = erlang:max(EstimatedSetSize, MaxBytesOrig),
   %% maybe shrink the max_bytes to send in fetch request to NewMaxBytes
-  State#state{max_bytes = erlang:min(NewMaxBytes, MaxBytes)};
-maybe_shrink_max_bytes(#state{ prefetch_count   = PrefetchCount
-                             , avg_bytes        = AvgBytes
-                             , size_stat_window = Window
-                             } = State,
-                       [#kafka_message{key = Key, value = Value} | Rest]) ->
+  State#state{max_bytes = erlang:min(NewMaxBytes, MaxBytes)}.
+
+update_avg_size(#state{} = State, []) -> State;
+update_avg_size(#state{ avg_bytes        = AvgBytes
+                      , size_stat_window = WindowSize
+                      } = State,
+                [#kafka_message{key = Key, value = Value} | Rest]) ->
   %% kafka adds 34 bytes of overhead (metadata) for each message
   %% use 40 to give some room for future kafka protocol versions
   MsgBytes = bytes(Key) + bytes(Value) + 40,
   %% See https://en.wikipedia.org/wiki/Moving_average
-  WindowSize = erlang:max(PrefetchCount, Window),
   NewAvgBytes = ((WindowSize - 1) * AvgBytes + MsgBytes) / WindowSize,
-  maybe_shrink_max_bytes(State#state{avg_bytes = NewAvgBytes}, Rest).
+  update_avg_size(State#state{avg_bytes = NewAvgBytes}, Rest).
 
 bytes(?undef)              -> 0;
 bytes(B) when is_binary(B) -> size(B).
@@ -484,21 +499,16 @@ handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
   {noreply, NewState}.
 
 %% @private
-handle_ack(#pending_acks{ offsets_queue = Queue
+handle_ack(#pending_acks{ queue = Queue
+                        , bytes = Bytes
                         , count = Count
                         } = PendingAcks, Offset) ->
   case queue:out(Queue) of
-    {{value, {Begin, End}}, Queue1} when Offset >= End ->
-      NewCount = Count - (End - Begin + 1),
-      handle_ack(PendingAcks#pending_acks{ offsets_queue = Queue1
-                                         , count = NewCount
+    {{value, ?PENDING(O, Size)}, Queue1} when O =< Offset ->
+      handle_ack(PendingAcks#pending_acks{ queue = Queue1
+                                         , count = Count - 1
+                                         , bytes = Bytes - Size
                                          }, Offset);
-    {{value, {Begin, End}}, Queue1} when Offset >= Begin ->
-      NewCount = Count - (Offset - Begin + 1),
-      NewQueue = queue:in_r({Offset + 1, End}, Queue1),
-      PendingAcks#pending_acks{ offsets_queue = NewQueue
-                              , count = NewCount
-                              };
     _ ->
       PendingAcks
   end.
@@ -520,7 +530,7 @@ maybe_delay_fetch_request(#state{sleep_timeout = T} = State) when T > 0 ->
 maybe_delay_fetch_request(State) ->
   maybe_send_fetch_request(State).
 
-%% @private Send new fetch request if no pending error.
+%% Send new fetch request if no pending error.
 maybe_send_fetch_request(#state{subscriber = ?undef} = State) ->
   %% no subscriber
   State;
@@ -533,25 +543,19 @@ maybe_send_fetch_request(#state{is_suspended = true} = State) ->
 maybe_send_fetch_request(#state{last_corr_id = I} = State) when is_integer(I) ->
   %% Waiting for the last request
   State;
-maybe_send_fetch_request(#state{ pending_acks   = #pending_acks{count = Count}
+maybe_send_fetch_request(#state{ pending_acks   = #pending_acks{ count = Count
+                                                               , bytes = Bytes
+                                                               }
                                , prefetch_count = PrefetchCount
+                               , prefetch_bytes = PrefetchBytes
                                } = State) ->
-  case Count =< PrefetchCount of
-    true ->
-      case send_fetch_request(State) of
-        {ok, CorrId} ->
-          State#state{last_corr_id = CorrId};
-        {error, {sock_down, _Reason}} ->
-          %% ignore error here, the socket pid 'DOWN' message
-          %% should trigger the socket re-init loop
-          State
-      end;
-    false ->
-      State
+  %% Do not send fetch request if exceeded limits on both count and size
+  case Count > PrefetchCount andalso Bytes > PrefetchBytes of
+    true  -> State;
+    false -> send_fetch_request(State)
   end.
 
-%% @private
--spec send_fetch_request(state()) -> {ok, corr_id()} | {error, any()}.
+-spec send_fetch_request(state()) -> state().
 send_fetch_request(#state{ begin_offset = BeginOffset
                          , socket_pid   = SocketPid
                          } = State) ->
@@ -565,7 +569,14 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                                      State#state.max_wait_time,
                                      State#state.min_bytes,
                                      State#state.max_bytes),
-  brod_sock:request_async(SocketPid, Request).
+  case brod_sock:request_async(SocketPid, Request) of
+    {ok, CorrId} ->
+      State#state{last_corr_id = CorrId};
+    {error, {sock_down, _Reason}} ->
+      %% ignore error here, the socket pid 'DOWN' message
+      %% should trigger the socket re-init loop
+      State
+  end.
 
 %% @private
 handle_subscribe_call(Pid, Options,
@@ -600,6 +611,7 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     , max_wait_time       = F(max_wait_time, State#state.max_wait_time)
     , sleep_timeout       = F(sleep_timeout, State#state.sleep_timeout)
     , prefetch_count      = F(prefetch_count, State#state.prefetch_count)
+    , prefetch_bytes      = F(prefetch_bytes, State#state.prefetch_bytes)
     , offset_reset_policy = OffsetResetPolicy
     , max_bytes           = F(max_bytes, State#state.max_bytes)
     , size_stat_window    = F(size_stat_window, State#state.size_stat_window)
@@ -646,12 +658,12 @@ resolve_offset(SocketPid, Topic, Partition, BeginOffset) ->
 %% Discard onwire fetch responses by setting last_corr_id to undefined.
 %% @end
 -spec reset_buffer(state()) -> state().
-reset_buffer(#state{ pending_acks = #pending_acks{offsets_queue = Queue}
+reset_buffer(#state{ pending_acks = #pending_acks{queue = Queue}
                    , begin_offset = BeginOffset0
                    } = State) ->
   BeginOffset = case queue:peek(Queue) of
-                  {value, {Begin, _}} -> Begin;
-                  empty               -> BeginOffset0
+                  {value, ?PENDING(Offset, _)} -> Offset;
+                  empty                        -> BeginOffset0
                 end,
   State#state{ begin_offset = BeginOffset
              , pending_acks = #pending_acks{}
@@ -709,27 +721,35 @@ maybe_send_init_socket(#state{subscriber = Subscriber}) ->
 
 -include_lib("eunit/include/eunit.hrl").
 
-pending_acks_to_list(#pending_acks{count = C, offsets_queue = Q}) ->
-  All = lists:foldl(fun({Begin, End}, Acc) ->
-                        Acc ++ lists:seq(Begin, End)
-                    end, [], queue:to_list(Q)),
+pending_acks_to_offset_list(#pending_acks{count = C, bytes = B, queue = Q}) ->
+  All = queue:to_list(Q),
+  Size = lists:foldl(fun(?PENDING(_Offset, Bytes), Acc) -> Bytes + Acc end,
+                     0, All),
   ?assertEqual(C, length(All)),
-  All.
+  ?assertEqual(B, Size),
+  [O || {O, _} <- All].
 
 pending_acks_test() ->
   Offsets = [1, 2, 3, 5, 6, 7, 9, 100],
-  Pending0 = handle_add_offset(#pending_acks{}, Offsets),
-  #pending_acks{count = 8, offsets_queue = Q} = Pending0,
-  Ranges = queue:to_list(Q),
-  ?assertEqual([{1, 3}, {5, 7}, {9, 9}, {100, 100}], Ranges),
-  Pending1 = handle_add_offset(Pending0, [101]),
-  ?assertEqual(Offsets ++ [101], pending_acks_to_list(Pending1)),
+  Messages = [#kafka_message{ offset = O
+                            , key = <<>>
+                            , value = crypto:strong_rand_bytes(10)
+                            } || O <- Offsets],
+  Pending0 = add_pending_acks(#pending_acks{}, Messages),
+  ?assertMatch(#pending_acks{count = 8}, Pending0),
+  Message = #kafka_message{ offset = 101
+                          , key = <<>>
+                          , value = crypto:strong_rand_bytes(10)
+                          },
+  Pending1 = add_pending_acks(Pending0, [Message]),
+  ?assertEqual(Offsets ++ [101], pending_acks_to_offset_list(Pending1)),
   Pending2 = handle_ack(Pending1, 2),
-  ?assertEqual([3, 5, 6, 7, 9, 100, 101], pending_acks_to_list(Pending2)),
+  ?assertEqual([3, 5, 6, 7, 9, 100, 101],
+               pending_acks_to_offset_list(Pending2)),
   Pending3 = handle_ack(Pending2, 99),
-  ?assertEqual([100, 101], pending_acks_to_list(Pending3)),
+  ?assertEqual([100, 101], pending_acks_to_offset_list(Pending3)),
   Pending4 = handle_ack(Pending3, 101),
-  ?assertEqual([], pending_acks_to_list(Pending4)).
+  ?assertEqual([], pending_acks_to_offset_list(Pending4)).
 
 -endif. % TEST
 

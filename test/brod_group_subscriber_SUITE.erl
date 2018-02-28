@@ -229,6 +229,7 @@ t_async_acks(Config) when is_list(Config) ->
   %% so we can control where to start fetching messages from
   GroupConfig = [{offset_commit_policy, consumer_managed}],
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {prefetch_bytes, 0}
                    , {sleep_timeout, 0}
                    , {max_wait_time, 100}
                    ],
@@ -299,6 +300,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   %% so we can control where to start fetching messages from
   GroupConfig = [{offset_commit_policy, consumer_managed}],
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {prefetch_bytes, 0}
                    , {sleep_timeout, 0}
                    , {max_wait_time, 100}
                    ],

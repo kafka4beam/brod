@@ -158,6 +158,7 @@ t_async_acks(Config) when is_list(Config) ->
   %% so we can control where to start fetching messages from
   MaxSeqNo       = 100,
   ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {prefetch_bytes, 0} %% as discard
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
                    ],
