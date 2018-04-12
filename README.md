@@ -394,7 +394,7 @@ Topic = <<"topic">>.
 Partition = 0.
 brod:get_metadata(Hosts).
 brod:get_metadata(Hosts, [Topic]).
-brod:get_offsets(Hosts, Topic, Partition).
+brod:resolve_offset(Hosts, Topic, Partition).
 brod:fetch(Hosts, Topic, Partition, 1).
 ```
 
