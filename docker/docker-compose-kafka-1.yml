@@ -10,11 +10,13 @@ services:
     container_name: kafka_1
     ports:
       - "9092:9092"
-      - "9192:9192"
-      - "9292:9292"
+      - "9093:9093"
+      - "9094:9094"
+      - "9095:9095"
     environment:
       BROKER_ID: 0
       PLAINTEXT_PORT: 9092
-      SSL_PORT: 9192
-      SASL_SSL_PORT: 9292
+      SSL_PORT: 9093
+      SASL_SSL_PORT: 9094
+      SASL_PLAINTEXT_PORT: 9095
 

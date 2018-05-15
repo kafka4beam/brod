@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2017 Klarna AB
+%%%   Copyright (c) 2017-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -14,16 +14,14 @@
 %%%   limitations under the License.
 %%%
 
-%% Version ranges are cached per host and per brod_sock pid in ets
+%% Version ranges are cached per host and per connection pid in ets
 
 -module(brod_kafka_apis).
 
 -export([ default_version/1
-        , maybe_add_sock_pid/2
         , pick_version/2
         , start_link/0
         , stop/0
-        , versions_received/4
         ]).
 
 -export([ code_change/3
@@ -43,12 +41,10 @@
 
 -record(state, {}).
 
--type vsn() :: non_neg_integer().
+-type vsn() :: kpro:vsn().
 -type range() :: {vsn(), vsn()}.
--type api() :: kpro:req_tag().
--type client_id() :: binary(). %% not brod:client_id()
--type host() :: brod:hostname().
--type versions() :: [{api(), range()}].
+-type api() :: kpro:api().
+-type conn() :: kpro:connection().
 
 %% @doc Start process.
 -spec start_link() -> {ok, pid()}.
@@ -59,46 +55,33 @@ start_link() ->
 stop() ->
   gen_server:call(?SERVER, stop, infinity).
 
-%% @doc Report API version ranges for a given `brod_sock' pid.
--spec versions_received(client_id(), pid(), versions(), host()) -> ok.
-versions_received(ClientId, SockPid, Versions, Host) ->
-  Vsns = resolve_version_ranges(ClientId, Versions, []),
-  gen_server:call(?SERVER, {versions_received, SockPid, Vsns, Host}, infinity).
-
 %% @doc Get default supported version for the given API.
 -spec default_version(api()) -> vsn().
 default_version(API) ->
   {Min, _Max} = supported_versions(API),
   Min.
 
-%% @doc Try add pid with existing version ranges.
-%% Return `{error, unknow_host}' if the host is not cached already.
-%% @end
--spec maybe_add_sock_pid(host(), pid()) -> ok | {error, unknown_host}.
-maybe_add_sock_pid(Host, SockPid) ->
-  case ets:lookup(?ETS, Host) of
-    [] ->
-      {error, unknown_host};
-    [{_, ResolvedVersions}] ->
-      gen_server:call(?SERVER, {add_sock_pid, SockPid, ResolvedVersions})
-  end.
-
 %% @doc Pick API version for the given API.
--spec pick_version(pid(), api()) -> vsn().
-pick_version(SockPid, API) ->
-  do_pick_version(SockPid, API, supported_versions(API)).
+-spec pick_version(conn(), api()) -> vsn().
+pick_version(Conn, API) ->
+  do_pick_version(Conn, API, supported_versions(API)).
+
+%%%_* gen_server callbacks =====================================================
 
 init([]) ->
-  ?ETS = ets:new(?ETS, [named_table, protected]),
+  ?ETS = ets:new(?ETS, [named_table, public]),
   {ok, #state{}}.
 
-handle_info({'DOWN', _Mref, process, Pid, _Reason}, State) ->
-  ets:delete(?ETS, Pid),
+handle_info({'DOWN', _Mref, process, Conn, _Reason}, State) ->
+  _ = ets:delete(?ETS, Conn),
   {noreply, State};
 handle_info(Info, State) ->
   error_logger:error_msg("unknown info ~p", [Info]),
   {noreply, State}.
 
+handle_cast({monitor_connection, Conn}, State) ->
+  erlang:monitor(process, Conn),
+  {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:error_msg("unknown cast ~p", [Cast]),
   {noreply, State}.
@@ -106,15 +89,6 @@ handle_cast(Cast, State) ->
 handle_call(stop, From, State) ->
   gen_server:reply(From, ok),
   {stop, normal, State};
-handle_call({add_sock_pid, SockPid, ResolvedVersions}, _From, State) ->
-  _ = erlang:monitor(process, SockPid),
-  ets:insert(?ETS, {SockPid, ResolvedVersions}),
-  {reply, ok, State};
-handle_call({versions_received, SockPid, Versions, Host}, _From, State) ->
-  _ = erlang:monitor(process, SockPid),
-  ets:insert(?ETS, {Host, Versions}),
-  ets:insert(?ETS, {SockPid, Versions}),
-  {reply, ok, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -124,103 +98,62 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, _State) ->
   ok.
 
-%% @private
--spec do_pick_version(pid(), api(), range()) -> vsn().
-do_pick_version(_SockPid, _API, {Vsn, Vsn}) ->
-  %% only one version supported, no need to lookup
-  Vsn;
-do_pick_version(SockPid, API, {Min, _Max}) ->
-  %% query the highest supported version
-  case lookup_version(SockPid, API) of
-    none -> Min; %% no version received from kafka, use min
-    Vsn  -> Vsn  %% use max supported version
+%%%_* Internals ================================================================
+
+-spec do_pick_version(conn(), api(), range()) -> vsn().
+do_pick_version(_Conn, _API, {V, V}) -> V;
+do_pick_version(Conn, API, {Min, Max} = MyRange) ->
+  case lookup_vsn_range(Conn, API) of
+    none ->
+      Min; %% no version received from kafka, use min
+    {KproMin, KproMax} = Range when KproMin > Max orelse KproMax < Min ->
+      erlang:error({unsupported_vsn_range, API, MyRange, Range});
+    {_, KproMax} ->
+      min(KproMax, Max) %% try to use highest version
   end.
 
-%% @private Lookup API from cache, return default if not found.
--spec lookup_version(pid(), api()) -> vsn() | none.
-lookup_version(SockPid, API) ->
-  case ets:lookup(?ETS, SockPid) of
-    [] -> none;
-    [{SockPid, Versions}] ->
-      case lists:keyfind(API, 1, Versions) of
-        {API, Vsn} -> Vsn;
-        false -> none
-      end
+%% Lookup API from cache, return 'none' if not found.
+-dialyzer([{nowarn_function, [lookup_vsn_range/2]}]).
+-spec lookup_vsn_range(conn(), api()) -> {vsn(), vsn()} | none.
+lookup_vsn_range(Conn, API) ->
+  case ets:lookup(?ETS, Conn) of
+    [] ->
+      case kpro:get_api_versions(Conn) of
+        {ok, Versions} when is_map(Versions) ->
+          %% public ets, insert it by caller
+          ets:insert(?ETS, {Conn, Versions}),
+          %% tell ?SERVER to monitor the connection
+          %% so to delete it from cache at when 'DOWN' is received
+          ok = monitor_connection(Conn),
+          maps:get(API, Versions, none);
+        {error, _Reason} ->
+          none %% connection died, ignore
+      end;
+    [{Conn, Vsns}] ->
+      maps:get(API, Vsns, none)
   end.
 
-%% @private
--spec resolve_version_ranges(client_id(), [{api(), range()}], Acc) -> Acc
-        when Acc :: [{api(), vsn()}].
-resolve_version_ranges(_ClientId, [], Acc) -> lists:reverse(Acc);
-resolve_version_ranges(ClientId, [{API, {MinKafka, MaxKafka}} | Rest], Acc) ->
-  case resolve_version_range(ClientId, API, MinKafka, MaxKafka,
-                             supported_versions(API)) of
-    none -> resolve_version_ranges(ClientId, Rest, Acc);
-    Max -> resolve_version_ranges(ClientId, Rest, [{API, Max} | Acc])
-  end.
-
-%% @private
--spec resolve_version_range(client_id(), api(), vsn(), vsn(),
-                            range() | none()) -> vsn() | none.
-resolve_version_range(_ClientId, _API, _MinKafka, _MaxKafka, none) ->
-  %% API not implemented by brod
-  none;
-resolve_version_range(ClientId, API, MinKafka, MaxKafka, {MinBrod, MaxBrod}) ->
-  Min = max(MinBrod, MinKafka),
-  Max = min(MaxBrod, MaxKafka),
-  case Min =< Max of
-    true when MinBrod =:= MaxBrod ->
-      %% if brod supports only one version
-      %% no need to store the range in ETS
-      none;
-    true ->
-      Max;
-    false ->
-      log_unsupported_api(ClientId, API,
-                          {MinBrod, MaxBrod}, {MinKafka, MaxKafka}),
-      none
-  end.
-
-%% @private
--spec log_unsupported_api(client_id(), api(), range(), range()) -> ok.
-log_unsupported_api(ClientId, API, BrodRange, KafkaRange) ->
-  error_logger:error_msg("Can not support API ~p for client ~p, "
-                         "brod versions: ~p, kafka versions: ~p",
-                         [API, ClientId, BrodRange, KafkaRange]),
-  ok.
-
-%% @private Do not change range without verification.
-%%% Fixed (hardcoded) version APIs
-%% sasl_handshake_request: 0
-%% api_versions_request: 0
-
-%%% Missing features
-%% {create_topics_request, 0, 0}
-%% {delete_topics_request, 0, 0}
-
-%%% Will not support
-%% leader_and_isr_request
-%% stop_replica_request
-%% update_metadata_request
-%% controlled_shutdown_request
-%% @end
+%% Do not change range without verification.
 supported_versions(API) ->
   case API of
-    produce_request           -> {0, 2};
-    fetch_request             -> {0, 3};
-    offsets_request           -> {0, 1};
-    metadata_request          -> {0, 2};
-    offset_commit_request     -> {2, 2};
-    offset_fetch_request      -> {1, 2};
-    group_coordinator_request -> {0, 0};
-    join_group_request        -> {0, 0};
-    heartbeat_request         -> {0, 0};
-    leave_group_request       -> {0, 0};
-    sync_group_request        -> {0, 0};
-    describe_groups_request   -> {0, 0};
-    list_groups_request       -> {0, 0};
-    _                         -> none
+    produce          -> {0, 2};
+    fetch            -> {0, 3};
+    list_offsets     -> {0, 1};
+    metadata         -> {0, 2};
+    offset_commit    -> {2, 2};
+    offset_fetch     -> {1, 2};
+    find_coordinator -> {0, 0};
+    join_group       -> {0, 0};
+    heartbeat        -> {0, 0};
+    leave_group      -> {0, 0};
+    sync_group       -> {0, 0};
+    describe_groups  -> {0, 0};
+    list_groups      -> {0, 0};
+    _                -> erlang:error({unsupported_api, API})
   end.
+
+monitor_connection(Conn) ->
+  gen_server:cast(?SERVER, {monitor_connection, Conn}).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

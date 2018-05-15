@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015-2017, Klarna AB
+%%%   Copyright (c) 2015-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -394,7 +394,7 @@ do_wait_for_subscribers(States) ->
           NewStates = lists:keystore(TP, 1, States, {TP, undefined}),
           do_wait_for_subscribers(NewStates)
         after
-          4000 ->
+          10000 ->
             erlang:error({timeout, States})
       end
   end.

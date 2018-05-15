@@ -11,21 +11,18 @@ before_install:
   - curl -L https://github.com/docker/compose/releases/download/1.6.0/docker-compose-`uname -s`-`uname -m` > docker-compose
   - chmod +x docker-compose
   - sudo mv docker-compose /usr/local/bin/
-  - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; sudo cp rebar3 /usr/bin; cd ..
   - git clone https://github.com/inaka/elvis.git; cd elvis; rebar3 escriptize; sudo cp _build/default/bin/elvis /usr/bin; cd ..
 
 notifications:
   email: false
 
 otp_release:
-  - 20.0
+  - 21.0
+  - 20.3
   - 19.3
-  - 18.2.1
-  - 17.5
 
 script:
   - set -e
-  - make vsn-check
   - elvis rock
 
   - echo "verifying rebar compilation"
@@ -43,5 +40,5 @@ script:
   - make xref
   - make test-env
   - make t
-  - if [ "$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)')" -gt 18 ]; then make dialyze; fi
+  - if [ "$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)')" -eq 21 ]; then make dialyze; fi
 

@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017 Klarna AB
+%%%   Copyright (c) 2016-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -117,7 +117,6 @@
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages from the given partition set. Use atom 'all' to subscribe to all
 %% partitions. Messages are handled by calling CbModule:handle_message
-%% @end
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), module(), term()) ->
         {ok, pid()} | {error, any()}.
@@ -131,7 +130,6 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
 %% messages or message sets from the given partition set. Use atom 'all'
 %% to subscribe to all partitions. Messages are handled by calling
 %% CbModule:handle_message
-%% @end
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), message | message_set,
                  module(), term()) ->
@@ -148,7 +146,6 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
 %%
 %% NOTE: CommittedOffsets are the offsets for the messages that are successfully
 %%       processed (acknoledged), not the begin-offset ot start fetching from.
-%% @end
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), committed_offsets(),
                  message | message_set, cb_fun(), cb_state()) ->
@@ -392,7 +389,7 @@ handle_ack(AckRef, #state{consumers = Consumers} = State) ->
       State
   end.
 
-%% @private Tell consumer process to fetch more (if pre-fetch count allows).
+%% Tell consumer process to fetch more (if pre-fetch count allows).
 consume_ack(Pid, Offset) when is_pid(Pid) ->
   ok = brod:consume_ack(Pid, Offset);
 consume_ack(_Down, _Offset) ->

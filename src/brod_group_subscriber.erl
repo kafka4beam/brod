@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017 Klarna AB
+%%%   Copyright (c) 2016-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -440,7 +440,6 @@ terminate(_Reason, #state{}) ->
 
 %%%_* Internal Functions =======================================================
 
-%% @private
 -spec start_subscribe_timer(?undef | reference(), timeout()) -> reference().
 start_subscribe_timer(?undef, Delay) ->
   erlang:send_after(Delay, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS);
@@ -520,18 +519,17 @@ handle_ack(AckRef, #state{ generationId = GenerationId
       State
   end.
 
-%% @private Tell consumer process to fetch more (if pre-fetch count allows).
+%% Tell consumer process to fetch more (if pre-fetch count allows).
 consume_ack(Pid, Offset) when is_pid(Pid) ->
   ok = brod:consume_ack(Pid, Offset);
 consume_ack(_Down, _Offset) ->
   %% consumer is down, should be restarted by its supervisor
   ok.
 
-%% @private Send an async message to group coordinator for offset commit.
+%% Send an async message to group coordinator for offset commit.
 commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
-%% @private
 subscribe_partitions(#state{ client    = Client
                            , consumers = Consumers0
                            } = State) ->
@@ -539,7 +537,6 @@ subscribe_partitions(#state{ client    = Client
     lists:map(fun(C) -> subscribe_partition(Client, C) end, Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
-%% @private
 subscribe_partition(Client, Consumer) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid

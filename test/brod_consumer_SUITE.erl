@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015 - 2017, Klarna AB
+%%%   Copyright (c) 2015-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 20150-2016 Klarna AB
-%%% @end
-%%% ============================================================================
 
 %% @private
 -module(brod_consumer_SUITE).
@@ -37,7 +31,7 @@
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
-        , t_consumer_socket_restart/1
+        , t_consumer_connection_restart/1
         , t_consumer_resubscribe/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
@@ -177,15 +171,14 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
 
 %% @doc Consumer should be smart enough to try greater max_bytes
 %% when it's not great enough to fetch one single message
-%% @end
 t_consumer_max_bytes_too_small({init, Config}) ->
-  meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
+  meck:new(brod_kafka_request, [passthrough, no_passthrough_cover, no_history]),
   %% kafka returns empty message set when it's 0.9
   %% or when fetch request sent was version 0
   %% Avoid querying api version will make brod send v0 requests
   [{client_config, [{query_api_versions, false}]} | Config];
 t_consumer_max_bytes_too_small({'end', _Config}) ->
-  meck:unload(kpro);
+  meck:unload(brod_kafka_request);
 t_consumer_max_bytes_too_small(Config) ->
   Client = ?config(client),
   Partition = 0,
@@ -196,13 +189,13 @@ t_consumer_max_bytes_too_small(Config) ->
   MaxBytes2 = 12, %% too small but message size is fetched
   MaxBytes3 = size(Key) + ValueBytes,
   Tester = self(),
-  F = fun(Vsn, Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
+  F = fun(Conn, Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
         Tester ! {max_bytes, MaxBytes},
-        meck:passthrough([Vsn, Topic, Partition1, BeginOffset,
+        meck:passthrough([Conn, Topic, Partition1, BeginOffset,
                           MaxWait, MinBytes, MaxBytes])
       end,
   %% Expect the fetch_request construction function called twice
-  meck:expect(kpro, fetch_request, F),
+  meck:expect(brod_kafka_request, fetch, F),
   Value = make_bytes(ValueBytes),
   Options = [{max_bytes, MaxBytes1}],
   {ok, ConsumerPid} =
@@ -219,10 +212,9 @@ t_consumer_max_bytes_too_small(Config) ->
           ?assertEqual(Value, ValueReceived)
         end).
 
-%% @doc Consumer shoud auto recover from socket down, subscriber should not
+%% @doc Consumer shoud auto recover from connection down, subscriber should not
 %% notice a thing except for a few seconds of break in data streaming
-%% @end
-t_consumer_socket_restart(Config) ->
+t_consumer_connection_restart(Config) ->
   Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
@@ -254,9 +246,9 @@ t_consumer_socket_restart(Config) ->
   after 1000 ->
     ct:fail("timed out waiting for seqno producer loop to start")
   end,
-  {ok, SocketPid} =
+  {ok, ConnPid} =
     brod_client:get_leader_connection(Client, Topic, Partition),
-  exit(SocketPid, kill),
+  exit(ConnPid, kill),
   receive
     {produce_result_change, ProducerPid, error} ->
       ok
@@ -290,7 +282,6 @@ t_consumer_socket_restart(Config) ->
 
 %% @doc Data stream should resume after re-subscribe starting from the
 %% the last acked offset
-%% @end
 t_consumer_resubscribe(Config) when is_list(Config) ->
   Client = ?config(client),
   Topic = ?TOPIC,
@@ -431,9 +422,8 @@ t_offset_reset_policy(Config) when is_list(Config) ->
 
 %%%_* Help functions ===========================================================
 
-%% @private Expecting sequence numbers delivered from kafka
+%% Expecting sequence numbers delivered from kafka
 %% not expecting any error messages.
-%% @end
 seqno_consumer_loop(ExitSeqNo, ExitSeqNo) ->
   %% we have verified all sequence numbers, time to exit
   exit(normal);
@@ -455,10 +445,9 @@ seqno_consumer_loop(ExpectedSeqNo, ExitSeqNo) ->
       exit({"unexpected message received", Msg})
   end.
 
-%% @private Verify if a received sequence number list is as expected
+%% Verify if a received sequence number list is as expected
 %% sequence numbers are allowed to get redelivered,
 %% but should not be re-ordered.
-%% @end
 verify_seqno(SeqNo, []) ->
   SeqNo + 1;
 verify_seqno(SeqNo, [X | _] = SeqNoList) when X < SeqNo ->
@@ -468,9 +457,8 @@ verify_seqno(SeqNo, [SeqNo | Rest]) ->
 verify_seqno(SeqNo, SeqNoList) ->
   exit({"sequence number received is not as expected", SeqNo, SeqNoList}).
 
-%% @private Produce sequence numbers in a retry loop.
+%% Produce sequence numbers in a retry loop.
 %% Report produce API return value pattern changes to parent pid
-%% @end
 seqno_producer_loop(ProduceFun, SeqNo, LastResult, Parent) ->
   {Result, NextSeqNo} =
     case ProduceFun(SeqNo) of

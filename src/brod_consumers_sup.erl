@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2015-2017 Klarna AB
+%%%   Copyright (c) 2015-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,9 +16,6 @@
 
 %%%=============================================================================
 %%% @doc brod consumers supervisor
-%%%
-%%% @copyright 2015 Klarna AB
-%%% @end
 %%%=============================================================================
 
 -module(brod_consumers_sup).
@@ -46,7 +43,6 @@
 %%%_* APIs =====================================================================
 
 %% @doc Start a root consumers supervisor.
-%% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
   supervisor3:start_link(?MODULE, ?TOPICS_SUP).
@@ -65,7 +61,6 @@ stop_consumer(SupPid, TopicName) ->
   supervisor3:terminate_child(SupPid, TopicName).
 
 %% @doc Find a brod_consumer process pid running under ?PARTITIONS_SUP
-%% @end
 -spec find_consumer(pid(), brod:topic(), brod:partition()) ->
                        {ok, pid()} | {error, Reason} when
         Reason :: {consumer_not_found, brod:topic()}

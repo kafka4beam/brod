@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2017, Klarna AB
+%%%   Copyright (c) 2014-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -22,19 +22,15 @@
         , assert_topics/1
         , assert_topic/1
         , bytes/1
-        , connect_group_coordinator/3
-        , decode_messages/2
         , describe_groups/3
         , epoch_ms/0
-        , fetch/8
+        , fetch/5
         , fetch_committed_offsets/3
         , fetch_committed_offsets/4
-        , find_leader_in_metadata/3
-        , find_struct/3
+        , flatten_batches/2
         , get_metadata/1
         , get_metadata/2
         , get_metadata/3
-        , get_sasl_opt/1
         , group_per_key/1
         , group_per_key/2
         , init_sasl_opt/1
@@ -44,21 +40,21 @@
         , list_all_groups/2
         , list_groups/2
         , log/3
-        , make_fetch_fun/6
+        , make_fetch_fun/4
         , os_time_utc_str/0
+        , parse_rsp/1
+        , request_sync/2
+        , request_sync/3
         , resolve_offset/4
         , resolve_offset/5
-        , shutdown_pid/1
-        , try_connect/1
-        , try_connect/2
-        , resolve_group_coordinator/3
         ]).
 
 -include("brod_int.hrl").
 
 -type req_fun() :: fun((offset(), kpro:count()) -> kpro:req()).
 -type fetch_fun() :: fun((offset()) -> {ok, [brod:message()]} | {error, any()}).
--type sock_opts() :: brod:sock_opts().
+-type connection() :: kpro:connection().
+-type conn_config() :: brod:conn_config().
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
@@ -70,79 +66,51 @@
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for all topics
-%% @end
 -spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
-  get_metadata(Hosts, []).
+  get_metadata(Hosts, all).
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for the given topics
-%% @end
--spec get_metadata([endpoint()], [topic()]) ->
+-spec get_metadata([endpoint()], all | [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
-  get_metadata(Hosts, Topics, _Options = []).
+  get_metadata(Hosts, Topics, _ConnCfg = []).
 
 %% @doc Try to connect to any of the bootstrap nodes using the given
 %% connection options and fetch metadata for the given topics.
-%% @end
--spec get_metadata([endpoint()], [topic()], sock_opts()) ->
+-spec get_metadata([endpoint()], all | [topic()], conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
-get_metadata(Hosts, Topics, Options) ->
-  with_sock(
-    try_connect(Hosts, Options),
-    fun(Pid) ->
-      Request = brod_kafka_request:metadata_request(Pid, Topics),
-      #kpro_rsp{ tag = metadata_response
-               , msg = Msg
-               } = request_sync(Pid, Request),
-      {ok, Msg}
-    end).
+get_metadata(Hosts, Topics, ConnCfg) ->
+  with_conn(Hosts, ConnCfg,
+            fun(Pid) ->
+                Request = brod_kafka_request:metadata(Pid, Topics),
+                request_sync(Pid, Request)
+            end).
 
 %% @doc Resolve timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
-                     offset_time(), sock_opts()) ->
+                     offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
-resolve_offset(Hosts, Topic, Partition, Time, Options) when is_list(Options) ->
-  with_sock(
-    brod:connect_leader(Hosts, Topic, Partition, Options),
-    fun(Pid) ->
-        resolve_offset(Pid, Topic, Partition, Time)
-    end).
+resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
+  with_conn(
+    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+    fun(Pid) -> resolve_offset(Pid, Topic, Partition, Time) end).
 
-%% @doc Resolve timestamp to real offset.
+%% @doc Resolve timestamp or semantic offset to real offset.
+%% The give pid should be the connection to partition leader broker.
 -spec resolve_offset(pid(), topic(), partition(), offset_time()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Pid, Topic, Partition, Time) ->
-  Request = brod_kafka_request:offsets_request(Pid, Topic, Partition, Time),
-  #kpro_rsp{tag = offsets_response
-           , vsn = Vsn
-           , msg = Msg
-           } = request_sync(Pid, Request),
-  [Response] = kf(responses, Msg),
-  [PartitionRespons] = kf(partition_responses, Response),
-  Ec = kf(error_code, PartitionRespons),
-  ?IS_ERROR(Ec) andalso erlang:throw(Ec),
-  case Vsn of
-    0 ->
-      case kf(offsets, PartitionRespons) of
-        [Offset] -> {ok, Offset};
-        []       -> {error, not_found}
-      end;
-    1 ->
-      {ok, kf(offset, PartitionRespons)}
+  Req = brod_kafka_request:list_offsets(Pid, Topic, Partition, Time),
+  case request_sync(Pid, Req) of
+    {ok, #{error_code := EC}} when ?IS_ERROR(EC) ->
+      {error, EC};
+    {ok, #{offset := Offset}} ->
+      {ok, Offset};
+    {error, Reason} ->
+      {error, Reason}
   end.
-
-%% @doc Try connect to any of the given bootstrap nodes.
--spec try_connect([endpoint()]) -> {ok, pid()} | {error, any()}.
-try_connect(Hosts) ->
-  try_connect(Hosts, [], ?undef).
-
-%% @doc Try connect to any of the given bootstrap nodes using
-%% the given connect options.
-%% @end
-try_connect(Hosts, Options) ->
-  try_connect(Hosts, Options, ?undef).
 
 %% @doc Check terminate reason for a gen_server implementation
 is_normal_reason(normal)        -> true;
@@ -152,24 +120,6 @@ is_normal_reason(_)             -> false.
 
 is_pid_alive(Pid) ->
   is_pid(Pid) andalso is_process_alive(Pid).
-
-shutdown_pid(Pid) ->
-  case is_pid_alive(Pid) of
-    true  -> exit(Pid, shutdown);
-    false -> ok
-  end.
-
-%% @doc Find leader broker ID for the given topic-partiton in
-%% the metadata response received from socket.
-%% @end
--spec find_leader_in_metadata(kpro:struct(), topic(), partition()) ->
-        {ok, endpoint()} | {error, any()}.
-find_leader_in_metadata(Metadata, Topic, Partition) ->
-  try
-    {ok, do_find_leader_in_metadata(Metadata, Topic, Partition)}
-  catch throw : Reason ->
-    {error, Reason}
-  end.
 
 %% @doc Get now timestamp, and format as UTC string.
 -spec os_time_utc_str() -> string().
@@ -191,7 +141,6 @@ epoch_ms() ->
 %% NOTE: keep making MFA calls to error_logger to
 %%       1. allow logging libraries such as larger parse_transform
 %%       2. be more xref friendly
-%% @end
 -spec log(info | warning | error, string(), [any()]) -> ok.
 log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
 log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
@@ -219,162 +168,128 @@ assert_topics(Topics) ->
 %% @doc Assert topic is a binary().
 -spec assert_topic(topic()) -> ok | no_return().
 assert_topic(Topic) ->
-  ok_when(is_binary(Topic) andalso size(Topic) > 0,
-          {bad_topic, Topic}).
+  ok_when(is_binary(Topic) andalso size(Topic) > 0, {bad_topic, Topic}).
 
-%% @doc Map message to brod's format.
-%% incomplete message indicator is kept when the only one message is incomplete.
-%% Messages having offset earlier than the requested offset are discarded.
-%% this might happen for compressed message sets
-%% @end
--spec decode_messages(offset(), kpro:incomplete_message() | [brod:message()]) ->
-        kpro:incomplete_message() | [brod:message()].
-decode_messages(BeginOffset, Messages) when is_binary(Messages) ->
-  decode_messages(BeginOffset, kpro:decode_message_set(Messages));
-decode_messages(_BeginOffset, ?incomplete_message(_) = Incomplete) ->
-  Incomplete;
-decode_messages(BeginOffset, Messages) when is_list(Messages) ->
-  drop_old_messages(BeginOffset, Messages).
+%% @doc Make a flat message list from decoded batch list.
+-spec flatten_batches(offset(), [kpro:batch()]) -> [kpro:message()].
+flatten_batches(BeginOffset, Batches) ->
+  MsgList = lists:append([Msgs || {_Meta, Msgs} <- Batches]),
+  drop_old_messages(BeginOffset, MsgList).
 
 %% @doc Fetch a single message set from the given topic-partition.
--spec fetch([endpoint()], topic(), partition(), offset(),
-            non_neg_integer(), non_neg_integer(), pos_integer(),
-            sock_opts()) -> {ok, [brod:message()]} | {error, any()}.
-fetch(Hosts, Topic, Partition, Offset, WaitTime,
-      MinBytes, MaxBytes, Options) ->
-  with_sock(
-    brod:connect_leader(Hosts, Topic, Partition, Options),
-    fun(Pid) ->
-        Fetch = make_fetch_fun(Pid, Topic, Partition,
-                               WaitTime, MinBytes, MaxBytes),
-        Fetch(Offset)
-    end).
+-spec fetch(connection() | {[endpoint()], conn_config()},
+            topic(), partition(), offset(), brod:fetch_opts()) ->
+              {ok, [brod:message()]} | {error, any()}.
+fetch({Hosts, ConnCfg}, Topic, Partition, Offset, Opts) ->
+  with_conn(
+    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+    fun(Conn) -> fetch(Conn, Topic, Partition, Offset, Opts) end);
+fetch(Conn, Topic, Partition, Offset, Opts) ->
+  Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
+  Fetch(Offset).
 
 %% @doc Make a fetch function which should expand `max_bytes' when
 %% it is not big enough to fetch one signle message.
-%% @end
--spec make_fetch_fun(pid(), topic(), partition(), kpro:wait(),
-                     kpro:count(), kpro:count()) -> fetch_fun().
-make_fetch_fun(SockPid, Topic, Partition, WaitTime, MinBytes, MaxBytes) ->
-  ReqFun = make_req_fun(SockPid, Topic, Partition, WaitTime, MinBytes),
-  fun(Offset) -> fetch(SockPid, ReqFun, Offset, MaxBytes) end.
-
-%% @doc Get sasl options from client config.
--spec get_sasl_opt(brod:client_config()) -> sasl_opt().
-get_sasl_opt(Config) ->
-  case proplists:get_value(sasl, Config) of
-    {plain, User, PassFun} when is_function(PassFun) ->
-      {plain, User, PassFun()};
-    {plain, File} ->
-      {User, Pass} = read_sasl_file(File),
-      {plain, User, Pass};
-    Other ->
-      Other
-  end.
+-spec make_fetch_fun(pid(), topic(), partition(), brod:fetch_opts()) ->
+        fetch_fun().
+make_fetch_fun(Conn, Topic, Partition, FetchOpts) ->
+  WaitTime = maps:get(max_wait_time, FetchOpts, 1000),
+  MinBytes = maps:get(min_bytes, FetchOpts, 1),
+  MaxBytes = maps:get(max_bytes, FetchOpts, 1 bsl 20),
+  ReqFun = make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes),
+  fun(Offset) -> fetch(Conn, ReqFun, Offset, MaxBytes) end.
 
 %% @doc Hide sasl plain password in an anonymous function to avoid
 %% the plain text being dumped to crash logs
-%% @end
 -spec init_sasl_opt(brod:client_config()) -> brod:client_config().
 init_sasl_opt(Config) ->
   case get_sasl_opt(Config) of
-    {plain, User, Pass} when not is_function(Pass) ->
-      replace_prop(sasl, {plain, User, fun() -> Pass end}, Config);
+    {Mechanism, User, Pass} when Mechanism =/= callback ->
+      replace_prop(sasl, {Mechanism, User, fun() -> Pass end}, Config);
     _Other ->
       Config
   end.
 
-%% @doc Fetch ommitted offsets for the given topics in a consumer group.
+%% @doc Fetch committed offsets for the given topics in a consumer group.
 %% 1. try find out the group coordinator broker from the bootstrap hosts
-%% 2. send `offset_fetch_request' and wait for `offset_fetch_response'
+%% 2. send `offset_fetch' request and wait for response.
 %% If Topics is an empty list, fetch offsets for all topics in the group
-%% @end
--spec fetch_committed_offsets([endpoint()], sock_opts(),
+-spec fetch_committed_offsets([endpoint()], conn_config(),
                               group_id(), [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
-fetch_committed_offsets(BootstrapEndpoints, SockOpts, GroupId, Topics) ->
-  with_sock(
-    connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId),
+fetch_committed_offsets(BootstrapEndpoints, ConnCfg, GroupId, Topics) ->
+  Args = #{type => group, id => GroupId},
+  with_conn(
+    kpro:connect_coordinator(BootstrapEndpoints, ConnCfg, Args),
     fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
 
 %% @doc Fetch commited offsts for the given topics in a consumer group.
-%% 1. locate the group coordinator broker by calling
+%% 1. Get broker endpoint by calling
 %%    `brod_client:get_group_coordinator'
-%% 2. connect group coordinator broker
-%% 3. send `offset_fetch_request' and wait for `offset_fetch_response'
+%% 2. Establish a connecton to the discovered endpoint.
+%% 3. send `offset_fetch' request and wait for response.
 %% If Topics is an empty list, fetch offsets for all topics in the group
-%% @end
 -spec fetch_committed_offsets(brod:client(), group_id(), [topic()]) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(Client, GroupId, Topics) ->
-  with_sock(
-    connect_group_coordinator(Client, GroupId),
-    fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
-
-%%%_* Internal Functions =======================================================
-
-%% @private With a socket connected to the group coordinator broker, send
-%% `offset_fetch_request' and wait for `offset_fetch_response'
-%% @end
--spec do_fetch_committed_offsets(brod:client_id() | pid(),
-                                 group_id(), [topic()]) ->
-        {ok, [kpro:struct()]} | {error, any()}.
-do_fetch_committed_offsets(SockPid, GroupId, Topics) when is_pid(SockPid) ->
-  Req = brod_kafka_request:offset_fetch_request(SockPid, GroupId, Topics),
-  try
-    #kpro_rsp{ tag = offset_fetch_response
-             , msg = Msg
-             } = request_sync(SockPid, Req),
-    TopicsArray = kf(responses, Msg),
-    {ok, TopicsArray}
-  catch
-    throw : Reason ->
+  case brod_client:get_group_coordinator(Client, GroupId) of
+    {ok, {Endpoint, ConnCfg}} ->
+      case kpro:connect(Endpoint, ConnCfg) of
+        {ok, Conn} ->
+          do_fetch_committed_offsets(Conn, GroupId, Topics);
+        {error, Reason} ->
+          {error, Reason}
+      end;
+    {error, Reason} ->
       {error, Reason}
   end.
 
-%% @private Make a function to build fetch requests.
-%% The function takes offset and max_bytes as input as these two parameters
-%% are varient when continuously polling a specific topic-partition.
-%% @end
--spec make_req_fun(pid(), topic(), partition(),
-                   kpro:wait(), kpro:count()) -> req_fun().
-make_req_fun(SockPid, Topic, Partition, WaitTime, MinBytes) ->
-  fun(Offset, MaxBytes) ->
-      brod_kafka_request:fetch_request(SockPid, Topic, Partition, Offset,
-                                       WaitTime, MinBytes, MaxBytes)
+-spec get_sasl_opt(brod:client_config()) -> sasl_opt().
+get_sasl_opt(Config) ->
+  case proplists:get_value(sasl, Config) of
+    ?undef -> {sasl, ?undef};
+    {callback, Module, Args} ->
+      %% Module should implement kpro_auth_backend behaviour
+      {callback, Module, Args};
+    {Mechanism, File} when is_list(File) orelse is_binary(File) ->
+      {User, Pass} = read_sasl_file(File),
+      {Mechanism, User, Pass};
+    Other ->
+      Other
+  end.
+
+%% With a connection to the group coordinator broker,
+%% send `offset_fetch' and wait for response.
+-spec do_fetch_committed_offsets(brod:client_id() | pid(),
+                                 group_id(), [topic()]) ->
+        {ok, [kpro:struct()]} | {error, any()}.
+do_fetch_committed_offsets(Conn, GroupId, Topics) when is_pid(Conn) ->
+  Req = brod_kafka_request:offset_fetch(Conn, GroupId, Topics),
+  case request_sync(Conn, Req) of
+    {ok, Msg} ->
+      {ok, kf(responses, Msg)};
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 %% @doc Fetch a message-set. If the given MaxBytes is not enough to fetch a
 %% single message, expand it to fetch exactly one message
-%% @end
--spec fetch(pid(), req_fun(), offset(), kpro:count()) ->
+-spec fetch(connection(), req_fun(), offset(), kpro:count()) ->
                {ok, [brod:message()]} | {error, any()}.
-fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
+fetch(Conn, ReqFun, Offset, MaxBytes) ->
   Request = ReqFun(Offset, MaxBytes),
-  #kpro_rsp{ tag = fetch_response
-           , msg = Msg
-           } = request_sync(SockPid, Request, infinity),
-  [Response] = kf(responses, Msg),
-  [PartitionResponse] = kf(partition_responses, Response),
-  Header = kf(partition_header, PartitionResponse),
-  Messages0 = kf(record_set, PartitionResponse),
-  ErrorCode = kf(error_code, Header),
-  case ?IS_ERROR(ErrorCode) of
-    true ->
-      {error, kpro_error_code:desc(ErrorCode)};
-    false ->
-      case decode_messages(Offset, Messages0) of
-        ?incomplete_message(Size) ->
-          fetch(SockPid, ReqFun, Offset, Size);
-        Messages ->
-          {ok, Messages}
-      end
+  case request_sync(Conn, Request, infinity) of
+    {ok, #{error_code := ErrorCode}} when ?IS_ERROR(ErrorCode) ->
+      {error, ErrorCode};
+    {ok, #{batches := Batches}} ->
+      {ok, flatten_batches(Offset, Batches)};
+    {error, Reason} ->
+      {error, Reason}
   end.
 
 %% @doc List all groups in the given cluster.
 %% NOTE: Exception if failed against any of the coordinator brokers.
-%% @end
--spec list_all_groups([endpoint()], sock_opts()) ->
+-spec list_all_groups([endpoint()], conn_config()) ->
         [{endpoint(), [brod:cg()] | {error, any()}}].
 list_all_groups(Endpoints, Options) ->
   {ok, Metadata} = get_metadata(Endpoints, [], Options),
@@ -389,24 +304,14 @@ list_all_groups(Endpoints, Options) ->
     end, [], Brokers).
 
 %% @doc List all groups in the given coordinator broker.
--spec list_groups(endpoint(), sock_opts()) ->
+-spec list_groups(endpoint(), conn_config()) ->
         {ok, [brod:cg()]} | {error, any()}.
-list_groups(Endpoint, Options) ->
-  with_sock(
-    try_connect([Endpoint], Options),
+list_groups(Endpoint, ConnCfg) ->
+  with_conn([Endpoint], ConnCfg,
     fun(Pid) ->
-      Vsn = 0, %% only one version
-      Body = [], %% this request has no struct field
-      Request = kpro:req(list_groups_request, Vsn, Body),
-      #kpro_rsp{ tag = list_groups_response
-               , vsn = Vsn
-               , msg = Msg
-               } = request_sync(Pid, Request),
-      ErrorCode = kf(error_code, Msg),
-      case ?IS_ERROR(ErrorCode) of
-        true ->
-          {error, ErrorCode};
-        false ->
+      Request = brod_kafka_request:list_groups(Pid),
+      case request_sync(Pid, Request) of
+        {ok, Groups0} ->
           Groups =
             lists:map(
               fun(Struct) ->
@@ -415,80 +320,28 @@ list_groups(Endpoint, Options) ->
                   #brod_cg{ id = Id
                           , protocol_type = Type
                           }
-              end, kf(groups, Msg)),
-          {ok, Groups}
+              end, Groups0),
+          {ok, Groups};
+        {error, Reason} ->
+          {error, Reason}
       end
     end).
 
 %% @doc Send describe_groups_request and wait for describe_groups_response.
--spec describe_groups(endpoint(), sock_opts(), [brod:group_id()]) ->
+-spec describe_groups(endpoint(), conn_config(), [brod:group_id()]) ->
         {ok, kpro:struct()} | {error, any()}.
-describe_groups(Coordinator, SockOpts, IDs) ->
-  with_sock(
-    try_connect([Coordinator], SockOpts),
+describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
+  with_conn([CoordinatorEndpoint], ConnCfg,
     fun(Pid) ->
-        Req = kpro:req(describe_groups_request, 0, [{group_ids, IDs}]),
-        #kpro_rsp{ tag = describe_groups_response
-                 , vsn = 0
-                 , msg = Msg
-                 } = request_sync(Pid, Req),
-        Groups = kf(groups, Msg),
-        {ok, Groups}
-    end).
-
-%% @doc Connect to consumer group coordinator broker.
-%% Done in steps: 1) connect to any of the given bootstrap ednpoints;
-%% 2) send `group_coordinator_request' to resolve group coordinator endpoint;
-%% 3) connect to the resolved endpoint and return the `brod_sock' pid
-%% @end
--spec connect_group_coordinator([endpoint()], sock_opts(), group_id()) ->
-        {ok, pid()} | {error, any()}.
-connect_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
-  case resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) of
-    {ok, Endpoint} -> try_connect([Endpoint], SockOpts);
-    {error, Reason} -> {error, Reason}
-  end.
-
-%% @doc Connect to consumer group coordinator broker.
-%% Done in steps: 1) make use of `brod_client' metadata socket to resolve
-%% group coordinator broker endpoint, 2) connect to the resolved endpoint
-%% and return the `brod_sock' pid
--spec connect_group_coordinator(brod:client(), brod:group_id()) ->
-        {ok, pid()} | {error, any()}.
-connect_group_coordinator(Client, GroupId) ->
-  case brod_client:get_group_coordinator(Client, GroupId) of
-    {ok, {Endpoint, SockOpts}} -> try_connect([Endpoint], SockOpts);
-    {error, Reason} -> {error, Reason}
-  end.
-
-%% @doc Send group_coordinator_request to any of the bootstrap endpoints.
-%% return resolved coordinator broker endpoint.
-%% @end
--spec resolve_group_coordinator([endpoint()], sock_opts(), group_id()) ->
-        {ok, endpoint()} | {error, any()}.
-resolve_group_coordinator(BootstrapEndpoints, SockOpts, GroupId) ->
-  with_sock(
-    try_connect(BootstrapEndpoints, SockOpts),
-    fun(BootstrapSockPid) ->
-        Req = kpro:req(group_coordinator_request, 0, [{group_id, GroupId}]),
-        #kpro_rsp{ tag = group_coordinator_response
-                 , vsn = 0
-                 , msg = Struct
-                 } = request_sync(BootstrapSockPid, Req),
-        EC = kf(error_code, Struct),
-        ?IS_ERROR(EC) andalso erlang:throw(EC),
-        Coordinator = kf(coordinator, Struct),
-        Host = kf(host, Coordinator),
-        Port = kf(port, Coordinator),
-        {ok, {binary_to_list(Host), Port}}
+        Req = kpro:make_request(describe_groups, 0, [{group_ids, IDs}]),
+        request_sync(Pid, Req)
     end).
 
 -define(IS_BYTE(I), (I>=0 andalso I<256)).
 
 %% @doc Return message set size in number of bytes.
 %% NOTE: This does not include the overheads of encoding protocol.
-%%       such as magic bytes, attributes, and length tags etc.
-%% @end
+%% such as magic bytes, attributes, and length tags etc.
 -spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
 bytes([]) -> 0;
 bytes(?undef) -> 0;
@@ -504,12 +357,12 @@ kv_count(KVList) ->
   Fold = fun(_Msg, Acc) -> Acc + 1 end,
   foldl_kvlist(Fold, 0, KVList).
 
-%% @private Get nested kv-list.
+%% Get nested kv-list.
 nested({_K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
 nested({_T, _K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
 nested(_) -> false.
 
-%% @private Foldl kv-list.
+%% Foldl kv-list.
 foldl_kvlist(_Fun, Acc, []) -> Acc;
 foldl_kvlist(Fun, Acc, [Msg | Rest]) ->
   NewAcc = case nested(Msg) of
@@ -533,32 +386,99 @@ group_per_key(List) ->
 group_per_key(MapFun, List) ->
   group_per_key(lists:map(MapFun, List)).
 
+%% @doc Parse decoded kafka response (`#kpro_rsp{}') into a more generic
+%% representation.
+%% Return `ok' if it is a trivial 'ok or not' response without data fields
+%% Return `{ok, Result}' for some of the APIs when no error-code found in
+%% response. Result could be a transformed representation of response message
+%% body `#kpro_rsp.msg' or the response body itself.
+%% For some APIs, it returns `{error, CodeOrMessage}' when error-code is not
+%% `no_error' in the message body.
+%% NOTE: Not all error codes are interpreted as `{error, CodeOrMessage}' tuple.
+%%       for some of the complex response bodies, error-codes are retained
+%%       for caller to parse.
+-spec parse_rsp(kpro:rsp()) -> ok | {ok, term()} | {error, any()}.
+parse_rsp(#kpro_rsp{api = API, vsn = Vsn, msg = Msg}) ->
+  try parse(API, Vsn, Msg) of
+    ok -> ok;
+    Result -> {ok, Result}
+  catch
+    throw : ErrorCodeOrMessage ->
+      {error, ErrorCodeOrMessage}
+  end.
+
+-spec request_sync(connection(), kpro:req()) ->
+        ok | {ok, term()} | {error, any()}.
+request_sync(Conn, Req) ->
+  request_sync(Conn, Req, infinity).
+
+-spec request_sync(connection(), kpro:req(), infinity | timeout()) ->
+        ok | {ok, term()} | {error, any()}.
+request_sync(Conn, #kpro_req{ref = Ref} = Req, Timeout) ->
+  % kpro_connection has a global 'request_timeout' option
+  % the connection pid will exit if that one times out
+  case kpro:request_sync(Conn, Req, Timeout) of
+    {ok, #kpro_rsp{ref = Ref} = Rsp} -> parse_rsp(Rsp);
+    {error, Reason} -> {error, Reason}
+  end.
+
 %%%_* Internal functions =======================================================
 
-%% @private
-with_sock({ok, Pid}, Fun) ->
-  try
-    Fun(Pid)
-  catch
-    throw : Reason ->
-      {error, Reason}
-  after
-    _ = brod_sock:stop(Pid)
-  end;
-with_sock({error, Reason}, _Fun) ->
-  {error, Reason}.
+%% Make a function to build fetch requests.
+%% The function takes offset and max_bytes as input as these two parameters
+%% are varient when continuously polling a specific topic-partition.
+-spec make_req_fun(connection(), topic(), partition(),
+                   kpro:wait(), kpro:count()) -> req_fun().
+make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes) ->
+  fun(Offset, MaxBytes) ->
+      brod_kafka_request:fetch(Conn, Topic, Partition, Offset,
+                               WaitTime, MinBytes, MaxBytes)
+  end.
 
-%% @private
+%% Parse fetch response into a more user-friendly representation.
+-spec parse_fetch_rsp(kpro:struct()) -> map().
+parse_fetch_rsp(Msg) ->
+  EC1 = kpro:find(error_code, Msg, ?no_error),
+  SessionID = kpro:find(session_id, Msg, 0),
+  {Header, Batches, EC2} =
+    case kpro:find(responses, Msg) of
+      [] ->
+        %% a session init without data
+        {undefined, [], ?no_error};
+      _ ->
+        PartitionRsp = get_partition_rsp(Msg),
+        HeaderX = kpro:find(partition_header, PartitionRsp),
+        throw_error_code([HeaderX]),
+        Records = kpro:find(record_set, PartitionRsp),
+        ECx = kpro:find(error_code, HeaderX),
+        {HeaderX, kpro:decode_batches(Records), ECx}
+    end,
+  ErrorCode = case EC2 =:= ?no_error of
+                true  -> EC1;
+                false -> EC2
+              end,
+  case ?IS_ERROR(ErrorCode) of
+    true -> erlang:throw(ErrorCode);
+    false -> #{ session_id => SessionID
+              , header => Header
+              , batches => Batches
+              }
+  end.
+
+get_partition_rsp(Struct) ->
+  [TopicRsp] = kpro:find(responses, Struct),
+  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
+  PartitionRsp.
+
 -spec replace_prop(term(), term(), proplists:proplist()) ->
         proplists:proplist().
 replace_prop(Key, Value, PropL0) ->
   PropL = proplists:delete(Key, PropL0),
   [{Key, Value} | PropL].
 
-%% @private Read a regular file, assume it has two lines:
+%% Read a regular file, assume it has two lines:
 %% First line is the sasl-plain username
 %% Second line is the password
-%% @end
 -spec read_sasl_file(file:name_all()) -> {binary(), binary()}.
 read_sasl_file(File) ->
   {ok, Bin} = file:read_file(File),
@@ -566,28 +486,9 @@ read_sasl_file(File) ->
   [User, Pass] = lists:filter(fun(Line) -> Line =/= <<>> end, Lines),
   {User, Pass}.
 
-%% @private Try to connect to one of the given endpoints.
-%% Try next in the list if failed. Return the last failure reason
-%% if failed on all endpoints.
-%% @end
--spec try_connect([endpoint()], sock_opts(), any()) ->
-        {ok, pid()} | {error, any()}.
-try_connect([], _Options, LastError) ->
-  LastError;
-try_connect([{Host, Port} | Hosts], Options, _) ->
-  %% Do not 'start_link' to avoid unexpected 'EXIT' message.
-  %% Should be ok since we're using a single blocking request which
-  %% monitors the process anyway.
-  case brod_sock:start(self(), Host, Port,
-                       ?BROD_DEFAULT_CLIENT_ID, Options) of
-    {ok, Pid} -> {ok, Pid};
-    Error     -> try_connect(Hosts, Options, Error)
-  end.
-
-%% @private A fetched batch may contain offsets earlier than the
+%% A fetched batch may contain offsets earlier than the
 %% requested begin-offset because the batch might be compressed on
 %% kafka side. Here we drop the leading messages.
-%% @end
 drop_old_messages(_BeginOffset, []) -> [];
 drop_old_messages(BeginOffset, [Message | Rest] = All) ->
   case Message#kafka_message.offset < BeginOffset of
@@ -595,63 +496,116 @@ drop_old_messages(BeginOffset, [Message | Rest] = All) ->
     false -> All
   end.
 
-%% @private Raise an 'error' exception when first argument is not 'true'.
+%% Raise an 'error' exception when first argument is not 'true'.
 %% The second argument is used as error reason.
-%% @end
 -spec ok_when(boolean(), any()) -> ok | no_return().
 ok_when(true, _) -> ok;
 ok_when(_, Reason) -> erlang:error(Reason).
 
-%% @private
--spec do_find_leader_in_metadata(kpro:struct(), brod:topic(),
-                                 brod:partition()) -> brod:endpoint().
-do_find_leader_in_metadata(Msg, Topic, Partition) ->
-  Brokers = kf(brokers, Msg),
-  [TopicMetadata] = kf(topic_metadata, Msg),
-  TopicEC = kf(topic_error_code, TopicMetadata),
-  RealTopic = kf(topic, TopicMetadata),
-  Partitions = kf(partition_metadata, TopicMetadata),
-  RealTopic /= Topic andalso erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION),
-  ?IS_ERROR(TopicEC) andalso erlang:throw(TopicEC),
-  Id = case find_struct(partition_id, Partition, Partitions) of
-         false -> erlang:throw(?EC_UNKNOWN_TOPIC_OR_PARTITION);
-         PartitionMetadata -> kf(leader, PartitionMetadata)
-       end,
-  Id >= 0 orelse erlang:throw(?EC_LEADER_NOT_AVAILABLE),
-  Broker = find_struct(node_id, Id, Brokers),
-  Host = kf(host, Broker),
-  Port = kf(port, Broker),
-  {binary_to_list(Host), Port}.
-
-%% @private
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
 kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
-%% @private Find kpro struct in array.
-%% Return false if no struct matches the given field name and value
-%% @end
--spec find_struct(kpro:field_name(), kpro:field_value(), [kpro:struct()]) ->
-        false | kpro:struct().
-find_struct(_FieldName, _Value, []) -> false;
-find_struct(FieldName, Value, [Struct | Rest]) ->
-  case kf(FieldName, Struct) =:= Value of
-    true  -> Struct;
-    false -> find_struct(FieldName, Value, Rest)
-  end.
+with_conn({ok, Pid}, Fun) ->
+  try
+    Fun(Pid)
+  after
+    kpro:close_connection(Pid)
+  end;
+with_conn({error, Reason}, _Fun) ->
+  {error, Reason}.
 
-%% @private
--spec request_sync(pid(), kpro:req()) -> kpro:rsp().
-request_sync(Pid, Req) ->
-  request_sync(Pid, Req, infinity).
+with_conn(Endpoints, ConnCfg, Fun) when is_list(ConnCfg) ->
+  with_conn(Endpoints, maps:from_list(ConnCfg), Fun);
+with_conn(Endpoints, ConnCfg, Fun) ->
+  kpro_brokers:with_connection(Endpoints, ConnCfg, Fun).
 
-%% @private
--spec request_sync(pid(), kpro:req(), timeout()) -> kpro:rsp().
-request_sync(Pid, Req, Timeout) ->
-  % brod_sock has a global 'request_timeout' option
-  % the socket pid will exit if that one times out
-  case brod_sock:request_sync(Pid, Req, Timeout) of
-    {ok, Rsp} -> Rsp;
-    {error, Reason} -> erlang:throw(Reason)
+parse(produce, _Vsn,  Msg) ->
+  kpro:find(base_offset, get_partition_rsp(Msg));
+parse(fetch, _Vsn, Msg) ->
+  parse_fetch_rsp(Msg);
+parse(list_offsets, _, Msg) ->
+  case get_partition_rsp(Msg) of
+    #{offsets := [Offset]} = M -> M#{offset => Offset};
+    #{offset := _} = M -> M
+  end;
+parse(metadata, _, Msg) ->
+  ok = throw_error_code(kpro:find(topic_metadata, Msg)),
+  Msg;
+parse(find_coordinator, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(join_group, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(heartbeat, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(leave_group, _, Msg) ->
+  ok = throw_error_code([Msg]);
+parse(sync_group, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(describe_groups, _, Msg) ->
+  %% return groups
+  Groups = kpro:find(groups, Msg),
+  ok = throw_error_code(Groups),
+  Groups;
+parse(list_groups, _, Msg) ->
+  %% return groups
+  ok = throw_error_code([Msg]),
+  kpro:find(groups, Msg);
+parse(create_topics, _, Msg) ->
+  ok = throw_error_code(kpro:find(topic_errors, Msg));
+parse(delete_topics, _, Msg) ->
+  ok = throw_error_code(kpro:find(topic_error_codes, Msg));
+parse(init_producer_id, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(create_partitions, _, Msg) ->
+  ok = throw_error_code(kpro:find(topic_errors, Msg));
+parse(end_txn, _, Msg) ->
+  ok = throw_error_code([Msg]);
+parse(describe_acls, _, Msg) ->
+  ok = throw_error_code([Msg]),
+  Msg;
+parse(create_acls, _, Msg) ->
+  ok = throw_error_code(kpro:find(creation_responses, Msg));
+parse(_API, _Vsn, Msg) ->
+  %% leave it to the caller to parse:
+  %% offset_commit
+  %% offset_fetch
+  %% sasl_handshake
+  %% api_versions
+  %% delete_records
+  %% add_partitions_to_txn
+  %% txn_offset_commit
+  %% delete_acls
+  %% describe_acls
+  %% describe_configs
+  %% alter_configs
+  %% alter_replica_log_dirs
+  %% describe_log_dirs
+  %% sasl_authenticate
+  %% create_partitions
+  %% create_delegation_token
+  %% renew_delegation_token
+  %% expire_delegation_token
+  %% describe_delegation_token
+  %% delete_groups
+  Msg.
+
+%% This function takes a list of kpro structs,
+%% return ok if all structs have 'no_error' as error code.
+%% Otherwise throw an exception with the first error.
+throw_error_code([]) -> ok;
+throw_error_code([Struct | Structs]) ->
+  EC = kpro:find(error_code, Struct),
+  case ?IS_ERROR(EC) of
+    true ->
+      Err = kpro:find(error_message, Struct, EC),
+      erlang:throw(Err);
+    false ->
+      throw_error_code(Structs)
   end.
 
 %%%_* Emacs ====================================================================

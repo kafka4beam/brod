@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017, Klarna AB
+%%%   Copyright (c) 2016-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -13,12 +13,6 @@
 %%%   See the License for the specific language governing permissions and
 %%%   limitations under the License.
 %%%
-
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2015 Klarna AB
-%%% @end
-%%% ============================================================================
 
 %% @private
 -module(brod_compression_SUITE).

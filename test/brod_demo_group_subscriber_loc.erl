@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017 Klarna AB
+%%%   Copyright (c) 2016-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 %%% This is called 'loc' as in 'Local Offset Commit'. i.e. it demos an
 %%% implementation of group subscriber that writes offsets locally (to file
 %%% in this module), but does not commit offsets to Kafka.
-%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -195,12 +194,11 @@ bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId,
 filename(Dir, GroupId, Topic, Partition) ->
   filename:join([Dir, GroupId, Topic, integer_to_list(Partition)]).
 
-%% @private Offsets are committed locally in files for demo.
+%% Offsets are committed locally in files for demo.
 %% Due to the fact that a partition can be assigned to any group member,
 %% in a real use case, when group members are distributed among Erlang nodes
 %% (or even hosts), the offsets should be committed to a place where all
 %% members have access to. e.g. a database.
-%% @end
 commit_offset(Dir, GroupId, Topic, Partition, Offset) ->
   Filename = filename(Dir, GroupId, Topic, Partition),
   ok = filelib:ensure_dir(Filename),

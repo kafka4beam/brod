@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2017, Klarna AB
+%%%   Copyright (c) 2017-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 %% @end
 -module(brod_cli_pipe).
 
--ifdef(BROD_CLI).
+-ifdef(build_brod_cli).
 
 -behaviour(gen_server).
 
@@ -62,7 +62,7 @@
 -type delimiter() :: binary().
 -type epoch_ms() :: integer().
 -type read_fun() ::
-        fun((?STDIN | file:io_device(), [binary()]) ->
+        fun((?STDIN | file:io_device(), [binary()]) -> eof |
               {[{epoch_ms(), Key :: binary(), Val :: binary()}], [binary()]}).
 
 -record(state, { parent :: pid()
@@ -70,7 +70,7 @@
                , read_fun :: read_fun()
                , is_eof_exit :: boolean()
                , is_tail :: boolean()
-               , io_device :: ?STDIN | file:io_device()
+               , io_device :: ?undef | ?STDIN | file:io_device()
                , acc_bytes = [] :: [binary()]
                , retry_delay :: timeout()
                }).
@@ -88,7 +88,6 @@
 %%           tell brod-cli to start reading from EOF
 %% no_exit:  boolean(). Do not exit when reaching EOF
 %% blk_size: Read block size
-%% @end
 -spec start_link([{arg_name(), arg_value()}]) -> {ok, pid()}.
 start_link(Args) ->
   Parent = self(),
@@ -134,10 +133,7 @@ init(#state{source = Source, is_tail = IsTail} = State0) ->
         ?STDIN;
       {file, File} ->
         {ok, Fd} = file:open(File, [read, binary]),
-        case IsTail of
-          true  -> file:position(Fd, eof);
-          false -> ok
-        end,
+        IsTail andalso file:position(Fd, eof),
         Fd
     end,
   State = State0#state{io_device = IoDevice},
@@ -176,16 +172,12 @@ terminate(_Reason, _State) ->
 
 %%%_* Privates =================================================================
 
-%% @private
 send_to_parent(Parent, Msgs0) ->
   FilterF = fun(?TKV(_T, K, V)) -> K =/= <<>> orelse V =/= <<>> end,
-  case lists:filter(FilterF, Msgs0) of
-    [] -> ok;
-    Msgs -> Parent ! {pipe, self(), Msgs}
-  end,
+  Msgs = lists:filter(FilterF, Msgs0),
+  Msgs =/= [] andalso erlang:send(Parent, {pipe, self(), Msgs}),
   ok.
 
-%% @private
 handle_read(#state{ read_fun = ReadFun
                   , acc_bytes = Acc0
                   , io_device = IoDevice
@@ -201,7 +193,6 @@ handle_read(#state{ read_fun = ReadFun
       {noreply, State}
   end.
 
-%% @private
 handle_eof(#state{io_device = ?STDIN} = State) ->
   %% standard_io pipe closed
   {stop, normal, State};
@@ -219,17 +210,15 @@ handle_eof(#state{io_device = Fd} = State) ->
       %% we can not assume the file is truncated to empty
       {stop, pipe_source_truncated, State};
     {ok, _Pos} ->
-      file:position(Fd, LastPos),
+      _ = file:position(Fd, LastPos),
       ok = delay_continue(State),
       {noreply, State}
   end.
 
-%% @private
 delay_continue(#state{retry_delay = Delay}) ->
   _ = erlang:send_after(Delay, self(), ?CONTINUE_MSG),
   ok.
 
-%% @private
 -spec make_prompt_line_reader(none | delimiter()) -> read_fun().
 make_prompt_line_reader(_KvDeli = none) ->
   %% Read only value, no key
@@ -254,7 +243,6 @@ make_prompt_line_reader(KvDeli) ->
   Prompt = "KEY" ++ binary_to_list(KvDeli) ++ "VAL> ",
   make_line_reader(KvDeli, Prompt).
 
-%% @private
 -spec make_line_reader(none | binary(), string()) -> read_fun().
 make_line_reader(KvDeli, Prompt) ->
   fun(IoDevice, _Acc) ->
@@ -276,7 +264,6 @@ make_line_reader(KvDeli, Prompt) ->
       end
   end.
 
-%% @private
 -spec make_stream_reader(none | delimiter(), delimiter(),
                          pos_integer(), boolean()) -> read_fun().
 make_stream_reader(KvDeli, MsgDeli, BlkSize, IsEofExit) ->
@@ -311,7 +298,6 @@ make_stream_reader(KvDeli, MsgDeli, BlkSize, IsEofExit) ->
       end
   end.
 
-%% @private
 -spec add_acc(pos_integer(), binary(), [binary()]) -> [binary()].
 add_acc(_DeliSize = 1, Bytes, Acc) ->
   %% Delimiter is only one byte, in no way coult it be cut in half
@@ -331,7 +317,6 @@ add_acc(DeliSize, Bytes, [Tail | Header]) ->
       [NewTail, TailH | Header]
   end.
 
-%% @private
 -spec split_messages(binary:cp(), [binary()]) -> {[binary()], [binary()]}.
 split_messages(MsgDeliCp, [Tail | Header]) ->
   case binary:split(Tail, MsgDeliCp, [global]) of
@@ -348,7 +333,6 @@ split_messages(MsgDeliCp, [Tail | Header]) ->
       end
   end.
 
-%% @private
 -spec split_kv_pairs([binary()], none | delimiter(), boolean()) ->
         brod:kv_list().
 split_kv_pairs(Msgs, none, _IsSameDeli) ->
@@ -361,17 +345,14 @@ split_kv_pairs(Msgs, KvDeliCp, _IsSameDeli = false) ->
                 make_msg(K, V)
             end, Msgs).
 
-%% @private
 make_msgs([]) -> [];
 make_msgs([K, V | Rest]) ->
   [make_msg(K, V) | make_msgs(Rest)].
 
-%% @private
 make_msg(K, V) ->
   CreateTs = brod_utils:epoch_ms(),
   ?TKV(CreateTs, K, V).
 
-%% @private
 -spec read_line(?STDIN | file:io_device(), string()) -> eof | binary().
 read_line(IoDevice, Prompt) ->
   case io:get_line(IoDevice, Prompt) of
@@ -381,12 +362,10 @@ read_line(IoDevice, Prompt) ->
       unicode:characters_to_binary(rstrip(Chars, "\n"))
   end.
 
-%% @private
 -spec rstrip(string(), string()) -> string().
 rstrip(Str, CharSet) ->
   lists:reverse(lstrip(lists:reverse(Str), CharSet)).
 
-%% @private
 -spec lstrip(string(), string()) -> string().
 lstrip([], _) -> [];
 lstrip([C | Rest] = Str, CharSet) ->
@@ -395,7 +374,6 @@ lstrip([C | Rest] = Str, CharSet) ->
     false -> Str
   end.
 
-%% @private
 -spec bin(iodata()) -> binary().
 bin(X) -> iolist_to_binary(X).
 

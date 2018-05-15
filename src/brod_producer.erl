@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2017, Klarna AB
+%%%   Copyright (c) 2014-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -70,16 +70,16 @@
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
--type corr_id() :: brod:corr_id().
 -type config() :: proplists:proplist().
 -type call_ref() :: brod:call_ref().
+-type conn() :: kpro:connection().
 
 -record(state,
         { client_pid        :: pid()
         , topic             :: topic()
         , partition         :: partition()
-        , sock_pid          :: ?undef | pid()
-        , sock_mref         :: ?undef | reference()
+        , connection        :: ?undef | conn()
+        , conn_mref         :: ?undef | reference()
         , buffer            :: brod_producer_buffer:buf()
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: ?undef | reference()
@@ -132,8 +132,8 @@
 %%          'max.message.bytes' in kafka config (or topic config)
 %%   max_retries (optional, default = 3):
 %%     If {max_retries, N} is given, the producer retry produce request for
-%%     N times before crashing in case of failures like socket being shut down
-%%     or exceptions received in produce response from kafka.
+%%     N times before crashing in case of failures like connection being
+%%     shutdown by remote or exceptions received in produce response from kafka.
 %%     The special value N = -1 means 'retry indefinitely'
 %%   retry_backoff_ms (optional, default = 500);
 %%     Time in milli-seconds to sleep before retry the failed produce request.
@@ -155,7 +155,6 @@
 %%     threshold is hit.
 %%     NOTE: It does not make sense to have this value set larger than
 %%           `partition_buffer_limit'
-%% @end
 -spec start_link(pid(), topic(), partition(), config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
@@ -166,7 +165,6 @@ start_link(ClientPid, Topic, Partition, Config) ->
 %% caller so the caller can used it to expect (match) a brod_produce_req_acked
 %% message after the produce request has been acked by configured number of
 %% replicas in kafka cluster.
-%% @end
 -spec produce(pid(), brod:key(), brod:value()) ->
         {ok, call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
@@ -186,11 +184,11 @@ produce(Pid, Key, Value) ->
   end.
 
 %% @doc Block calling process until it receives an acked reply for the CallRef.
-%%      The caller pid of this function must be the caller of produce/3
-%%      in which the call reference was created.
-%% @end
+%% The caller pid of this function must be the caller of produce/3
+%% in which the call reference was created.
 -spec sync_produce_request(call_ref(), timeout()) ->
-        {ok, offset()} | {error, {producer_down, any()}}.
+        {ok, offset()} | {error, Reason}
+          when Reason :: timeout | {producer_down, any()}.
 sync_produce_request(CallRef, Timeout) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
@@ -239,23 +237,30 @@ init({ClientPid, Topic, Partition, Config}) ->
       end
     end,
   SendFun =
-    fun(SockPid, KafkaKvList, Vsn) ->
+    fun(Conn, KafkaKvList, Vsn) ->
         ProduceRequest =
-          kpro:produce_request(Vsn, Topic, Partition, KafkaKvList,
-                               RequiredAcks, AckTimeout,
-                               MaybeCompress(KafkaKvList)),
-        sock_send(SockPid, ProduceRequest)
+          brod_kafka_request:produce(Vsn, Topic, Partition, KafkaKvList,
+                                     RequiredAcks, AckTimeout,
+                                     MaybeCompress(KafkaKvList)),
+        case send(Conn, ProduceRequest) of
+          ok when ProduceRequest#kpro_req.no_ack ->
+            ok;
+          ok ->
+            {ok, ProduceRequest#kpro_req.ref};
+          {error, Reason} ->
+            {error, Reason}
+        end
     end,
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
-  DefaultReqVersion = brod_kafka_apis:default_version(produce_request),
+  DefaultReqVersion = brod_kafka_apis:default_version(produce),
   State = #state{ client_pid       = ClientPid
                 , topic            = Topic
                 , partition        = Partition
                 , buffer           = Buffer
                 , retry_backoff_ms = RetryBackoffMs
-                , sock_pid         = ?undef
+                , connection       = ?undef
                 , produce_req_vsn  = DefaultReqVersion
                 },
   %% Register self() to client.
@@ -272,33 +277,33 @@ handle_info(?DELAYED_SEND_MSG(_MsgRef), #state{} = State) ->
   {noreply, State};
 handle_info(?RETRY_MSG, #state{} = State0) ->
   State1 = State0#state{retry_tref = ?undef},
-  {ok, State2} = maybe_reinit_socket(State1),
-  %% For retry-interval deterministic, produce regardless of socket state.
-  %% In case it has failed to find a new socket in maybe_reinit_socket/1
+  {ok, State2} = maybe_reinit_connection(State1),
+  %% For retry-interval deterministic, produce regardless of connection state.
+  %% In case it has failed to find a new connection in maybe_reinit_connection/1
   %% the produce call should fail immediately with {error, no_leader}
   %% and a new retry should be scheduled (if not reached max_retries yet)
   {ok, State} = maybe_produce(State2),
   {noreply, State};
 handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
-            #state{sock_pid = Pid, buffer = Buffer0} = State) ->
+            #state{connection = Pid, buffer = Buffer0} = State) ->
   case brod_producer_buffer:is_empty(Buffer0) of
     true ->
-      %% no socket restart in case of empty request buffer
-      {noreply, State#state{sock_pid = ?undef}};
+      %% no connection restart in case of empty request buffer
+      {noreply, State#state{connection = ?undef, conn_mref = ?undef}};
     false ->
-      %% put sent requests back to buffer immediately after socket down
+      %% put sent requests back to buffer immediately after connection down
       %% to fail fast if retry is not allowed (reaching max_retries).
-      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, Reason),
+      Buffer = brod_producer_buffer:nack_all(Buffer0, Reason),
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
-      {noreply, NewState#state{sock_pid = ?undef}}
+      {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
 handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
   handle_produce(CallRef, Key, Value, State);
-handle_info({msg, Pid, #kpro_rsp{ tag     = produce_response
-                                , corr_id = CorrId
-                                , msg     = Rsp
+handle_info({msg, Pid, #kpro_rsp{ api = produce
+                                , ref = Ref
+                                , msg = Rsp
                                 }},
-            #state{ sock_pid = Pid
+            #state{ connection = Pid
                   , buffer   = Buffer
                   } = State) ->
   [TopicRsp] = kpro:find(responses, Rsp),
@@ -316,21 +321,11 @@ handle_info({msg, Pid, #kpro_rsp{ tag     = produce_response
         Error = {produce_response_error, Topic, Partition,
                  Offset, ErrorCode},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
-        case brod_producer_buffer:nack(Buffer, CorrId, Error) of
-          {ok, NewBuffer}  ->
-            schedule_retry(State#state{buffer = NewBuffer});
-          {error, CorrIdExpected} ->
-            _ = log_discarded_corr_id(CorrId, CorrIdExpected),
-            maybe_produce(State)
-        end;
+        NewBuffer = brod_producer_buffer:nack(Buffer, Ref, Error),
+        schedule_retry(State#state{buffer = NewBuffer});
       false ->
-        case brod_producer_buffer:ack(Buffer, CorrId, Offset) of
-          {ok, NewBuffer}  ->
-            maybe_produce(State#state{buffer = NewBuffer});
-          {error, CorrIdExpected} ->
-            _ = log_discarded_corr_id(CorrId, CorrIdExpected),
-            maybe_produce(State)
-        end
+        NewBuffer = brod_producer_buffer:ack(Buffer, Ref, Offset),
+        maybe_produce(State#state{buffer = NewBuffer})
     end,
   {noreply, NewState};
 handle_info(_Info, #state{} = State) ->
@@ -352,7 +347,6 @@ terminate(_Reason, _State) ->
 
 %%%_* Internal Functions =======================================================
 
-%% @private
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
   brod_utils:log(error,
@@ -360,82 +354,71 @@ log_error_code(Topic, Partition, Offset, ErrorCode) ->
                  "Topic: ~s Partition: ~B Offset: ~B Error: ~p",
                  [Topic, Partition, Offset, ErrorCode]).
 
-%% @private
--spec log_discarded_corr_id(corr_id(), none | corr_id()) -> _.
-log_discarded_corr_id(CorrIdReceived, CorrIdExpected) ->
-  brod_utils:log(warning,
-                 "Correlation ID discarded:~p, expecting: ~p",
-                 [CorrIdReceived, CorrIdExpected]).
-
-%% @private
 handle_produce(CallRef, Key, Value,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
-  %% pending on retry, add to buffer regardless of socket state
+  %% pending on retry, add to buffer regardless of connection state
   do_handle_produce(CallRef, Key, Value, State);
 handle_produce(CallRef, Key, Value,
-               #state{sock_pid = Pid} = State) when is_pid(Pid) ->
-  %% Socket is alive, add to buffer, and try send produce request
+               #state{connection = Pid} = State) when is_pid(Pid) ->
+  %% Connection is alive, add to buffer, and try send produce request
   do_handle_produce(CallRef, Key, Value, State);
 handle_produce(CallRef, Key, Value, #state{} = State) ->
-  %% this is the first request after fresh start/restart or socket death
-  {ok, NewState} = maybe_reinit_socket(State),
+  %% this is the first request after fresh start/restart or conection death
+  {ok, NewState} = maybe_reinit_connection(State),
   do_handle_produce(CallRef, Key, Value, NewState).
 
-%% @private
 do_handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
-  {ok, NewBuffer} = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+  NewBuffer = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
   State1 = State#state{buffer = NewBuffer},
   {ok, NewState} = maybe_produce(State1),
   {noreply, NewState}.
 
-%% @private
--spec maybe_reinit_socket(state()) -> {ok, state()}.
-maybe_reinit_socket(#state{ client_pid = ClientPid
-                          , sock_pid   = OldSockPid
-                          , sock_mref  = OldSockMref
+-spec maybe_reinit_connection(state()) -> {ok, state()}.
+maybe_reinit_connection(#state{ client_pid = ClientPid
+                          , connection = OldConnection
+                          , conn_mref  = OldConnMref
                           , topic      = Topic
                           , partition  = Partition
                           , buffer     = Buffer0
                           } = State) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
-    {ok, OldSockPid} ->
-      %% Still the old socket
+    {ok, OldConnection} ->
+      %% Still the old connection
       {ok, State};
-    {ok, SockPid} ->
-      ok = maybe_demonitor(OldSockMref),
-      SockMref = erlang:monitor(process, SockPid),
+    {ok, Connection} ->
+      ok = maybe_demonitor(OldConnMref),
+      ConnMref = erlang:monitor(process, Connection),
       %% Make sure the sent but not acked ones are put back to buffer
-      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, new_leader),
-      ReqVersion = brod_kafka_apis:pick_version(SockPid, produce_request),
-      {ok, State#state{ sock_pid        = SockPid
-                      , sock_mref       = SockMref
+      Buffer = brod_producer_buffer:nack_all(Buffer0, new_leader),
+      ReqVersion = brod_kafka_apis:pick_version(Connection, produce),
+      {ok, State#state{ connection      = Connection
+                      , conn_mref       = ConnMref
                       , buffer          = Buffer
                       , produce_req_vsn = ReqVersion
                       }};
     {error, Reason} ->
-      ok = maybe_demonitor(OldSockMref),
+      ok = maybe_demonitor(OldConnMref),
       %% Make sure the sent but not acked ones are put back to buffer
-      {ok, Buffer} = brod_producer_buffer:nack_all(Buffer0, no_leader),
-      brod_utils:log(warning, "Failed to (re)init socket, reason:\n~p",
+      Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader),
+      brod_utils:log(warning, "Failed to (re)init connection, reason:\n~p",
                      [Reason]),
-      {ok, State#state{ sock_pid  = ?undef
-                      , sock_mref = ?undef
-                      , buffer    = Buffer
+      {ok, State#state{ connection = ?undef
+                      , conn_mref  = ?undef
+                      , buffer     = Buffer
                       }}
   end.
 
-%% @private
 maybe_produce(#state{retry_tref = Ref} = State) when is_reference(Ref) ->
   %% pending on retry after failure
   {ok, State};
 maybe_produce(#state{ buffer = Buffer0
-                    , sock_pid = SockPid
+                    , connection = Connection
                     , delay_send_ref = DelaySendRef0
                     , produce_req_vsn = Vsn
                     } = State) ->
   _ = cancel_delay_send_timer(DelaySendRef0),
-  case brod_producer_buffer:maybe_send(Buffer0, SockPid, Vsn) of
+  case brod_producer_buffer:maybe_send(Buffer0, Connection, Vsn) of
     {ok, Buffer} ->
       %% One or more produce requests are sent;
       %% Or no more message left to send;
@@ -449,33 +432,30 @@ maybe_produce(#state{ buffer = Buffer0
                             },
       {ok, NewState};
     {retry, Buffer} ->
-      %% Failed to send, e.g. due to socket error, retry later
+      %% Failed to send, e.g. due to connection error, retry later
       schedule_retry(State#state{buffer = Buffer})
   end.
 
-%% @private Start delay send timer.
+%% Start delay send timer.
 -spec start_delay_send_timer(milli_sec()) -> delay_send_ref().
 start_delay_send_timer(Timeout) ->
   MsgRef = make_ref(),
   TRef = erlang:send_after(Timeout, self(), ?DELAYED_SEND_MSG(MsgRef)),
   {TRef, MsgRef}.
 
-%% @private Ensure delay send timer is canceled.
+%% Ensure delay send timer is canceled.
 %% But not flushing the possibly already sent (stale) message
 %% Stale message should be discarded in handle_info
-%% @end
 -spec cancel_delay_send_timer(delay_send_ref()) -> _.
 cancel_delay_send_timer(?undef) -> ok;
 cancel_delay_send_timer({Tref, _Msg}) -> _ = erlang:cancel_timer(Tref).
 
-%% @private
 maybe_demonitor(?undef) ->
   ok;
 maybe_demonitor(Mref) ->
   true = erlang:demonitor(Mref, [flush]),
   ok.
 
-%% @private
 schedule_retry(#state{ retry_tref = ?undef
                      , retry_backoff_ms = Timeout
                      } = State) ->
@@ -485,23 +465,19 @@ schedule_retry(State) ->
   %% retry timer has been already activated
   {ok, State}.
 
-%% @private
-is_retriable(EC) when EC =:= ?EC_CORRUPT_MESSAGE;
-                      EC =:= ?EC_UNKNOWN_TOPIC_OR_PARTITION;
-                      EC =:= ?EC_LEADER_NOT_AVAILABLE;
-                      EC =:= ?EC_NOT_LEADER_FOR_PARTITION;
-                      EC =:= ?EC_REQUEST_TIMED_OUT;
-                      EC =:= ?EC_NOT_ENOUGH_REPLICAS;
-                      EC =:= ?EC_NOT_ENOUGH_REPLICAS_AFTER_APPEND ->
+is_retriable(EC) when EC =:= ?unknown_topic_or_partition;
+                      EC =:= ?leader_not_available;
+                      EC =:= ?not_leader_for_partition;
+                      EC =:= ?request_timed_out;
+                      EC =:= ?not_enough_replicas;
+                      EC =:= ?not_enough_replicas_after_append ->
   true;
 is_retriable(_) ->
   false.
 
-%% @private
--spec sock_send(?undef | pid(), kpro:req()) ->
-        ok | {ok, corr_id()} | {error, any()}.
-sock_send(?undef, _KafkaReq) -> {error, no_leader};
-sock_send(SockPid, KafkaReq) -> brod_sock:request_async(SockPid, KafkaReq).
+-spec send(?undef | pid(), kpro:req()) -> ok | {error, any()}.
+send(?undef, _KafkaReq) -> {error, no_leader};
+send(Connection, KafkaReq) -> kpro:request_async(Connection, KafkaReq).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

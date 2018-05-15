@@ -505,3 +505,8 @@ NOTE: This feature is designed for force overwriting commits, not for regular us
 ./scripts/brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
 ```
 
+## TODOs
+
+* HTML tagged EDoc
+* Support scram-sasl in brod-cli
+
