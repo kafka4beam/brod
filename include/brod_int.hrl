@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2017, Klarna AB
+%%%   Copyright (c) 2014-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@
                   | ?undef.
 
 %% Is kafka error code
--define(IS_ERROR(EC), kpro_error_code:is_error(EC)).
+-define(IS_ERROR(EC), ((EC) =/= ?no_error)).
 
 -define(KV(Key, Value), {Key, Value}).
 -define(TKV(Ts, Key, Value), {Ts, Key, Value}).

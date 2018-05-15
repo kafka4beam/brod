@@ -50,5 +50,5 @@ halt(LoopFun(LoopFun, io:get_line([]), Deps0)).
 EOF
 )
 
-grep -E "dep_.*_commit" $MAKEFILE | sed 's/dep_//' | sed 's/_commit//' | erl -noshell -eval "$ESCRIPT"
+grep -E "dep_.*_commit\s=" $MAKEFILE | sed 's/dep_//' | sed 's/_commit//' | erl -noshell -eval "$ESCRIPT"
 

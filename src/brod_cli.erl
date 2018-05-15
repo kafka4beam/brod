@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2017, Klarna AB
+%%%   Copyright (c) 2017-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 -module(brod_cli).
 
--ifdef(BROD_CLI).
+-ifdef(build_brod_cli).
 
 -export([main/1, main/2]).
 
@@ -24,11 +24,19 @@
 
 -define(CLIENT, brod_cli_client).
 
+-ifdef(OTP_RELEASE).
+-define(BIND_STACKTRACE(Var), :Var).
+-define(GET_STACKTRACE(Var), ok).
+-else.
+-define(BIND_STACKTRACE(Var), ).
+-define(GET_STACKTRACE(Var), Var = erlang:get_stacktrace()).
+-endif.
+
 %% 'halt' is for escript, stop the vm immediately
 %% 'exit' is for testing, we want eunit or ct to be able to capture
 -define(STOP(How),
         begin
-          application:stop(brod),
+          _ = application:stop(brod),
           case How of
             'halt' -> erlang:halt(?LINE);
             'exit' -> erlang:exit(?LINE)
@@ -146,7 +154,7 @@ options:
                                 to a consultable Erlang term format.
                          Expr:  An Erlang expression to be evaluated for each
                                 message. Bound variable to be used in the
-                                expression: Offset, Key, Value, CRC, TsType, Ts.
+                                expression: Offset, Key, Value, TsType, Ts.
                                 Print nothing if the evaluation result in 'ok',
                                 otherwise print the evaluated io-list.
                          [default: v]
@@ -297,8 +305,10 @@ options:
 
 -type command() :: string().
 
-main(Args) -> main(Args, halt).
+main(Args) ->
+  _ = main(Args, halt).
 
+-spec main([string()], halt | exit) -> no_return().
 main(["-h" | _], _Stop) ->
   print(?MAIN_DOC);
 main(["--help" | _], _Stop) ->
@@ -324,7 +334,6 @@ main(_, Stop) ->
   print(?MAIN_DOC),
   ?STOP(Stop).
 
-%% @private
 -spec main(command(), string(), [string()], halt | exit) -> _ | no_return().
 main(Command, Doc, Args0, Stop) ->
   IsHelp = lists:member("--help", Args0) orelse lists:member("-h", Args0),
@@ -343,7 +352,6 @@ main(Command, Doc, Args0, Stop) ->
       main(Command, Doc, Args, Stop, LogLevel)
   end.
 
-%% @private
 -spec main(command(), string(), [string()], halt | exit,
            log_level()) -> _ | no_return().
 main(Command, Doc, Args, Stop, LogLevel) ->
@@ -351,8 +359,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     try
       docopt:docopt(Doc, Args, [debug || LogLevel =:= ?LOG_LEVEL_DEBUG])
     catch
-      C1 : E1 ->
-        Stack1 = erlang:get_stacktrace(),
+      C1 : E1 ?BIND_STACKTRACE(Stack1) ->
+        ?GET_STACKTRACE(Stack1),
         verbose("~p:~p\n~p\n", [C1, E1, Stack1]),
         print(Doc),
         ?STOP(Stop)
@@ -371,26 +379,24 @@ main(Command, Doc, Args, Stop, LogLevel) ->
   {ok, _} = application:ensure_all_started(brod),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
-    SockOpts = parse_sock_opts(ParsedArgs),
+    ConnConfig0 = parse_connection_config(ParsedArgs),
     Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
     NoApiQuery = parse(ParsedArgs, "--no-api-vsn-query", fun parse_boolean/1),
     ok = code:add_pathsa(Paths),
-    verbose("sock opts: ~p\n", [SockOpts]),
-    ClientConfig = [{query_api_versions, not NoApiQuery} |  SockOpts],
-    run(Command, Brokers, ClientConfig, ParsedArgs)
+    SockOpts = [{query_api_versions, not NoApiQuery} |  ConnConfig0],
+    verbose("connection config: ~p\n", [SockOpts]),
+    run(Command, Brokers, SockOpts, ParsedArgs)
   catch
     throw : Reason when is_binary(Reason) ->
       %% invalid options etc.
       logerr([Reason, "\n"]),
       ?STOP(Stop);
-    C2 : E2 ->
-      %% crashed
-      Stack2 = erlang:get_stacktrace(),
+    C2 : E2 ?BIND_STACKTRACE(Stack2) ->
+      ?GET_STACKTRACE(Stack2),
       logerr("~p:~p\n~p\n", [C2, E2, Stack2]),
       ?STOP(Stop)
   end.
 
-%% @private
 run(?META_CMD, Brokers, Topic, SockOpts, Args) ->
   Topics = case Topic of
              <<"*">> -> []; %% fetch all topics
@@ -432,8 +438,8 @@ run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
   MaxBytes = parse(Args, "--max-bytes", fun parse_size/1),
   {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
   Offset = resolve_begin_offset(Sock, Topic, Partition, Offset0),
-  FetchFun = brod_utils:make_fetch_fun(Sock, Topic, Partition,
-                                       Wait, _MinBytes = 1, MaxBytes),
+  FetchOpts = #{max_wait_time => Wait, max_bytes => MaxBytes},
+  FetchFun = brod_utils:make_fetch_fun(Sock, Topic, Partition, FetchOpts),
   Count = case Count0 < 0 of
             true -> 1000000000; %% as if an infinite loop
             false -> Count0
@@ -528,7 +534,6 @@ run(?PIPE_CMD, Brokers, Topic, SockOpts, Args) ->
   _ = erlang:monitor(process, ReaderPid),
   pipe(ReaderPid, SendFun, queue:new()).
 
-%% @private
 run(?GROUPS_CMD, Brokers, SockOpts, Args) ->
   IDs = parse(Args, "--ids", fun parse_cg_ids/1),
   cg(Brokers, SockOpts, IDs);
@@ -549,7 +554,6 @@ run(Cmd, Brokers, SockOpts, Args) ->
   Topic = parse(Args, "--topic", fun bin/1),
   run(Cmd, Brokers, Topic, SockOpts, Args).
 
-%% @private
 resolve_offsets_print(Topic, all, Time, IsOneLine) ->
   Offsets = resolve_offsets(Topic, Time),
   Outputs =
@@ -566,7 +570,6 @@ resolve_offsets_print(Topic, Partition, Time, _) when is_integer(Partition) ->
   {ok, Offset} = resolve_offset(Topic, Partition, Time),
   print(integer_to_list(Offset)).
 
-%% @private
 resolve_offsets(Topic, Time) ->
   {ok, Count} = brod_client:get_partitions_count(?CLIENT, Topic),
   Partitions = lists:seq(0, Count - 1),
@@ -576,12 +579,10 @@ resolve_offsets(Topic, Time) ->
         {P, Offset}
     end, Partitions).
 
-%% @private
 resolve_offset(Topic, Partition, Time) ->
   {ok, SockPid} = brod_client:get_leader_connection(?CLIENT, Topic, Partition),
   brod_utils:resolve_offset(SockPid, Topic, Partition, Time).
 
-%% @private
 show_commits(GroupId, Topic) ->
   case brod:fetch_committed_offsets(?CLIENT, GroupId) of
     {ok, PerTopicStructs0} ->
@@ -592,7 +593,6 @@ show_commits(GroupId, Topic) ->
       throw_bin("Failed to fetch commited offsets ~p\n", [Reason])
   end.
 
-%% @private
 reset_commits(ID, Topic, Args) ->
   Retention = parse(Args, "--retention", fun parse_retention/1),
   ProtocolName = parse(Args, "--protocol", fun(X) -> X end),
@@ -610,7 +610,6 @@ reset_commits(ID, Topic, Args) ->
           ],
   brod_cg_commits:run(?CLIENT, Group).
 
-%% @private
 parse_commit_offsets_input("latest") -> latest;
 parse_commit_offsets_input("earliest") -> earliest;
 parse_commit_offsets_input(PartitionOffsets) ->
@@ -621,7 +620,6 @@ parse_commit_offsets_input(PartitionOffsets) ->
       end,
   lists:map(F, Pairs).
 
-%% @private
 parse_retention("-1") -> -1;
 parse_retention([_|_] = R) ->
   case lists:last(R) of
@@ -641,23 +639,20 @@ parse_retention([_|_] = R) ->
       end
   end.
 
-%% @private
 print_commits(Struct) ->
   Topic = kf(topic, Struct),
   PartRsps = kf(partition_responses, Struct),
   print([Topic, ":\n"]),
   print([pp_fmt_struct(1, P) || P <- PartRsps]).
 
-%% @private
 cg(BootstrapEndpoints, SockOpts, all) ->
   %% List all groups
   All = list_groups(BootstrapEndpoints, SockOpts),
   lists:foreach(fun print_cg_cluster/1, All);
 cg(BootstrapEndpoints, SockOpts, IDs) ->
   CgClusters = list_groups(BootstrapEndpoints, SockOpts),
-  describe_cgs(CgClusters, SockOpts, IDs).
+  describe_cgs(CgClusters, SockOpts, lists:usort(IDs)).
 
-%% @private
 describe_cgs(_, _SockOpts, []) -> ok;
 describe_cgs([], _SockOpts, IDs) ->
   logerr("Unknown group IDs: ~s", [infix(IDs, ", ")]);
@@ -668,9 +663,7 @@ describe_cgs([{Coordinator, CgList} | Rest], SockOpts, IDs) ->
   IDsRest = IDs -- ThisIDs,
   describe_cgs(Rest, SockOpts, IDsRest).
 
-%% @private
-do_describe_cgs(_Coordinator, _SockOpts, []) ->
-  ok;
+do_describe_cgs(_Coordinator, _SockOpts, []) -> ok;
 do_describe_cgs(Coordinator, SockOpts, IDs) ->
   case brod:describe_groups(Coordinator, SockOpts, IDs) of
     {ok, DescArray} ->
@@ -681,7 +674,6 @@ do_describe_cgs(Coordinator, SockOpts, IDs) ->
              [infix(IDs, ","), fmt_endpoint(Coordinator), Reason])
   end.
 
-%% @private
 print_cg_desc(Desc) ->
   EC = kf(error_code, Desc),
   GroupId = kf(group_id, Desc),
@@ -689,19 +681,29 @@ print_cg_desc(Desc) ->
     true ->
       logerr("Failed to describe group id=~s\nreason:~p\n", [GroupId, EC]);
     false ->
-      D1 = lists:keydelete(error_code, 1, Desc),
-      D  = lists:keydelete(group_id, 1, D1),
+      D1 = lists:keydelete(error_code, 1, ensure_list(Desc)),
+      D  = lists:keydelete(group_id, 1, ensure_list(D1)),
       print("  ~s\n~s", [GroupId, pp_fmt_struct(_Indent = 2, D)])
   end.
 
-%% @private
-pp_fmt_struct(_Indent, []) -> [];
-pp_fmt_struct(Indent, [{Field, Value} | Rest]) ->
-  [ indent_fmt(Indent, "~p: ~s", [Field, pp_fmt_struct_value(Indent, Value)])
-  | pp_fmt_struct(Indent, Rest)
+ensure_list(Struct) when is_map(Struct) -> maps:to_list(Struct);
+ensure_list(List) when is_list(List) -> List.
+
+pp_fmt_struct(Indent, Map) when is_map(Map) ->
+  pp_fmt_struct(Indent, maps:to_list(Map));
+pp_fmt_struct(Indent, Fields0) when is_list(Fields0) ->
+  Fields = case Fields0 of
+             [_] -> Fields0;
+             _ -> lists:keydelete(no_error, 2, Fields0)
+           end,
+  F = fun(IsFirst, {N, V}) ->
+          indent_fmt(IsFirst, Indent,
+                     "~p: ~s", [N, pp_fmt_struct_value(Indent, V)])
+      end,
+  [ F(true, hd(Fields))
+  | lists:map(fun(Fi) -> F(false, Fi) end, tl(Fields))
   ].
 
-%% @private
 pp_fmt_struct_value(_Indent, X) when is_integer(X) orelse
                                      is_atom(X) orelse
                                      is_binary(X) orelse
@@ -723,17 +725,16 @@ pp_fmt_struct_value(Indent, Array) when is_list(Array) ->
       [[pp_fmt_prim(V) || V <- Array], "\n"]
   end.
 
-%% @private
 pp_fmt_prim([]) -> "[]";
 pp_fmt_prim(N) when is_integer(N) -> integer_to_list(N);
 pp_fmt_prim(A) when is_atom(A) -> atom_to_list(A);
 pp_fmt_prim(S) when is_binary(S) -> S.
 
-%% @private
-indent_fmt(Indent, Fmt, Args) ->
+indent_fmt(true, Indent, Fmt, Args) ->
+  ["- ", indent_fmt(false, Indent - 1, Fmt, Args)];
+indent_fmt(false, Indent, Fmt, Args) ->
   io_lib:format(lists:duplicate(Indent * 2, $\s) ++ Fmt, Args).
 
-%% @private
 print_cg_cluster({Endpoint, Cgs}) ->
   ok = print([fmt_endpoint(Endpoint), "\n"]),
   IoData = [ io_lib:format("  ~s (~s)\n", [Id, Type])
@@ -741,18 +742,15 @@ print_cg_cluster({Endpoint, Cgs}) ->
            ],
   print(IoData).
 
-%% @private
 fmt_endpoint({Host, Port}) ->
   bin(io_lib:format("~s:~B", [Host, Port])).
 
-%% @private Return consumer groups clustered by group coordinator
+%% Return consumer groups clustered by group coordinator
 %% {CoordinatorEndpoint, [group_id()]}.
-%% @end
 list_groups(Brokers, SockOpts) ->
   Cgs = brod:list_all_groups(Brokers, SockOpts),
   lists:keysort(1, lists:foldl(fun do_list_groups/2, [], Cgs)).
 
-%% @private
 do_list_groups({_Endpoint, []}, Acc) -> Acc;
 do_list_groups({Endpoint, {error, Reason}}, Acc) ->
   logerr("Failed to list groups at kafka ~s\nreason~p",
@@ -761,7 +759,6 @@ do_list_groups({Endpoint, {error, Reason}}, Acc) ->
 do_list_groups({Endpoint, Cgs}, Acc) ->
   [{Endpoint, Cgs} | Acc].
 
-%% @private
 pipe(ReaderPid, SendFun, PendingAcks0) ->
   PendingAcks1 = flush_pending_acks(PendingAcks0, _Timeout = 0),
   receive
@@ -779,7 +776,6 @@ pipe(ReaderPid, SendFun, PendingAcks0) ->
       pipe(ReaderPid, SendFun, PendingAcks)
   end.
 
-%% @private
 flush_pending_acks(Queue, Timeout) ->
   case queue:peek(Queue) of
     empty ->
@@ -795,7 +791,6 @@ flush_pending_acks(Queue, Timeout) ->
       end
   end.
 
-%% @private
 fetch_loop(_FmtFun, _FetchFun, _Offset, 0) ->
   verbose("done (count)\n"),
   ok;
@@ -819,7 +814,7 @@ fetch_loop(FmtFun, FetchFun, Offset, Count) ->
         fun(M) ->
             #kafka_message{offset = O, key = K, value = V} = M,
             R = case is_function(FmtFun, 3) of
-                  true -> FmtFun(O, ensure_kafka_bin(K), ensure_kafka_bin(V));
+                  true -> FmtFun(O, K, V);
                   false -> FmtFun(M)
                 end,
             case R of
@@ -830,7 +825,6 @@ fetch_loop(FmtFun, FetchFun, Offset, Count) ->
       fetch_loop(FmtFun, FetchFun, LastOffset + 1, NewCount)
   end.
 
-%% @private
 resolve_begin_offset(_Sock, _T, _P, Offset) when is_integer(Offset) ->
   Offset;
 resolve_begin_offset(Sock, Topic, Partition, last) ->
@@ -844,7 +838,6 @@ resolve_begin_offset(Sock, Topic, Partition, Time) ->
   {ok, Offset} = brod_utils:resolve_offset(Sock, Topic, Partition, Time),
   Offset.
 
-%% @private
 parse_source("stdin") ->
   standard_io;
 parse_source("@" ++ Path) ->
@@ -855,7 +848,6 @@ parse_source(Path) ->
     false -> erlang:throw(bin(["bad file ", Path]))
   end.
 
-%% @private
 parse_size(Size) ->
   case lists:reverse(Size) of
     "K" ++ N -> int(lists:reverse(N)) * (1 bsl 10);
@@ -863,7 +855,6 @@ parse_size(Size) ->
     N        -> int(lists:reverse(N))
   end.
 
-%% @private
 format_metadata(Metadata, Format, IsList, IsToListUrp) ->
   Brokers = kf(brokers, Metadata),
   Topics0 = kf(topic_metadata, Metadata),
@@ -900,26 +891,24 @@ format_metadata(Metadata, Format, IsList, IsToListUrp) ->
       end
   end.
 
-%% @private
 format_broker_lines(Brokers) ->
   Header = io_lib:format("brokers [~p]:\n", [length(Brokers)]),
   F = fun(Broker) ->
           Id = kf(node_id, Broker),
           Host = kf(host, Broker),
           Port = kf(port, Broker),
-          Rack = kf(rack, Broker, ?undef),
+          Rack = kf(rack, Broker, <<>>),
           HostStr = fmt_endpoint({Host, Port}),
           format_broker_line(Id, Rack, HostStr)
       end,
   [Header, lists:map(F, Brokers)].
 
-%% @private
-format_broker_line(Id, ?undef, Endpoint) ->
+format_broker_line(Id, Rack, Endpoint)
+ when Rack =:= ?kpro_null orelse Rack =:= <<>> ->
   io_lib:format("  ~p: ~s\n", [Id, Endpoint]);
 format_broker_line(Id, Rack, Endpoint) ->
   io_lib:format("  ~p(~s): ~s\n", [Id, Rack, Endpoint]).
 
-%% @private
 format_topics_lines(Topics, true) ->
   Header = io_lib:format("topics [~p]:\n", [length(Topics)]),
   [Header, lists:map(fun format_topic_list_line/1, Topics)];
@@ -927,14 +916,12 @@ format_topics_lines(Topics, false) ->
   Header = io_lib:format("topics [~p]:\n", [length(Topics)]),
   [Header, lists:map(fun format_topic_lines/1, Topics)].
 
-%% @private
 format_topic_list_line({Name, Partitions}) when is_list(Partitions) ->
   io_lib:format("  ~s\n", [Name]);
 format_topic_list_line({Name, ErrorCode}) ->
   ErrorStr = format_error_code(ErrorCode),
   io_lib:format("  ~s: [ERROR] ~s\n", [Name, ErrorStr]).
 
-%% @private
 format_topic_lines({Name, Partitions}) when is_list(Partitions) ->
   Header = io_lib:format("  ~s [~p]:\n", [Name, length(Partitions)]),
   PartitionsText = format_partitions_lines(Partitions),
@@ -943,11 +930,9 @@ format_topic_lines({Name, ErrorCode}) ->
   ErrorStr = format_error_code(ErrorCode),
   io_lib:format("  ~s: [ERROR] ~s\n", [Name, ErrorStr]).
 
-%% @private
 format_error_code(E) when is_atom(E) -> atom_to_list(E);
 format_error_code(E) when is_integer(E) -> integer_to_list(E).
 
-%% @private
 format_partitions_lines(Partitions0) ->
   Partitions1 =
     lists:map(fun({Pnr, Info}) ->
@@ -956,7 +941,6 @@ format_partitions_lines(Partitions0) ->
   Partitions = lists:keysort(1, Partitions1),
   lists:map(fun format_partition_lines/1, Partitions).
 
-%% @private
 format_partition_lines({Partition, Info}) ->
   LeaderNodeId = kf(leader, Info),
   Status = kf(status, Info),
@@ -976,41 +960,29 @@ format_partition_lines({Partition, Info}) ->
                  integer_to_list(LeaderNodeId),
                  ReplicaList, MaybeWarning]).
 
-%% @private
 format_list(List, Mark) ->
   infix(lists:map(fun(I) -> [integer_to_list(I), Mark] end, List), ",").
 
-%% @private
 infix([], _Sep) -> [];
 infix([_] = L, _Sep) -> L;
 infix([H | T], Sep) -> [H, Sep, infix(T, Sep)].
 
-%% @private
 format_topics(Topics) ->
   TL = lists:map(fun format_topic/1, Topics),
   lists:keysort(1, TL).
 
-%% @private
 format_topic(Topic) ->
-  ErrorCode = kf(topic_error_code, Topic),
   TopicName = kf(topic, Topic),
   PL = kf(partition_metadata, Topic),
-  Data =
-    case ?IS_ERROR(ErrorCode) of
-      true  -> ErrorCode;
-      false -> format_partitions(PL)
-    end,
-  {TopicName, Data}.
+  {TopicName, format_partitions(PL)}.
 
-%% @private
 format_partitions(Partitions) ->
   PL = lists:map(fun format_partition/1, Partitions),
   lists:keysort(1, PL).
 
-%% @private
 format_partition(P) ->
-  ErrorCode = kf(partition_error_code, P),
-  PartitionNr = kf(partition_id, P),
+  ErrorCode = kf(error_code, P),
+  PartitionNr = kf(partition, P),
   LeaderNodeId = kf(leader, P),
   Replicas = kf(replicas, P),
   Isr = kf(isr, P),
@@ -1021,27 +993,25 @@ format_partition(P) ->
          ],
   {integer_to_binary(PartitionNr), Data}.
 
-%% @private Return true if a topics is under-replicated
+%% Return true if a topics is under-replicated
 is_ur_topic(Topic) ->
-  ErrorCode = kf(topic_error_code, Topic),
+  ErrorCode = kf(error_code, Topic),
   Partitions = kf(partition_metadata, Topic),
   %% when there is an error, we do not know if
   %% it is under-replicated or not
   %% retrun true to alert user
   ?IS_ERROR(ErrorCode) orelse lists:any(fun is_ur_partition/1, Partitions).
 
-%% @private Return true if a partition is under-replicated
+%% Return true if a partition is under-replicated
 is_ur_partition(Partition) ->
-  ErrorCode = kf(partition_error_code, Partition),
+  ErrorCode = kf(error_code, Partition),
   Replicas = kf(replicas, Partition),
   Isr = kf(isr, Partition),
   ?IS_ERROR(ErrorCode) orelse lists:sort(Isr) =/= lists:sort(Replicas).
 
-%% @private
 parse_delimiter("none") -> none;
 parse_delimiter(EscappedStr) -> eval_str(EscappedStr).
 
-%% @private
 eval_str([]) -> [];
 eval_str([$\\, $n | Rest]) ->
   [$\n | eval_str(Rest)];
@@ -1052,7 +1022,6 @@ eval_str([$\\, $s | Rest]) ->
 eval_str([C | Rest]) ->
   [C | eval_str(Rest)].
 
-%% @private
 parse_fmt("v", _KvDel, MsgDeli) ->
   fun(_Offset, _Key, Value) -> [Value, MsgDeli] end;
 parse_fmt("kv", KvDeli, MsgDeli) ->
@@ -1071,11 +1040,8 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
   {ok, Tokens, _Line} = erl_scan:string(FunLiteral),
   {ok, [Expr]} = erl_parse:parse_exprs(Tokens),
   fun(#kafka_message{offset     = Offset,
-                     magic_byte = MagicByte,
-                     attributes = Attributes,
                      key        = Key,
                      value      = Value,
-                     crc        = CRC,
                      ts_type    = TsType,
                      ts         = Ts
                     }) ->
@@ -1085,11 +1051,8 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
             erl_eval:add_binding(VarName, VarValue, Acc)
           end, erl_eval:new_bindings(),
           [ {'Offset', Offset}
-          , {'MagicByte', MagicByte}
-          , {'Attributes', Attributes}
           , {'Key', Key}
           , {'Value', Value}
-          , {'CRC', CRC}
           , {'TsType', TsType}
           , {'Ts', Ts}
           ]),
@@ -1103,16 +1066,14 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
       end
   end.
 
-%% @private Append a dot to the function literal.
+%% Append a dot to the function literal.
 ensure_end_with_dot(Str0) ->
   Str = rstrip(Str0, [$\n, $\t, $\s, $.]),
   Str ++ ".".
 
-%% @private
 rstrip(Str, CharSet) ->
   lists:reverse(lstrip(lists:reverse(Str), CharSet)).
 
-%% @private
 lstrip([], _) -> [];
 lstrip([C | Rest] = Str, CharSet) ->
   case lists:member(C, CharSet) of
@@ -1120,7 +1081,6 @@ lstrip([C | Rest] = Str, CharSet) ->
     false -> Str
   end.
 
-%% @private
 parse_partition("random") ->
   fun(_Topic, PartitionsCount, _Key, _Value) ->
       {_, _, Micro} = os:timestamp(),
@@ -1139,14 +1099,12 @@ parse_partition(I) ->
       erlang:throw(bin(["Bad partition: ", I]))
   end.
 
-%% @private
 parse_acks("all") -> -1;
 parse_acks("-1") -> -1;
 parse_acks("0") -> 0;
 parse_acks("1") -> 1;
 parse_acks(X) -> erlang:throw(bin(["Bad --acks value: ", X])).
 
-%% @private
 parse_timeout(Str) ->
   case lists:reverse(Str) of
     "s" ++ R -> int(lists:reverse(R)) * 1000;
@@ -1154,20 +1112,17 @@ parse_timeout(Str) ->
     _        -> int(Str)
   end.
 
-%% @private
 parse_compression("none") -> no_compression;
 parse_compression("gzip") -> gzip;
 parse_compression("snappy") -> snappy;
 parse_compression(X) -> erlang:throw(bin(["Unknown --compresion value: ", X])).
 
-%% @private
 parse_offset_time("earliest") -> earliest;
 parse_offset_time("latest") -> latest;
 parse_offset_time("last") -> last;
 parse_offset_time(T) -> int(T).
 
-%% @private
-parse_sock_opts(Args) ->
+parse_connection_config(Args) ->
   SslBool = parse(Args, "--ssl", fun parse_boolean/1),
   CaCertFile = parse(Args, "--cacertfile", fun parse_file/1),
   CertFile = parse(Args, "--certfile", fun parse_file/1),
@@ -1188,23 +1143,19 @@ parse_sock_opts(Args) ->
   SaslOpts = sasl_opts(SaslOpt),
   lists:filter(FilterPred, [{ssl, SslOpt} | SaslOpts]).
 
-%% @private
 sasl_opts(?undef) -> [];
 sasl_opts(File)   -> [{sasl, {plain, File}}].
 
-%% @private
 parse_boolean(true) -> true;
 parse_boolean(false) -> false;
 parse_boolean("true") -> true;
 parse_boolean("false") -> false;
 parse_boolean(?undef) -> ?undef.
 
-%% @private
 parse_cg_ids("") -> [];
 parse_cg_ids("all") -> all;
 parse_cg_ids(Str) -> [bin(I) || I <- string:tokens(Str, ",")].
 
-%% @private
 parse_file(?undef) ->
   ?undef;
 parse_file(Path) ->
@@ -1213,15 +1164,14 @@ parse_file(Path) ->
     false -> erlang:throw(bin(["bad file ", Path]))
   end.
 
-%% @private
 parse(Args, OptName, ParseFun) ->
   case lists:keyfind(OptName, 1, Args) of
     {_, Arg} ->
       try
         ParseFun(Arg)
       catch
-        C : E ->
-          Stack = erlang:get_stacktrace(),
+        C : E ?BIND_STACKTRACE(Stack) ->
+          ?GET_STACKTRACE(Stack),
           verbose("~p:~p\n~p\n", [C, E, Stack]),
           Reason =
             case Arg of
@@ -1235,59 +1185,42 @@ parse(Args, OptName, ParseFun) ->
       erlang:throw(bin(Reason))
   end.
 
-%% @private
 print_version() ->
   _ = application:load(brod),
   {_, _, V} = lists:keyfind(brod, 1, application:loaded_applications()),
   print([V, "\n"]).
 
-%% @private
 print(IoData) -> io:put_chars(IoData).
 
-%% @private
-print(Fmt, Args) -> io:format(Fmt, Args).
+print(Fmt, Args) -> io:format(user, Fmt, Args).
 
-%% @private
 logerr(IoData) -> io:put_chars(standard_error, ["*** ", IoData]).
 
-%% @private
 logerr(Fmt, Args) -> io:format(standard_error, "*** " ++ Fmt, Args).
 
-%% @private
 verbose(Str) -> verbose(Str, []).
 
-%% @private
 verbose(Fmt, Args) ->
   case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_VERBOSE of
     true  -> io:format(standard_error, "[verbo]: " ++ Fmt, Args);
     false -> ok
   end.
 
-%% @private
 debug(Fmt, Args) ->
   case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_DEBUG of
     true  -> io:format(standard_error, "[debug]: " ++ Fmt, Args);
     false -> ok
   end.
 
-%% @private
 int(Str) -> list_to_integer(trim(Str)).
 
-%% @private
 trim_h([$\s | T]) -> trim_h(T);
 trim_h(X) -> X.
 
-%% @private
 trim(Str) -> trim_h(lists:reverse(trim_h(lists:reverse(Str)))).
 
-%% @private
 bin(IoData) -> iolist_to_binary(IoData).
 
-%% @private
-ensure_kafka_bin(?undef) -> <<>>;
-ensure_kafka_bin(Bin) -> Bin.
-
-%% @private
 parse_brokers(HostsStr) ->
   F = fun(HostPortStr) ->
           Pair = string:tokens(HostPortStr, ":"),
@@ -1298,32 +1231,29 @@ parse_brokers(HostsStr) ->
       end,
   shuffle(lists:map(F, string:tokens(HostsStr, ","))).
 
-%% @private Parse code paths.
+%% Parse code paths.
 parse_paths(?undef) -> [];
 parse_paths(Str) -> string:tokens(Str, ",").
 
-%% @private Randomize the order.
+%% Randomize the order.
 shuffle(L) ->
   RandList = lists:map(fun(_) -> element(3, os:timestamp()) end, L),
   {_, SortedL} = lists:unzip(lists:keysort(1, lists:zip(RandList, L))),
   SortedL.
 
-%% @private
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
 kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
-%% @private
 -spec kf(kpro:field_name(), kpro:struct(), kpro:field_value()) ->
         kpro:field_value().
 kf(FieldName, Struct, Default) ->
   kpro:find(FieldName, Struct, Default).
 
-%% @private
 start_client(BootstrapEndpoints, ClientConfig) ->
   {ok, _} = brod_client:start_link(BootstrapEndpoints, ?CLIENT, ClientConfig),
   ok.
 
-%% @private
+-spec throw_bin(string(), [term()]) -> no_return().
 throw_bin(Fmt, Args) ->
   erlang:throw(bin(io_lib:format(Fmt, Args))).
 

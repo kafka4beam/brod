@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017 Klarna AB
+%%%   Copyright (c) 2016-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -52,7 +52,6 @@
 %% * consumed sequence numbers are printed to console
 %% * consumed offsets are written to file /tmp/T/P.offset
 %%   where T is the topic name and X is the partition number
-%% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
   bootstrap(?PRODUCE_DELAY_SECONDS, message).

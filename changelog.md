@@ -89,3 +89,16 @@
 * 3.5.2
   * Fix issue #263: Kafka 0.11 may send empty batch in fetch response when messages are deleted in
     compacted topics.
+* 3.6.0
+  * Moved 3 modules to kafka_protocol:
+    - `brod_sock` -> `kpro_connection`
+    - `brod_auth_backed` -> `kpro_auth_backend`
+    - `brod_kafka_requests` -> `kpro_sent_reqs`
+  * `#kafka_message.key` and `#kafka_message.value` are now always `binary()`
+    (they were of spec `undefined | binary()` prior to this version).
+    i.e. empty bytes are now decoded as `<<>>` instead of `undefined`.
+    This may cause dialyzer check failures.
+  * `brod_client` no longer logs about metadata socket down, it had been confusing rather than being helpful
+  * There is no more cool-down delay for metadata socket re-establishment
+  * `brod_group_coordinator` default session timeout changed from 10 seconds to 30,
+     and heartbeat interval changed from 2 seconds to 5.

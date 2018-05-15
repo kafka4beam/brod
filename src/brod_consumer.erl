@@ -1,4 +1,4 @@
-%%%   Copyright (c) 2014-2018, Klarna AB
+%%%   Copyright (c) 2014-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -42,8 +42,8 @@
 -export_type([config/0]).
 
 -include("brod_int.hrl").
+-include_lib("kafka_protocol/include/kpro_error_codes.hrl").
 
--type corr_id() :: brod:corr_id().
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
@@ -68,7 +68,7 @@
 -type pending_acks() :: #pending_acks{}.
 
 -record(state, { client_pid          :: pid()
-               , socket_pid          :: ?undef | pid()
+               , connection          :: ?undef | pid()
                , topic               :: binary()
                , partition           :: integer()
                , begin_offset        :: offset_time()
@@ -77,7 +77,7 @@
                , max_bytes_orig      :: bytes()
                , sleep_timeout       :: integer()
                , prefetch_count      :: integer()
-               , last_corr_id        :: ?undef | corr_id()
+               , last_req_ref        :: ?undef | reference()
                , subscriber          :: ?undef | pid()
                , subscriber_mref     :: ?undef | reference()
                , pending_acks        :: pending_acks()
@@ -103,10 +103,10 @@
 -define(DEFAULT_PREFETCH_BYTES, 102400). % 100 KB
 -define(DEFAULT_OFFSET_RESET_POLICY, reset_by_subscriber).
 -define(ERROR_COOLDOWN, 1000).
--define(SOCKET_RETRY_DELAY_MS, 1000).
+-define(CONNECTION_RETRY_DELAY_MS, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).
--define(INIT_SOCKET, init_socket).
+-define(INIT_CONNECTION, init_connection).
 -define(DEFAULT_AVG_WINDOW, 5).
 
 %%%_* APIs =====================================================================
@@ -228,7 +228,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , sleep_timeout       = SleepTimeout
              , prefetch_count      = PrefetchCount
              , prefetch_bytes      = PrefetchBytes
-             , socket_pid          = ?undef
+             , connection          = ?undef
              , pending_acks        = #pending_acks{}
              , is_suspended        = false
              , offset_reset_policy = OffsetResetPolicy
@@ -237,9 +237,9 @@ init({ClientPid, Topic, Partition, Config}) ->
              , size_stat_window    = Cfg(size_stat_window, ?DEFAULT_AVG_WINDOW)
              }}.
 
-handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
+handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber} = State0) ->
   case brod_utils:is_pid_alive(Subscriber) andalso
-       maybe_init_socket(State0) of
+       maybe_init_connection(State0) of
     false ->
       %% subscriber not alive
       {noreply, State0};
@@ -249,7 +249,7 @@ handle_info(?INIT_SOCKET, #state{subscriber = Subscriber} = State0) ->
     {{error, _Reason}, State} ->
       %% failed when connecting to partition leader
       %% retry after a delay
-      ok = maybe_send_init_socket(State),
+      ok = maybe_send_init_connection(State),
       {noreply, State}
   end;
 handle_info({msg, _Pid, Rsp}, State) ->
@@ -264,9 +264,9 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
                                      }),
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
-            #state{socket_pid = Pid} = State) ->
-  ok = maybe_send_init_socket(State),
-  State1 = State#state{socket_pid = ?undef},
+            #state{connection = Pid} = State) ->
+  ok = maybe_send_init_connection(State),
+  State1 = State#state{connection = ?undef},
   {noreply, State1};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p ~p got unexpected info: ~p",
@@ -278,7 +278,7 @@ handle_call({subscribe, Pid, Options}, _From,
   case (not brod_utils:is_pid_alive(Subscriber)) %% old subscriber died
     orelse Subscriber =:= Pid of                 %% re-subscribe
     true ->
-      case maybe_init_socket(State0) of
+      case maybe_init_connection(State0) of
         {ok, State} ->
           handle_subscribe_call(Pid, Options, State);
         {{error, Reason}, State} ->
@@ -332,56 +332,49 @@ do_debug(Pid, Debug) ->
 
 handle_fetch_response(#kpro_rsp{}, #state{subscriber = ?undef} = State0) ->
   %% discard fetch response when there is no (dead?) subscriber
-  State = State0#state{last_corr_id = ?undef},
+  State = State0#state{last_req_ref = ?undef},
   {noreply, State};
-handle_fetch_response(#kpro_rsp{corr_id = CorrId1},
-                      #state{ last_corr_id = CorrId2
-                            } = State) when CorrId1 =/= CorrId2 ->
+handle_fetch_response(#kpro_rsp{ref = Ref1},
+                      #state{ last_req_ref = Ref2
+                            } = State) when Ref1 =/= Ref2 ->
   %% Not expected response, discard
   {noreply, State};
-handle_fetch_response(#kpro_rsp{corr_id = CorrId, msg = Rsp}, State0) ->
-  CorrId = State0#state.last_corr_id, %% assert
-  State = State0#state{last_corr_id = ?undef},
-  [TopicRsp] = kpro:find(responses, Rsp),
-  Topic = kpro:find(topic, TopicRsp),
-  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
-  Header = kpro:find(partition_header, PartitionRsp),
-  ErrorCode = kpro:find(error_code, Header),
-  Partition = kpro:find(partition, Header),
-  case ?IS_ERROR(ErrorCode) of
-    true ->
+handle_fetch_response(#kpro_rsp{ref = Ref} = Rsp,
+                      #state{ topic = Topic
+                            , partition = Partition
+                            , last_req_ref = Ref
+                            } = State0) ->
+  State = State0#state{last_req_ref = ?undef},
+  case brod_utils:parse_rsp(Rsp) of
+    {ok, #{ header := Header
+          , batches := Batches
+          }} ->
+      handle_batches(Header, Batches, State);
+    {error, ErrorCode} ->
       Error = #kafka_fetch_error{ topic      = Topic
                                 , partition  = Partition
                                 , error_code = ErrorCode
-                                , error_desc = kpro_error_code:desc(ErrorCode)
                                 },
-      handle_fetch_error(Error, State);
-    false ->
-      MsgSetBin = kpro:find(record_set, PartitionRsp),
-      HighWmOffset = kpro:find(high_watermark, Header),
-      Msgs = brod_utils:decode_messages(State#state.begin_offset, MsgSetBin),
-      MsgSet = #kafka_message_set{ topic          = Topic
-                                 , partition      = Partition
-                                 , high_wm_offset = HighWmOffset
-                                 , messages       = Msgs
-                                 },
-      handle_message_set(MsgSet, State)
+      handle_fetch_error(Error, State)
   end.
 
-%% @private
-handle_message_set(#kafka_message_set{messages = ?incomplete_message(Size)},
-                   #state{max_bytes = MaxBytes} = State0) ->
-  %% max_bytes is too small to fetch ONE complete message
+handle_batches(?undef, [], #state{begin_offset = LastOffset} = State0) ->
+  %% A meta-batch. e.g. transactional session ID initialization message
+  %% fast-forward to the next offset.
+  %% This clause is not possilbe for fetch requests prior to version 4
+  State = State0#state{begin_offset = LastOffset + 1},
+  {noreply, State};
+handle_batches(_Header, ?incomplete_batch(Size),
+               #state{max_bytes = MaxBytes} = State0) ->
+  %% max_bytes is too small to fetch ONE complete batch
   true = Size > MaxBytes, %% assert
   State1 = State0#state{max_bytes = Size},
   State = maybe_send_fetch_request(State1),
   {noreply, State};
-handle_message_set(#kafka_message_set{messages = [],
-                                      high_wm_offset = HmOffset
-                                     },
-                   #state{begin_offset = BeginOffset} = State0) ->
+handle_batches(Header, [], #state{begin_offset = BeginOffset} = State0) ->
+  HighWmOffset = kpro:find(high_watermark, Header),
   State =
-    case BeginOffset < HmOffset of
+    case BeginOffset < HighWmOffset of
       true ->
         %% There are chances that kafka may return empty message set
         %% when messages are delete from a compacted topic.
@@ -395,10 +388,20 @@ handle_message_set(#kafka_message_set{messages = [],
         maybe_delay_fetch_request(State0)
     end,
   {noreply, State};
-handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
-                   #state{ subscriber    = Subscriber
-                         , pending_acks  = PendingAcks
-                         } = State0) ->
+handle_batches(Header, Batches,
+               #state{ subscriber   = Subscriber
+                     , pending_acks = PendingAcks
+                     , begin_offset = BeginOffset
+                     , topic        = Topic
+                     , partition    = Partition
+                     } = State0) ->
+  HighWmOffset = kpro:find(high_watermark, Header),
+  Messages = brod_utils:flatten_batches(BeginOffset, Batches),
+  MsgSet = #kafka_message_set{ topic          = Topic
+                             , partition      = Partition
+                             , high_wm_offset = HighWmOffset
+                             , messages       = Messages
+                             },
   ok = cast_to_subscriber(Subscriber, MsgSet),
   NewPendingAcks = add_pending_acks(PendingAcks, Messages),
   {value, ?PENDING(LastOffset, _LastMsgSize)} =
@@ -419,7 +422,7 @@ add_pending_ack(#kafka_message{offset = Offset, key = Key, value = Value},
                              , count = Count
                              , bytes = Bytes
                              } = PendingAcks) ->
-  Size = bytes(Key) + bytes(Value),
+  Size = size(Key) + size(Value),
   NewQueue = queue:in(?PENDING(Offset, Size), Queue),
   PendingAcks#pending_acks{ queue = NewQueue
                           , count = Count + 1
@@ -455,21 +458,17 @@ update_avg_size(#state{ avg_bytes        = AvgBytes
                 [#kafka_message{key = Key, value = Value} | Rest]) ->
   %% kafka adds 34 bytes of overhead (metadata) for each message
   %% use 40 to give some room for future kafka protocol versions
-  MsgBytes = bytes(Key) + bytes(Value) + 40,
+  MsgBytes = size(Key) + size(Value) + 40,
   %% See https://en.wikipedia.org/wiki/Moving_average
   NewAvgBytes = ((WindowSize - 1) * AvgBytes + MsgBytes) / WindowSize,
   update_avg_size(State#state{avg_bytes = NewAvgBytes}, Rest).
 
-bytes(?undef)              -> 0;
-bytes(B) when is_binary(B) -> size(B).
+err_op(?request_timed_out)          -> retry;
+err_op(?unknown_topic_or_partition) -> stop;
+err_op(?invalid_topic_exception)    -> stop;
+err_op(?offset_out_of_range)        -> reset_offset;
+err_op(_)                           -> restart.
 
-err_op(?EC_REQUEST_TIMED_OUT)          -> retry;
-err_op(?EC_UNKNOWN_TOPIC_OR_PARTITION) -> stop;
-err_op(?EC_INVALID_TOPIC_EXCEPTION)    -> stop;
-err_op(?EC_OFFSET_OUT_OF_RANGE)        -> reset_offset;
-err_op(_)                              -> restart.
-
-%% @private
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                    #state{ topic      = Topic
                          , partition  = Partition
@@ -490,7 +489,6 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       {stop, {restart, ErrorCode}, State}
   end.
 
-%% @private
 handle_reset_offset(#state{ subscriber          = Subscriber
                           , offset_reset_policy = reset_by_subscriber
                           } = State, Error) ->
@@ -514,7 +512,6 @@ handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
   NewState = maybe_send_fetch_request(State2),
   {noreply, NewState}.
 
-%% @private
 handle_ack(#pending_acks{ queue = Queue
                         , bytes = Bytes
                         , count = Count
@@ -529,7 +526,6 @@ handle_ack(#pending_acks{ queue = Queue
       PendingAcks
   end.
 
-%% @private
 cast_to_subscriber(Pid, Msg) ->
   try
     Pid ! {self(), Msg},
@@ -538,7 +534,6 @@ cast_to_subscriber(Pid, Msg) ->
     ok
   end.
 
-%% @private
 -spec maybe_delay_fetch_request(state()) -> state().
 maybe_delay_fetch_request(#state{sleep_timeout = T} = State) when T > 0 ->
   _ = erlang:send_after(T, self(), ?SEND_FETCH_REQUEST),
@@ -550,13 +545,14 @@ maybe_delay_fetch_request(State) ->
 maybe_send_fetch_request(#state{subscriber = ?undef} = State) ->
   %% no subscriber
   State;
-maybe_send_fetch_request(#state{socket_pid = ?undef} = State) ->
-  %% no socket
+maybe_send_fetch_request(#state{connection = ?undef} = State) ->
+  %% no connection
   State;
 maybe_send_fetch_request(#state{is_suspended = true} = State) ->
   %% waiting for subscriber to re-subscribe
   State;
-maybe_send_fetch_request(#state{last_corr_id = I} = State) when is_integer(I) ->
+maybe_send_fetch_request(#state{last_req_ref = R} = State)
+  when is_reference(R) ->
   %% Waiting for the last request
   State;
 maybe_send_fetch_request(#state{ pending_acks   = #pending_acks{ count = Count
@@ -573,28 +569,27 @@ maybe_send_fetch_request(#state{ pending_acks   = #pending_acks{ count = Count
 
 -spec send_fetch_request(state()) -> state().
 send_fetch_request(#state{ begin_offset = BeginOffset
-                         , socket_pid   = SocketPid
+                         , connection = Connection
                          } = State) ->
   (is_integer(BeginOffset) andalso BeginOffset >= 0) orelse
     erlang:error({bad_begin_offset, BeginOffset}),
   Request =
-    brod_kafka_request:fetch_request(SocketPid,
-                                     State#state.topic,
-                                     State#state.partition,
-                                     State#state.begin_offset,
-                                     State#state.max_wait_time,
-                                     State#state.min_bytes,
-                                     State#state.max_bytes),
-  case brod_sock:request_async(SocketPid, Request) of
-    {ok, CorrId} ->
-      State#state{last_corr_id = CorrId};
-    {error, {sock_down, _Reason}} ->
-      %% ignore error here, the socket pid 'DOWN' message
-      %% should trigger the socket re-init loop
+    brod_kafka_request:fetch(Connection,
+                             State#state.topic,
+                             State#state.partition,
+                             State#state.begin_offset,
+                             State#state.max_wait_time,
+                             State#state.min_bytes,
+                             State#state.max_bytes),
+  case kpro:request_async(Connection, Request) of
+    ok ->
+      State#state{last_req_ref = Request#kpro_req.ref};
+    {error, {connection_down, _Reason}} ->
+      %% ignore error here, the connection pid 'DOWN' message
+      %% should trigger the re-init loop
       State
   end.
 
-%% @private
 handle_subscribe_call(Pid, Options,
                       #state{subscriber_mref = OldMref} = State0) ->
   case update_options(Options, State0) of
@@ -614,7 +609,6 @@ handle_subscribe_call(Pid, Options,
       {reply, {error, Reason}, State0}
   end.
 
-%% @private
 -spec update_options(options(), state()) -> {ok, state()} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
@@ -642,14 +636,13 @@ update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
     end,
   resolve_begin_offset(NewState).
 
-%% @private
 -spec resolve_begin_offset(state()) -> {ok, state()} | {error, any()}.
 resolve_begin_offset(#state{ begin_offset = BeginOffset
-                           , socket_pid   = SocketPid
+                           , connection   = Connection
                            , topic        = Topic
                            , partition    = Partition
                            } = State) when ?IS_SPECIAL_OFFSET(BeginOffset) ->
-  case resolve_offset(SocketPid, Topic, Partition, BeginOffset) of
+  case resolve_offset(Connection, Topic, Partition, BeginOffset) of
     {ok, NewBeginOffset} ->
       {ok, State#state{begin_offset = NewBeginOffset}};
     {error, Reason} ->
@@ -658,21 +651,19 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
 resolve_begin_offset(State) ->
   {ok, State}.
 
-%% @private
 -spec resolve_offset(pid(), topic(), partition(), offset_time()) ->
         {ok, offset()} | {error, any()}.
-resolve_offset(SocketPid, Topic, Partition, BeginOffset) ->
+resolve_offset(Connection, Topic, Partition, BeginOffset) ->
   try
-    brod_utils:resolve_offset(SocketPid, Topic, Partition, BeginOffset)
+    brod_utils:resolve_offset(Connection, Topic, Partition, BeginOffset)
   catch
     throw : Reason ->
       {error, Reason}
   end.
 
-%% @private Reset fetch buffer, use the last unacked offset as the next begin
+%% Reset fetch buffer, use the last unacked offset as the next begin
 %% offset to fetch data from.
-%% Discard onwire fetch responses by setting last_corr_id to undefined.
-%% @end
+%% Discard onwire fetch responses by setting last_req_ref to undefined.
 -spec reset_buffer(state()) -> state().
 reset_buffer(#state{ pending_acks = #pending_acks{queue = Queue}
                    , begin_offset = BeginOffset0
@@ -683,10 +674,10 @@ reset_buffer(#state{ pending_acks = #pending_acks{queue = Queue}
                 end,
   State#state{ begin_offset = BeginOffset
              , pending_acks = #pending_acks{}
-             , last_corr_id = ?undef
+             , last_req_ref = ?undef
              }.
 
-%% @private Catch noproc exit exception when making gen_server:call.
+%% Catch noproc exit exception when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
@@ -698,37 +689,38 @@ safe_gen_call(Server, Call, Timeout) ->
     {error, consumer_down}
   end.
 
-%% @private Init payload socket regardless of subscriber state.
--spec maybe_init_socket(state()) -> {ok, state()} | {{error, any()}, state()}.
-maybe_init_socket(#state{ client_pid = ClientPid
+%% Init payload connection regardless of subscriber state.
+-spec maybe_init_connection(state()) ->
+        {ok, state()} | {{error, any()}, state()}.
+maybe_init_connection(#state{ client_pid = ClientPid
                         , topic      = Topic
                         , partition  = Partition
-                        , socket_pid = ?undef
+                        , connection = ?undef
                         } = State0) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
-    {ok, SocketPid} ->
-      _ = erlang:monitor(process, SocketPid),
-      %% Switching to a new socket
-      %% the response for last_coor_id will be lost forever
-      State = State0#state{ last_corr_id = ?undef
-                          , socket_pid   = SocketPid
+    {ok, Connection} ->
+      _ = erlang:monitor(process, Connection),
+      %% Switching to a new connection
+      %% the response for last_req_ref will be lost forever
+      State = State0#state{ last_req_ref = ?undef
+                          , connection = Connection
                           },
       {ok, State};
     {error, Reason} ->
       {{error, Reason}, State0}
   end;
-maybe_init_socket(State) ->
+maybe_init_connection(State) ->
   {ok, State}.
 
 
-%% @private Send a ?INIT_SOCKET delayed loopback message to re-init socket.
--spec maybe_send_init_socket(state()) -> ok.
-maybe_send_init_socket(#state{subscriber = Subscriber}) ->
-  Timeout = ?SOCKET_RETRY_DELAY_MS,
-  %% re-init payload socket only when subscriber is alive
+%% Send a ?INIT_CONNECTION delayed loopback message to re-init.
+-spec maybe_send_init_connection(state()) -> ok.
+maybe_send_init_connection(#state{subscriber = Subscriber}) ->
+  Timeout = ?CONNECTION_RETRY_DELAY_MS,
+  %% re-init payload connection only when subscriber is alive
   brod_utils:is_pid_alive(Subscriber) andalso
-    erlang:send_after(Timeout, self(), ?INIT_SOCKET),
+    erlang:send_after(Timeout, self(), ?INIT_CONNECTION),
   ok.
 
 %%%_* Tests ====================================================================

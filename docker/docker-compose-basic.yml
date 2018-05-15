@@ -4,6 +4,8 @@ services:
   kafka:
     build:
       context: .
+      args:
+        KAFKA_VERSION: "${KAFKA_VERSION}"
   zookeeper:
     image: docker_kafka
     ports:

@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2016-2017 Klarna AB
+%%%   Copyright (c) 2016-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@
 %%% it demos a all-configs-by-default minimal implenemtation of a
 %%% consumer group subscriber which commits offsets to kafka.
 %%% See bootstrap/0 for more details about all prerequisite.
-%%% @copyright 2016 Klarna AB
 %%% @end
 %%%=============================================================================
 
@@ -74,7 +73,6 @@
 %% synchronously, or dispatch it to any number of worker processes for
 %% concurrent processing, acks can be sent from the worker processes
 %% by calling brod_group_subscriber:ack/4
-%% @end
 -spec bootstrap() -> ok.
 bootstrap() ->
   bootstrap(?PRODUCE_DELAY_SECONDS).
@@ -179,12 +177,11 @@ producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno) ->
   timer:sleep(timer:seconds(DelaySeconds)),
   producer_loop(ClientId, Topic, Partition, DelaySeconds, Seqno+1).
 
-%% @private Spawn one message handler per partition. Some of them may sit
+%% Spawn one message handler per partition. Some of them may sit
 %% idle if the partition is assigned to another group member.
 %% Perhaps hibernate if idle for certain minutes.
 %% Or even spawn dynamically in `handle_message` callback and
 %% `exit(normal)` when idle for long.
-%% @end
 -spec spawn_message_handlers(brod:client_id(), [brod:topic()]) ->
         [{{brod:topic(), brod:partition()}, pid()}].
 spawn_message_handlers(_ClientId, []) -> [];

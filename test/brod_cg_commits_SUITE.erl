@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2017, Klarna AB
+%%%   Copyright (c) 2017-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -76,13 +76,13 @@ t_set_then_reset(Config) when is_list(Config) ->
   Offsets0 = [{0, 0}, {1, 0}, {2, 0}],
   ok = do_commit(Topic, Offsets0),
   {ok, Rsp0} =
-    brod_utils:fetch_committed_offsets(?BROKERS, [], ?GROUP_ID,
+    brod_utils:fetch_committed_offsets(?BROKERS, #{}, ?GROUP_ID,
                                        [{Topic, Partitions}]),
   ok = assert_offsets([{Topic, Offsets0}], Rsp0),
   Offsets1 = [{0, 1}, {1, 1}, {2, 1}],
   ok = do_commit(Topic, Offsets1),
   {ok, Rsp1} =
-    brod_utils:fetch_committed_offsets(?BROKERS, [], ?GROUP_ID,
+    brod_utils:fetch_committed_offsets(?BROKERS, #{}, ?GROUP_ID,
                                        [{Topic, Partitions}]),
   ok = assert_offsets([{Topic, Offsets1}], Rsp1),
   ok.

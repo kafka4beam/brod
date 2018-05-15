@@ -1,12 +1,28 @@
-#!/bin/bash -e
+#!/bin/bash -eu
+
+case $1 in
+  0.9*)
+    VERSION="0.9.0.0";;
+  0.10*)
+    VERSION="0.10.2.1";;
+  0.11*)
+    VERSION="0.11.0.2";;
+  1.*)
+    VERSION="1.1.0";;
+  *)
+    echo "unknown kafka version $1"
+    exit 1
+esac
+
+export KAFKA_VERSION=$VERSION
 
 THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd $THIS_DIR/../docker
 
-sudo docker-compose -f docker-compose-kafka-2.yml down || true
-sudo docker-compose -f docker-compose-basic.yml build
-sudo docker-compose -f docker-compose-kafka-2.yml up -d
+sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f docker-compose-kafka-2.yml down || true
+sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f docker-compose-basic.yml build
+sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f docker-compose-kafka-2.yml up -d
 
 n=0
 while [ "$(sudo docker exec kafka_1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --describe')" != '' ]; do
@@ -41,3 +57,9 @@ create_topic "test-topic"
 
 # this is to warm-up kafka group coordinator for deterministic in tests
 sudo docker exec kafka_1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --new-consumer --group test-group --describe > /dev/null 2>&1
+
+# for kafka 0.11 or later, add sasl-scram test credentials
+if [[ "$KAFKA_VERSION" != 0.9* ]] && [[ "$KAFKA_VERSION" != 0.10* ]]; then
+  sudo docker exec kafka_1 /opt/kafka/bin/kafka-configs.sh --zookeeper zookeeper:2181 --alter --add-config 'SCRAM-SHA-256=[iterations=8192,password=ecila],SCRAM-SHA-512=[password=ecila]' --entity-type users --entity-name alice
+fi
+

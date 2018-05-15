@@ -1,17 +1,20 @@
 IsRebar3 = erlang:function_exported(rebar3, main, 1),
 
 case IsRebar3 of
-    true ->
-        CONFIG;
-    false ->
-        Rebar3Deps = proplists:get_value(deps, CONFIG),
-        Rebar2Deps = [
-            {supervisor3, ".*",
-                {git, "https://github.com/klarna/supervisor3",
-                    {tag, proplists:get_value(supervisor3, Rebar3Deps)}}},
-            {kafka_protocol, ".*",
-                {git, "https://github.com/klarna/kafka_protocol.git",
-                    {tag, proplists:get_value(kafka_protocol, Rebar3Deps)}}}
-        ],
-        lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
+  true ->
+    CONFIG;
+  false ->
+    URLs = [ {supervisor3, "https://github.com/klarna/supervisor3.git"}
+           , {kafka_protocol, "https://github.com/klarna/kafka_protocol.git"}
+           ],
+    Rebar3Deps = proplists:get_value(deps, CONFIG),
+    Rebar2Deps =
+      lists:map(
+        fun({Name, URL}) ->
+          case proplists:get_value(Name, Rebar3Deps) of
+            {git, _, _} = Git -> {Name, ".*", Git};
+            Vsn               -> {Name, ".*", {git, URL, {tag, Vsn}}}
+          end
+        end, URLs),
+   lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
 end.

@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2017, Klarna AB
+%%%   Copyright (c) 2014-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -28,15 +28,15 @@
         , partition      :: brod:partition()
         , high_wm_offset :: integer() %% max offset of the partition
         , messages       :: [brod:message()] %% exposed to brod user
-                          | kpro:incomplete_message() %% this union member
-                                                      %% is internal only
+                          | kpro:incomplete_batch() %% this union member
+                                                    %% is internal only
         }).
 
 -record(kafka_fetch_error,
         { topic      :: brod:topic()
         , partition  :: brod:partition()
         , error_code :: brod:error_code()
-        , error_desc :: binary()
+        , error_desc = ""
         }).
 
 -record(brod_call_ref, { caller :: pid()

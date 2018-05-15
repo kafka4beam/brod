@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2017 Klarna AB
+%%%   Copyright (c) 2017-2018 Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 %%%=============================================================================
 %%% @doc This is a utility module to help force commit offsets to kafka.
-%%% @end
 %%%=============================================================================
 
 -module(brod_cg_commits).
@@ -88,7 +87,6 @@ run(ClientId, GroupInput) ->
 %% then commit given offsets to kafka.
 %% In case not all given partitions are assigned to it,
 %% it will terminate with an exit exception
-%% @end
 -spec start_link(brod:client(), group_input()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupInput) ->
   gen_server:start_link(?MODULE, {Client, GroupInput}, []).
@@ -105,7 +103,6 @@ stop(Pid) ->
 
 %% @doc Make a call to the resetter process, the call will be blocked
 %% until offsets are committed.
-%% @end
 -spec sync(pid()) -> ok.
 sync(Pid) ->
   ok = gen_server:call(Pid, sync, infinity).
@@ -126,7 +123,6 @@ assignments_revoked(Pid) ->
 
 %% @doc This function is called only when `partition_assignment_strategy'
 %% is set for `callback_implemented' in group config.
-%% @end
 -spec assign_partitions(pid(), [brod:group_member()],
                         [{brod:topic(), brod:partition()}]) ->
         [{member_id(), [brod:partition_assignment()]}].
@@ -138,7 +134,6 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
 %% for subscriber.
 %% NOTE: this function is called only when it is DISABLED to commit offsets
 %%       to kafka. i.e. offset_commit_policy is set to consumer_managed
-%% @end
 -spec get_committed_offsets(pid(), [{brod:topic(), brod:partition()}]) ->
         {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
 get_committed_offsets(_Pid, _TopicPartitions) -> {ok, []}.
@@ -289,7 +284,6 @@ maybe_reply_sync(#state{pending_sync = From} = State) ->
   log(State, info, "done\n", []),
   State#state{pending_sync = ?undef}.
 
-%% @private
 -spec assign_all_to_self(pid(), [brod:group_member()],
                          [{topic(), partition()}]) ->
         [{member_id(), [brod:partition_assignment()]}].
@@ -298,14 +292,13 @@ assign_all_to_self(CoordinatorPid, Members, TopicPartitions) ->
   Groupped = brod_utils:group_per_key(TopicPartitions),
   [{MyMemberId, Groupped}].
 
-%% @private I am the current leader because I am assigning partitions,
+%% I am the current leader because I am assigning partitions,
 %% however my member ID is kept in `brod_group_coordinator' looping state,
 %% i.e. not exposed to callback module. So I make use of the coordinator
 %% pid in member's `user_data' to find my member ID.
 %%
 %% NOTE: I can not make a gen_server call to `brod_group_coordinator' because
 %% I am currently being called by coordinator -- deadlock otherwise.
-%% @end
 find_my_member_id(CoordinatorPid, [H | T]) ->
   {MemberId, #kafka_group_member_metadata{user_data = UD}} = H,
   try
@@ -317,7 +310,6 @@ find_my_member_id(CoordinatorPid, [H | T]) ->
       find_my_member_id(CoordinatorPid, T)
   end.
 
-%% @private
 log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
   brod_utils:log(Level,
                  "Group member (~s,coor=~p):\n" ++ Fmt,
