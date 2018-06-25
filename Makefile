@@ -39,7 +39,7 @@ ifeq ($(BROD_CLI),true)
 endif
 
 ## Make app the default target
-## To avoid building a relese when brod is used as a erlang.mk project's dependency
+## To avoid building a release when brod is used as a erlang.mk project's dependency
 app::
 
 include erlang.mk
