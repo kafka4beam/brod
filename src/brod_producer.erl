@@ -190,7 +190,7 @@ produce(Pid, Key, Value) ->
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(produce_reply(), infinity | timeout()) ->
+-spec sync_produce_request(produce_reply(), timeout()) ->
         ok | {error, {producer_down, any()}}.
 sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
                      Timeout) ->

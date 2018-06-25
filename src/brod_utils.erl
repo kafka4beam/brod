@@ -624,7 +624,7 @@ request_sync(Pid, Req) ->
   request_sync(Pid, Req, infinity).
 
 %% @private
--spec request_sync(pid(), kpro:req(), infinity | timeout()) -> kpro:rsp().
+-spec request_sync(pid(), kpro:req(), timeout()) -> kpro:rsp().
 request_sync(Pid, Req, Timeout) ->
   % brod_sock has a global 'request_timeout' option
   % the socket pid will exit if that one times out

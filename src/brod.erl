@@ -438,7 +438,7 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 sync_produce_request(CallRef) ->
   sync_produce_request(CallRef, infinity).
 
--spec sync_produce_request(call_ref(), infinity | timeout()) ->
+-spec sync_produce_request(call_ref(), timeout()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef, Timeout) ->
   Expect = #brod_produce_reply{ call_ref = CallRef
