@@ -20,6 +20,7 @@
 -export([ new/7
         , add/4
         , ack/2
+        , ack/3
         , nack/3
         , nack_all/2
         , maybe_send/3
@@ -74,6 +75,7 @@
 -opaque buf() :: #buf{}.
 
 -type corr_id() :: brod:corr_id().
+-type offset()  :: brod:offset().
 
 %%%_* APIs =====================================================================
 
@@ -137,14 +139,19 @@ maybe_send(#buf{} = Buf, SockPid, Vsn) ->
 
 %% @doc Reply 'acked' to callers.
 -spec ack(buf(), corr_id()) -> {ok, buf()} | {error, none | corr_id()}.
+ack(Buf, CorrId) ->
+  ack(Buf, CorrId, ?BROD_PRODUCE_UNKNOWN_OFFSET).
+
+-spec ack(buf(), corr_id(), offset()) ->
+             {ok, buf()} | {error, none | corr_id()}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
-        } = Buf, CorrId) ->
-  ok = lists:foreach(fun reply_acked/1, Reqs),
+        } = Buf, CorrId, Offset) ->
+  ok = lists:foreach(fun(R) -> reply_acked(R, Offset) end, Reqs),
   {ok, Buf#buf{ onwire_count = OnWireCount - 1
               , onwire       = Rest
               }};
-ack(#buf{onwire = OnWire}, CorrIdReceived) ->
+ack(#buf{onwire = OnWire}, CorrIdReceived, _Offset) ->
   %% unkonwn corr-id, ignore
   CorrIdExpected = assert_corr_id(OnWire, CorrIdReceived),
   {error, CorrIdExpected}.
@@ -376,13 +383,19 @@ maybe_buffer(#buf{} = Buf) ->
 -spec reply_buffered(req()) -> ok.
 reply_buffered(#req{call_ref = CallRef}) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
+                             , offset   = ?BROD_PRODUCE_UNKNOWN_OFFSET
                              , result   = brod_produce_req_buffered
                              },
   cast(CallRef#brod_call_ref.caller, Reply).
 
 -spec reply_acked(req()) -> ok.
-reply_acked(#req{call_ref = CallRef}) ->
+reply_acked(Req) ->
+  reply_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET).
+
+-spec reply_acked(req(), offset()) -> ok.
+reply_acked(#req{call_ref = CallRef}, Offset) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
+                             , offset   = Offset
                              , result   = brod_produce_req_acked
                              },
   cast(CallRef#brod_call_ref.caller, Reply).

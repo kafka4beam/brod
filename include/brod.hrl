@@ -44,7 +44,10 @@
                        , ref    :: reference()
                        }).
 
+-define(BROD_PRODUCE_UNKNOWN_OFFSET, -1).
+
 -record(brod_produce_reply, { call_ref :: brod:call_ref()
+                            , offset   :: brod:offset()
                             , result   :: brod:produce_result()
                             }).
 

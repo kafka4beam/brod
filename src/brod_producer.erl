@@ -67,7 +67,6 @@
 
 -type milli_sec() :: non_neg_integer().
 -type delay_send_ref() :: ?undef | {reference(), reference()}.
--type produce_reply() :: brod:produce_reply().
 -type topic() :: brod:topic().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
@@ -186,23 +185,25 @@ produce(Pid, Key, Value) ->
       {error, {producer_down, Reason}}
   end.
 
-%% @doc Block calling process until it receives ExpectedReply.
+%% @doc Block calling process until it receives an acked reply for the CallRef.
 %%      The caller pid of this function must be the caller of produce/3
 %%      in which the call reference was created.
 %% @end
--spec sync_produce_request(produce_reply(), timeout()) ->
-        ok | {error, {producer_down, any()}}.
-sync_produce_request(#brod_produce_reply{call_ref = CallRef} = ExpectedReply,
-                     Timeout) ->
+-spec sync_produce_request(call_ref(), timeout()) ->
+        {ok, offset()} | {error, {producer_down, any()}}.
+sync_produce_request(CallRef, Timeout) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
                 } = CallRef,
   Caller = self(), %% assert
   Mref = erlang:monitor(process, Callee),
   receive
-    ExpectedReply ->
+    #brod_produce_reply{ call_ref = CallRef
+                       , offset   = Offset
+                       , result   = brod_produce_req_acked
+                       } ->
       erlang:demonitor(Mref, [flush]),
-      ok;
+      {ok, Offset};
     {'DOWN', Mref, process, _Pid, Reason} ->
       {error, {producer_down, Reason}}
   after
@@ -323,7 +324,7 @@ handle_info({msg, Pid, #kpro_rsp{ tag     = produce_response
             maybe_produce(State)
         end;
       false ->
-        case brod_producer_buffer:ack(Buffer, CorrId) of
+        case brod_producer_buffer:ack(Buffer, CorrId, Offset) of
           {ok, NewBuffer}  ->
             maybe_produce(State#state{buffer = NewBuffer});
           {error, CorrIdExpected} ->

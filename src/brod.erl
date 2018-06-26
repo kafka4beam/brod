@@ -47,8 +47,11 @@
         , produce_sync/2
         , produce_sync/3
         , produce_sync/5
+        , produce_sync_offset/5
         , sync_produce_request/1
         , sync_produce_request/2
+        , sync_produce_request_offset/1
+        , sync_produce_request_offset/2
         ]).
 
 %% Simple Consumer API
@@ -425,9 +428,21 @@ produce_sync(Pid, Key, Value) ->
 -spec produce_sync(client(), topic(), partition() | partition_fun(),
                    key(), value()) -> ok | {error, any()}.
 produce_sync(Client, Topic, Partition, Key, Value) ->
+  case produce_sync_offset(Client, Topic, Partition, Key, Value) of
+    {ok, _} -> ok;
+    Else -> Else
+  end.
+
+%% @doc Version of produce_sync/5 that returns the offset assigned by Kafka
+%% If producer is started with required_acks set to 0, the offset will be
+%% ?BROD_PRODUCE_UNKNOWN_OFFSET.
+%% @end
+-spec produce_sync_offset(client(), topic(), partition() | partition_fun(),
+                          key(), value()) -> {ok, offset()} | {error, any()}.
+produce_sync_offset(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
     {ok, CallRef} ->
-      sync_produce_request(CallRef);
+      sync_produce_request_offset(CallRef);
     {error, Reason} ->
       {error, Reason}
   end.
@@ -441,10 +456,23 @@ sync_produce_request(CallRef) ->
 -spec sync_produce_request(call_ref(), timeout()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef, Timeout) ->
-  Expect = #brod_produce_reply{ call_ref = CallRef
-                              , result   = brod_produce_req_acked
-                              },
-  brod_producer:sync_produce_request(Expect, Timeout).
+  case sync_produce_request_offset(CallRef, Timeout) of
+    {ok, _} -> ok;
+    Else -> Else
+  end.
+
+%% @doc As sync_produce_request_offset/1, but also returning assigned offset
+%% See produce_sync_offset/5.
+%% @end
+-spec sync_produce_request_offset(call_ref()) ->
+        {ok, offset()} | {error, Reason :: any()}.
+sync_produce_request_offset(CallRef) ->
+  sync_produce_request_offset(CallRef, infinity).
+
+-spec sync_produce_request_offset(call_ref(), timeout()) ->
+        {ok, offset()} | {error, Reason :: any()}.
+sync_produce_request_offset(CallRef, Timeout) ->
+  brod_producer:sync_produce_request(CallRef, Timeout).
 
 %% @doc Subscribe data stream from the given topic-partition.
 %% If {error, Reason} is returned, the caller should perhaps retry later.
