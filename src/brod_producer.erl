@@ -199,7 +199,7 @@ sync_produce_request(CallRef, Timeout) ->
   Mref = erlang:monitor(process, Callee),
   receive
     #brod_produce_reply{ call_ref = CallRef
-                       , offset   = Offset
+                       , base_offset = Offset
                        , result   = brod_produce_req_acked
                        } ->
       erlang:demonitor(Mref, [flush]),

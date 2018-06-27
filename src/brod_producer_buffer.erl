@@ -383,7 +383,7 @@ maybe_buffer(#buf{} = Buf) ->
 -spec reply_buffered(req()) -> ok.
 reply_buffered(#req{call_ref = CallRef}) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
-                             , offset   = ?BROD_PRODUCE_UNKNOWN_OFFSET
+                             , base_offset = ?BROD_PRODUCE_UNKNOWN_OFFSET
                              , result   = brod_produce_req_buffered
                              },
   cast(CallRef#brod_call_ref.caller, Reply).
@@ -395,7 +395,7 @@ reply_acked(Req) ->
 -spec reply_acked(req(), offset()) -> ok.
 reply_acked(#req{call_ref = CallRef}, Offset) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
-                             , offset   = Offset
+                             , base_offset = Offset
                              , result   = brod_produce_req_acked
                              },
   cast(CallRef#brod_call_ref.caller, Reply).
