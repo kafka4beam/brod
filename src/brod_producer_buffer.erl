@@ -149,8 +149,7 @@ ack(Buf, CorrId) ->
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
         } = Buf, CorrId, BaseOffset) ->
-  Fold = fun(R, Offset) -> reply_acked(R, Offset) end,
-  _ = lists:foldl(Fold, BaseOffset, Reqs),
+  _ = lists:foldl(fun reply_acked/2, BaseOffset, Reqs),
   {ok, Buf#buf{ onwire_count = OnWireCount - 1
               , onwire       = Rest
               }};
