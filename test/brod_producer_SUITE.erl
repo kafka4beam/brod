@@ -46,6 +46,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include("brod.hrl").
 -include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}]).
@@ -222,8 +223,8 @@ t_produce_no_ack_offset(Config) when is_list(Config) ->
     end,
   ReceiveFun(K1, V1),
   ReceiveFun(K2, V2),
-  ?assert(?IS_SPECIAL_OFFSET(O1)),
-  ?assert(?IS_SPECIAL_OFFSET(O2)).
+  ?assert(O1 =:= ?BROD_PRODUCE_UNKNOWN_OFFSET),
+  ?assert(O2 =:= ?BROD_PRODUCE_UNKNOWN_OFFSET).
 
 t_produce_async(Config) when is_list(Config) ->
   Client = ?config(client),
