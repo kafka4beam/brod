@@ -177,7 +177,6 @@ t_produce_no_ack({init, Config}) ->
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
-  {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
   [{client, Client}, {client_pid, ClientPid},
    {subscriber, Subscriber} | Config];
 t_produce_no_ack(Config) when is_list(Config) ->
