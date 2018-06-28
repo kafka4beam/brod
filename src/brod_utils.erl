@@ -40,6 +40,7 @@
         , init_sasl_opt/1
         , is_normal_reason/1
         , is_pid_alive/1
+        , kv_count/1
         , list_all_groups/2
         , list_groups/2
         , log/3
@@ -496,6 +497,26 @@ bytes(B) when is_binary(B) -> erlang:size(B);
 bytes(?TKV(T, K, V)) when is_integer(T) -> 8 + bytes(K) + bytes(V);
 bytes(?KV(K, V)) -> bytes(K) + bytes(V);
 bytes([H | T]) -> bytes(H) + bytes(T).
+
+%% @doc Count kv-pairs in a (maybe nested) list of kv pairs
+-spec kv_count(brod:kv_list()) -> non_neg_integer().
+kv_count(KVList) ->
+  Fold = fun(_Msg, Acc) -> Acc + 1 end,
+  foldl_kvlist(Fold, 0, KVList).
+
+%% @private Get nested kv-list.
+nested({_K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
+nested({_T, _K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
+nested(_) -> false.
+
+%% @private Foldl kv-list.
+foldl_kvlist(_Fun, Acc, []) -> Acc;
+foldl_kvlist(Fun, Acc, [Msg | Rest]) ->
+  NewAcc = case nested(Msg) of
+             false -> Fun(Msg, Acc);
+             Nested -> foldl_kvlist(Fun, Acc, Nested)
+           end,
+  foldl_kvlist(Fun, NewAcc, Rest).
 
 %% @doc Group values per-key in a key-value list.
 -spec group_per_key([{Key, Val}]) -> [{Key, [Val]}]

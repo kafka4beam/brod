@@ -43,6 +43,7 @@
         { call_ref :: brod:call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
+        , kv_count :: non_neg_integer() %% messages in the set
         , ctime    :: milli_ts() %% time when request was created
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
@@ -109,6 +110,7 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
             , bytes    = data_size(Key) + data_size(Value)
+            , kv_count = brod_utils:kv_count([{Key, Value}])
             , ctime    = now_ms()
             , failures = 0
             },
@@ -146,8 +148,9 @@ ack(Buf, CorrId) ->
              {ok, buf()} | {error, none | corr_id()}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
-        } = Buf, CorrId, Offset) ->
-  ok = lists:foreach(fun(R) -> reply_acked(R, Offset) end, Reqs),
+        } = Buf, CorrId, BaseOffset) ->
+  Fold = fun(R, Offset) -> reply_acked(R, Offset) end,
+  _ = lists:foldl(Fold, BaseOffset, Reqs),
   {ok, Buf#buf{ onwire_count = OnWireCount - 1
               , onwire       = Rest
               }};
@@ -390,15 +393,20 @@ reply_buffered(#req{call_ref = CallRef}) ->
 
 -spec reply_acked(req()) -> ok.
 reply_acked(Req) ->
-  reply_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET).
+  _ = reply_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET),
+  ok.
 
--spec reply_acked(req(), offset()) -> ok.
-reply_acked(#req{call_ref = CallRef}, Offset) ->
+-spec reply_acked(req(), offset()) -> offset().
+reply_acked(#req{call_ref = CallRef, kv_count = Count}, Offset) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
                              , base_offset = Offset
                              , result   = brod_produce_req_acked
                              },
-  cast(CallRef#brod_call_ref.caller, Reply).
+  ok = cast(CallRef#brod_call_ref.caller, Reply),
+  case Offset =:= ?BROD_PRODUCE_UNKNOWN_OFFSET of
+    true -> Offset;
+    false -> Offset + Count
+  end.
 
 cast(Pid, Msg) ->
   try
