@@ -80,3 +80,6 @@
 * 3.4.0
   * Add `prefetch_bytes' consumer config. `brod_consumer' should stop fetch-ahead only when
     both `prefetch_count' and `prefetch_bytes' limits are exceeded
+* 3.5.0
+  * Add `*_offset` variants to `produce` APIs, returning the base offsets that were assigned by Kafka.
+    Producers need to be restarted when upgrading to this version.
