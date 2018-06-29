@@ -47,7 +47,6 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include("brod.hrl").
 -include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}]).
