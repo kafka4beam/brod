@@ -54,7 +54,7 @@
 
 -define(config(Name), proplists:get_value(Name, Config)).
 
-subscriber_loop(Client, TesterPid) ->
+subscriber_loop(TesterPid) ->
   receive
     {ConsumerPid, KMS} ->
       #kafka_message_set{ messages = Messages
@@ -63,7 +63,7 @@ subscriber_loop(Client, TesterPid) ->
                       TesterPid ! {Partition, Offset, K, V},
                       ok = brod:consume_ack(ConsumerPid, Offset)
                     end, Messages),
-      subscriber_loop(Client, TesterPid);
+      subscriber_loop(TesterPid);
     Msg ->
       ct:fail("unexpected message received by test subscriber.\n~p", [Msg])
   end.
@@ -92,7 +92,7 @@ init_client(Case, Config) ->
   ok = brod:start_client(?HOSTS, Client),
   ok = brod:start_producer(Client, Topic, []),
   ok = brod:start_consumer(Client, Topic, []),
-  Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
+  Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
   {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
   [{client, Client}, {subscriber, Subscriber} | Config].
@@ -175,7 +175,7 @@ t_produce_no_ack({init, Config}) ->
   {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
   ok = brod:start_producer(Client, Topic, [{required_acks, 0}]),
   ok = brod:start_consumer(Client, Topic, []),
-  Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
+  Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
   [{client, Client}, {client_pid, ClientPid},
    {subscriber, Subscriber} | Config];
@@ -318,7 +318,7 @@ t_produce_buffered_offset({init, Config}) ->
   {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
   ok = brod:start_producer(Client, Topic, [{max_linger_ms, 100}, {max_linger_count, 3}]),
   ok = brod:start_consumer(Client, Topic, []),
-  Subscriber = spawn_link(fun() -> subscriber_loop(Client, TesterPid) end),
+  Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
   [{client, Client}, {client_pid, ClientPid},
    {subscriber, Subscriber} | Config];
