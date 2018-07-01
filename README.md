@@ -376,7 +376,7 @@ auth(Host :: string(), Sock :: gen_tcp:socket() | ssl:sslsocket(),
 ```
 
 If authentication is successful - callback function should return an atom `ok`, otherwise - error tuple with reason description.
-For example, you can use `brod_gssapi' plugin (https://github.com/ElMaxo/brod_gssapi) for SASL GSSAPI authentication.
+For example, you can use `brod_gssapi` plugin (https://github.com/ElMaxo/brod_gssapi) for SASL GSSAPI authentication.
 To use it - add it as dependency to your top level project that uses brod.
 Then add `{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config.
 Keytab should be the keytab file path, and Principal should be a byte-list or binary string.

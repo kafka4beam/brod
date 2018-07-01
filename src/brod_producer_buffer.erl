@@ -20,6 +20,7 @@
 -export([ new/7
         , add/4
         , ack/2
+        , ack/3
         , nack/3
         , nack_all/2
         , maybe_send/3
@@ -42,6 +43,7 @@
         { call_ref :: brod:call_ref()
         , data     :: data()
         , bytes    :: non_neg_integer()
+        , kv_count :: non_neg_integer() %% messages in the set
         , ctime    :: milli_ts() %% time when request was created
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
@@ -74,6 +76,7 @@
 -opaque buf() :: #buf{}.
 
 -type corr_id() :: brod:corr_id().
+-type offset()  :: brod:offset().
 
 %%%_* APIs =====================================================================
 
@@ -107,6 +110,7 @@ add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
   Req = #req{ call_ref = CallRef
             , data     = fun() -> {Key, Value} end
             , bytes    = data_size(Key) + data_size(Value)
+            , kv_count = brod_utils:kv_count([{Key, Value}])
             , ctime    = now_ms()
             , failures = 0
             },
@@ -137,14 +141,19 @@ maybe_send(#buf{} = Buf, SockPid, Vsn) ->
 
 %% @doc Reply 'acked' to callers.
 -spec ack(buf(), corr_id()) -> {ok, buf()} | {error, none | corr_id()}.
+ack(Buf, CorrId) ->
+  ack(Buf, CorrId, ?BROD_PRODUCE_UNKNOWN_OFFSET).
+
+-spec ack(buf(), corr_id(), offset()) ->
+             {ok, buf()} | {error, none | corr_id()}.
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{CorrId, Reqs} | Rest]
-        } = Buf, CorrId) ->
-  ok = lists:foreach(fun reply_acked/1, Reqs),
+        } = Buf, CorrId, BaseOffset) ->
+  _ = lists:foldl(fun reply_acked/2, BaseOffset, Reqs),
   {ok, Buf#buf{ onwire_count = OnWireCount - 1
               , onwire       = Rest
               }};
-ack(#buf{onwire = OnWire}, CorrIdReceived) ->
+ack(#buf{onwire = OnWire}, CorrIdReceived, _Offset) ->
   %% unkonwn corr-id, ignore
   CorrIdExpected = assert_corr_id(OnWire, CorrIdReceived),
   {error, CorrIdExpected}.
@@ -376,16 +385,27 @@ maybe_buffer(#buf{} = Buf) ->
 -spec reply_buffered(req()) -> ok.
 reply_buffered(#req{call_ref = CallRef}) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
+                             , base_offset = ?BROD_PRODUCE_UNKNOWN_OFFSET
                              , result   = brod_produce_req_buffered
                              },
   cast(CallRef#brod_call_ref.caller, Reply).
 
 -spec reply_acked(req()) -> ok.
-reply_acked(#req{call_ref = CallRef}) ->
+reply_acked(Req) ->
+  _ = reply_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET),
+  ok.
+
+-spec reply_acked(req(), offset()) -> offset().
+reply_acked(#req{call_ref = CallRef, kv_count = Count}, Offset) ->
   Reply = #brod_produce_reply{ call_ref = CallRef
+                             , base_offset = Offset
                              , result   = brod_produce_req_acked
                              },
-  cast(CallRef#brod_call_ref.caller, Reply).
+  ok = cast(CallRef#brod_call_ref.caller, Reply),
+  case Offset =:= ?BROD_PRODUCE_UNKNOWN_OFFSET of
+    true -> Offset;
+    false -> Offset + Count
+  end.
 
 cast(Pid, Msg) ->
   try
