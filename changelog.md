@@ -83,3 +83,7 @@
 * 3.5.0
   * Add `*_offset` variants to `produce` APIs, returning the base offsets that were assigned by Kafka.
     Producers need to be restarted when upgrading to this version.
+* 3.5.1
+  * Add `extra_sock_opts` client socket options.
+    It would be helpful for tuning the performance of tcp socket.
+    
