@@ -166,7 +166,8 @@ debug(Pid, File) when is_list(File) ->
            binary(), options()) -> no_return().
 init(Parent, Host, Port, ClientId, Options) ->
   Timeout = get_connect_timeout(Options),
-  SockOpts = [{active, once}, {packet, raw}, binary, {nodelay, true}],
+  ExtraSockOpts = proplists:get_value(extra_sock_opts, Options, []),
+  SockOpts = [{active, once}, {packet, raw}, binary] ++ ExtraSockOpts,
   case gen_tcp:connect(Host, Port, SockOpts, Timeout) of
     {ok, Sock} ->
       State = #state{ client_id = ClientId
