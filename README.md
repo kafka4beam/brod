@@ -135,6 +135,14 @@ ClientConfig = [{reconnect_cool_down_seconds, 10}],
 ok = brod:start_client([{"localhost", 9092}], brod_client_1, ClientConfig).
 ```
 
+Extra [socket options](http://erlang.org/doc/man/gen_tcp.html#type-option)
+could be passed as `{extra_sock_opts, ExtraSockOpts}`, e.g.
+
+```erlang
+ExtraSockOpts = [{sndbuf, 1024*1024}],
+ok = brod:start_client([{"localhost", 9092}], brod_client_1, [{extra_sock_opts, ExtraSockOpts}]).
+```
+
 # Producers
 
 ## Auto start producer with default producer config
