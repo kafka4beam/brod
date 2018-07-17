@@ -86,4 +86,6 @@
 * 3.5.1
   * Add `extra_sock_opts` client socket options.
     It would be helpful for tuning the performance of tcp socket.
-    
+* 3.5.2
+  * Fix issue #263: Kafka 0.11 may send empty batch in fetch response when messages are deleted in
+    compacted topics.
