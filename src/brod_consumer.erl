@@ -376,8 +376,24 @@ handle_message_set(#kafka_message_set{messages = ?incomplete_message(Size)},
   State1 = State0#state{max_bytes = Size},
   State = maybe_send_fetch_request(State1),
   {noreply, State};
-handle_message_set(#kafka_message_set{messages = []}, State0) ->
-  State = maybe_delay_fetch_request(State0),
+handle_message_set(#kafka_message_set{messages = [],
+                                      high_wm_offset = HmOffset
+                                     },
+                   #state{begin_offset = BeginOffset} = State0) ->
+  State =
+    case BeginOffset < HmOffset of
+      true ->
+        %% There are chances that kafka may return empty message set
+        %% when messages are delete from a compacted topic.
+        %% Since there is no way to know how big the 'hole' is
+        %% we can only bump begin_offset with +1 and try again.
+        State1 = State0#state{begin_offset = BeginOffset + 1},
+        maybe_send_fetch_request(State1);
+      false ->
+        %% we have reached the end of partition
+        %% try to poll again (maybe after a delay)
+        maybe_delay_fetch_request(State0)
+    end,
   {noreply, State};
 handle_message_set(#kafka_message_set{messages = Messages} = MsgSet,
                    #state{ subscriber    = Subscriber
