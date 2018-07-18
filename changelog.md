@@ -102,5 +102,5 @@
   * There is no more cool-down delay for metadata socket re-establishment
   * `brod_group_coordinator` default session timeout changed from 10 seconds to 30,
      and heartbeat interval changed from 2 seconds to 5.
-  * Add `brod:produce_cb/4` and `brod:porduce_cb/6` to support user devined callback for
-    produce ack handler.
+  * Add `brod:produce_cb/4` and `brod:porduce_cb/6` to support user devined callback for produce ack handler.
+  * Add `brod:produce_no_ack/3` and `brod:produce_no_ack/5`

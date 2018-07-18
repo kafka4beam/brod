@@ -20,6 +20,7 @@
 -export([ start_link/4
         , produce/3
         , produce_cb/4
+        , produce_no_ack/3
         , stop/1
         , sync_produce_request/2
         ]).
@@ -171,6 +172,17 @@ start_link(ClientPid, Topic, Partition, Config) ->
 produce(Pid, Key, Value) ->
   produce_cb(Pid, Key, Value, ?undef).
 
+%% @doc Fire-n-forget, no ack, no back-pressure.
+-spec produce_no_ack(pid(), brod:key(), brod:value()) -> ok.
+produce_no_ack(Pid, Key, Value) ->
+  CallRef = #brod_call_ref{caller = ?undef},
+  AckCb = fun(_, _) -> ok end,
+  Pid ! {produce, CallRef, Key, Value, AckCb},
+  ok.
+
+%% @doc Async produce, evaluate callback if `AckCb' is a function
+%% otherwise send `#brod_produce_reply{result = brod_produce_req_acked}'
+%% message to caller after the produce request has been acked by kafka.
 -spec produce_cb(pid(), brod:key(), brod:value(),
                  ?undef | brod:produce_ack_cb()) ->
         ok | {ok, call_ref()} | {error, any()}.
@@ -311,11 +323,14 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
 handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
   #brod_call_ref{caller = Pid} = CallRef,
   BufCb =
-    fun(?buffered) ->
+    fun(?buffered) when is_pid(Pid) ->
         Reply = #brod_produce_reply{ call_ref = CallRef
                                    , result = ?buffered
                                    },
         erlang:send(Pid, Reply);
+       (?buffered) ->
+        %% caller requires no ack
+        ok;
        ({?acked, BaseOffset}) when AckCb =:= ?undef ->
         Reply = #brod_produce_reply{ call_ref = CallRef
                                    , base_offset = BaseOffset

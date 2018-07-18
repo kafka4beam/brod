@@ -38,7 +38,7 @@
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
--type cb() :: fun((buffered | {acked, offset()}) -> ok).
+-type cb() :: fun((?buffered | {?acked, offset()}) -> ok).
 
 -record(req,
         { cb       :: cb()

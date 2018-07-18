@@ -50,6 +50,7 @@
         , produce_sync/3
         , produce_sync/5
         , produce_sync_offset/5
+        , produce_no_ack/5
         , sync_produce_request/1
         , sync_produce_request/2
         , sync_produce_request_offset/1
@@ -464,6 +465,33 @@ produce_cb(Client, Topic, PartFun, Key, Value, AckCb)
 produce_cb(Client, Topic, Partition, Key, Value, AckCb) ->
   case get_producer(Client, Topic, Partition) of
     {ok, Pid} -> produce_cb(Pid, Key, Value, AckCb);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @doc Send the message to partition worker without any ack.
+%% NOTE: This call has no back-pressure to the caller,
+%%       excessive usage may cause beam to run out of memory.
+-spec produce_no_ack(pid(), key(), value()) -> ok | {error, any()}.
+produce_no_ack(ProducerPid, Key, Value) ->
+  brod_producer:produce_no_ack(ProducerPid, Key, Value).
+
+%% @doc Find the partition worker and send message without any ack.
+%% NOTE: This call has no back-pressure to the caller,
+%%       excessive usage may cause beam to run out of memory.
+-spec produce_no_ack(client(), topic(), partition() | partition_fun(),
+           key(), value()) -> ok | {error, any()}.
+produce_no_ack(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
+  case brod_client:get_partitions_count(Client, Topic) of
+    {ok, PartitionsCnt} ->
+      {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
+      produce_no_ack(Client, Topic, Partition, Key, Value);
+    {error, _Reason} ->
+      %% error ignored
+      ok
+  end;
+produce_no_ack(Client, Topic, Partition, Key, Value) ->
+  case get_producer(Client, Topic, Partition) of
+    {ok, Pid} -> produce_no_ack(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
   end.
 
