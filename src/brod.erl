@@ -44,6 +44,8 @@
         , produce/2
         , produce/3
         , produce/5
+        , produce_cb/4
+        , produce_cb/6
         , produce_sync/2
         , produce_sync/3
         , produce_sync/5
@@ -133,6 +135,7 @@
              , partition_assignment/0
              , partition_fun/0
              , portnum/0
+             , produce_ack_cb/0
              , producer_config/0
              , produce_reply/0
              , produce_result/0
@@ -171,6 +174,7 @@
 -type producer_config() :: brod_producer:config().
 -type partition_fun() :: fun((topic(), partition(), key(), value()) ->
                                 {ok, partition()}).
+-type produce_ack_cb() :: fun((partition(), offset()) -> _).
 -type compression() :: no_compression | gzip | snappy.
 -type call_ref() :: #brod_call_ref{}.
 -type produce_result() :: brod_produce_req_buffered
@@ -392,20 +396,28 @@ produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
 %% @doc Produce one message if Value is binary or iolist,
-%% or a message set if Value is a (nested) kv-list, in this case Key
-%% is discarded (only the keys in kv-list are sent to kafka).
+%% Or send a batch if Value is a (nested) kv-list or a list of maps,
+%% in this case Key is discarded (only the keys in kv-list are sent to kafka).
 %% The pid should be a partition producer pid, NOT client pid.
+%% The return value is a call reference of type `call_ref()',
+%% so the caller can used it to expect (match) a
+%% `#brod_produce_reply{result = brod_produce_req_acked}'
+%% message after the produce request has been acked by kafka.
 -spec produce(pid(), key(), value()) ->
         {ok, call_ref()} | {error, any()}.
 produce(ProducerPid, Key, Value) ->
   brod_producer:produce(ProducerPid, Key, Value).
 
 %% @doc Produce one message if Value is binary or iolist,
-%% or a message set if Value is a (nested) kv-list, in this case Key
-%% is used only for partitioning (or discarded if Partition is used
-%% instead of PartFun).
+%% Or send a batch if Value is a (nested) kv-list or a list of maps,
+%% in this case Key is used only for partitioning, or discarded if the 3rd
+%% arg is a partition number instead of a partitioner callback.
 %% This function first lookup the producer pid,
-%% then call produce/3 to do the real work.
+%% then call `produce/3' to do the real work.
+%% The return value is a call reference of type `call_ref()',
+%% so the caller can used it to expect (match) a
+%% `#brod_produce_reply{result = brod_produce_req_acked}'
+%% message after the produce request has been acked by kafka.
 -spec produce(client(), topic(), partition() | partition_fun(),
               key(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
@@ -418,10 +430,44 @@ produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
   end;
 produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
   case get_producer(Client, Topic, Partition) of
-    {ok, Pid}       -> produce(Pid, Key, Value);
+    {ok, Pid} -> produce(Pid, Key, Value);
     {error, Reason} -> {error, Reason}
   end.
 
+%% @doc Same as `produce/3' only the ack is not delivered as a message,
+%% instead, the callback is evaluated by producer worker when ack is received
+%% from kafka.
+-spec produce_cb(pid(), key(), value(), produce_ack_cb()) ->
+        ok | {error, any()}.
+produce_cb(ProducerPid, Key, Value, AckCb) ->
+  brod_producer:produce_cb(ProducerPid, Key, Value, AckCb).
+
+%% @doc Same as `produce/5' only the ack is not delivered as a message,
+%% instead, the callback is evaluated by producer worker when ack is received
+%% from kafka. Return the partition to caller as `{ok, Partition}' for caller
+%% to correlate the callback when the 3rd arg is not a partition number.
+-spec produce_cb(client(), topic(), partition() | partition_fun(),
+                 key(), value(), produce_ack_cb()) ->
+        ok | {ok, partition()} | {error, any()}.
+produce_cb(Client, Topic, PartFun, Key, Value, AckCb)
+ when is_function(PartFun) ->
+  case brod_client:get_partitions_count(Client, Topic) of
+    {ok, PartitionsCnt} ->
+      {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
+      case produce_cb(Client, Topic, Partition, Key, Value, AckCb) of
+        ok -> {ok, Partition};
+        {error, Reason} -> {error, Reason}
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end;
+produce_cb(Client, Topic, Partition, Key, Value, AckCb) ->
+  case get_producer(Client, Topic, Partition) of
+    {ok, Pid} -> produce_cb(Pid, Key, Value, AckCb);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @doc Same as `produce/5' only the ack is not d
 %% @equiv produce_sync(Pid, 0, <<>>, Value)
 -spec produce_sync(pid(), value()) -> ok.
 produce_sync(Pid, Value) ->
@@ -456,7 +502,7 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 
 %% @doc Version of produce_sync/5 that returns the offset assigned by Kafka
 %% If producer is started with required_acks set to 0, the offset will be
-%% ?BROD_PRODUCE_UNKNOWN_OFFSET.
+%% `?BROD_PRODUCE_UNKNOWN_OFFSET'.
 -spec produce_sync_offset(client(), topic(), partition() | partition_fun(),
                           key(), value()) -> {ok, offset()} | {error, any()}.
 produce_sync_offset(Client, Topic, Partition, Key, Value) ->

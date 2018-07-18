@@ -58,35 +58,26 @@ with some non-important printouts trimmed.
 > rr(brod).
 > {ok, _} = application:ensure_all_started(brod).
 > KafkaBootstrapEndpoints = [{"localhost", 9092}].
-> Topic = <<"brod-test">>.
+> Topic = <<"test-topic">>.
 > Partition = 0.
 > ok = brod:start_client(KafkaBootstrapEndpoints, client1).
 > ok = brod:start_producer(client1, Topic, _ProducerConfig = []).
 > ok = brod:produce_sync(client1, Topic, Partition, <<"key1">>, <<"value1">>).
 > ok = brod:produce_sync(client1, Topic, Partition, <<"key2">>, <<"value2">>).
-> SubscriberCallbackFun =
-    fun(Partition, Msg, ShellPid = CallbackState) ->
-      ShellPid ! Msg,
-      {ok, ack, CallbackState}
-    end.
+> SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPid ! Msg, {ok, ack, CallbackState} end.
 > Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end.
 > brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                    _ConsumerConfig=[{begin_offset, earliest}],
                                    _CommittdOffsets=[], message, SubscriberCallbackFun,
                                    _CallbackState=self()).
 > Receive().
-#kafka_message{offset = 0,magic_byte = 0,attributes = 0,
-               key = <<"key1">>,value = <<"value1">>,crc = 1978725405}
+#kafka_message{offset = 0,magic_byte = 0,attributes = 0, key = <<"key1">>,value = <<"value1">>,crc = 1978725405}
 > Receive().
-#kafka_message{offset = 1,magic_byte = 0,attributes = 0,
-               key = <<"key2">>,value = <<"value2">>,crc = 1964753830}
-> {ok, CallRef} = brod:produce(client1, Topic, Partition, <<"key3">>, <<"value3">>).
-> #brod_produce_reply{ call_ref = CallRef,
-                       result   = brod_produce_req_acked
-                     } = Receive().
+#kafka_message{offset = 1,magic_byte = 0,attributes = 0, key = <<"key2">>,value = <<"value2">>,crc = 1964753830}
+> AckCb = fun(Partition, BaseOffset) -> io:format(user, "batch produced to partition ~p at base-offset ~p\n", [Partition, BaseOffset]) end,
+> ok = brod:produce_cb(client1, Topic, Partition, <<>>, [{<<"key3">>, <<"value3">>}], AckCb).
 > Receive().
-#kafka_message{offset = 2,magic_byte = 0,attributes = 0,
-               key = <<"key3">>,value = <<"value3">>,crc = -1013830416}
+#kafka_message{offset = 2,magic_byte = 0,attributes = 0, key = <<"key3">>,value = <<"value3">>,crc = -1013830416}
 ```
 
 # Overview

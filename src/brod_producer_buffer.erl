@@ -38,9 +38,10 @@
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
+-type cb() :: fun((buffered | {acked, offset()}) -> ok).
 
 -record(req,
-        { call_ref :: brod:call_ref()
+        { cb       :: cb()
         , data     :: data()
         , bytes    :: non_neg_integer()
         , kv_count :: non_neg_integer() %% messages in the set
@@ -102,9 +103,9 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
--spec add(buf(), brod:call_ref(), brod:key(), brod:value()) -> buf().
-add(#buf{pending = Pending} = Buf, CallRef, Key, Value) ->
-  Req = #req{ call_ref = CallRef
+-spec add(buf(), cb(), brod:key(), brod:value()) -> buf().
+add(#buf{pending = Pending} = Buf, Cb, Key, Value) ->
+  Req = #req{ cb       = Cb
             , data     = fun() -> {Key, Value} end
             , bytes    = data_size(Key) + data_size(Value)
             , kv_count = brod_utils:kv_count([{Key, Value}])
@@ -145,7 +146,7 @@ ack(Buf, Ref) ->
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{Ref, Reqs} | Rest]
         } = Buf, Ref, BaseOffset) ->
-  _ = lists:foldl(fun reply_acked/2, BaseOffset, Reqs),
+  _ = lists:foldl(fun eval_acked/2, BaseOffset, Reqs),
   Buf#buf{ onwire_count = OnWireCount - 1
          , onwire       = Rest
          }.
@@ -272,7 +273,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
   case SendFun(Conn, MessageSet, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
-      ok = lists:foreach(fun reply_acked/1, Reqs),
+      ok = lists:foreach(fun eval_acked/1, Reqs),
       %% continue to try next batch
       maybe_send(Buf, Conn, Vsn);
     {ok, Ref} ->
@@ -323,7 +324,7 @@ maybe_buffer(#buf{ buffer_limit = BufferLimit
                  } = Buf) when BufferCount < BufferLimit ->
   case queue:out(Pending) of
     {{value, Req}, NewPending} ->
-      ok = reply_buffered(Req),
+      ok = eval_buffered(Req),
       NewBuf = Buf#buf{ buffer_count = BufferCount + 1
                       , pending      = NewPending
                       , buffer       = queue:in(Req, Buffer)
@@ -335,38 +336,25 @@ maybe_buffer(#buf{ buffer_limit = BufferLimit
 maybe_buffer(#buf{} = Buf) ->
   Buf.
 
--spec reply_buffered(req()) -> ok.
-reply_buffered(#req{call_ref = CallRef}) ->
-  Reply = #brod_produce_reply{ call_ref = CallRef
-                             , base_offset = ?BROD_PRODUCE_UNKNOWN_OFFSET
-                             , result   = brod_produce_req_buffered
-                             },
-  cast(CallRef#brod_call_ref.caller, Reply).
-
--spec reply_acked(req()) -> ok.
-reply_acked(Req) ->
-  _ = reply_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET),
+-spec eval_buffered(req()) -> ok.
+eval_buffered(#req{cb = CbFun}) ->
+  _ = CbFun(?buffered),
   ok.
 
--spec reply_acked(req(), offset()) -> offset().
-reply_acked(#req{call_ref = CallRef, kv_count = Count}, Offset) ->
-  Reply = #brod_produce_reply{ call_ref = CallRef
-                             , base_offset = Offset
-                             , result   = brod_produce_req_acked
-                             },
-  ok = cast(CallRef#brod_call_ref.caller, Reply),
-  case Offset =:= ?BROD_PRODUCE_UNKNOWN_OFFSET of
-    true -> Offset;
-    false -> Offset + Count
-  end.
+-spec eval_acked(req()) -> ok.
+eval_acked(Req) ->
+  _ = eval_acked(Req, ?BROD_PRODUCE_UNKNOWN_OFFSET),
+  ok.
 
-cast(Pid, Msg) ->
-  try
-    Pid ! Msg,
-    ok
-  catch _ : _ ->
-    ok
-  end.
+-spec eval_acked(req(), offset()) -> offset().
+eval_acked(#req{cb = CbFun, kv_count = Count}, Offset) ->
+  _ = CbFun({?acked, Offset}),
+  next_base_offset(Offset, Count).
+
+next_base_offset(?BROD_PRODUCE_UNKNOWN_OFFSET, _) ->
+  ?BROD_PRODUCE_UNKNOWN_OFFSET;
+next_base_offset(Offset, Count) ->
+  Offset + Count.
 
 -spec data_size(brod:key() | brod:value()) -> non_neg_integer().
 data_size(Data) -> brod_utils:bytes(Data).
@@ -375,21 +363,6 @@ data_size(Data) -> brod_utils:bytes(Data).
 now_ms() ->
   {M, S, Micro} = os:timestamp(),
   ((M * 1000000) + S) * 1000 + Micro div 1000.
-
-%%%_* Tests ====================================================================
-
--ifdef(TEST).
-
--include_lib("eunit/include/eunit.hrl").
-
-cast_test() ->
-  Ref = make_ref(),
-  ok = cast(self(), Ref),
-  receive Ref -> ok
-  end,
-  ok = cast(?undef, Ref).
-
--endif. % TEST
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

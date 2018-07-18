@@ -19,6 +19,7 @@
 
 -export([ start_link/4
         , produce/3
+        , produce_cb/4
         , stop/1
         , sync_produce_request/2
         ]).
@@ -161,24 +162,33 @@ start_link(ClientPid, Topic, Partition, Config) ->
 
 %% @doc Produce a message to partition asynchronizely.
 %% The call is blocked until the request has been buffered in producer worker
-%% The function returns a call reference of type call_ref() to the
-%% caller so the caller can used it to expect (match) a brod_produce_req_acked
-%% message after the produce request has been acked by configured number of
-%% replicas in kafka cluster.
+%% The function returns a call reference of type `call_ref()' to the
+%% caller so the caller can used it to expect (match) a
+%% `#brod_produce_reply{result = brod_produce_req_acked}'
+%% message after the produce request has been acked by kafka.
 -spec produce(pid(), brod:key(), brod:value()) ->
         {ok, call_ref()} | {error, any()}.
 produce(Pid, Key, Value) ->
+  produce_cb(Pid, Key, Value, ?undef).
+
+-spec produce_cb(pid(), brod:key(), brod:value(),
+                 ?undef | brod:produce_ack_cb()) ->
+        ok | {ok, call_ref()} | {error, any()}.
+produce_cb(Pid, Key, Value, AckCb) ->
   CallRef = #brod_call_ref{ caller = self()
                           , callee = Pid
                           , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  Pid ! {produce, CallRef, Key, Value},
+  Pid ! {produce, CallRef, Key, Value, AckCb},
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
-                       , result   = brod_produce_req_buffered
+                       , result   = ?buffered
                        } ->
       erlang:demonitor(Mref, [flush]),
-      {ok, CallRef};
+      case AckCb of
+        ?undef -> {ok, CallRef};
+        _ -> ok
+      end;
     {'DOWN', Mref, process, _Pid, Reason} ->
       {error, {producer_down, Reason}}
   end.
@@ -192,13 +202,14 @@ produce(Pid, Key, Value) ->
 sync_produce_request(CallRef, Timeout) ->
   #brod_call_ref{ caller = Caller
                 , callee = Callee
+                , ref = Ref
                 } = CallRef,
   Caller = self(), %% assert
   Mref = erlang:monitor(process, Callee),
   receive
-    #brod_produce_reply{ call_ref = CallRef
+    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Ref}
                        , base_offset = Offset
-                       , result   = brod_produce_req_acked
+                       , result = brod_produce_req_acked
                        } ->
       erlang:demonitor(Mref, [flush]),
       {ok, Offset};
@@ -297,8 +308,24 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
-handle_info({produce, CallRef, Key, Value}, #state{} = State) ->
-  handle_produce(CallRef, Key, Value, State);
+handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
+  #brod_call_ref{caller = Pid} = CallRef,
+  BufCb =
+    fun(?buffered) ->
+        Reply = #brod_produce_reply{ call_ref = CallRef
+                                   , result = ?buffered
+                                   },
+        erlang:send(Pid, Reply);
+       ({?acked, BaseOffset}) when AckCb =:= ?undef ->
+        Reply = #brod_produce_reply{ call_ref = CallRef
+                                   , base_offset = BaseOffset
+                                   , result = ?acked
+                                   },
+        erlang:send(Pid, Reply);
+       ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
+        AckCb(State#state.partition, BaseOffset)
+    end,
+  handle_produce(BufCb, Key, Value, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
                                 , ref = Ref
                                 , msg = Rsp
@@ -354,33 +381,33 @@ log_error_code(Topic, Partition, Offset, ErrorCode) ->
                  "Topic: ~s Partition: ~B Offset: ~B Error: ~p",
                  [Topic, Partition, Offset, ErrorCode]).
 
-handle_produce(CallRef, Key, Value,
+handle_produce(BufCb, Key, Value,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
   %% pending on retry, add to buffer regardless of connection state
-  do_handle_produce(CallRef, Key, Value, State);
-handle_produce(CallRef, Key, Value,
+  do_handle_produce(BufCb, Key, Value, State);
+handle_produce(BufCb, Key, Value,
                #state{connection = Pid} = State) when is_pid(Pid) ->
   %% Connection is alive, add to buffer, and try send produce request
-  do_handle_produce(CallRef, Key, Value, State);
-handle_produce(CallRef, Key, Value, #state{} = State) ->
+  do_handle_produce(BufCb, Key, Value, State);
+handle_produce(BufCb, Key, Value, #state{} = State) ->
   %% this is the first request after fresh start/restart or conection death
   {ok, NewState} = maybe_reinit_connection(State),
-  do_handle_produce(CallRef, Key, Value, NewState).
+  do_handle_produce(BufCb, Key, Value, NewState).
 
-do_handle_produce(CallRef, Key, Value, #state{buffer = Buffer} = State) ->
-  NewBuffer = brod_producer_buffer:add(Buffer, CallRef, Key, Value),
+do_handle_produce(BufCb, Key, Value, #state{buffer = Buffer} = State) ->
+  NewBuffer = brod_producer_buffer:add(Buffer, BufCb, Key, Value),
   State1 = State#state{buffer = NewBuffer},
   {ok, NewState} = maybe_produce(State1),
   {noreply, NewState}.
 
 -spec maybe_reinit_connection(state()) -> {ok, state()}.
 maybe_reinit_connection(#state{ client_pid = ClientPid
-                          , connection = OldConnection
-                          , conn_mref  = OldConnMref
-                          , topic      = Topic
-                          , partition  = Partition
-                          , buffer     = Buffer0
-                          } = State) ->
+                              , connection = OldConnection
+                              , conn_mref  = OldConnMref
+                              , topic      = Topic
+                              , partition  = Partition
+                              , buffer     = Buffer0
+                              } = State) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
     {ok, OldConnection} ->

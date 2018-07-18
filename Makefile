@@ -12,7 +12,7 @@ TEST_ERLC_OPTS = $(COMMON_ERLC_OPTS)
 
 
 dep_supervisor3_commit = 1.1.5
-dep_kafka_protocol_commit = 2.0.0
+dep_kafka_protocol_commit = 2.0.1
 dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafka_protocol_commit)
 dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
 
