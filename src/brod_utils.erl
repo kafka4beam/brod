@@ -281,6 +281,8 @@ fetch(Conn, ReqFun, Offset, MaxBytes) ->
   case request_sync(Conn, Request, infinity) of
     {ok, #{error_code := ErrorCode}} when ?IS_ERROR(ErrorCode) ->
       {error, ErrorCode};
+    {ok, #{batches := ?incomplete_batch(Size)}} ->
+      fetch(Conn, ReqFun, Offset, Size);
     {ok, #{batches := Batches}} ->
       {ok, flatten_batches(Offset, Batches)};
     {error, Reason} ->
@@ -516,6 +518,7 @@ parse(fetch, _Vsn, Msg) ->
   parse_fetch_rsp(Msg);
 parse(list_offsets, _, Msg) ->
   case get_partition_rsp(Msg) of
+    #{offsets := []} = M -> M#{offset => -1};
     #{offsets := [Offset]} = M -> M#{offset => Offset};
     #{offset := _} = M -> M
   end;

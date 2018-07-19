@@ -1,19 +1,21 @@
 FROM java:openjdk-8-jre
 
-ARG KAFKA_VERSION
-
-ENV KAFKA_VERSION ${KAFKA_VERSION}
-ENV SCALA_VERSION 2.11
-
 RUN apt-get update && \
     apt-get install -y zookeeper wget supervisor dnsutils && \
     rm -rf /var/lib/apt/lists/* && \
-    apt-get clean && \
-    if [[ "$KAFKA_VERSION" = 0.9* ]]; then \
-      DOWNLOAD_URL_PREFIX="https://archive.apache.org/dist/kafka"; \
-    else \
-      DOWNLOAD_URL_PREFIX="https://apache.org/dist/kafka/"; \
-    fi && \
+    apt-get clean
+
+ENV SCALA_VERSION 2.11
+
+ARG KAFKA_VERSION
+ENV KAFKA_VERSION ${KAFKA_VERSION}
+
+RUN case $KAFKA_VERSION in \
+      0.9*) \
+        DOWNLOAD_URL_PREFIX="https://archive.apache.org/dist/kafka";; \
+      *) \
+        DOWNLOAD_URL_PREFIX="https://apache.org/dist/kafka";; \
+    esac && \
     KAFKA_DOWNLOAD_URL="$DOWNLOAD_URL_PREFIX/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" && \
     wget -q "${KAFKA_DOWNLOAD_URL}" -O /tmp/kafka_"$SCALA_VERSION"-"$KAFKA_VERSION".tgz && \
     tar xfz /tmp/kafka_"$SCALA_VERSION"-"$KAFKA_VERSION".tgz -C /opt && \

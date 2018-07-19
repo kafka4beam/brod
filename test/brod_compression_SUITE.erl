@@ -57,7 +57,7 @@ end_per_suite(_Config) -> ok.
 init_per_testcase(Case, Config) ->
   Client = Case,
   brod:stop_client(Client),
-  ok = brod:start_client(?HOSTS, Client),
+  ok = start_client(?HOSTS, Client),
   NewConfig = [{client, Client} | Config],
   try
     ?MODULE:Case({init, NewConfig})
@@ -119,11 +119,8 @@ produce(Config) when is_list(Config) ->
                    ],
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   {K, V} = make_unique_kv(),
-  {ok, Offset0} = brod:resolve_offset(?HOSTS, Topic, 0),
-  ok = brod:produce_sync(Client, Topic, 0, K, V),
-  {ok, Offset1} = brod:resolve_offset(?HOSTS, Topic, 0),
-  ?assert(Offset1 =:= Offset0 + 1),
-  ok = brod:start_consumer(Client, Topic, [{begin_offset, Offset0}]),
+  {ok, Offset} = brod:produce_sync_offset(Client, Topic, 0, K, V),
+  ok = brod:start_consumer(Client, Topic, [{begin_offset, Offset}]),
   {ok, ConsumerPid} = brod:subscribe(Client, self(), ?TOPIC, 0, []),
   receive
     {ConsumerPid, MsgSet} ->
@@ -144,7 +141,8 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   Client = ?config(client),
   BatchCount = 100,
   %% get the latest offset before producing the batch
-  {ok, Offset0} = brod:resolve_offset(?HOSTS, Topic, 0),
+  {ok, Offset0} = brod:resolve_offset(?HOSTS, Topic, 0, latest,
+                                      client_config()),
   ct:pal("offset before batch: ~p", [Offset0]),
   ProducerConfig = [ {min_compression_batch_size, 0}
                    , {compression, ?config(compression)}
@@ -153,7 +151,8 @@ produce_compressed_batch_consume_from_middle(Config) when is_list(Config) ->
   KvList = [make_unique_kv() || _ <- lists:seq(1, BatchCount)],
   ok = brod:produce_sync(Client, Topic, 0, <<>>, KvList),
   %% Get the latest offset after the batch is produced
-  {ok, Offset1} = brod:resolve_offset(?HOSTS, Topic, 0),
+  {ok, Offset1} = brod:resolve_offset(?HOSTS, Topic, 0, latest,
+                                      client_config()),
   ct:pal("offset after batch: ~p", [Offset1]),
   ?assertEqual(Offset1, Offset0 + BatchCount),
   HalfBatch = BatchCount div 2,
@@ -196,6 +195,16 @@ make_unique_kv() ->
   }.
 
 make_ts_str() -> brod_utils:os_time_utc_str().
+
+start_client(Hosts, ClientId) ->
+  Config = client_config(),
+  brod:start_client(Hosts, ClientId, Config).
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

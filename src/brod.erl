@@ -745,8 +745,8 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
               {ok, [message()]} | {error, any()}.
 fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
   Opts = #{ max_wait_time => 1000
-          , min_bytes => 0
-          , max_bytes => 100 bsl 10 %% 100K
+          , min_bytes => 1
+          , max_bytes => 1 bsl 20
           },
   fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts).
 

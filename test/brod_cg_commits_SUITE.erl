@@ -62,11 +62,16 @@ end_per_testcase(Case, Config) when is_list(Config) ->
   ct:pal("=== ~p end ===", [Case]),
   ok.
 
-all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
+all() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [];
+    _ ->
+      [F || {F, _A} <- module_info(exports),
+            case atom_to_list(F) of
+              "t_" ++ _ -> true;
+              _         -> false
+            end]
+  end.
 
 %%%_* Test cases ===============================================================
 

@@ -51,6 +51,13 @@
 -define(acked, brod_produce_req_acked).
 -define(buffered, brod_produce_req_buffered).
 
+-define(KAFKA_0_9,  {0,  9}).
+-define(KAFKA_0_10, {0, 10}).
+-define(KAFKA_0_11, {0, 11}).
+-define(KAFKA_1_0,  {1,  0}).
+-define(KAFKA_1_1,  {1,  1}).
+-define(LATEST_KAFKA_VERSION, ?KAFKA_1_1).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

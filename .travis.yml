@@ -37,20 +37,25 @@ script:
   - make rel
   - make edoc
   - make xref
-  - OTP_VSN=$(erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)')
+  - |
+    OTP_VSN=`erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)'`
     if [ $OTP_VSN -eq 21 ]; then
-      ## test more only in otp 21
+      # run dialyzer only in otp 21
       make dialyze
-	    ./scripts/setup-test-env.sh 0.9
-      make it
+      # test against kafka 0.9 in otp 21
+      export KAFKA_VERSION="0.9"
     fi
     if [ $OTP_VSN -eq 20 ]; then
-	    ./scripts/setup-test-env.sh 0.10
-      make it
+      # test against kafka 0.10 in otp 20
+      export KAFKA_VERSION="0.10"
     fi
     if [ $OTP_VSN -eq 19 ]; then
-	    ./scripts/setup-test-env.sh 0.11
-      make it
+      # test against kafka 0.11 in otp 19
+      export KAFKA_VERSION="0.11"
     fi
-	  ./scripts/setup-test-env.sh 1.1
+	  ./scripts/setup-test-env.sh $KAFKA_VERSION
+    make it
+    # final full test against kafka 1.1
+    export KAFKA_VERSION="1.1"
+	  ./scripts/setup-test-env.sh $KAFKA_VERSION
     make t

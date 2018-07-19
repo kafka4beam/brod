@@ -59,7 +59,7 @@ bootstrap() ->
 bootstrap(DelaySeconds, MessageType) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
-  ClientConfig = [],
+  ClientConfig = client_config(),
   Topic = <<"brod-demo-topic-subscriber">>,
   {ok, _} = application:ensure_all_started(brod),
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
@@ -164,6 +164,11 @@ os_time_utc_str() ->
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
 
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -288,7 +288,7 @@ handle_info(?RETRY_MSG, #state{} = State0) ->
   {ok, State2} = maybe_reinit_connection(State1),
   %% For retry-interval deterministic, produce regardless of connection state.
   %% In case it has failed to find a new connection in maybe_reinit_connection/1
-  %% the produce call should fail immediately with {error, no_leader}
+  %% the produce call should fail immediately with {error, no_leader_connection}
   %% and a new retry should be scheduled (if not reached max_retries yet)
   {ok, State} = maybe_produce(State2),
   {noreply, State};
@@ -428,7 +428,7 @@ maybe_reinit_connection(#state{ client_pid = ClientPid
     {error, Reason} ->
       ok = maybe_demonitor(OldConnMref),
       %% Make sure the sent but not acked ones are put back to buffer
-      Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader),
+      Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader_connection),
       brod_utils:log(warning, "Failed to (re)init connection, reason:\n~p",
                      [Reason]),
       {ok, State#state{ connection = ?undef
@@ -504,7 +504,7 @@ is_retriable(_) ->
   false.
 
 -spec send(?undef | pid(), kpro:req()) -> ok | {error, any()}.
-send(?undef, _KafkaReq) -> {error, no_leader};
+send(?undef, _KafkaReq) -> {error, no_leader_connection};
 send(Connection, KafkaReq) -> kpro:request_async(Connection, KafkaReq).
 
 -spec make_batch_input(brod:key(), brod:value()) -> brod:batch_input().
