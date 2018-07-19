@@ -36,7 +36,6 @@
         , init_sasl_opt/1
         , is_normal_reason/1
         , is_pid_alive/1
-        , kv_count/1
         , list_all_groups/2
         , list_groups/2
         , log/3
@@ -47,6 +46,7 @@
         , request_sync/3
         , resolve_offset/4
         , resolve_offset/5
+        , unify_batch_input/1
         ]).
 
 -include("brod_int.hrl").
@@ -342,34 +342,19 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
 %% @doc Return message set size in number of bytes.
 %% NOTE: This does not include the overheads of encoding protocol.
 %% such as magic bytes, attributes, and length tags etc.
--spec bytes(brod:key() | brod:value() | brod:kv_list()) -> non_neg_integer().
+-spec bytes(brod:key() | brod:value()) -> non_neg_integer().
 bytes([]) -> 0;
-bytes(?undef) -> 0;
-bytes(I) when ?IS_BYTE(I) -> 1;
 bytes(B) when is_binary(B) -> erlang:size(B);
 bytes(?TKV(T, K, V)) when is_integer(T) -> 8 + bytes(K) + bytes(V);
 bytes(?KV(K, V)) -> bytes(K) + bytes(V);
-bytes([H | T]) -> bytes(H) + bytes(T).
-
-%% @doc Count kv-pairs in a (maybe nested) list of kv pairs
--spec kv_count(brod:kv_list()) -> non_neg_integer().
-kv_count(KVList) ->
-  Fold = fun(_Msg, Acc) -> Acc + 1 end,
-  foldl_kvlist(Fold, 0, KVList).
-
-%% Get nested kv-list.
-nested({_K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
-nested({_T, _K, [Msg | _] = Nested}) when is_tuple(Msg) -> Nested;
-nested(_) -> false.
-
-%% Foldl kv-list.
-foldl_kvlist(_Fun, Acc, []) -> Acc;
-foldl_kvlist(Fun, Acc, [Msg | Rest]) ->
-  NewAcc = case nested(Msg) of
-             false -> Fun(Msg, Acc);
-             Nested -> foldl_kvlist(Fun, Acc, Nested)
-           end,
-  foldl_kvlist(Fun, NewAcc, Rest).
+bytes([H | T]) -> bytes(H) + bytes(T);
+bytes(#{} = Msg) ->
+  %% this is message from a magic v2 batch
+  %% last 8 bytes are for timestamp although it is encoded as varint
+  %% which in best case scenario takes only 1 byte.
+  bytes(maps:get(key, Msg, <<>>)) +
+  bytes(maps:get(value, Msg, <<>>)) +
+  bytes(maps:get(headers, Msg, [])) + 8.
 
 %% @doc Group values per-key in a key-value list.
 -spec group_per_key([{Key, Val}]) -> [{Key, [Val]}]
@@ -421,6 +406,12 @@ request_sync(Conn, #kpro_req{ref = Ref} = Req, Timeout) ->
     {ok, #kpro_rsp{ref = Ref} = Rsp} -> parse_rsp(Rsp);
     {error, Reason} -> {error, Reason}
   end.
+
+%% @doc Ensure batch-input is in the right format for kafka_protocol.
+-spec unify_batch_input([?KV(_, _) | ?TKV(_, _, _)]) -> brod:batch_input().
+unify_batch_input(BatchInput) ->
+  F = fun(M, Acc) -> [unify_msg(M) | Acc] end,
+  lists:reverse(foldl_batch(F, [], BatchInput)).
 
 %%%_* Internal functions =======================================================
 
@@ -607,6 +598,23 @@ throw_error_code([Struct | Structs]) ->
     false ->
       throw_error_code(Structs)
   end.
+
+unify_msg(?KV(K, V)) -> #{key => K, value => V};
+unify_msg(?TKV(T, K, V)) -> #{ts => T, key => K, value => V};
+unify_msg(Map) when is_map(Map) -> Map.
+
+%% Get nested kv-list.
+nested(?KV(_K, [Msg | _] = Nested)) when is_tuple(Msg) -> Nested;
+nested(?TKV(_T, _K, [Msg | _] = Nested)) when is_tuple(Msg) -> Nested;
+nested(_Msg) -> false.
+
+foldl_batch(_Fun, Acc, []) -> Acc;
+foldl_batch(Fun, Acc, [Msg | Rest]) ->
+  NewAcc = case nested(Msg) of
+             false -> Fun(Msg, Acc);
+             Nested -> foldl_batch(Fun, Acc, Nested)
+           end,
+  foldl_batch(Fun, NewAcc, Rest).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

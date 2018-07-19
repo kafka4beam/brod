@@ -333,7 +333,7 @@ t_produce_batch_callback(Config) when is_list(Config) ->
   {K1, V1} = make_unique_kv(),
   {K2, V2} = make_unique_kv(),
   {K3, V3} = make_unique_kv(),
-  Batch = [{K1, V1}, {K2, V2}, {<<>>, [{K3, V3}]}],
+  Batch = [{K1, V1}, #{key => K2, value => V2}, {<<>>, [{K3, V3}]}],
   Self = self(),
   Ref = make_ref(),
   Cb = fun(_Partition, _Offset) ->

@@ -104,7 +104,8 @@
             , {fetch, 8, next_version}
             ]).
 
--export_type([ call_ref/0
+-export_type([ batch_input/0
+             , call_ref/0
              , cg/0
              , cg_protocol_type/0
              , client/0
@@ -126,7 +127,7 @@
              , group_member_id/0
              , hostname/0
              , key/0
-             , kv_list/0
+             , msg_input/0
              , msg_ts/0
              , message/0
              , message_set/0
@@ -156,9 +157,15 @@
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
 -type offset() :: kpro:offset().
--type key() :: kpro:key().
--type value() :: kpro:value().
--type kv_list() :: kpro:kv_list().
+-type key() :: binary().
+-type value() :: binary() %% single value
+               | {msg_ts(), binary()} %% one message with timestamp
+               | kpro:msg_input() %% one magic v2 message
+               | kpro:batch_input(). %% maybe nested batch
+
+-type msg_input() :: kpro:msg_input().
+-type batch_input() :: [msg_input()].
+
 -type msg_ts() :: kpro:msg_ts().
 -type client_id() :: atom().
 -type client() :: client_id() | pid().

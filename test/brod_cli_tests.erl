@@ -16,7 +16,7 @@
 
 -module(brod_cli_tests).
 
--ifdef(BROD_CLI).
+-ifdef(build_brod_cli).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -31,7 +31,7 @@ meta_test() ->
   run(["meta", "-b", "localhost", "-t", "test-topic"]).
 
 ssl_test() ->
-  run(["meta", "-b", "localhost:9192", "-L",
+  run(["meta", "-b", "localhost:9093", "-L",
        "--cacertfile", "priv/ssl/ca.crt",
        "--keyfile", "priv/ssl/client.key",
        "--certfile", "priv/ssl/client.crt"]).
@@ -59,11 +59,11 @@ send_fetch_test() ->
   ok.
 
 sasl_test() ->
-  ok = file:write_file("sasl.testdata", "alice\nalice-secret\n"),
+  ok = file:write_file("sasl.testdata", "alice\necila\n"),
   K = make_ts_str(),
   V = make_ts_str(),
   Output =
-    cmd("send --brokers localhost:9292,localhost:9392 -t test-topic "
+    cmd("send --brokers localhost:9194,localhost:9094 -t test-topic "
         "--cacertfile priv/ssl/ca.crt "
         "--keyfile priv/ssl/client.key "
         "--certfile priv/ssl/client.crt "

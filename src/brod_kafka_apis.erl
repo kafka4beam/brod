@@ -123,7 +123,7 @@ lookup_vsn_range(Conn, API) ->
           %% public ets, insert it by caller
           ets:insert(?ETS, {Conn, Versions}),
           %% tell ?SERVER to monitor the connection
-          %% so to delete it from cache at when 'DOWN' is received
+          %% so to delete it from cache when 'DOWN' is received
           ok = monitor_connection(Conn),
           maps:get(API, Versions, none);
         {error, _Reason} ->
@@ -136,9 +136,9 @@ lookup_vsn_range(Conn, API) ->
 %% Do not change range without verification.
 supported_versions(API) ->
   case API of
-    produce          -> {0, 2};
+    produce          -> {0, 5};
     fetch            -> {0, 3};
-    list_offsets     -> {0, 1};
+    list_offsets     -> {0, 2};
     metadata         -> {0, 2};
     offset_commit    -> {2, 2};
     offset_fetch     -> {1, 2};

@@ -18,7 +18,7 @@
 -module(brod_producer_buffer).
 
 -export([ new/7
-        , add/4
+        , add/3
         , ack/2
         , ack/3
         , nack/3
@@ -44,7 +44,7 @@
         { cb       :: cb()
         , data     :: data()
         , bytes    :: non_neg_integer()
-        , kv_count :: non_neg_integer() %% messages in the set
+        , msg_cnt  :: non_neg_integer() %% messages in the set
         , ctime    :: milli_ts() %% time when request was created
         , failures :: non_neg_integer() %% the number of failed attempts
         }).
@@ -103,12 +103,12 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
--spec add(buf(), cb(), brod:key(), brod:value()) -> buf().
-add(#buf{pending = Pending} = Buf, Cb, Key, Value) ->
+-spec add(buf(), cb(), brod:batch_input()) -> buf().
+add(#buf{pending = Pending} = Buf, Cb, Batch) ->
   Req = #req{ cb       = Cb
-            , data     = fun() -> {Key, Value} end
-            , bytes    = data_size(Key) + data_size(Value)
-            , kv_count = brod_utils:kv_count([{Key, Value}])
+            , data     = fun() -> Batch end
+            , bytes    = data_size(Batch)
+            , msg_cnt  = length(Batch)
             , ctime    = now_ms()
             , failures = 0
             },
@@ -269,8 +269,8 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
-  MessageSet = lists:map(fun(#req{data = F}) -> F() end, Reqs),
-  case SendFun(Conn, MessageSet, Vsn) of
+  Batch = lists:append(lists:map(fun(#req{data = F}) -> F() end, Reqs)),
+  case SendFun(Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
       ok = lists:foreach(fun eval_acked/1, Reqs),
@@ -347,7 +347,7 @@ eval_acked(Req) ->
   ok.
 
 -spec eval_acked(req(), offset()) -> offset().
-eval_acked(#req{cb = CbFun, kv_count = Count}, Offset) ->
+eval_acked(#req{cb = CbFun, msg_cnt = Count}, Offset) ->
   _ = CbFun({?acked, Offset}),
   next_base_offset(Offset, Count).
 
@@ -356,7 +356,7 @@ next_base_offset(?BROD_PRODUCE_UNKNOWN_OFFSET, _) ->
 next_base_offset(Offset, Count) ->
   Offset + Count.
 
--spec data_size(brod:key() | brod:value()) -> non_neg_integer().
+-spec data_size(brod:batch_input()) -> non_neg_integer().
 data_size(Data) -> brod_utils:bytes(Data).
 
 -spec now_ms() -> milli_ts().

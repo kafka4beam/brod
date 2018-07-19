@@ -362,22 +362,16 @@ t_subscriber_restart(Config) when is_list(Config) ->
   receive {subscribed, Subscriber0} -> ok end,
   ReceiveFun =
     fun(Subscriber, ExpectedSeqNo) ->
-      receive
-        {Subscriber, ExpectedSeqNo} ->
-          ok
-      after 3000 ->
-        ct:fail("timed out receiving seqno ~p", [ExpectedSeqNo])
+      receive {Subscriber, ExpectedSeqNo} -> ok
+      after 3000 -> ct:fail("timed out receiving seqno ~p", [ExpectedSeqNo])
       end
     end,
   ok = ProduceFun(0),
   ok = ProduceFun(1),
   ok = ReceiveFun(Subscriber0, 0),
   Mref = erlang:monitor(process, Subscriber0),
-  receive
-    {'DOWN', Mref, process, Subscriber0, normal} ->
-      ok
-    after 1000 ->
-      ct:fail("timed out waiting for Subscriber0 to exit")
+  receive {'DOWN', Mref, process, Subscriber0, normal} -> ok
+  after 2000 -> ct:fail("timed out waiting for Subscriber0 to exit")
   end,
   Subscriber1 = erlang:spawn_link(SubscriberFun),
   receive {subscribed, Subscriber1} -> ok end,

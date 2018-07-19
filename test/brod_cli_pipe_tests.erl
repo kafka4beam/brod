@@ -16,7 +16,7 @@
 
 -module(brod_cli_pipe_tests).
 
--ifdef(BROD_CLI).
+-ifdef(build_brod_cli).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("brod_int.hrl").
