@@ -138,8 +138,8 @@ t_direct_fetch(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
                                      ?OFFSET_LATEST, ?config(client_config)),
-  {ok, [Msg]} = brod:fetch({?HOSTS, ?config(client_config)},
-                           Topic, Partition, Offset - 1),
+  {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
+                                 Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
@@ -152,8 +152,9 @@ t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
                                      ?OFFSET_LATEST, ?config(client_config)),
-  {ok, [Msg]} = brod:fetch({?HOSTS, ?config(client_config)},
-                           Topic, Partition, Offset - 1, #{max_bytes => 1}),
+  {ok, {_, [Msg]}} =
+    brod:fetch({?HOSTS, ?config(client_config)},
+               Topic, Partition, Offset - 1, #{max_bytes => 1}),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
@@ -171,9 +172,9 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
                                      ?OFFSET_LATEST, ?config(client_config)),
-  {ok, [Msg]} = brod:fetch({?HOSTS, ?config(client_config)},
-                           Topic, Partition, Offset - 1,
-                           #{max_bytes => 13}),
+  {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
+                                Topic, Partition, Offset - 1,
+                                #{max_bytes => 13}),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 

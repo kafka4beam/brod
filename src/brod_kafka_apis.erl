@@ -137,7 +137,7 @@ lookup_vsn_range(Conn, API) ->
 supported_versions(API) ->
   case API of
     produce          -> {0, 5};
-    fetch            -> {0, 3};
+    fetch            -> {0, 7};
     list_offsets     -> {0, 2};
     metadata         -> {0, 2};
     offset_commit    -> {2, 2};

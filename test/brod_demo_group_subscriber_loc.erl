@@ -30,6 +30,7 @@
 -export([ bootstrap/0
         , bootstrap/1
         , bootstrap/2
+        , bootstrap/3
         ]).
 
 %% behabviour callbacks
@@ -82,13 +83,15 @@ bootstrap(DelaySeconds) ->
   bootstrap(DelaySeconds, message).
 
 bootstrap(DelaySeconds, MessageType) ->
-  BootstrapHosts = [{"localhost", 9092}],
-  Topic = <<"brod-demo-group-subscriber-loc">>,
-  {ok, _} = application:ensure_all_started(brod),
-
   %% A group ID is to be shared between the members (which often run in
   %% different Erlang nodes or even hosts).
   GroupId = <<"brod-demo-group-subscriber-loc-consumer-group">>,
+  bootstrap(DelaySeconds, MessageType, GroupId).
+
+bootstrap(DelaySeconds, MessageType, GroupId) ->
+  BootstrapHosts = [{"localhost", 9092}],
+  Topic = <<"brod-demo-group-subscriber-loc">>,
+  {ok, _} = application:ensure_all_started(brod),
   %% Different members may subscribe to identical or different set of topics.
   %% In the assignments, a member receives only the partitions from the
   %% subscribed topic set.

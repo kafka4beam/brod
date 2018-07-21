@@ -53,9 +53,9 @@ script:
       # test against kafka 0.11 in otp 19
       export KAFKA_VERSION="0.11"
     fi
-	  ./scripts/setup-test-env.sh $KAFKA_VERSION
+    make test-env
     make it
     # final full test against kafka 1.1
     export KAFKA_VERSION="1.1"
-	  ./scripts/setup-test-env.sh $KAFKA_VERSION
+    make test-env
     make t

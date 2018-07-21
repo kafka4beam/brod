@@ -111,16 +111,22 @@ pipe_test() ->
     cmd("pipe -b localhost -t test-topic -p 0 -s README.md "
         "--kv-deli none --msg-deli '\\n'"),
   ?assertEqual("", PipeCmdOutput),
-  FetchOutput =
+  FetchedText =
     cmd("fetch -b localhost -t test-topic -p 0 -w 100 -c -1 -o " ++ OffsetStr),
-  FetchedLines = iolist_to_binary(FetchOutput),
-  {ok, Expected0} = file:read_file("README.md"),
-  Expected1 = binary:split(Expected0, <<"\n">>, [global]),
-  Expected2 = lists:filtermap(fun(<<>>) -> false;
-                                 (Line) -> {true, [Line, "\n"]}
-                              end, Expected1),
-  Expected = iolist_to_binary(Expected2),
-  ?assertEqual(Expected, FetchedLines).
+  {ok, ReadmeText} = file:read_file("README.md"),
+  Split =
+    fun(Text) ->
+        Lines = binary:split(iolist_to_binary(Text), <<"\n">>, [global]),
+        lists:filtermap(
+          fun(<<>>) -> false;
+             (Line) -> {true, iolist_to_binary([Line, "\n"])}
+          end, Lines)
+    end,
+  ExpectedLines = Split(ReadmeText),
+  FetchedLines = Split(FetchedText),
+  ?assertEqual(hd(ExpectedLines), hd(FetchedLines)),
+  ?assertEqual(lists:last(ExpectedLines), lists:last(FetchedLines)),
+  ?assertEqual(ExpectedLines, FetchedLines).
 
 groups_test() ->
   assert_no_error(cmd("groups")),

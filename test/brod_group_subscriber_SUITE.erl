@@ -133,10 +133,12 @@ get_committed_offsets(_GroupId, _TopicPartitions, State) ->
 %%%_* Test functions ===========================================================
 
 t_loc_demo(Config) when is_list(Config) ->
+  CgId = iolist_to_binary("t_loc_demo-" ++
+                          integer_to_list(erlang:system_time())),
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_group_subscriber_loc:bootstrap(1),
+        brod_demo_group_subscriber_loc:bootstrap(1, message, CgId),
         receive
           _ ->
             ok
@@ -151,10 +153,12 @@ t_loc_demo(Config) when is_list(Config) ->
   end.
 
 t_loc_demo_message_set(Config) when is_list(Config) ->
+  CgId = iolist_to_binary("t_loc_demo_message_set-" ++
+                          integer_to_list(erlang:system_time())),
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_group_subscriber_loc:bootstrap(1, message_set),
+        brod_demo_group_subscriber_loc:bootstrap(1, message_set, CgId),
         receive
           _ ->
             ok

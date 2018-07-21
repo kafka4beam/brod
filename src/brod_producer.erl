@@ -173,7 +173,8 @@ produce(Pid, Key, Value) ->
 produce_no_ack(Pid, Key, Value) ->
   CallRef = #brod_call_ref{caller = ?undef},
   AckCb = fun(_, _) -> ok end,
-  Pid ! {produce, CallRef, Key, Value, AckCb},
+  Batch = make_batch_input(Key, Value),
+  Pid ! {produce, CallRef, Batch, AckCb},
   ok.
 
 %% @doc Async produce, evaluate callback if `AckCb' is a function
@@ -187,7 +188,8 @@ produce_cb(Pid, Key, Value, AckCb) ->
                           , callee = Pid
                           , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  Pid ! {produce, CallRef, Key, Value, AckCb},
+  Batch = make_batch_input(Key, Value),
+  Pid ! {produce, CallRef, Batch, AckCb},
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
                        , result   = ?buffered
@@ -305,7 +307,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
-handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
+handle_info({produce, CallRef, Batch, AckCb}, #state{} = State) ->
   #brod_call_ref{caller = Pid} = CallRef,
   BufCb =
     fun(?buffered) when is_pid(Pid) ->
@@ -325,7 +327,6 @@ handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
        ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
         AckCb(State#state.partition, BaseOffset)
     end,
-  Batch = make_batch_input(Key, Value),
   handle_produce(BufCb, Batch, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
                                 , ref = Ref

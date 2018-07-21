@@ -49,46 +49,45 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-init_per_testcase(Case, Config) ->
-  ct:pal("=== ~p begin ===", [Case]),
+init_per_testcase(_Case, Config) ->
   ClientId       = ?CLIENT_ID,
   BootstrapHosts = ?BROKERS,
-  ClientConfig   = [],
+  ClientConfig =
+    case os:getenv("KAFKA_VERSION") of
+      "0.9" ++ _ -> [{query_api_versions, false}];
+      _ -> []
+    end,
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
-  Config.
+  [{client_config, ClientConfig} | Config].
 
-end_per_testcase(Case, Config) when is_list(Config) ->
+end_per_testcase(_Case, Config) when is_list(Config) ->
   ok = brod:stop_client(?CLIENT_ID),
-  ct:pal("=== ~p end ===", [Case]),
   ok.
 
 all() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [];
-    _ ->
-      [F || {F, _A} <- module_info(exports),
-            case atom_to_list(F) of
-              "t_" ++ _ -> true;
-              _         -> false
-            end]
-  end.
+  [F || {F, _A} <- module_info(exports),
+        case atom_to_list(F) of
+          "t_" ++ _ -> true;
+          _         -> false
+        end].
 
 %%%_* Test cases ===============================================================
 
 t_set_then_reset(Config) when is_list(Config) ->
+  ClientConfig = proplists:get_value(client_config, Config),
   Topic = <<"brod-group-subscriber-1">>,
   Partitions = [0, 1, 2],
   Offsets0 = [{0, 0}, {1, 0}, {2, 0}],
   ok = do_commit(Topic, Offsets0),
   {ok, Rsp0} =
-    brod_utils:fetch_committed_offsets(?BROKERS, #{}, ?GROUP_ID,
-                                       [{Topic, Partitions}]),
+    brod_utils:fetch_committed_offsets(?BROKERS, ClientConfig,
+                                       ?GROUP_ID, [{Topic, Partitions}]),
   ok = assert_offsets([{Topic, Offsets0}], Rsp0),
   Offsets1 = [{0, 1}, {1, 1}, {2, 1}],
   ok = do_commit(Topic, Offsets1),
   {ok, Rsp1} =
-    brod_utils:fetch_committed_offsets(?BROKERS, #{}, ?GROUP_ID,
-                                       [{Topic, Partitions}]),
+    brod_utils:fetch_committed_offsets(?BROKERS, ClientConfig,
+                                       ?GROUP_ID, [{Topic, Partitions}]),
   ok = assert_offsets([{Topic, Offsets1}], Rsp1),
   ok.
 

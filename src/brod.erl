@@ -742,7 +742,7 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
 -spec fetch(connection() | [endpoint()] | {[endpoint()], conn_config()},
             topic(), partition(), integer()) ->
-              {ok, [message()]} | {error, any()}.
+              {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
   Opts = #{ max_wait_time => 1000
           , min_bytes => 1
@@ -755,7 +755,7 @@ fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
 -spec fetch(connection() | {[endpoint()], conn_config()},
             topic(), partition(), offset(), fetch_opts()) ->
-              {ok, [message()]} | {error, any()}.
+              {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->
   fetch({Hosts, _ConnConfig = []}, Topic, Partition, Offset, Opts);
 fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts) ->
@@ -779,7 +779,10 @@ fetch(Hosts, Topic, Partition, Offset,
                , min_bytes => MinBytes
                , max_bytes => MaxBytes
                },
-  fetch({Hosts, ConnConfig}, Topic, Partition, Offset, FetchOpts).
+  case fetch({Hosts, ConnConfig}, Topic, Partition, Offset, FetchOpts) of
+    {ok, {_HwOffset, Batch}} -> {ok, Batch}; %% backward compatible
+    {error, Reason} -> {error, Reason}
+  end.
 
 %% @doc Connect partition leader.
 -spec connect_leader([endpoint()], topic(), partition(),

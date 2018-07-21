@@ -52,7 +52,8 @@
 -include("brod_int.hrl").
 
 -type req_fun() :: fun((offset(), kpro:count()) -> kpro:req()).
--type fetch_fun() :: fun((offset()) -> {ok, [brod:message()]} | {error, any()}).
+-type fetch_fun() :: fun((offset()) -> {ok, {offset(), [brod:message()]}} |
+                                       {error, any()}).
 -type connection() :: kpro:connection().
 -type conn_config() :: brod:conn_config().
 -type topic() :: brod:topic().
@@ -179,7 +180,7 @@ flatten_batches(BeginOffset, Batches) ->
 %% @doc Fetch a single message set from the given topic-partition.
 -spec fetch(connection() | {[endpoint()], conn_config()},
             topic(), partition(), offset(), brod:fetch_opts()) ->
-              {ok, [brod:message()]} | {error, any()}.
+              {ok, {offset(), [brod:message()]}} | {error, any()}.
 fetch({Hosts, ConnCfg}, Topic, Partition, Offset, Opts) ->
   with_conn(
     kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
@@ -275,7 +276,7 @@ do_fetch_committed_offsets(Conn, GroupId, Topics) when is_pid(Conn) ->
 %% @doc Fetch a message-set. If the given MaxBytes is not enough to fetch a
 %% single message, expand it to fetch exactly one message
 -spec fetch(connection(), req_fun(), offset(), kpro:count()) ->
-               {ok, [brod:message()]} | {error, any()}.
+               {ok, {offset(), [brod:message()]}} | {error, any()}.
 fetch(Conn, ReqFun, Offset, MaxBytes) ->
   Request = ReqFun(Offset, MaxBytes),
   case request_sync(Conn, Request, infinity) of
@@ -283,8 +284,13 @@ fetch(Conn, ReqFun, Offset, MaxBytes) ->
       {error, ErrorCode};
     {ok, #{batches := ?incomplete_batch(Size)}} ->
       fetch(Conn, ReqFun, Offset, Size);
-    {ok, #{batches := Batches}} ->
-      {ok, flatten_batches(Offset, Batches)};
+    {ok, #{header := Header, batches := Batches0}} ->
+      HighWmOffset = kpro:find(high_watermark, Header),
+      Batches = flatten_batches(Offset, Batches0),
+      case Offset < HighWmOffset andalso Batches =:= [] of
+        true -> fetch(Conn, ReqFun, Offset + 1, MaxBytes);
+        false -> {ok, {HighWmOffset, Batches}}
+      end;
     {error, Reason} ->
       {error, Reason}
   end.
@@ -410,7 +416,9 @@ request_sync(Conn, #kpro_req{ref = Ref} = Req, Timeout) ->
   end.
 
 %% @doc Ensure batch-input is in the right format for kafka_protocol.
--spec unify_batch_input([?KV(_, _) | ?TKV(_, _, _)]) -> brod:batch_input().
+%% This is to be backward compatible with prior brod versions.
+-spec unify_batch_input([?KV(_, _) | ?TKV(_, _, _) | map()]) ->
+        brod:batch_input().
 unify_batch_input(BatchInput) ->
   F = fun(M, Acc) -> [unify_msg(M) | Acc] end,
   lists:reverse(foldl_batch(F, [], BatchInput)).
@@ -602,9 +610,17 @@ throw_error_code([Struct | Structs]) ->
       throw_error_code(Structs)
   end.
 
-unify_msg(?KV(K, V)) -> #{key => K, value => V};
-unify_msg(?TKV(T, K, V)) -> #{ts => T, key => K, value => V};
-unify_msg(Map) when is_map(Map) -> Map.
+bin(?undef) -> <<>>;
+bin(X) -> iolist_to_binary(X).
+
+unify_msg(?KV(K, V)) -> #{key => bin(K), value => bin(V)};
+unify_msg(?TKV(T, K, V)) -> #{ts => T, key => bin(K), value => bin(V)};
+unify_msg(M) when is_map(M) ->
+  M#{key => bin(maps:get(key, M, <<>>)),
+     value => bin(maps:get(value, M, <<>>)),
+     headers => lists:map(fun({K, V}) -> {bin(K), bin(V)} end,
+                          maps:get(headers, M, []))
+    }.
 
 %% Get nested kv-list.
 nested(?KV(_K, [Msg | _] = Nested)) when is_tuple(Msg) -> Nested;

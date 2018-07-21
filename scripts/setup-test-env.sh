@@ -1,6 +1,9 @@
 #!/bin/bash -eu
 
-case $1 in
+VERSION=$KAFKA_VERSION
+if [ -z $VERSION ]; then VERSION=$1; fi
+
+case $VERSION in
   0.9*)
     VERSION="0.9.0.1";;
   0.10*)
@@ -10,10 +13,10 @@ case $1 in
   1.*)
     VERSION="1.1.0";;
   *)
-    echo "unknown kafka version $1"
-    exit 1
+    VERSION="1.1.0";;
 esac
 
+echo "Using KAFKA_VERSION=$VERSION"
 export KAFKA_VERSION=$VERSION
 
 THIS_DIR="$(cd "$(dirname "$0")" && pwd)"

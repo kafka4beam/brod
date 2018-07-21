@@ -40,6 +40,7 @@
         , t_sasl_plain_ssl/1
         , t_sasl_plain_file_ssl/1
         , t_sasl_callback/1
+        , t_magic_version/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -294,8 +295,7 @@ t_sasl_plain_file_ssl(Config) when is_list(Config) ->
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
 
 t_sasl_callback(min_kafka_vsn) -> ?KAFKA_0_10;
-t_sasl_callback({init, Config}) ->
-  Config;
+t_sasl_callback({init, Config}) -> Config;
 t_sasl_callback({'end', Config}) ->
   brod:stop_client(t_sasl_callback),
   Config;
@@ -304,6 +304,34 @@ t_sasl_callback(Config) when is_list(Config) ->
                  , {sasl, {callback, ?MODULE, []}}
                  ],
   produce_and_consume_message(?HOSTS, t_sasl_callback, ClientConfig).
+
+t_magic_version({init, Config}) -> Config;
+t_magic_version({'end', Config}) ->
+  brod:stop_client(t_magic_version),
+  Config;
+t_magic_version(Config) when is_list(Config) ->
+  Client = t_magic_version,
+  ClientConfig = [{get_metadata_timeout_seconds, 10}],
+  K = term_to_binary(make_ref()),
+  ok = start_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_producer(Client, ?TOPIC, []),
+  {ok, Conn} = brod_client:get_leader_connection(Client, ?TOPIC, 0),
+  Headers = [{<<"foo">>, <<"bar">>}],
+  Msg = #{value => <<"v">>, headers => Headers},
+  {ok, Offset} = brod:produce_sync_offset(Client, ?TOPIC, 0, K, Msg),
+  {ok, {_, [M]}} = brod:fetch(Conn, ?TOPIC, 0, Offset, #{max_wait_time => 100}),
+  #kafka_message{key = K, headers = Hdrs, ts = Ts} = M,
+  case kafka_version() of
+    ?KAFKA_0_9 ->
+      ?assertEqual([], Hdrs),
+      ?assertEqual(?undef, Ts);
+    ?KAFKA_0_10 ->
+      ?assertEqual([], Hdrs),
+      ?assert(is_integer(Ts));
+    _ ->
+      ?assertEqual(Headers, Hdrs),
+      ?assert(is_integer(Ts))
+  end.
 
 %%%_* Help functions ===========================================================
 

@@ -32,11 +32,15 @@
         , bootstrap/2
         ]).
 
+-export([ delete_commit_history/1
+        ]).
+
 -include("brod.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
+-define(TOPIC, <<"brod-demo-topic-subscriber">>).
 
--record(state, { offset_dir   :: file:fd()
+-record(state, { offset_dir   :: string()
                , message_type :: message | message_type
                }).
 
@@ -60,7 +64,7 @@ bootstrap(DelaySeconds, MessageType) ->
   ClientId = ?MODULE,
   BootstrapHosts = [{"localhost", 9092}],
   ClientConfig = client_config(),
-  Topic = <<"brod-demo-topic-subscriber">>,
+  Topic = ?TOPIC,
   {ok, _} = application:ensure_all_started(brod),
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
@@ -72,7 +76,7 @@ bootstrap(DelaySeconds, MessageType) ->
 
 %% @doc Get committed offsets from file `/tmp/<topic>'
 init(Topic, MessageType) ->
-  OffsetDir = filename:join(["/tmp", Topic]),
+  OffsetDir = commit_dir(Topic),
   Offsets = read_offsets(OffsetDir),
   State = #state{ offset_dir   = OffsetDir
                 , message_type =  MessageType
@@ -96,6 +100,10 @@ handle_message(Partition, MessageSet,
   [process_message(Dir, Partition, Message) || Message <- Messages],
   {ok, ack, State}.
 
+delete_commit_history(Topic) ->
+  Files = list_offset_files(commit_dir(Topic)),
+  lists:foreach(fun(F) -> file:delete(F) end, Files).
+
 %%%_* Internal Functions =======================================================
 
 -spec process_message(file:fd(), brod:partition(), brod:message()) -> ok.
@@ -103,18 +111,21 @@ process_message(Dir, Partition, Message) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
-  Seqno = list_to_integer(binary_to_list(Value)),
+  Seqno = binary_to_integer(Value),
   Now = os_time_utc_str(),
   error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
                        [ self(), Partition, Now, Offset, Seqno]),
   ok = commit_offset(Dir, Partition, Offset).
 
 -spec read_offsets(string()) -> [{brod:partition(), brod:offset()}].
-read_offsets(Dir) when is_binary(Dir) ->
-  read_offsets(binary_to_list(Dir));
 read_offsets(Dir) ->
-  Files = filelib:wildcard("*.offset", Dir),
+  Files = list_offset_files(Dir),
   lists:map(fun(Filename) -> read_offset(Dir, Filename) end, Files).
+
+list_offset_files(Dir) when is_binary(Dir) ->
+  list_offset_files(binary_to_list(Dir));
+list_offset_files(Dir) ->
+  filelib:wildcard("*.offset", Dir).
 
 -spec read_offset(string(), string()) -> {brod:partition(), brod:offset()}.
 read_offset(Dir, Filename) ->
@@ -169,6 +180,9 @@ client_config() ->
     "0.9" ++ _ -> [{query_api_versions, false}];
     _ -> []
   end.
+
+commit_dir(Topic) ->
+  filename:join(["/tmp", Topic]).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -800,11 +800,11 @@ fetch_loop(_FmtFun, _FetchFun, _Offset, 0) ->
 fetch_loop(FmtFun, FetchFun, Offset, Count) ->
   debug("Fetching from offset: ~p\n", [Offset]),
   case FetchFun(Offset) of
-    {ok, []} ->
+    {ok, {_, []}} ->
       %% reached max_wait, no message received
       verbose("done (wait)\n"),
       ok;
-    {ok, Messages0} ->
+    {ok, {_HmOffset, Messages0}} ->
       {Messages, NewCount} =
         case length(Messages0) of
           N when N > Count ->
