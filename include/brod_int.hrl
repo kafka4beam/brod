@@ -48,6 +48,9 @@
 -define(KV(Key, Value), {Key, Value}).
 -define(TKV(Ts, Key, Value), {Ts, Key, Value}).
 
+-define(acked, brod_produce_req_acked).
+-define(buffered, brod_produce_req_buffered).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

@@ -39,15 +39,15 @@
         , error_desc = ""
         }).
 
--record(brod_call_ref, { caller :: pid()
-                       , callee :: pid()
-                       , ref    :: reference()
+-record(brod_call_ref, { caller :: undefined | pid()
+                       , callee :: undefined | pid()
+                       , ref    :: undefined | reference()
                        }).
 
 -define(BROD_PRODUCE_UNKNOWN_OFFSET, -1).
 
 -record(brod_produce_reply, { call_ref :: brod:call_ref()
-                            , base_offset :: brod:offset()
+                            , base_offset :: undefined | brod:offset()
                             , result   :: brod:produce_result()
                             }).
 

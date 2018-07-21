@@ -93,12 +93,9 @@ t_nack(Config) when is_list(Config) ->
                                   SendFun),
   AddFun =
     fun(BufIn, Num) ->
-      CallRef = #brod_call_ref{ caller = self()
-                              , callee = ignore
-                              , ref    = Num
-                              },
+      BufCb = make_buf_cb(Num),
       Bin = list_to_binary(integer_to_list(Num)),
-      brod_producer_buffer:add(BufIn, CallRef, Bin, Bin)
+      brod_producer_buffer:add(BufIn, BufCb, Bin, Bin)
     end,
   MaybeSend =
     fun(BufIn) ->
@@ -156,12 +153,9 @@ t_send_fun_error(Config) when is_list(Config) ->
                                   SendFun),
   AddFun =
     fun(BufIn, Num) ->
-      CallRef = #brod_call_ref{ caller = self()
-                              , callee = ignore
-                              , ref    = Num
-                              },
+      BufCb = make_buf_cb(Num),
       Bin = list_to_binary(integer_to_list(Num)),
-      brod_producer_buffer:add(BufIn, CallRef, Bin, Bin)
+      brod_producer_buffer:add(BufIn, BufCb, Bin, Bin)
     end,
   MaybeSend =
     fun(BufIn) ->
@@ -242,31 +236,20 @@ no_ack_produce(Buf, []) ->
   brod_producer_buffer:is_empty(Buf) orelse
     erlang:error({buffer_not_empty, Buf});
 no_ack_produce(Buf, [{Key, Value} | Rest]) ->
-  CallRef = #brod_call_ref{ caller = self()
-                          , callee = ignore
-                          , ref    = Key
-                          },
+  BufCb = make_buf_cb(Key),
   BinKey = list_to_binary(integer_to_list(Key)),
-  Buf1 = brod_producer_buffer:add(Buf, CallRef, BinKey, Value),
+  Buf1 = brod_producer_buffer:add(Buf, BufCb, BinKey, Value),
   FakeSockPid = self(),
   {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid, 0),
   %% in case of no ack required, expect 'buffered' immediately
   receive
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
-                       , result   = brod_produce_req_buffered
-                       } ->
-      ok
-    after 100 ->
-      erlang:error({timeout, brod_produce_req_buffered, Key})
+    {?buffered, Key} -> ok
+    after 100 -> erlang:error({timeout, brod_produce_req_buffered, Key})
   end,
   %% in case of no ack required, expect 'acked' immediately
   receive
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
-                       , result   = brod_produce_req_acked
-                       } ->
-      ok
-    after 100 ->
-      erlang:error({timeout, brod_produce_req_acked, Key})
+    {?acked, Key} -> ok
+    after 100 -> erlang:error({timeout, brod_produce_req_acked, Key})
   end,
   no_ack_produce(NewBuf, Rest).
 
@@ -290,12 +273,9 @@ produce_loop(FakeKafka, [], #state{buf = Buf} = State) ->
   end;
 produce_loop(FakeKafka, [{Key, Value} | Rest], State0) ->
   #state{buf = Buf0} = State0,
-  CallRef = #brod_call_ref{ caller = self()
-                          , callee = ignore
-                          , ref    = Key
-                          },
+  BufCb = make_buf_cb(Key),
   BinKey = list_to_binary(integer_to_list(Key)),
-  Buf1 = brod_producer_buffer:add(Buf0, CallRef, BinKey, Value),
+  Buf1 = brod_producer_buffer:add(Buf0, BufCb, BinKey, Value),
   State1 = State0#state{buf = Buf1},
   State2 = maybe_send(State1),
   State = collect_replies(State2, _Delay = 0),
@@ -314,9 +294,7 @@ collect_replies(#state{ buffered  = Buffered
     {delayed_send, _} ->
       %% stale message
       collect_replies(State0, Timeout);
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
-                       , result   = brod_produce_req_buffered
-                       } ->
+    {?buffered, Key} ->
       State = State0#state{buffered = [Key | Buffered]},
       collect_replies(State, Timeout);
     {ack_from_kafka, Ref} ->
@@ -324,9 +302,7 @@ collect_replies(#state{ buffered  = Buffered
       State1 = State0#state{buf = Buf1},
       State = maybe_send(State1),
       collect_replies(State, Timeout);
-    #brod_produce_reply{ call_ref = #brod_call_ref{ref = Key}
-                       , result   = brod_produce_req_acked
-                       } ->
+    {?acked, Key} ->
       State = State0#state{acked = [Key | Acked]},
       collect_replies(State, Timeout);
     Msg ->
@@ -393,6 +369,14 @@ fake_kafka_process_msgs([]) -> ok;
 fake_kafka_process_msgs([{_Key, {DelayMs, _Value}} | Rest]) ->
   timer:sleep(DelayMs),
   fake_kafka_process_msgs(Rest).
+
+make_buf_cb(Ref) ->
+  Pid = self(),
+  fun(?buffered) ->
+      erlang:send(Pid, {?buffered, Ref});
+     ({?acked, _BaseOffset}) ->
+      erlang:send(Pid, {?acked, Ref})
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
