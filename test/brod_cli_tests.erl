@@ -49,70 +49,77 @@ offset_test() ->
 send_fetch_test() ->
   K = make_ts_str(),
   V = make_ts_str(),
-  Output =
-    cmd("send --brokers localhost:9092,localhost:9192 -t test-topic "
-        "-p 0 -k " ++ K ++ " -v " ++ V),
-  ?assertEqual(Output, ""),
-  FetchOutput =
-    cmd("fetch --brokers localhost:9092 -t test-topic -p 0 "
-        "-c 1 --fmt kv"),
-  ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
+  Args = ["--brokers", "localhost:9092,localhost:9192", "-t",
+          "test-topic", "-p", "0"],
+  Output = cmd(["send", "-k", K, "-v", V] ++ Args),
+  ?assertEqual(<<"">>, Output),
+  FetchOutput = cmd(["fetch", "-c", "1", "--fmt", "kv"] ++ Args),
+  ?assertEqual(iolist_to_binary(K ++ ":" ++ V ++ "\n"), FetchOutput),
   ok.
 
-sasl_test() ->
+sasl_test_() ->
   case get_kafka_version() of
-    ?KAFKA_0_9 -> ok;
-    _ ->
-      ok = file:write_file("sasl.testdata", "alice\necila\n"),
-      K = make_ts_str(),
-      V = make_ts_str(),
-      Output =
-        cmd("send --brokers localhost:9194,localhost:9094 -t test-topic "
-            "--cacertfile priv/ssl/ca.crt "
-            "--keyfile priv/ssl/client.key "
-            "--certfile priv/ssl/client.crt "
-            "--sasl-plain sasl.testdata "
-            "-p 0 -k " ++ K ++ " -v " ++ V),
-      ?assertEqual(Output, ""),
-      FetchOutput =
-        cmd("fetch --brokers localhost:9092 -t test-topic -p 0 "
-            "-c 1 --fmt kv"),
-      ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
-      ok
+    ?KAFKA_0_9 -> [];
+    _ -> [fun test_sasl/0]
   end.
+
+test_sasl() ->
+  ok = file:write_file("sasl.testdata", "alice\necila\n"),
+  K = make_ts_str(),
+  V = make_ts_str(),
+  Output =
+    cmd(["send", "--brokers", "localhost:9194,localhost:9094",
+         "-t", "test-topic", "-p", "0",
+         "--cacertfile", "priv/ssl/ca.crt",
+         "--keyfile", "priv/ssl/client.key",
+         "--certfile", "priv/ssl/client.crt",
+         "--sasl-plain", "sasl.testdata",
+         "-k", K, "-v", V]),
+  ?assertEqual(<<"">>, Output),
+  FetchOutput =
+    cmd(["fetch", "--brokers", "localhost:9092", "-t", "test-topic",
+         "-p", "0", "-c", "1", "--fmt", "kv"]),
+  ?assertEqual(iolist_to_binary([K, ":", V, "\n"]), FetchOutput),
+  ok.
 
 fetch_format_fun_test() ->
   T = os:timestamp(),
   Value = term_to_binary(T),
   file:write_file("fetch.testdata", Value),
-  cmd("send -b localhost -t test-topic -p 0 -v @fetch.testdata"),
-  FmtFun = "fun(_O, _K, V) -> io_lib:format(\"~p\", [binary_to_term(V)]) end",
+  run(["send", "-b", "localhost", "-t", "test-topic", "-p", "0",
+       "-v", "@fetch.testdata"]),
+  FmtFun = "io_lib:format(\"~p\", [binary_to_term(Value)])",
   Output =
-    cmd("fetch -b localhost -t test-topic -p 0 -c 1 --fmt '" ++ FmtFun ++ "'"),
-  Expected = lists:flatten(io_lib:format("~p", [T])),
+    cmd(["fetch", "-b", "localhost", "-t", "test-topic", "-p", "0",
+         "-c", "1", "--fmt", FmtFun]),
+  Expected = iolist_to_binary(io_lib:format("~p", [T])),
   ?assertEqual(Expected, Output).
 
 fetch_format_expr_test() ->
   T = os:timestamp(),
   Value = term_to_binary(T),
   file:write_file("fetch.testdata", Value),
-  cmd("send -b localhost -t test-topic -p 0 -v @fetch.testdata"),
+  cmd(["send", "-b", "localhost", "-t", "test-topic", "-p", "0",
+       "-v", "@fetch.testdata"]),
   FmtExpr = "io_lib:format(\"~p\", [binary_to_term(Value)])",
   Output =
-    cmd("fetch -b localhost -t test-topic -p 0 -c 1 --fmt '" ++ FmtExpr ++ "'"),
-  Expected = lists:flatten(io_lib:format("~p", [T])),
+    cmd(["fetch", "-b", "localhost", "-t", "test-topic", "-p", "0",
+         "-c", "1", "--fmt", FmtExpr]),
+  Expected = iolist_to_binary(io_lib:format("~p", [T])),
   ?assertEqual(Expected, Output).
 
 pipe_test() ->
   %% get last offset
-  OffsetStr = cmd("offset -b localhost -t test-topic -p 0 -T latest"),
+  OffsetStr = cmd(["offset", "-b", "localhost", "-t", "test-topic", "-p", "0",
+                   "-T", "latest"]),
   %% send file
   PipeCmdOutput =
-    cmd("pipe -b localhost -t test-topic -p 0 -s README.md "
-        "--kv-deli none --msg-deli '\\n'"),
-  ?assertEqual("", PipeCmdOutput),
+    cmd(["pipe", "-b", "localhost", "-t", "test-topic", "-p", "0",
+         "-s", "README.md", "--kv-deli", "none", "--msg-deli", "'\\n'"]),
+  ?assertEqual(<<"">>, PipeCmdOutput),
   FetchedText =
-    cmd("fetch -b localhost -t test-topic -p 0 -w 100 -c -1 -o " ++ OffsetStr),
+    cmd(["fetch", "-b", "localhost", "-t", "test-topic", "-p", "0",
+         "-w", "100", "-c", "-1", "-o", binary_to_list(OffsetStr)]),
   {ok, ReadmeText} = file:read_file("README.md"),
   Split =
     fun(Text) ->
@@ -129,17 +136,17 @@ pipe_test() ->
   ?assertEqual(ExpectedLines, FetchedLines).
 
 groups_test() ->
-  assert_no_error(cmd("groups")),
-  assert_no_error(cmd("groups --ids all")).
+  assert_no_error(cmd(["groups"])),
+  assert_no_error(cmd(["groups", "--ids", "all"])).
 
 commits_describe_test() ->
-  assert_no_error(cmd("commits --id test-group --describe")).
+  assert_no_error(cmd(["commits", "--id", "test-group", "--describe"])).
 
 commits_overwrite_test_() ->
   {timeout, 20,
    fun() ->
-       assert_no_error(cmd("commits --id test-group -t test-topic "
-                           "-o \"0:1\" -r 1d --protocol range"))
+       assert_no_error(cmd(["commits", "--id", "test-group", "-t", "test-topic",
+                           "-o", "0:1", "-r", "1d", "--protocol", "range"]))
    end}.
 
 assert_no_error(Result) ->
@@ -147,11 +154,6 @@ assert_no_error(Result) ->
     nomatch -> ok;
     _ -> erlang:throw(Result)
   end.
-
-run(Args) -> brod_cli:main(Args, exit).
-
-cmd(ArgsStr) ->
-  os:cmd("scripts/brod " ++ ArgsStr).
 
 make_ts_str() ->
   Ts = os:timestamp(),
@@ -169,6 +171,51 @@ get_kafka_version() ->
       [Major, Minor | _] = string:tokens(Vsn, "."),
       {list_to_integer(Major), list_to_integer(Minor)}
   end.
+
+run(Args) ->
+  _ = cmd(Args),
+  ok.
+
+cmd(Args) ->
+  Parent = self(),
+  IO = erlang:spawn_link(fun() -> io_loop(Parent, []) end),
+  put(redirect_stdio, IO),
+  try
+    brod_cli:main(Args, exit),
+    timer:sleep(10), % avoid race
+    IO ! stop,
+    Result = receive {outputs, Outputs} -> Outputs
+             after 5000 -> throw(timeout) end,
+    catch brod:stop_client(brod_cli_client),
+    Result
+  after
+    _ = application:stop(brod)
+  end.
+
+io_loop(Parent, Acc0) ->
+  receive
+    {io_request, From, ReplyAs, Req} ->
+      Acc = io(From, ReplyAs, Req, Acc0),
+      io_loop(Parent, Acc);
+    stop ->
+      Parent ! {outputs, iolist_to_binary(Acc0)}
+  end.
+
+io(From, ReplyAs, Req, Acc0) ->
+  {Reply, Acc} = io(Req, Acc0),
+  erlang:send(From, {io_reply, ReplyAs, Reply}),
+  Acc.
+
+%% supports only a subset of io requests
+io({put_chars, Chars}, Acc) ->
+  {ok, [Chars | Acc]};
+io({put_chars, _Code, Chars}, Acc) ->
+  io({put_chars, Chars}, Acc);
+io({setopts, _Opts}, Acc) ->
+  {ok, Acc};
+io(Unknown, _Acc) ->
+  io:format(standard_error, "unknown_io_request: ~p\n", [Unknown]),
+  exit({unknown_io_request, Unknown}).
 
 -endif.
 

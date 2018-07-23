@@ -23,7 +23,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Building and testing
 
-    make
+    make compile
     make test-env t # requires docker-compose in place
 
 # Working With Kafka 0.9.x or Earlier
@@ -47,29 +47,29 @@ e.g. in sys.config:
 
 Assuming kafka is running at `localhost:9092` and there is a topic named `test-topic`.
 
-Start Erlang shell by `make; erl -pa ebin -pa deps/*/ebin`, then paste lines below into shell:
+Start Erlang shell by `make compile; erl -pa _build/default/lib/*/ebin`, then paste lines below into shell:
 
 ```erlang
-rr(brod).
-{ok, _} = application:ensure_all_started(brod).
-KafkaBootstrapEndpoints = [{"localhost", 9092}].
-Topic = <<"test-topic">>.
-Partition = 0.
-ok = brod:start_client(KafkaBootstrapEndpoints, client1).
-ok = brod:start_producer(client1, Topic, _ProducerConfig = []).
-{ok, FirstOffset} = brod:produce_sync_offset(client1, Topic, Partition, <<"key1">>, <<"value1">>).
-ok = brod:produce_sync(client1, Topic, Partition, <<"key2">>, <<"value2">>).
-SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPid ! Msg, {ok, ack, CallbackState} end.
-Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end.
+rr(brod),
+{ok, _} = application:ensure_all_started(brod),
+KafkaBootstrapEndpoints = [{"localhost", 9092}],
+Topic = <<"test-topic">>,
+Partition = 0,
+ok = brod:start_client(KafkaBootstrapEndpoints, client1),
+ok = brod:start_producer(client1, Topic, _ProducerConfig = []),
+{ok, FirstOffset} = brod:produce_sync_offset(client1, Topic, Partition, <<"key1">>, <<"value1">>),
+ok = brod:produce_sync(client1, Topic, Partition, <<"key2">>, <<"value2">>),
+SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPid ! Msg, {ok, ack, CallbackState} end,
+Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end,
 brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                  _ConsumerConfig=[{begin_offset, FirstOffset}],
                                  _CommittdOffsets=[], message, SubscriberCallbackFun,
-                                 _CallbackState=self()).
-Receive().
-Receive().
+                                 _CallbackState=self()),
 AckCb = fun(Partition, BaseOffset) -> io:format(user, "\nProduced to partition ~p at base-offset ~p\n", [Partition, BaseOffset]) end,
 ok = brod:produce_cb(client1, Topic, Partition, <<>>, [{<<"key3">>, <<"value3">>}], AckCb).
-{ok, [Msg]} = brod:fetch(KafkaBootstrapEndpoints, Topic, Partition, FirstOffset + 2), Msg.
+Receive().
+Receive().
+{ok, {_, [Msg]}} = brod:fetch(KafkaBootstrapEndpoints, Topic, Partition, FirstOffset + 2), Msg.
 ```
 
 Example outputs:
@@ -413,38 +413,32 @@ brod:fetch(Hosts, Topic, Partition, 1).
 This will build a self-contained binary with brod application
 
 ```bash
-make rel
-./_rel/brod/bin/brod --help
+make brod-cli
+_build/brod_cli/rel/brod/bin/brod -h
 ```
 
 Disclaimer: This script is NOT designed for use cases where fault-tolerance is a hard requirement.
 As it may crash when e.g. kafka cluster is temporarily unreachable,
 or (for fetch command) when the parition leader migrates to another broker in the cluster.
 
-Start an Erlang shell with brod started
-
-```bash
-./_rel/brod/bin/brod-i
-```
-
-## brod-cli examples:
+## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod`):
 
 ### Fetch and print metadata
 ```
-./scripts/brod meta -b localhost
+brod meta -b localhost
 ```
 
 ### Produce a Message
 
 ```
-./scripts/brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
+brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
 
 ```
 
 ### Fetch a Message
 
 ```
-./scripts/brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
+brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
 ```
 
 Bound variables to be used in `--fmt` expression:
@@ -452,7 +446,6 @@ Bound variables to be used in `--fmt` expression:
 - `Offset`: Message offset
 - `Key`: Kafka key
 - `Value`: Kafka Value
-- `CRC`: Message CRC
 - `TsType`: Timestamp type either `create` or `append`
 - `Ts`: Timestamp, `-1` as no value
 
@@ -460,33 +453,33 @@ Bound variables to be used in `--fmt` expression:
 
 Send `README.md` to kafka one line per kafka message
 ```
-./scripts/brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
+brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
 ```
 
 ### Resolve Offset
 
 ```
-./scripts/brod offset -b localhost:9092 -t test-topic -p 0
+brod offset -b localhost:9092 -t test-topic -p 0
 ```
 
 ### List or Describe Groups
 
 ```
 # List all groups
-./scripts/brod groups -b localhost:9092
+brod groups -b localhost:9092
 
 # Describe groups
-./scripts/brod groups -b localhost:9092 --ids group-1,group-2
+brod groups -b localhost:9092 --ids group-1,group-2
 ```
 
 ### Display Committed Offsets
 
 ```
 # all topics
-./scripts/brod commits -b localhost:9092 --id the-group-id --describe
+brod commits -b localhost:9092 --id the-group-id --describe
 
 # a specific topic
-./scripts/brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
+brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
 ```
 
 ### Commit Offsets
@@ -495,16 +488,16 @@ NOTE: This feature is designed for force overwriting commits, not for regular us
 
 ```
 # Commit 'latest' offsets of all partitions with 2 days retention
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
 
 # Commit offset=100 for partition 0 and 200 for partition 1
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
 
 # Use --retention 0 to delete commits (may linger in kafka before cleaner does its job)
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
 
 # Try join an active consumer group using 'range' protocol and steal one partition assignment then commit offset=10000
-./scripts/brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
+brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
 ```
 
 ## TODOs

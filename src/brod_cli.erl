@@ -36,6 +36,12 @@
 %% 'exit' is for testing, we want eunit or ct to be able to capture
 -define(STOP(How),
         begin
+          try
+            brod:stop_client(?CLIENT)
+          catch
+            exit : {noproc, _} ->
+              ok
+          end,
           _ = application:stop(brod),
           case How of
             'halt' -> erlang:halt(?LINE);
@@ -364,7 +370,6 @@ main(Command, Doc, Args, Stop, LogLevel) ->
       C1 : E1 ?BIND_STACKTRACE(Stack1) ->
         ?GET_STACKTRACE(Stack1),
         verbose("~p:~p\n~p\n", [C1, E1, Stack1]),
-        print(Doc),
         ?STOP(Stop)
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
@@ -822,7 +827,7 @@ fetch_loop(FmtFun, FetchFun, Offset, Count) ->
                 end,
             case R of
               ok -> ok;
-              IoData -> io:put_chars(IoData)
+              IoData -> print(IoData)
             end
         end, Messages),
       fetch_loop(FmtFun, FetchFun, LastOffset + 1, NewCount)
@@ -1046,7 +1051,8 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
                      key        = Key,
                      value      = Value,
                      ts_type    = TsType,
-                     ts         = Ts
+                     ts         = Ts,
+                     headers    = Headers
                     }) ->
       Bindings =
         lists:foldl(
@@ -1058,6 +1064,7 @@ parse_fmt(FunLiteral0, _KvDeli, _MsgDeli) ->
           , {'Value', Value}
           , {'TsType', TsType}
           , {'Ts', Ts}
+          , {'Headers', Headers}
           ]),
       {value, Val, _NewBindings} = erl_eval:expr(Expr, Bindings),
       case Val of
@@ -1193,26 +1200,33 @@ print_version() ->
   {_, _, V} = lists:keyfind(brod, 1, application:loaded_applications()),
   print([V, "\n"]).
 
-print(IoData) -> io:put_chars(IoData).
+print(IoData) -> io:put_chars(stdio(), IoData).
 
-print(Fmt, Args) -> io:format(user, Fmt, Args).
+print(Fmt, Args) -> io:put_chars(stdio(), io_lib:format(Fmt, Args)).
 
 logerr(IoData) -> io:put_chars(standard_error, ["*** ", IoData]).
 
-logerr(Fmt, Args) -> io:format(standard_error, "*** " ++ Fmt, Args).
+logerr(Fmt, Args) ->
+  io:put_chars(standard_error, io_lib:format("*** " ++ Fmt, Args)).
 
 verbose(Str) -> verbose(Str, []).
 
 verbose(Fmt, Args) ->
   case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_VERBOSE of
-    true  -> io:format(standard_error, "[verbo]: " ++ Fmt, Args);
+    true  -> logerr("[verbo]: " ++ Fmt, Args);
     false -> ok
   end.
 
 debug(Fmt, Args) ->
   case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_DEBUG of
-    true  -> io:format(standard_error, "[debug]: " ++ Fmt, Args);
+    true  -> logerr("[debug]: " ++ Fmt, Args);
     false -> ok
+  end.
+
+stdio() ->
+  case get(redirect_stdio) of
+    undefined -> user;
+    Other -> Other
   end.
 
 int(Str) -> list_to_integer(trim(Str)).

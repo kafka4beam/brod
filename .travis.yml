@@ -5,8 +5,17 @@ sudo: required
 services:
   - docker
 
+# install latest rebar3 because the one travis provids doesn't support cover_export_name option
 before_install:
+  - |
+    git clone https://github.com/erlang/rebar3.git
+    pushd .
+    cd rebar3
+    ./bootstrap
+    sudo mv rebar3 /usr/local/bin/
+    popd
   - git clone https://github.com/inaka/elvis.git; cd elvis; rebar3 escriptize; sudo cp _build/default/bin/elvis /usr/bin; cd ..
+  - sudo docker info
 
 notifications:
   email: false
@@ -17,26 +26,25 @@ otp_release:
   - 19.3
 
 script:
-  - set -e
+  # check style first
   - elvis rock
 
-  - echo "verifying rebar compilation"
+  # test compilation with rebar
   - rebar get-deps
   - rebar compile
 
+  # test with rebar3
   - make distclean
-  - echo "verifying rebar3 compilation"
   - rebar3 compile
 
   - make distclean
-  - make rel
-  - make edoc
-  - make xref
+  - rebar3 edoc
+  - rebar3 xref
   - |
     OTP_VSN=`erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)'`
     if [ $OTP_VSN -eq 21 ]; then
       # run dialyzer only in otp 21
-      make dialyze
+      rebar3 dialyzer
       # test against kafka 0.9 in otp 21
       export KAFKA_VERSION="0.9"
     fi
@@ -54,3 +62,4 @@ script:
     export KAFKA_VERSION="1.1"
     make test-env
     make t
+    make cover
