@@ -2,15 +2,10 @@ language: erlang
 
 sudo: required
 
+services:
+  - docker
+
 before_install:
-  - sudo apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
-  - sudo sh -c "echo deb https://apt.dockerproject.org/repo ubuntu-precise main > /etc/apt/sources.list.d/docker.list"
-  - sudo apt-get update
-  - sudo apt-get install docker-engine
-  - sudo docker info
-  - curl -L https://github.com/docker/compose/releases/download/1.6.0/docker-compose-`uname -s`-`uname -m` > docker-compose
-  - chmod +x docker-compose
-  - sudo mv docker-compose /usr/local/bin/
   - git clone https://github.com/inaka/elvis.git; cd elvis; rebar3 escriptize; sudo cp _build/default/bin/elvis /usr/bin; cd ..
 
 notifications:
