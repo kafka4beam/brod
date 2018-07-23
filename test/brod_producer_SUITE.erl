@@ -85,13 +85,16 @@ init_client(Case, Config) ->
   Topic = ?TOPIC,
   brod:stop_client(Client),
   TesterPid = self(),
-  ok = brod:start_client(?HOSTS, Client),
+  ClientConfig = client_config(),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, []),
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
   {ok, _ConsumerPid2} = brod:subscribe(Client, Subscriber, Topic, 1, []),
-  [{client, Client}, {subscriber, Subscriber} | Config].
+  [{client, Client},
+   {client_config, ClientConfig},
+   {subscriber, Subscriber} | Config].
 
 end_per_testcase(_Case, Config) ->
   Subscriber = ?config(subscriber),
@@ -168,7 +171,7 @@ t_produce_no_ack({init, Config}) ->
     Pid_   -> brod:stop_client(Pid_)
   end,
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, client_config()),
   ok = brod:start_producer(Client, Topic, [{required_acks, 0}]),
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
@@ -203,9 +206,11 @@ t_produce_no_ack_offset(Config) when is_list(Config) ->
   Client = ?config(client),
   Partition = 0,
   {T1, K1, V1} = make_unique_tkv(),
-  {ok, O1} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>, [{T1, K1, V1}]),
+  {ok, O1} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>,
+                                      [{T1, K1, V1}]),
   {T2, K2, V2} = make_unique_tkv(),
-  {ok, O2} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>, [{T2, K2, V2}]),
+  {ok, O2} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>,
+                                      [{T2, K2, V2}]),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive
@@ -333,7 +338,7 @@ t_produce_batch_callback(Config) when is_list(Config) ->
   {K1, V1} = make_unique_kv(),
   {K2, V2} = make_unique_kv(),
   {K3, V3} = make_unique_kv(),
-  Batch = [{K1, V1}, {K2, V2}, {<<>>, [{K3, V3}]}],
+  Batch = [{K1, V1}, #{key => K2, value => V2}, {<<>>, [{K3, V3}]}],
   Self = self(),
   Ref = make_ref(),
   Cb = fun(_Partition, _Offset) ->
@@ -366,11 +371,12 @@ t_produce_buffered_offset({init, Config}) ->
   Topic = ?TOPIC,
   case whereis(Client) of
     ?undef -> ok;
-    Pid_   -> brod:stop_client(Pid_)
+    PidX   -> brod:stop_client(PidX)
   end,
   TesterPid = self(),
-  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client),
-  ok = brod:start_producer(Client, Topic, [{max_linger_ms, 100}, {max_linger_count, 3}]),
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, client_config()),
+  ok = brod:start_producer(Client, Topic, [{max_linger_ms, 100},
+                                           {max_linger_count, 3}]),
   ok = brod:start_consumer(Client, Topic, []),
   Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
   {ok, _ConsumerPid1} = brod:subscribe(Client, Subscriber, Topic, 0, []),
@@ -409,6 +415,12 @@ t_produce_buffered_offset(Config) when is_list(Config) ->
 
 
 %%%_* Help functions ===========================================================
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %% os:timestamp should be unique enough for testing
 make_unique_kv() ->

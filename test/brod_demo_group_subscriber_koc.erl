@@ -102,7 +102,7 @@ bootstrap(DelaySeconds, MessageType) ->
   %% start one producer process for each partition to feed sequence numbers
   %% to kafka, then consumed by the group subscribers.
   ProducerClientId = ?MODULE,
-  ok = brod:start_client(BootstrapHosts, ProducerClientId, _ClientConfig = []),
+  ok = brod:start_client(BootstrapHosts, ProducerClientId, client_config()),
   ok = brod:start_producer(ProducerClientId, Topic, _ProducerConfig = []),
   {ok, PartitionCount} = brod:get_partitions_count(ProducerClientId, Topic),
   ok = spawn_producers(ProducerClientId, Topic, DelaySeconds, PartitionCount),
@@ -147,7 +147,7 @@ process_message(Topic, Partition, Handlers, Message) ->
 bootstrap_subscribers([], _BootstrapHosts, _GroupId, _Topics, _MsgType) -> ok;
 bootstrap_subscribers([ClientId | Rest], BootstrapHosts, GroupId,
                       Topics, MessageType) ->
-  ok = brod:start_client(BootstrapHosts, ClientId, _ClientConfig = []),
+  ok = brod:start_client(BootstrapHosts, ClientId, client_config()),
   %% commit offsets to kafka every 5 seconds
   GroupConfig = [{offset_commit_policy, commit_to_kafka_v2}
                 ,{offset_commit_interval_seconds, 1}
@@ -215,6 +215,12 @@ os_time_utc_str() ->
   S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

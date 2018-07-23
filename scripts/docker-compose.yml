@@ -2,12 +2,14 @@ version: '2'
 
 services:
   zookeeper:
-    extends:
-      file: docker-compose-basic.yml
-      service: zookeeper
+    image: "zmstone/kafka:${KAFKA_VERSION}"
+    ports:
+      - "2181:2181"
+    container_name: zookeeper
+    command: run zookeeper
   kafka_1:
-    image: docker_kafka
-    container_name: kafka_1
+    image: "zmstone/kafka:${KAFKA_VERSION}"
+    container_name: 'kafka-1'
     ports:
       - "9092:9092"
       - "9093:9093"
@@ -20,8 +22,8 @@ services:
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
   kafka_2:
-    image: docker_kafka
-    container_name: kafka_2
+    image: "zmstone/kafka:${KAFKA_VERSION}"
+    container_name: 'kafka-2'
     ports:
       - "9192:9092"
       - "9193:9093"

@@ -104,7 +104,8 @@
             , {fetch, 8, next_version}
             ]).
 
--export_type([ call_ref/0
+-export_type([ batch_input/0
+             , call_ref/0
              , cg/0
              , cg_protocol_type/0
              , client/0
@@ -126,7 +127,7 @@
              , group_member_id/0
              , hostname/0
              , key/0
-             , kv_list/0
+             , msg_input/0
              , msg_ts/0
              , message/0
              , message_set/0
@@ -156,9 +157,15 @@
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
 -type offset() :: kpro:offset().
--type key() :: kpro:key().
--type value() :: kpro:value().
--type kv_list() :: kpro:kv_list().
+-type key() :: binary().
+-type value() :: binary() %% single value
+               | {msg_ts(), binary()} %% one message with timestamp
+               | kpro:msg_input() %% one magic v2 message
+               | kpro:batch_input(). %% maybe nested batch
+
+-type msg_input() :: kpro:msg_input().
+-type batch_input() :: [msg_input()].
+
 -type msg_ts() :: kpro:msg_ts().
 -type client_id() :: atom().
 -type client() :: client_id() | pid().
@@ -735,11 +742,11 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
 -spec fetch(connection() | [endpoint()] | {[endpoint()], conn_config()},
             topic(), partition(), integer()) ->
-              {ok, [message()]} | {error, any()}.
+              {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
   Opts = #{ max_wait_time => 1000
-          , min_bytes => 0
-          , max_bytes => 100 bsl 10 %% 100K
+          , min_bytes => 1
+          , max_bytes => 1 bsl 20
           },
   fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts).
 
@@ -748,7 +755,7 @@ fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
 -spec fetch(connection() | {[endpoint()], conn_config()},
             topic(), partition(), offset(), fetch_opts()) ->
-              {ok, [message()]} | {error, any()}.
+              {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->
   fetch({Hosts, _ConnConfig = []}, Topic, Partition, Offset, Opts);
 fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts) ->
@@ -772,7 +779,10 @@ fetch(Hosts, Topic, Partition, Offset,
                , min_bytes => MinBytes
                , max_bytes => MaxBytes
                },
-  fetch({Hosts, ConnConfig}, Topic, Partition, Offset, FetchOpts).
+  case fetch({Hosts, ConnConfig}, Topic, Partition, Offset, FetchOpts) of
+    {ok, {_HwOffset, Batch}} -> {ok, Batch}; %% backward compatible
+    {error, Reason} -> {error, Reason}
+  end.
 
 %% @doc Connect partition leader.
 -spec connect_leader([endpoint()], topic(), partition(),

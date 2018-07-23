@@ -73,6 +73,8 @@ commands:
   --ebin-paths=<dirs>    Comma separated directory names for extra beams,
                          This is to support user compiled message formatters
   --no-api-vsn-query     Do not query api version (for kafka 0.9 or earlier)
+                         Or set KAFKA_VERSION environment variable to 0.9 for
+                         the same effect
 "
 ).
 
@@ -381,7 +383,8 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
     ConnConfig0 = parse_connection_config(ParsedArgs),
     Paths = parse(ParsedArgs, "--ebin-paths", fun parse_paths/1),
-    NoApiQuery = parse(ParsedArgs, "--no-api-vsn-query", fun parse_boolean/1),
+    NoApiQuery = parse(ParsedArgs, "--no-api-vsn-query", fun parse_boolean/1)
+                 orelse ({0, 9} =:= get_kafka_version()),
     ok = code:add_pathsa(Paths),
     SockOpts = [{query_api_versions, not NoApiQuery} |  ConnConfig0],
     verbose("connection config: ~p\n", [SockOpts]),
@@ -797,11 +800,11 @@ fetch_loop(_FmtFun, _FetchFun, _Offset, 0) ->
 fetch_loop(FmtFun, FetchFun, Offset, Count) ->
   debug("Fetching from offset: ~p\n", [Offset]),
   case FetchFun(Offset) of
-    {ok, []} ->
+    {ok, {_, []}} ->
       %% reached max_wait, no message received
       verbose("done (wait)\n"),
       ok;
-    {ok, Messages0} ->
+    {ok, {_HmOffset, Messages0}} ->
       {Messages, NewCount} =
         case length(Messages0) of
           N when N > Count ->
@@ -1256,6 +1259,15 @@ start_client(BootstrapEndpoints, ClientConfig) ->
 -spec throw_bin(string(), [term()]) -> no_return().
 throw_bin(Fmt, Args) ->
   erlang:throw(bin(io_lib:format(Fmt, Args))).
+
+get_kafka_version() ->
+  case os:getenv("KAFKA_VERSION") of
+    false ->
+      ?LATEST_KAFKA_VERSION;
+    Vsn ->
+      [Major, Minor | _] = string:tokens(Vsn, "."),
+      {list_to_integer(Major), list_to_integer(Minor)}
+  end.
 
 -endif.
 

@@ -54,8 +54,6 @@
 -define(DEFAULT_MAX_RETRIES, 3).
 %% by default, no compression
 -define(DEFAULT_COMPRESSION, no_compression).
-%% by default, only compress if batch size is >= 1k
--define(DEFAULT_MIN_COMPRESSION_BATCH_SIZE, 1024).
 %% by default, messages never linger around in buffer
 %% should be sent immediately when onwire-limit allows
 -define(DEFAULT_MAX_LINGER_MS, 0).
@@ -141,8 +139,6 @@
 %%     Time in milli-seconds to sleep before retry the failed produce request.
 %%   compression (optional, default = no_compression):
 %%     'gzip' or 'snappy' to enable compression
-%%   min_compression_batch_size (in bytes, optional, default = 1K):
-%%     Only try to compress when batch size is greater than this value.
 %%   max_linger_ms(optional, default = 0):
 %%     Messages are allowed to 'linger' in buffer for this amount of
 %%     milli-seconds before being sent.
@@ -177,7 +173,8 @@ produce(Pid, Key, Value) ->
 produce_no_ack(Pid, Key, Value) ->
   CallRef = #brod_call_ref{caller = ?undef},
   AckCb = fun(_, _) -> ok end,
-  Pid ! {produce, CallRef, Key, Value, AckCb},
+  Batch = make_batch_input(Key, Value),
+  Pid ! {produce, CallRef, Batch, AckCb},
   ok.
 
 %% @doc Async produce, evaluate callback if `AckCb' is a function
@@ -191,7 +188,8 @@ produce_cb(Pid, Key, Value, AckCb) ->
                           , callee = Pid
                           , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  Pid ! {produce, CallRef, Key, Value, AckCb},
+  Batch = make_batch_input(Key, Value),
+  Pid ! {produce, CallRef, Batch, AckCb},
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
                        , result   = ?buffered
@@ -247,24 +245,13 @@ init({ClientPid, Topic, Partition, Config}) ->
   RequiredAcks = ?config(required_acks, ?DEFAULT_REQUIRED_ACKS),
   AckTimeout = ?config(ack_timeout, ?DEFAULT_ACK_TIMEOUT),
   Compression = ?config(compression, ?DEFAULT_COMPRESSION),
-  MinCompressBatchSize = ?config(min_compression_batch_size,
-                                 ?DEFAULT_MIN_COMPRESSION_BATCH_SIZE),
   MaxLingerMs = ?config(max_linger_ms, ?DEFAULT_MAX_LINGER_MS),
   MaxLingerCount = ?config(max_linger_count, ?DEFAULT_MAX_LINGER_COUNT),
-  MaybeCompress =
-    fun(KafkaKvList) ->
-      case Compression =/= no_compression andalso
-           brod_utils:bytes(KafkaKvList) >= MinCompressBatchSize of
-        true  -> Compression;
-        false -> no_compression
-      end
-    end,
   SendFun =
-    fun(Conn, KafkaKvList, Vsn) ->
+    fun(Conn, BatchInput, Vsn) ->
         ProduceRequest =
-          brod_kafka_request:produce(Vsn, Topic, Partition, KafkaKvList,
-                                     RequiredAcks, AckTimeout,
-                                     MaybeCompress(KafkaKvList)),
+          brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
+                                     RequiredAcks, AckTimeout, Compression),
         case send(Conn, ProduceRequest) of
           ok when ProduceRequest#kpro_req.no_ack ->
             ok;
@@ -303,7 +290,7 @@ handle_info(?RETRY_MSG, #state{} = State0) ->
   {ok, State2} = maybe_reinit_connection(State1),
   %% For retry-interval deterministic, produce regardless of connection state.
   %% In case it has failed to find a new connection in maybe_reinit_connection/1
-  %% the produce call should fail immediately with {error, no_leader}
+  %% the produce call should fail immediately with {error, no_leader_connection}
   %% and a new retry should be scheduled (if not reached max_retries yet)
   {ok, State} = maybe_produce(State2),
   {noreply, State};
@@ -320,7 +307,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
-handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
+handle_info({produce, CallRef, Batch, AckCb}, #state{} = State) ->
   #brod_call_ref{caller = Pid} = CallRef,
   BufCb =
     fun(?buffered) when is_pid(Pid) ->
@@ -340,7 +327,7 @@ handle_info({produce, CallRef, Key, Value, AckCb}, #state{} = State) ->
        ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
         AckCb(State#state.partition, BaseOffset)
     end,
-  handle_produce(BufCb, Key, Value, State);
+  handle_produce(BufCb, Batch, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
                                 , ref = Ref
                                 , msg = Rsp
@@ -396,21 +383,21 @@ log_error_code(Topic, Partition, Offset, ErrorCode) ->
                  "Topic: ~s Partition: ~B Offset: ~B Error: ~p",
                  [Topic, Partition, Offset, ErrorCode]).
 
-handle_produce(BufCb, Key, Value,
+handle_produce(BufCb, Batch,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
   %% pending on retry, add to buffer regardless of connection state
-  do_handle_produce(BufCb, Key, Value, State);
-handle_produce(BufCb, Key, Value,
+  do_handle_produce(BufCb, Batch, State);
+handle_produce(BufCb, Batch,
                #state{connection = Pid} = State) when is_pid(Pid) ->
   %% Connection is alive, add to buffer, and try send produce request
-  do_handle_produce(BufCb, Key, Value, State);
-handle_produce(BufCb, Key, Value, #state{} = State) ->
+  do_handle_produce(BufCb, Batch, State);
+handle_produce(BufCb, Batch, #state{} = State) ->
   %% this is the first request after fresh start/restart or conection death
   {ok, NewState} = maybe_reinit_connection(State),
-  do_handle_produce(BufCb, Key, Value, NewState).
+  do_handle_produce(BufCb, Batch, NewState).
 
-do_handle_produce(BufCb, Key, Value, #state{buffer = Buffer} = State) ->
-  NewBuffer = brod_producer_buffer:add(Buffer, BufCb, Key, Value),
+do_handle_produce(BufCb, Batch, #state{buffer = Buffer} = State) ->
+  NewBuffer = brod_producer_buffer:add(Buffer, BufCb, Batch),
   State1 = State#state{buffer = NewBuffer},
   {ok, NewState} = maybe_produce(State1),
   {noreply, NewState}.
@@ -442,7 +429,7 @@ maybe_reinit_connection(#state{ client_pid = ClientPid
     {error, Reason} ->
       ok = maybe_demonitor(OldConnMref),
       %% Make sure the sent but not acked ones are put back to buffer
-      Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader),
+      Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader_connection),
       brod_utils:log(warning, "Failed to (re)init connection, reason:\n~p",
                      [Reason]),
       {ok, State#state{ connection = ?undef
@@ -518,8 +505,31 @@ is_retriable(_) ->
   false.
 
 -spec send(?undef | pid(), kpro:req()) -> ok | {error, any()}.
-send(?undef, _KafkaReq) -> {error, no_leader};
+send(?undef, _KafkaReq) -> {error, no_leader_connection};
 send(Connection, KafkaReq) -> kpro:request_async(Connection, KafkaReq).
+
+-spec make_batch_input(brod:key(), brod:value()) -> brod:batch_input().
+make_batch_input(_PartitionerKey, List) when is_list(List) ->
+  brod_utils:unify_batch_input(List);
+make_batch_input(Key, Value) ->
+  [make_msg_input(Key, Value)].
+
+-spec make_msg_input(brod:key(), brod:value()) -> brod:msg_input().
+make_msg_input(Key, Value) when is_binary(Value) ->
+  #{ts => now_ts(), key => Key, value => Value};
+make_msg_input(Key, {Ts, Value}) when is_integer(Ts) ->
+  #{ts => Ts, key => Key, value => Value};
+make_msg_input(Key, M) when is_map(M) ->
+  ensure_ts(ensure_key(M, Key)).
+
+ensure_key(#{key := _} = M, _) -> M;
+ensure_key(M, Key) -> M#{key => Key}.
+
+ensure_ts(#{ts := _} = M) -> M;
+ensure_ts(M) -> M#{ts => now_ts()}.
+
+%% current timestamp (milliseconds) for kafka message
+now_ts() -> kpro_lib:now_ts().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -16,9 +16,10 @@
 
 -module(brod_cli_tests).
 
--ifdef(BROD_CLI).
+-ifdef(build_brod_cli).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("brod_int.hrl").
 
 %% no crash on 'help', 'version' etc commands
 informative_test() ->
@@ -31,7 +32,7 @@ meta_test() ->
   run(["meta", "-b", "localhost", "-t", "test-topic"]).
 
 ssl_test() ->
-  run(["meta", "-b", "localhost:9192", "-L",
+  run(["meta", "-b", "localhost:9093", "-L",
        "--cacertfile", "priv/ssl/ca.crt",
        "--keyfile", "priv/ssl/client.key",
        "--certfile", "priv/ssl/client.crt"]).
@@ -49,7 +50,7 @@ send_fetch_test() ->
   K = make_ts_str(),
   V = make_ts_str(),
   Output =
-    cmd("send --brokers localhost:9092,localhost:9093 -t test-topic "
+    cmd("send --brokers localhost:9092,localhost:9192 -t test-topic "
         "-p 0 -k " ++ K ++ " -v " ++ V),
   ?assertEqual(Output, ""),
   FetchOutput =
@@ -59,22 +60,26 @@ send_fetch_test() ->
   ok.
 
 sasl_test() ->
-  ok = file:write_file("sasl.testdata", "alice\nalice-secret\n"),
-  K = make_ts_str(),
-  V = make_ts_str(),
-  Output =
-    cmd("send --brokers localhost:9292,localhost:9392 -t test-topic "
-        "--cacertfile priv/ssl/ca.crt "
-        "--keyfile priv/ssl/client.key "
-        "--certfile priv/ssl/client.crt "
-        "--sasl-plain sasl.testdata "
-        "-p 0 -k " ++ K ++ " -v " ++ V),
-  ?assertEqual(Output, ""),
-  FetchOutput =
-    cmd("fetch --brokers localhost:9092 -t test-topic -p 0 "
-        "-c 1 --fmt kv"),
-  ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
-  ok.
+  case get_kafka_version() of
+    ?KAFKA_0_9 -> ok;
+    _ ->
+      ok = file:write_file("sasl.testdata", "alice\necila\n"),
+      K = make_ts_str(),
+      V = make_ts_str(),
+      Output =
+        cmd("send --brokers localhost:9194,localhost:9094 -t test-topic "
+            "--cacertfile priv/ssl/ca.crt "
+            "--keyfile priv/ssl/client.key "
+            "--certfile priv/ssl/client.crt "
+            "--sasl-plain sasl.testdata "
+            "-p 0 -k " ++ K ++ " -v " ++ V),
+      ?assertEqual(Output, ""),
+      FetchOutput =
+        cmd("fetch --brokers localhost:9092 -t test-topic -p 0 "
+            "-c 1 --fmt kv"),
+      ?assertEqual(FetchOutput, K ++ ":" ++ V ++ "\n"),
+      ok
+  end.
 
 fetch_format_fun_test() ->
   T = os:timestamp(),
@@ -106,16 +111,22 @@ pipe_test() ->
     cmd("pipe -b localhost -t test-topic -p 0 -s README.md "
         "--kv-deli none --msg-deli '\\n'"),
   ?assertEqual("", PipeCmdOutput),
-  FetchOutput =
+  FetchedText =
     cmd("fetch -b localhost -t test-topic -p 0 -w 100 -c -1 -o " ++ OffsetStr),
-  FetchedLines = iolist_to_binary(FetchOutput),
-  {ok, Expected0} = file:read_file("README.md"),
-  Expected1 = binary:split(Expected0, <<"\n">>, [global]),
-  Expected2 = lists:filtermap(fun(<<>>) -> false;
-                                 (Line) -> {true, [Line, "\n"]}
-                              end, Expected1),
-  Expected = iolist_to_binary(Expected2),
-  ?assertEqual(Expected, FetchedLines).
+  {ok, ReadmeText} = file:read_file("README.md"),
+  Split =
+    fun(Text) ->
+        Lines = binary:split(iolist_to_binary(Text), <<"\n">>, [global]),
+        lists:filtermap(
+          fun(<<>>) -> false;
+             (Line) -> {true, iolist_to_binary([Line, "\n"])}
+          end, Lines)
+    end,
+  ExpectedLines = Split(ReadmeText),
+  FetchedLines = Split(FetchedText),
+  ?assertEqual(hd(ExpectedLines), hd(FetchedLines)),
+  ?assertEqual(lists:last(ExpectedLines), lists:last(FetchedLines)),
+  ?assertEqual(ExpectedLines, FetchedLines).
 
 groups_test() ->
   assert_no_error(cmd("groups")),
@@ -124,9 +135,12 @@ groups_test() ->
 commits_describe_test() ->
   assert_no_error(cmd("commits --id test-group --describe")).
 
-commits_overwrite_test() ->
-  assert_no_error(cmd("commits --id test-group -t test-topic "
-                      "-o \"0:1\" -r 1d --protocol range")).
+commits_overwrite_test_() ->
+  {timeout, 20,
+   fun() ->
+       assert_no_error(cmd("commits --id test-group -t test-topic "
+                           "-o \"0:1\" -r 1d --protocol range"))
+   end}.
 
 assert_no_error(Result) ->
   case binary:match(iolist_to_binary(Result), <<"***">>) of
@@ -146,6 +160,15 @@ make_ts_str() ->
   S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
+
+get_kafka_version() ->
+  case os:getenv("KAFKA_VERSION") of
+    false ->
+      ?LATEST_KAFKA_VERSION;
+    Vsn ->
+      [Major, Minor | _] = string:tokens(Vsn, "."),
+      {list_to_integer(Major), list_to_integer(Minor)}
+  end.
 
 -endif.
 

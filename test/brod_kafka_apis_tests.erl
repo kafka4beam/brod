@@ -39,9 +39,9 @@ only_one_version_test() ->
   ?assertEqual(0, brod_kafka_apis:pick_version(conn, list_groups)).
 
 pick_brod_max_version_test() ->
-  %% brod supports max = 2, kafka supports max = 7
-  ?WITH_MECK(#{produce => {0, 7}},
-             ?assertEqual(2, brod_kafka_apis:pick_version(self(), produce))).
+  %% brod supports max = 5, kafka supports max = 100
+  ?WITH_MECK(#{produce => {0, 100}},
+             ?assertEqual(5, brod_kafka_apis:pick_version(self(), produce))).
 
 pick_kafka_max_version_test() ->
   %% brod supports max = 2, kafka supports max = 1

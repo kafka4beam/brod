@@ -60,8 +60,9 @@ init_per_testcase(Case, Config) ->
   ct:pal("=== ~p begin ===", [Case]),
   ClientId       = ?CLIENT_ID,
   BootstrapHosts = [{"localhost", 9092}],
-  ClientConfig   = [],
+  ClientConfig   = client_config(),
   Topic          = ?TOPIC,
+  ok = brod_demo_topic_subscriber:delete_commit_history(?TOPIC),
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
   Config.
@@ -198,6 +199,12 @@ t_async_acks(Config) when is_list(Config) ->
   ok.
 
 %%%_* Help funtions ============================================================
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

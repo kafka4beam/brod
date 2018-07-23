@@ -47,7 +47,7 @@
 
 %%%_* ct callbacks =============================================================
 
-suite() -> [{timetrap, {seconds, 30}}].
+suite() -> [{timetrap, {seconds, 60}}].
 
 init_per_suite(Config) -> Config.
 
@@ -76,17 +76,17 @@ t_random_latency_ack(Config) when is_list(Config) ->
 
 t_nack(Config) when is_list(Config) ->
   SendFun =
-    fun(Conn, KvList, _Vsn) ->
+    fun(Conn, Batch, _Vsn) ->
       Ref = make_ref(),
-      NumList = lists:map(fun({Bin, Bin}) ->
+      NumList = lists:map(fun(#{key := Bin, value := Bin}) ->
                             list_to_integer(binary_to_list(Bin))
-                          end, KvList),
+                          end, Batch),
       Conn ! {produce, Ref, NumList},
       {ok, Ref}
     end,
   Buf0 = brod_producer_buffer:new(_BufferLimit = 2,
                                   _OnWireLimit = 2,
-                                  _MaxBatchSize = 4, %% 4 bytes, 2 messages
+                                  _MaxBatchSize = 20, %% 2 messages
                                   _MaxRetry = 1,
                                   _MaxLingerTime = 0,
                                   _MaxLingerCount = 0,
@@ -95,7 +95,8 @@ t_nack(Config) when is_list(Config) ->
     fun(BufIn, Num) ->
       BufCb = make_buf_cb(Num),
       Bin = list_to_binary(integer_to_list(Num)),
-      brod_producer_buffer:add(BufIn, BufCb, Bin, Bin)
+      Batch = [#{key => Bin, value => Bin}],
+      brod_producer_buffer:add(BufIn, BufCb, Batch)
     end,
   MaybeSend =
     fun(BufIn) ->
@@ -141,7 +142,7 @@ t_nack(Config) when is_list(Config) ->
 
 t_send_fun_error(Config) when is_list(Config) ->
   SendFun =
-    fun(_SockPid, _KvList, _Vsn) ->
+    fun(_SockPid, _Batch, _Vsn) ->
       {error, "the reason"}
     end,
   Buf0 = brod_producer_buffer:new(_BufferLimit = 1,
@@ -155,7 +156,8 @@ t_send_fun_error(Config) when is_list(Config) ->
     fun(BufIn, Num) ->
       BufCb = make_buf_cb(Num),
       Bin = list_to_binary(integer_to_list(Num)),
-      brod_producer_buffer:add(BufIn, BufCb, Bin, Bin)
+      Batch = [#{key => Bin, value => Bin}],
+      brod_producer_buffer:add(BufIn, BufCb, Batch)
     end,
   MaybeSend =
     fun(BufIn) ->
@@ -169,7 +171,7 @@ t_send_fun_error(Config) when is_list(Config) ->
 
 %%%_* Help functions ===========================================================
 
--define(MAX_DELAY, 3).
+-define(MAX_DELAY, 4).
 
 prop_buffer_limit() -> proper_types:pos_integer().
 prop_onwire_limit() -> proper_types:pos_integer().
@@ -186,31 +188,31 @@ prop_value_with_processing_latency_list() ->
   proper_types:list({prop_latency_ms(), proper_types:binary()}).
 
 prop_no_ack_run() ->
-  SendFun = fun(_SockPid, _KvList, _Vsn) -> ok end,
+  SendFun = fun(_SockPid, _Batch, _Vsn) -> ok end,
   ?FORALL(
     {BufferLimit, OnWireLimit, MsgSetBytes, ValueList},
     {prop_buffer_limit(), prop_onwire_limit(),
      prop_msgset_bytes(), prop_value_list()},
     begin
-      KeyList = lists:seq(1, length(ValueList)),
-      KvList = lists:zip(KeyList, ValueList),
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,
                                      _MaxLingerTime = 0, _MaxLingerCount = 0,
                                      SendFun),
+      KeyList = lists:seq(1, length(ValueList)),
+      KvList = lists:zip(KeyList, ValueList),
       no_ack_produce(Buf, KvList)
     end).
 
 prop_random_latency_ack_run() ->
   SendFun0 =
-    fun(FakeKafka, KvList, _Vsn) ->
+    fun(FakeKafka, Batch, _Vsn) ->
       %% use reference as correlation to simplify test
       Ref = make_ref(),
       %% send the message to fake kafka
       %% the pre-generated latency values are in KvList
       %% fake kafka should receive the KvList, sleep a while
       %% and reply ack
-      FakeKafka ! {produce, self(), Ref, KvList},
+      FakeKafka ! {produce, self(), Ref, Batch},
       {ok, Ref}
     end,
   ?FORALL(
@@ -222,14 +224,19 @@ prop_random_latency_ack_run() ->
     begin
       KeyList = lists:seq(1, length(ValueList)),
       KvList = lists:zip(KeyList, ValueList),
+      Batch = lists:map(fun({K, {Delay, V}}) ->
+                            #{key => integer_to_binary(K),
+                              value => V,
+                              delay => Delay}
+                        end, KvList),
       FakeKafka = spawn_fake_kafka(),
-      SendFun = fun(_SockPid, KvList_, Vsn) ->
-                    SendFun0(FakeKafka, KvList_, Vsn)
+      SendFun = fun(_SockPid, BatchX, Vsn) ->
+                    SendFun0(FakeKafka, BatchX, Vsn)
                 end,
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,
                                      MaxLingerTime, MaxLingerCount, SendFun),
-      random_latency_ack_produce(FakeKafka, Buf, KvList)
+      random_latency_ack_produce(FakeKafka, Buf, Batch)
     end).
 
 no_ack_produce(Buf, []) ->
@@ -238,7 +245,8 @@ no_ack_produce(Buf, []) ->
 no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   BufCb = make_buf_cb(Key),
   BinKey = list_to_binary(integer_to_list(Key)),
-  Buf1 = brod_producer_buffer:add(Buf, BufCb, BinKey, Value),
+  Batch = [#{key => BinKey, value => Value}],
+  Buf1 = brod_producer_buffer:add(Buf, BufCb, Batch),
   FakeSockPid = self(),
   {ok, NewBuf} = brod_producer_buffer:maybe_send(Buf1, FakeSockPid, 0),
   %% in case of no ack required, expect 'buffered' immediately
@@ -253,11 +261,11 @@ no_ack_produce(Buf, [{Key, Value} | Rest]) ->
   end,
   no_ack_produce(NewBuf, Rest).
 
-random_latency_ack_produce(FakeKafka, Buf, KvList) ->
+random_latency_ack_produce(FakeKafka, Buf, Batch) ->
   State0 = #state{buf = Buf, buffered = [], acked = []},
-  #state{buffered = Buffered, acked = Acked} =
-    produce_loop(FakeKafka, KvList, State0),
-  N = length(KvList),
+  #state{buffered = Buffered,
+         acked = Acked} = produce_loop(FakeKafka, Batch, State0),
+  N = length(Batch),
   ok = assert_reply_sequence(Buffered, N),
   ok = assert_reply_sequence(Acked, N),
   ok = stop_fake_kafka(FakeKafka),
@@ -271,11 +279,10 @@ produce_loop(FakeKafka, [], #state{buf = Buf} = State) ->
       NewState = collect_replies(State, ?MAX_DELAY),
       produce_loop(FakeKafka, [], NewState)
   end;
-produce_loop(FakeKafka, [{Key, Value} | Rest], State0) ->
+produce_loop(FakeKafka, [#{key := Key} = Msg | Rest], State0) ->
   #state{buf = Buf0} = State0,
-  BufCb = make_buf_cb(Key),
-  BinKey = list_to_binary(integer_to_list(Key)),
-  Buf1 = brod_producer_buffer:add(Buf0, BufCb, BinKey, Value),
+  BufCb = make_buf_cb(binary_to_integer(Key)),
+  Buf1 = brod_producer_buffer:add(Buf0, BufCb, [Msg]),
   State1 = State0#state{buf = Buf1},
   State2 = maybe_send(State1),
   State = collect_replies(State2, _Delay = 0),
@@ -355,8 +362,8 @@ stop_fake_kafka(FakeKafka) when is_pid(FakeKafka) ->
 
 fake_kafka_loop() ->
   receive
-    {produce, FromPid, Ref, KvList} ->
-      ok = fake_kafka_process_msgs(KvList),
+    {produce, FromPid, Ref, Batch} ->
+      ok = fake_kafka_process_msgs(Batch),
       FromPid ! {ack_from_kafka, Ref},
       fake_kafka_loop();
     stop ->
@@ -366,7 +373,7 @@ fake_kafka_loop() ->
   end.
 
 fake_kafka_process_msgs([]) -> ok;
-fake_kafka_process_msgs([{_Key, {DelayMs, _Value}} | Rest]) ->
+fake_kafka_process_msgs([#{delay := DelayMs} | Rest]) ->
   timer:sleep(DelayMs),
   fake_kafka_process_msgs(Rest).
 

@@ -65,10 +65,9 @@ init_per_suite(Config) ->
 end_per_suite(_Config) -> ok.
 
 init_per_testcase(Case, Config) ->
-  ct:pal("=== ~p begin ===", [Case]),
   ClientId       = ?CLIENT_ID,
   BootstrapHosts = [{"localhost", 9092}],
-  ClientConfig   = [],
+  ClientConfig   = client_config(),
   ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
   ok = brod:start_producer(ClientId, ?TOPIC1, _ProducerConfig = []),
   ok = brod:start_producer(ClientId, ?TOPIC2, _ProducerConfig = []),
@@ -88,7 +87,6 @@ end_per_testcase(Case, Config) when is_list(Config) ->
     error : function_clause ->
       ok
   end,
-  ct:pal("=== ~p end ===", [Case]),
   ok.
 
 all() -> [F || {F, _A} <- module_info(exports),
@@ -135,10 +133,12 @@ get_committed_offsets(_GroupId, _TopicPartitions, State) ->
 %%%_* Test functions ===========================================================
 
 t_loc_demo(Config) when is_list(Config) ->
+  CgId = iolist_to_binary("t_loc_demo-" ++
+                          integer_to_list(erlang:system_time())),
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_group_subscriber_loc:bootstrap(1),
+        brod_demo_group_subscriber_loc:bootstrap(1, message, CgId),
         receive
           _ ->
             ok
@@ -153,10 +153,12 @@ t_loc_demo(Config) when is_list(Config) ->
   end.
 
 t_loc_demo_message_set(Config) when is_list(Config) ->
+  CgId = iolist_to_binary("t_loc_demo_message_set-" ++
+                          integer_to_list(erlang:system_time())),
   {Pid, Mref} =
     erlang:spawn_monitor(
       fun() ->
-        brod_demo_group_subscriber_loc:bootstrap(1, message_set),
+        brod_demo_group_subscriber_loc:bootstrap(1, message_set, CgId),
         receive
           _ ->
             ok
@@ -402,6 +404,12 @@ do_wait_for_subscribers(States) ->
 rand_uniform(Max) ->
   {_, _, Micro} = os:timestamp(),
   Micro rem Max.
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

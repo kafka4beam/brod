@@ -76,7 +76,7 @@ init_per_testcase(Case, Config0) ->
   ct:pal("=== ~p begin ===", [Case]),
   Client = Case,
   Topic = ?TOPIC,
-  CooldownSecs = 2,
+  CooldownSecs = 1,
   ProducerRestartDelay = 1,
   ClientConfig0 = [{reconnect_cool_down_seconds, CooldownSecs}],
   ProducerConfig = [ {partition_restart_delay_seconds, ProducerRestartDelay}
@@ -90,10 +90,16 @@ init_per_testcase(Case, Config0) ->
     end,
   ClientConfig1 = proplists:get_value(client_config, Config, []),
   brod:stop_client(Client),
-  ok = brod:start_client(?HOSTS, Client, ClientConfig0 ++ ClientConfig1),
+  ClientConfig =
+    case os:getenv("KAFKA_VERSION") of
+      "0.9" ++ _ -> [{query_api_versions, false}];
+      _ -> []
+    end ++ ClientConfig0 ++ ClientConfig1,
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
-  ok = brod:start_consumer(Client, Topic, []),
-  [{client, Client} | Config].
+  ok = brod:start_consumer(Client, Topic, [{max_wait_time, 1000},
+                                           {sleep_timeout, 0}]),
+  [{client, Client}, {client_config, ClientConfig} | Config].
 
 end_per_testcase(Case, Config) ->
   try
@@ -131,8 +137,9 @@ t_direct_fetch(Config) when is_list(Config) ->
   Value = <<>>,
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
-                                     ?OFFSET_LATEST),
-  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1),
+                                     ?OFFSET_LATEST, ?config(client_config)),
+  {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
+                                 Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
@@ -144,9 +151,10 @@ t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
   Value = crypto:strong_rand_bytes(100),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
-                                     ?OFFSET_LATEST),
-  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1,
-                           _Timeout = 1000, _MinBytes = 0, _MaxBytes = 1),
+                                     ?OFFSET_LATEST, ?config(client_config)),
+  {ok, {_, [Msg]}} =
+    brod:fetch({?HOSTS, ?config(client_config)},
+               Topic, Partition, Offset - 1, #{max_bytes => 1}),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
@@ -163,9 +171,10 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
   Value = crypto:strong_rand_bytes(100),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
-                                     ?OFFSET_LATEST),
-  {ok, [Msg]} = brod:fetch(?HOSTS, Topic, Partition, Offset - 1,
-                           _Timeout = 1000, _MinBytes = 0, _MaxBytes = 13),
+                                     ?OFFSET_LATEST, ?config(client_config)),
+  {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
+                                Topic, Partition, Offset - 1,
+                                #{max_bytes => 13}),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
@@ -220,8 +229,7 @@ t_consumer_connection_restart(Config) ->
   Partition = 0,
   ProduceFun =
     fun(I) ->
-      Key = list_to_binary(integer_to_list(I)),
-      Value = Key,
+      Value = Key= integer_to_binary(I),
       brod:produce_sync(Client, Topic, Partition, Key, Value)
     end,
   Parent = self(),
@@ -246,8 +254,7 @@ t_consumer_connection_restart(Config) ->
   after 1000 ->
     ct:fail("timed out waiting for seqno producer loop to start")
   end,
-  {ok, ConnPid} =
-    brod_client:get_leader_connection(Client, Topic, Partition),
+  {ok, ConnPid} = brod_client:get_leader_connection(Client, Topic, Partition),
   exit(ConnPid, kill),
   receive
     {produce_result_change, ProducerPid, error} ->
@@ -288,8 +295,7 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   Partition = 0,
   ProduceFun =
     fun(I) ->
-      Key = list_to_binary(integer_to_list(I)),
-      Value = Key,
+      Value = Key = integer_to_binary(I),
       brod:produce_sync(Client, Topic, Partition, Key, Value)
     end,
   ReceiveFun =
@@ -333,8 +339,7 @@ t_subscriber_restart(Config) when is_list(Config) ->
   Partition = 0,
   ProduceFun =
     fun(I) ->
-      Key = list_to_binary(integer_to_list(I)),
-      Value = Key,
+      Value = Key = integer_to_binary(I),
       brod:produce_sync(Client, Topic, Partition, Key, Value)
     end,
   Parent = self(),
@@ -349,8 +354,7 @@ t_subscriber_restart(Config) when is_list(Config) ->
                         , key    = SeqNoBin
                         , value  = SeqNoBin
                         } = hd(Messages),
-          SeqNo = list_to_integer(binary_to_list(SeqNoBin)),
-          Parent ! {self(), SeqNo},
+          Parent ! {self(), binary_to_integer(SeqNoBin)},
           ok = brod:consume_ack(ConsumerPid, Offset),
           exit(normal)
       after 2000 ->
@@ -358,28 +362,21 @@ t_subscriber_restart(Config) when is_list(Config) ->
         exit(timeout)
       end
     end,
-  Subscriber0 = erlang:spawn_link(SubscriberFun),
+  {Subscriber0, _} = erlang:spawn_monitor(SubscriberFun),
   receive {subscribed, Subscriber0} -> ok end,
   ReceiveFun =
     fun(Subscriber, ExpectedSeqNo) ->
-      receive
-        {Subscriber, ExpectedSeqNo} ->
-          ok
-      after 3000 ->
-        ct:fail("timed out receiving seqno ~p", [ExpectedSeqNo])
+      receive {Subscriber, ExpectedSeqNo} -> ok
+      after 3000 -> ct:fail("timed out receiving seqno ~p", [ExpectedSeqNo])
       end
     end,
   ok = ProduceFun(0),
   ok = ProduceFun(1),
   ok = ReceiveFun(Subscriber0, 0),
-  Mref = erlang:monitor(process, Subscriber0),
-  receive
-    {'DOWN', Mref, process, Subscriber0, normal} ->
-      ok
-    after 1000 ->
-      ct:fail("timed out waiting for Subscriber0 to exit")
+  receive {'DOWN', _, process, Subscriber0, normal} -> ok
+  after 2000 -> ct:fail("timed out waiting for Subscriber0 to exit")
   end,
-  Subscriber1 = erlang:spawn_link(SubscriberFun),
+  {Subscriber1, _} = erlang:spawn_monitor(SubscriberFun),
   receive {subscribed, Subscriber1} -> ok end,
   ok = ReceiveFun(Subscriber1, 1),
   ok.

@@ -133,15 +133,15 @@ t_no_required_acks(Config) when is_list(Config) ->
   meck:expect(brod_client, get_leader_connection,
               fun(_, <<"topic">>, 0) -> {ok, Tester} end),
   meck:expect(brod_kafka_request, produce,
-              fun(_, <<"topic">>, 0, KvList, 0, _, no_compression) ->
-                  case length(KvList) =:= MaxLingerCount of
+              fun(_, <<"topic">>, 0, Batch, 0, _, no_compression) ->
+                  case length(Batch) =:= MaxLingerCount of
                     true ->
-                      ?assertEqual([{<<"1">>, <<"1">>},
-                                    {<<"2">>, <<"2">>},
-                                    {<<"3">>, <<"3">>}
-                                   ], KvList);
+                      ?assertMatch([#{key := <<"1">>, value := <<"1">>},
+                                    #{key := <<"2">>, value := <<"2">>},
+                                    #{key := <<"3">>, value := <<"3">>}
+                                   ], Batch);
                     false ->
-                      ?assertEqual([{<<"4">>, <<"4">>}], KvList)
+                      ?assertMatch([#{key := <<"4">>, value := <<"4">>}], Batch)
                   end,
                   #kpro_req{api = produce, no_ack = true}
               end),
@@ -218,9 +218,9 @@ t_retry_on_same_connection(Config) when is_list(Config) ->
 t_connection_down_retry({init, Config}) ->
   meck_module(brod_kafka_request),
   meck:expect(brod_kafka_request, produce,
-              fun(_Vsn, <<"topic">>, 0, KvList, _RequiredAcks,
+              fun(_Vsn, <<"topic">>, 0, Batch, _RequiredAcks,
                   _AckTimeout, no_compression) ->
-                  #kpro_req{msg = KvList}
+                  #kpro_req{msg = Batch}
               end),
   Config;
 t_connection_down_retry({'end', Config}) ->
@@ -233,9 +233,9 @@ t_connection_down_retry(Config) when is_list(Config) ->
   ConnFun =
     fun L() ->
         receive
-          {produce, ProducerPid, #kpro_req{ref = Ref, msg = KvList}} ->
-            Tester ! {sent, KvList},
-            case length(KvList) of
+          {produce, ProducerPid, #kpro_req{ref = Ref, msg = Batch}} ->
+            Tester ! {sent, Batch},
+            case length(Batch) of
               1 ->
                 ok;
               _ ->
@@ -281,12 +281,12 @@ t_connection_down_retry(Config) when is_list(Config) ->
               end),
   {ok, CallRef1} = brod_producer:produce(Producer, <<"k1">>, <<"v1">>),
   ConnPid1 = ?WAIT({connected, Pid}, Pid, 1000),
-  ?WAIT({sent, [{<<"k1">>, <<"v1">>}]}, ok, 1000),
+  ?WAIT({sent, [#{key := <<"k1">>, value := <<"v1">>}]}, ok, 1000),
   {ok, CallRef2} = brod_producer:produce(Producer, <<"k2">>, <<"v2">>),
   ?WAIT({called, 1}, ok, 1000),
   erlang:exit(ConnPid1, kill),
   ?WAIT({connected, _}, ok, 3000),
-  ?WAIT({sent, [{<<"k1">>, _}, {<<"k2">>, _}]}, ok, 1000),
+  ?WAIT({sent, [#{key := <<"k1">>}, #{key := <<"k2">>}]}, ok, 1000),
   ?WAIT(#brod_produce_reply{call_ref = CallRef1,
                             result = brod_produce_req_acked}, ok, 1000),
   ?WAIT(#brod_produce_reply{call_ref = CallRef2,
@@ -298,9 +298,9 @@ t_connection_down_retry(Config) when is_list(Config) ->
 t_leader_migration({init, Config}) ->
   meck_module(brod_kafka_request),
   meck:expect(brod_kafka_request, produce,
-              fun(_Vsn = 0, <<"topic">>, 0, KvList, _RequiredAcks,
+              fun(_Vsn = 0, <<"topic">>, 0, Batch, _RequiredAcks,
                   _AckTimeout, no_compression) ->
-                  #kpro_req{msg = KvList}
+                  #kpro_req{msg = Batch}
               end),
   Config;
 t_leader_migration({'end', Config}) ->
@@ -311,10 +311,10 @@ t_leader_migration(Config) when is_list(Config) ->
   ConnFun =
     fun L() ->
       receive
-        {produce, ProducerPid, #kpro_req{ref = Ref, msg = KvList}} ->
-          Tester ! {sent, KvList},
+        {produce, ProducerPid, #kpro_req{ref = Ref, msg = Batch}} ->
+          Tester ! {sent, Batch},
           Rsp =
-            case length(KvList) of
+            case length(Batch) of
               1 -> fake_rsp(Ref, <<"topic">>, 0, ?not_leader_for_partition);
               _ -> fake_rsp(Ref, <<"topic">>, 0)
             end,
@@ -352,10 +352,12 @@ t_leader_migration(Config) when is_list(Config) ->
   {ok, CallRef2} = brod_producer:produce(Producer, <<"k2">>, <<"v2">>),
   {ok, CallRef3} = brod_producer:produce(Producer, <<"k3">>, <<"v3">>),
   ConnPid1 = ?WAIT({connected, P}, P, 1000),
-  ?WAIT({sent, [{<<"k1">>, _}]}, ok, 1000),
+  ?WAIT({sent, [#{key := <<"k1">>}]}, ok, 1000),
   ConnPid2 = ?WAIT({connected, P}, P, 2000),
   ?assert(ConnPid1 =/= ConnPid2),
-  ?WAIT({sent, [{<<"k1">>, _}, {<<"k2">>, _}, {<<"k3">>, _}]}, ok, 1000),
+  ?WAIT({sent, [#{key := <<"k1">>},
+                #{key := <<"k2">>},
+                #{key := <<"k3">>}]}, ok, 1000),
   ?WAIT(#brod_produce_reply{call_ref = CallRef1,
                             result = brod_produce_req_acked}, ok, 1000),
   ?WAIT(#brod_produce_reply{call_ref = CallRef2,

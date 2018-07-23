@@ -40,6 +40,7 @@
         , t_sasl_plain_ssl/1
         , t_sasl_plain_file_ssl/1
         , t_sasl_callback/1
+        , t_magic_version/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -94,18 +95,24 @@ end_per_testcase(Case, Config) ->
   ct:pal("=== ~p end ===", [Case]),
   ok.
 
-all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
+all() ->
+  KafkaVsn = kafka_version(),
+  MinVsn = fun(F) -> try ?MODULE:F(min_kafka_vsn)
+                     catch error : function_clause -> ?KAFKA_0_9
+                     end end,
+  [F || {F, _A} <- module_info(exports),
+        case atom_to_list(F) of
+          "t_" ++ _ -> true;
+          _         -> false
+        end andalso KafkaVsn >= MinVsn(F)
+  ].
 
 
 %%%_* Test functions ===========================================================
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
-  ok = brod:start_client([{"localhost", 8192} | ?HOSTS], Client),
+  ok = start_client([{"localhost", 8192} | ?HOSTS], Client),
   _Res = brod_client:get_partitions_count(Client, <<"some-unknown-topic">>),
   ?assertMatch({error, unknown_topic_or_partition}, _Res),
   ClientPid = whereis(Client),
@@ -119,7 +126,7 @@ t_no_reachable_endpoint({'end', _Config}) ->
 t_no_reachable_endpoint(Config) when is_list(Config) ->
   Client = t_no_reachable_endpoint,
   Endpoint = {"badhost", 9092},
-  ok = brod:start_client([Endpoint], Client),
+  ok = start_client([Endpoint], Client),
   ClientPid = whereis(Client),
   Mref = erlang:monitor(process, ClientPid),
   Reason = ?WAIT({'DOWN', Mref, process, ClientPid, ReasonX}, ReasonX, 1000),
@@ -141,7 +148,7 @@ t_metadata_connection_restart({'end', Config}) ->
 t_metadata_connection_restart(Config) when is_list(Config) ->
   Ref = mock_connection(hd(?HOSTS)),
   Client = t_metadata_connection_restart,
-  ok = brod:start_client(?HOSTS, Client),
+  ok = start_client(?HOSTS, Client),
   ClientPid = whereis(Client),
   Connection = ?WAIT({connection_pid, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
@@ -172,7 +179,7 @@ t_payload_connection_restart(Config) when is_list(Config) ->
   ProducerRestartDelay = 1,
   ClientConfig = [{reconnect_cool_down_seconds, CooldownSecs}],
   Client = t_payload_connection_restart,
-  ok = brod:start_client(?HOSTS, Client, ClientConfig),
+  ok = start_client(?HOSTS, Client, ClientConfig),
   ?WAIT({connection_pid, Ref, _MetadataConnection}, ok, 5000),
   ProducerConfig = [{partition_restart_delay_seconds, ProducerRestartDelay},
                     {max_retries, 0}],
@@ -222,12 +229,12 @@ t_auto_start_producers(Config) when is_list(Config) ->
   K = <<"k">>,
   V = <<"v">>,
   Client = t_auto_start_producers,
-  ok = brod:start_client(?HOSTS, Client),
+  ok = start_client(?HOSTS, Client),
   ?assertEqual({error, {producer_not_found, ?TOPIC}},
                brod:produce_sync(Client, ?TOPIC, 0, K, V)),
   ClientConfig = [{auto_start_producers, true}],
   ok = brod:stop_client(Client),
-  ok = brod:start_client(?HOSTS, Client, ClientConfig),
+  ok = start_client(?HOSTS, Client, ClientConfig),
   ?assertEqual(ok, brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
   ok.
 
@@ -237,7 +244,7 @@ t_auto_start_producer_for_unknown_topic({'end', Config}) ->
 t_auto_start_producer_for_unknown_topic(Config) when is_list(Config) ->
   Client = t_auto_start_producer_for_unknown_topic,
   ClientConfig = [{auto_start_producers, true}],
-  ok = brod:start_client(?HOSTS, Client, ClientConfig),
+  ok = start_client(?HOSTS, Client, ClientConfig),
   Topic0 = ?TOPIC,
   Partition = 1000, %% non-existing partition
   ?assertEqual({error, {producer_not_found, Topic0, Partition}},
@@ -260,6 +267,7 @@ t_ssl(Config) when is_list(Config) ->
                  , {get_metadata_timeout_seconds, 10}],
   produce_and_consume_message(?HOSTS_SSL, t_ssl, ClientConfig).
 
+t_sasl_plain_ssl(min_kafka_vsn) -> ?KAFKA_0_10;
 t_sasl_plain_ssl({init, Config}) ->
   Config;
 t_sasl_plain_ssl({'end', Config}) ->
@@ -272,6 +280,7 @@ t_sasl_plain_ssl(Config) when is_list(Config) ->
                  ],
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
 
+t_sasl_plain_file_ssl(min_kafka_vsn) -> ?KAFKA_0_10;
 t_sasl_plain_file_ssl({init, Config}) ->
   ok = file:write_file("sasl-plain-user-pass-file", "alice\necila\n"),
   Config;
@@ -285,8 +294,8 @@ t_sasl_plain_file_ssl(Config) when is_list(Config) ->
                  ],
   produce_and_consume_message(?HOSTS_SASL_SSL, t_sasl_plain_ssl, ClientConfig).
 
-t_sasl_callback({init, Config}) ->
-  Config;
+t_sasl_callback(min_kafka_vsn) -> ?KAFKA_0_10;
+t_sasl_callback({init, Config}) -> Config;
 t_sasl_callback({'end', Config}) ->
   brod:stop_client(t_sasl_callback),
   Config;
@@ -295,6 +304,34 @@ t_sasl_callback(Config) when is_list(Config) ->
                  , {sasl, {callback, ?MODULE, []}}
                  ],
   produce_and_consume_message(?HOSTS, t_sasl_callback, ClientConfig).
+
+t_magic_version({init, Config}) -> Config;
+t_magic_version({'end', Config}) ->
+  brod:stop_client(t_magic_version),
+  Config;
+t_magic_version(Config) when is_list(Config) ->
+  Client = t_magic_version,
+  ClientConfig = [{get_metadata_timeout_seconds, 10}],
+  K = term_to_binary(make_ref()),
+  ok = start_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_producer(Client, ?TOPIC, []),
+  {ok, Conn} = brod_client:get_leader_connection(Client, ?TOPIC, 0),
+  Headers = [{<<"foo">>, <<"bar">>}],
+  Msg = #{value => <<"v">>, headers => Headers},
+  {ok, Offset} = brod:produce_sync_offset(Client, ?TOPIC, 0, K, Msg),
+  {ok, {_, [M]}} = brod:fetch(Conn, ?TOPIC, 0, Offset, #{max_wait_time => 100}),
+  #kafka_message{key = K, headers = Hdrs, ts = Ts} = M,
+  case kafka_version() of
+    ?KAFKA_0_9 ->
+      ?assertEqual([], Hdrs),
+      ?assertEqual(?undef, Ts);
+    ?KAFKA_0_10 ->
+      ?assertEqual([], Hdrs),
+      ?assert(is_integer(Ts));
+    _ ->
+      ?assertEqual(Headers, Hdrs),
+      ?assert(is_integer(Ts))
+  end.
 
 %%%_* Help functions ===========================================================
 
@@ -311,7 +348,7 @@ ssl_options() ->
 
 produce_and_consume_message(Host, Client, ClientConfig) ->
   K = term_to_binary(make_ref()),
-  ok = brod:start_client(Host, Client, ClientConfig),
+  ok = start_client(Host, Client, ClientConfig),
   ok = brod:start_consumer(Client, ?TOPIC, []),
   {ok, ConsumerPid} =
     brod:subscribe(Client, self(), ?TOPIC, 0, [{begin_offset, latest}]),
@@ -360,6 +397,25 @@ mock_connection(EP) ->
   ok = meck:expect(kpro_connection, get_endpoint, 1, {ok, EP}),
   ok = meck:expect(kpro_connection, get_api_vsns, 1, {ok, ?undef}),
   Ref.
+
+kafka_version() ->
+  case os:getenv("KAFKA_VERSION") of
+    false ->
+      ?LATEST_KAFKA_VERSION;
+    Vsn ->
+      [Major, Minor | _] = string:tokens(Vsn, "."),
+      {list_to_integer(Major), list_to_integer(Minor)}
+  end.
+
+start_client(Hosts, ClientId) -> start_client(Hosts, ClientId, []).
+
+start_client(Hosts, ClientId, Config0) ->
+  Config =
+    case kafka_version() of
+      ?KAFKA_0_9 -> [{query_api_versions, false} | Config0];
+      _ -> Config0
+    end,
+  brod:start_client(Hosts, ClientId, Config).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

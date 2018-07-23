@@ -37,15 +37,17 @@
 -type offset() :: brod:offset().
 -type conn() :: kpro:connection().
 
+-define(MIN_MAGIC_2_PRODUCE_API_VSN, 3).
+
 %% @doc Make a produce request, If the first arg is a connection pid, call
 %% `brod_kafka_apis:pick_version/2' to resolve version.
 -spec produce(conn() | vsn(), topic(), partition(),
-              brod:kv_list(), integer(), integer(),
+              kpro:batch_input(), integer(), integer(),
               brod:compression()) -> kpro:req().
-produce(MaybePid, Topic, Partition, KvList,
+produce(MaybePid, Topic, Partition, BatchInput,
         RequiredAcks, AckTimeout, Compression) ->
   Vsn = pick_version(produce, MaybePid),
-  kpro_req_lib:produce(Vsn, Topic, Partition, KvList,
+  kpro_req_lib:produce(Vsn, Topic, Partition, BatchInput,
                        #{ required_acks => RequiredAcks
                         , ack_timeout => AckTimeout
                         , compression => Compression
