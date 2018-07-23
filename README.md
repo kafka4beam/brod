@@ -75,7 +75,6 @@ Receive().
 Example outputs:
 
 ```erlang
-13> Receive().
 #kafka_message{offset = 0,key = <<"key1">>,
                value = <<"value1">>,ts_type = create,ts = 1531995555085,
                headers = []}
@@ -238,7 +237,7 @@ brod:produce(_Client    = brod_client_1,
                           ]).
 ```
 
-## Handle Acks from Kafka as a Message
+## Handle Acks from Kafka as Messages
 
 For async produce APIs `brod:produce/3` and `brod:produce/5`, 
 the caller should expect a message of below pattern for each produce call. 
@@ -269,8 +268,8 @@ it may receive replies ordered differently than in which order
 Async APIs `brod:produce_cb/4` and `brod:produce_cb/6` allow callers to 
 provided a callback function to handle acknowledgements from kafka. 
 In this case, the caller may want to monitor the producer process because 
-then the caller knows that the callbacks will not be evaluated hence a retry 
-is required.
+then they know that the callbacks will not be evaluated if the producer is 'DOWN',
+and there is perhaps a need for retry.
 
 # Consumers
 
@@ -373,9 +372,13 @@ start(ClientId) ->
 
 # Authentication support
 
-brod supports SASL PLAIN authentication mechanism out of the box. To use it
-add `{sasl, {plain, Username, Password}}` to client config. Also, brod has authentication
-plugins support. Authentication callback module should implement `brod_auth_backend` behaviour.
+brod supports SASL `PLAIN`, `SCRAM-SHA-256` and `SCRAM-SHA-512` authentication mechanisms out of the box.
+To use it, add `{sasl, {Mechanism, Username, Password}}` or `{sasl, {Mechanism, File}}` to client config.
+Where `Mechanism` is `plain | scram_sha_256 | scram_sha_512`, and `File` is the path to a text file
+which contains two lines, first line for username and second line for password
+
+Also, brod has authentication plugins support with `{sasl, {callback, Module, Opts}}` in client config.
+Authentication callback module should implement `brod_auth_backend` behaviour.
 Auth function spec:
 
 ```erlang
@@ -405,7 +408,6 @@ Partition = 0.
 brod:get_metadata(Hosts).
 brod:get_metadata(Hosts, [Topic]).
 brod:resolve_offset(Hosts, Topic, Partition).
-brod:fetch(Hosts, Topic, Partition, 1).
 ```
 
 # brod-cli: A command line tool to interact with Kafka
