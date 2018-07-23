@@ -1,8 +1,8 @@
-# Brod - Apache Kafka Erlang client library
+[![Build Status](https://travis-ci.org/klarna/brod.svg)](https://travis-ci.org/klarna/brod) [![Coverage Status](https://coveralls.io/repos/github/klarna/brod/badge.svg?branch=master)](https://coveralls.io/github/klarna/brod?branch=master)
 
-Brod is an erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
+# Brod - Apache Kafka Client for Erlang/Elixir
 
-[![Build Status](https://travis-ci.org/klarna/brod.svg)](https://travis-ci.org/klarna/brod)
+Brod is an Erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
 
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 

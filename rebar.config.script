@@ -21,7 +21,7 @@ Profiles =
       {erl_opts, [{d, build_brod_cli}]}
     ]}
   ]},
-case IsRebar3 of
+CONFIG1 = case IsRebar3 of
   true ->
     [Profiles | CONFIG];
   false ->
@@ -38,5 +38,15 @@ case IsRebar3 of
           end
         end, URLs),
    lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
+end,
+case os:getenv("TRAVIS") of
+  "true" ->
+    JobId = os:getenv("TRAVIS_JOB_ID"),
+    [{coveralls_service_job_id, JobId},
+     {plugins, [coveralls]},
+     {coveralls_coverdata, "_build/test/cover/*.coverdata"},
+     {coveralls_service_name , "travis-ci"} | CONFIG1];
+  _ ->
+    CONFIG1
 end.
 
