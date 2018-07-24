@@ -42,7 +42,7 @@
             exit : {noproc, _} ->
               ok
           end,
-          _ = application:stop(brod),
+          _ = brod:stop(),
           case How of
             'halt' -> erlang:halt(?LINE);
             'exit' -> erlang:exit(?LINE)
@@ -383,7 +383,7 @@ main(Command, Doc, Args, Stop, LogLevel) ->
   %% This is to allow error_logger to write more logs
   %% before stopping init process immediately
   process_flag(trap_exit, true),
-  {ok, _} = application:ensure_all_started(brod),
+  ok = brod:start(),
   try
     Brokers = parse(ParsedArgs, "--brokers", fun parse_brokers/1),
     ConnConfig0 = parse_connection_config(ParsedArgs),
@@ -1204,10 +1204,10 @@ print(IoData) -> io:put_chars(stdio(), IoData).
 
 print(Fmt, Args) -> io:put_chars(stdio(), io_lib:format(Fmt, Args)).
 
-logerr(IoData) -> io:put_chars(standard_error, ["*** ", IoData]).
+logerr(IoData) -> io:put_chars(stderr(), ["*** ", IoData]).
 
 logerr(Fmt, Args) ->
-  io:put_chars(standard_error, io_lib:format("*** " ++ Fmt, Args)).
+  io:put_chars(stderr(), io_lib:format("*** " ++ Fmt, Args)).
 
 verbose(Str) -> verbose(Str, []).
 
@@ -1226,6 +1226,12 @@ debug(Fmt, Args) ->
 stdio() ->
   case get(redirect_stdio) of
     undefined -> user;
+    Other -> Other
+  end.
+
+stderr() ->
+  case get(redirect_stderr) of
+    undefined -> standard_error;
     Other -> Other
   end.
 

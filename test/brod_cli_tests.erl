@@ -23,9 +23,13 @@
 
 %% no crash on 'help', 'version' etc commands
 informative_test() ->
-  run(["--help"]),
+  brod:main(["--help"]), % should not halt
   run(["--version"]),
   run(["meta", "--help", "--debug"]).
+
+error_test() ->
+  put(redirect_stderr, standard_io),
+  ?assertExit(N when is_integer(N), run(["-unknown-opt"])).
 
 meta_test() ->
   run(["meta", "-b", "localhost", "-L"]),
@@ -189,7 +193,7 @@ cmd(Args) ->
     catch brod:stop_client(brod_cli_client),
     Result
   after
-    _ = application:stop(brod)
+    _ = brod:stop()
   end.
 
 io_loop(Parent, Acc0) ->
