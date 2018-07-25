@@ -1,6 +1,6 @@
 #!/bin/bash -eu
 
-VERSION=$KAFKA_VERSION
+VERSION=${KAFKA_VERSION:-1.1}
 if [ -z $VERSION ]; then VERSION=$1; fi
 
 case $VERSION in

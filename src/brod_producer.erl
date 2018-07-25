@@ -173,7 +173,7 @@ produce(Pid, Key, Value) ->
 produce_no_ack(Pid, Key, Value) ->
   CallRef = #brod_call_ref{caller = ?undef},
   AckCb = fun(_, _) -> ok end,
-  Batch = make_batch_input(Key, Value),
+  Batch = brod_utils:make_batch_input(Key, Value),
   Pid ! {produce, CallRef, Batch, AckCb},
   ok.
 
@@ -188,7 +188,7 @@ produce_cb(Pid, Key, Value, AckCb) ->
                           , callee = Pid
                           , ref    = Mref = erlang:monitor(process, Pid)
                           },
-  Batch = make_batch_input(Key, Value),
+  Batch = brod_utils:make_batch_input(Key, Value),
   Pid ! {produce, CallRef, Batch, AckCb},
   receive
     #brod_produce_reply{ call_ref = #brod_call_ref{ ref = Mref }
@@ -507,29 +507,6 @@ is_retriable(_) ->
 -spec send(?undef | pid(), kpro:req()) -> ok | {error, any()}.
 send(?undef, _KafkaReq) -> {error, no_leader_connection};
 send(Connection, KafkaReq) -> kpro:request_async(Connection, KafkaReq).
-
--spec make_batch_input(brod:key(), brod:value()) -> brod:batch_input().
-make_batch_input(_PartitionerKey, List) when is_list(List) ->
-  brod_utils:unify_batch_input(List);
-make_batch_input(Key, Value) ->
-  [make_msg_input(Key, Value)].
-
--spec make_msg_input(brod:key(), brod:value()) -> brod:msg_input().
-make_msg_input(Key, Value) when is_binary(Value) ->
-  #{ts => now_ts(), key => Key, value => Value};
-make_msg_input(Key, {Ts, Value}) when is_integer(Ts) ->
-  #{ts => Ts, key => Key, value => Value};
-make_msg_input(Key, M) when is_map(M) ->
-  ensure_ts(ensure_key(M, Key)).
-
-ensure_key(#{key := _} = M, _) -> M;
-ensure_key(M, Key) -> M#{key => Key}.
-
-ensure_ts(#{ts := _} = M) -> M;
-ensure_ts(M) -> M#{ts => now_ts()}.
-
-%% current timestamp (milliseconds) for kafka message
-now_ts() -> kpro_lib:now_ts().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

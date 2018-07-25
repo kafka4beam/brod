@@ -162,8 +162,10 @@
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
 -type offset() :: kpro:offset().
--type key() :: binary().
--type value() :: binary() %% single value
+-type key() :: undefined %% no key, transformed to <<>>
+             | binary().
+-type value() :: undefined %% no value, transformed to <<>>
+               | iodata() %% single value
                | {msg_ts(), binary()} %% one message with timestamp
                | kpro:msg_input() %% one magic v2 message
                | kpro:batch_input(). %% maybe nested batch
