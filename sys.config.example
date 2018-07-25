@@ -11,7 +11,7 @@
            , {default_producer_config,
                [ {topic_restart_delay_seconds, 10}
                , {partition_restart_delay_seconds, 2}
-               , {required_acks, -1}
+               , {required_acks, leader_only}
                ]
              }
            ]
@@ -23,7 +23,7 @@
            , {default_producer_config,
                [ {topic_restart_delay_seconds, 10}
                , {partition_restart_delay_seconds, 2}
-               , {required_acks, -1}
+               , {required_acks, all_isr}
                ]
              }
            , {ssl,

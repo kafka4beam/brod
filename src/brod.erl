@@ -104,6 +104,11 @@
             , {fetch, 8, next_version}
             ]).
 
+
+-ifdef(build_brod_cli).
+-export([main/1]).
+-endif.
+
 -export_type([ batch_input/0
              , call_ref/0
              , cg/0
@@ -157,8 +162,10 @@
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
 -type offset() :: kpro:offset().
--type key() :: binary().
--type value() :: binary() %% single value
+-type key() :: undefined %% no key, transformed to <<>>
+             | binary().
+-type value() :: undefined %% no value, transformed to <<>>
+               | iodata() %% single value
                | {msg_ts(), binary()} %% one message with timestamp
                | kpro:msg_input() %% one magic v2 message
                | kpro:batch_input(). %% maybe nested batch
@@ -836,6 +843,10 @@ fetch_committed_offsets(BootstrapEndpoints, ConnCfg, GroupId) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(Client, GroupId) ->
   brod_utils:fetch_committed_offsets(Client, GroupId, []).
+
+-ifdef(build_brod_cli).
+main(X) -> brod_cli:main(X).
+-endif.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

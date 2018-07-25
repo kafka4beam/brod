@@ -1,33 +1,17 @@
+KAFKA_VERSION ?= 1.1
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
 PROJECT_VERSION = 3.6.0
 
 DEPS = supervisor3 kafka_protocol
-TEST_DEPS = docopt jsone meck proper
-REL_DEPS = docopt jsone
 
-COMMON_ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info -Dbuild_brod_cli
-ERLC_OPTS = $(COMMON_ERLC_OPTS)
-TEST_ERLC_OPTS = $(COMMON_ERLC_OPTS)
+ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info -Dbuild_brod_cli
 
-
-dep_supervisor3_commit = 1.1.5
-dep_kafka_protocol_commit = 2.1.0
+dep_supervisor3_commit = 1.1.7
+dep_kafka_protocol_commit = 2.1.1
 dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafka_protocol_commit)
-dep_docopt = git https://github.com/zmstone/docopt-erl.git 0.1.3
-
-ERTS_VSN = $(shell erl -noshell -eval 'io:put_chars(erlang:system_info(version)), halt()')
-ESCRIPT_FILE = scripts/brod_cli
-ESCRIPT_EMU_ARGS = -sname brod_cli
 
 EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
-COVER = true
-
-EUNIT_OPTS = verbose
-
-CT_OPTS = -ct_use_short_names true
-
-ERL_LIBS := $(ERL_LIBS):$(CURDIR)
 
 ## Make app the default target
 ## To avoid building a release when brod is used as a erlang.mk project's dependency
@@ -35,28 +19,50 @@ app::
 
 include erlang.mk
 
-rel:: escript
-	@cp scripts/brod _rel/brod/bin/brod
-	@cp $(ESCRIPT_FILE) _rel/brod/bin/brod_cli
-	@ln -sf erts-$(ERTS_VSN) _rel/brod/erts
-	@tar -pczf _rel/brod.tar.gz -C _rel brod
+compile:
+	@rebar3 compile
 
 test-env:
 	@./scripts/setup-test-env.sh
 
-t: eunit ct
-	./scripts/cover-summary.escript eunit.coverdata ct.coverdata
+ut:
+	@rebar3 eunit -v --cover_export_name ut-$(KAFKA_VERSION)
+
+# version check, eunit and all common tests
+t: vsn-check ut
+	@rebar3 ct -v --cover_export_name ct-$(KAFKA_VERSION)
 
 vsn-check:
-	$(verbose) ./scripts/vsn-check.sh $(PROJECT_VERSION)
+	@./scripts/vsn-check.sh $(PROJECT_VERSION)
+
+distclean:: rebar-clean
+
+rebar-clean:
+	@rebar3 clean
+	@rm -rf _build
+	@rm -rf doc
+	@rm -f pipe.testdata
 
 hex-publish: distclean
-	$(verbose) rebar3 hex publish
+	@rebar3 hex publish
 
 ## tests that require kafka running at localhost
 INTEGRATION_CTS = brod_cg_commits brod_client brod_compression brod_consumer brod_producer brod_group_subscriber brod_topic_subscriber
 
 ## integration tests
-.PHONY: it
-it: eunit $(INTEGRATION_CTS:%=ct-%)
+it: ut $(INTEGRATION_CTS:%=it-%)
 
+$(INTEGRATION_CTS:%=it-%):
+	@rebar3 ct -v --suite=test/$(subst it-,,$@)_SUITE --cover_export_name $@-$(KAFKA_VERSION)
+
+## build escript and a releas, and copy escript to release bin dir
+brod-cli:
+	@rebar3 as brod_cli escriptize
+	@rebar3 as brod_cli release
+	@cp _build/brod_cli/bin/brod_cli _build/brod_cli/rel/brod/bin/
+
+cover:
+	@rebar3 cover -v
+
+coveralls:
+	@rebar3 coveralls send

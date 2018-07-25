@@ -323,7 +323,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
                 end,
   SendFun =
     fun(I) ->
-      Value = list_to_binary(integer_to_list(I)),
+      Value = integer_to_binary(I),
       Topic =
         case rand_uniform(2) of
           0 -> ?TOPIC2;
@@ -332,18 +332,16 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       ok = brod:produce_sync(?CLIENT_ID, Topic, Partitioner, <<>>, Value)
     end,
   RecvFun =
-    fun Continue(Acc) ->
-      receive
-        ?MSG(CaseRef, SubscriberPid, Topic, _Partition, _Offset, Value) ->
-          %% assert subscribers assigned with only topics in subscription list
-          ?assert((SubscriberPid =:= SubscriberPid1 andalso Topic =:= ?TOPIC2)
-                  orelse
-                  (SubscriberPid =:= SubscriberPid2 andalso Topic =:= ?TOPIC3)),
-          I = binary_to_integer(Value),
-          case I =:= MaxSeqNo of
-            true -> [I | Acc];
-            false -> Continue([I | Acc])
-          end;
+    fun Continue(Acc) when length(Acc) =:= MaxSeqNo -> lists:sort(Acc);
+        Continue(Acc) ->
+          receive
+            ?MSG(CaseRef, SubscriberPid, Topic, _Partition, _Offset, Value) ->
+            %% assert subscribers assigned with only topics in subscription list
+            ?assert((SubscriberPid =:= SubscriberPid1 andalso Topic =:= ?TOPIC2)
+                    orelse
+                    (SubscriberPid =:= SubscriberPid2 andalso Topic =:= ?TOPIC3)
+                   ),
+            Continue([binary_to_integer(Value) | Acc]);
         Msg ->
           erlang:error({unexpected_msg, Msg})
       after
@@ -356,7 +354,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   %% since the nubmers are produced to different partitions and collected
   %% by different consumers, they have a very good chance to go out of the
   %% original order, hence we do not verify the order here
-  ?assertEqual(L, lists:sort(RecvFun([]))),
+  ?assertEqual(L, RecvFun([])),
   ok = brod_group_subscriber:stop(SubscriberPid1),
   ok = brod_group_subscriber:stop(SubscriberPid2),
   ok.

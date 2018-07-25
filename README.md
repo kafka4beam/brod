@@ -1,8 +1,8 @@
-# Brod - Apache Kafka Erlang client library
+[![Build Status](https://travis-ci.org/klarna/brod.svg)](https://travis-ci.org/klarna/brod) [![Coverage Status](https://coveralls.io/repos/github/klarna/brod/badge.svg?branch=master)](https://coveralls.io/github/klarna/brod?branch=master)
 
-Brod is an erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
+# Brod - Apache Kafka Client for Erlang/Elixir
 
-[![Build Status](https://travis-ci.org/klarna/brod.svg)](https://travis-ci.org/klarna/brod)
+Brod is an Erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
 
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 
@@ -23,7 +23,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Building and testing
 
-    make
+    make compile
     make test-env t # requires docker-compose in place
 
 # Working With Kafka 0.9.x or Earlier
@@ -47,35 +47,34 @@ e.g. in sys.config:
 
 Assuming kafka is running at `localhost:9092` and there is a topic named `test-topic`.
 
-Start Erlang shell by `make; erl -pa ebin -pa deps/*/ebin`, then paste lines below into shell:
+Start Erlang shell by `make compile; erl -pa _build/default/lib/*/ebin`, then paste lines below into shell:
 
 ```erlang
-rr(brod).
-{ok, _} = application:ensure_all_started(brod).
-KafkaBootstrapEndpoints = [{"localhost", 9092}].
-Topic = <<"test-topic">>.
-Partition = 0.
-ok = brod:start_client(KafkaBootstrapEndpoints, client1).
-ok = brod:start_producer(client1, Topic, _ProducerConfig = []).
-{ok, FirstOffset} = brod:produce_sync_offset(client1, Topic, Partition, <<"key1">>, <<"value1">>).
-ok = brod:produce_sync(client1, Topic, Partition, <<"key2">>, <<"value2">>).
-SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPid ! Msg, {ok, ack, CallbackState} end.
-Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end.
+rr(brod),
+{ok, _} = application:ensure_all_started(brod),
+KafkaBootstrapEndpoints = [{"localhost", 9092}],
+Topic = <<"test-topic">>,
+Partition = 0,
+ok = brod:start_client(KafkaBootstrapEndpoints, client1),
+ok = brod:start_producer(client1, Topic, _ProducerConfig = []),
+{ok, FirstOffset} = brod:produce_sync_offset(client1, Topic, Partition, <<"key1">>, <<"value1">>),
+ok = brod:produce_sync(client1, Topic, Partition, <<"key2">>, <<"value2">>),
+SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPid ! Msg, {ok, ack, CallbackState} end,
+Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end,
 brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                  _ConsumerConfig=[{begin_offset, FirstOffset}],
                                  _CommittdOffsets=[], message, SubscriberCallbackFun,
-                                 _CallbackState=self()).
-Receive().
-Receive().
+                                 _CallbackState=self()),
 AckCb = fun(Partition, BaseOffset) -> io:format(user, "\nProduced to partition ~p at base-offset ~p\n", [Partition, BaseOffset]) end,
 ok = brod:produce_cb(client1, Topic, Partition, <<>>, [{<<"key3">>, <<"value3">>}], AckCb).
-{ok, [Msg]} = brod:fetch(KafkaBootstrapEndpoints, Topic, Partition, FirstOffset + 2), Msg.
+Receive().
+Receive().
+{ok, {_, [Msg]}} = brod:fetch(KafkaBootstrapEndpoints, Topic, Partition, FirstOffset + 2), Msg.
 ```
 
 Example outputs:
 
 ```erlang
-13> Receive().
 #kafka_message{offset = 0,key = <<"key1">>,
                value = <<"value1">>,ts_type = create,ts = 1531995555085,
                headers = []}
@@ -238,7 +237,7 @@ brod:produce(_Client    = brod_client_1,
                           ]).
 ```
 
-## Handle Acks from Kafka as a Message
+## Handle Acks from Kafka as Messages
 
 For async produce APIs `brod:produce/3` and `brod:produce/5`, 
 the caller should expect a message of below pattern for each produce call. 
@@ -269,8 +268,8 @@ it may receive replies ordered differently than in which order
 Async APIs `brod:produce_cb/4` and `brod:produce_cb/6` allow callers to 
 provided a callback function to handle acknowledgements from kafka. 
 In this case, the caller may want to monitor the producer process because 
-then the caller knows that the callbacks will not be evaluated hence a retry 
-is required.
+then they know that the callbacks will not be evaluated if the producer is 'DOWN',
+and there is perhaps a need for retry.
 
 # Consumers
 
@@ -373,9 +372,13 @@ start(ClientId) ->
 
 # Authentication support
 
-brod supports SASL PLAIN authentication mechanism out of the box. To use it
-add `{sasl, {plain, Username, Password}}` to client config. Also, brod has authentication
-plugins support. Authentication callback module should implement `brod_auth_backend` behaviour.
+brod supports SASL `PLAIN`, `SCRAM-SHA-256` and `SCRAM-SHA-512` authentication mechanisms out of the box.
+To use it, add `{sasl, {Mechanism, Username, Password}}` or `{sasl, {Mechanism, File}}` to client config.
+Where `Mechanism` is `plain | scram_sha_256 | scram_sha_512`, and `File` is the path to a text file
+which contains two lines, first line for username and second line for password
+
+Also, brod has authentication plugins support with `{sasl, {callback, Module, Opts}}` in client config.
+Authentication callback module should implement `brod_auth_backend` behaviour.
 Auth function spec:
 
 ```erlang
@@ -405,7 +408,6 @@ Partition = 0.
 brod:get_metadata(Hosts).
 brod:get_metadata(Hosts, [Topic]).
 brod:resolve_offset(Hosts, Topic, Partition).
-brod:fetch(Hosts, Topic, Partition, 1).
 ```
 
 # brod-cli: A command line tool to interact with Kafka
@@ -413,38 +415,32 @@ brod:fetch(Hosts, Topic, Partition, 1).
 This will build a self-contained binary with brod application
 
 ```bash
-make rel
-./_rel/brod/bin/brod --help
+make brod-cli
+_build/brod_cli/rel/brod/bin/brod -h
 ```
 
 Disclaimer: This script is NOT designed for use cases where fault-tolerance is a hard requirement.
 As it may crash when e.g. kafka cluster is temporarily unreachable,
 or (for fetch command) when the parition leader migrates to another broker in the cluster.
 
-Start an Erlang shell with brod started
-
-```bash
-./_rel/brod/bin/brod-i
-```
-
-## brod-cli examples:
+## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod`):
 
 ### Fetch and print metadata
 ```
-./scripts/brod meta -b localhost
+brod meta -b localhost
 ```
 
 ### Produce a Message
 
 ```
-./scripts/brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
+brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
 
 ```
 
 ### Fetch a Message
 
 ```
-./scripts/brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
+brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
 ```
 
 Bound variables to be used in `--fmt` expression:
@@ -452,7 +448,6 @@ Bound variables to be used in `--fmt` expression:
 - `Offset`: Message offset
 - `Key`: Kafka key
 - `Value`: Kafka Value
-- `CRC`: Message CRC
 - `TsType`: Timestamp type either `create` or `append`
 - `Ts`: Timestamp, `-1` as no value
 
@@ -460,33 +455,33 @@ Bound variables to be used in `--fmt` expression:
 
 Send `README.md` to kafka one line per kafka message
 ```
-./scripts/brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
+brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
 ```
 
 ### Resolve Offset
 
 ```
-./scripts/brod offset -b localhost:9092 -t test-topic -p 0
+brod offset -b localhost:9092 -t test-topic -p 0
 ```
 
 ### List or Describe Groups
 
 ```
 # List all groups
-./scripts/brod groups -b localhost:9092
+brod groups -b localhost:9092
 
 # Describe groups
-./scripts/brod groups -b localhost:9092 --ids group-1,group-2
+brod groups -b localhost:9092 --ids group-1,group-2
 ```
 
 ### Display Committed Offsets
 
 ```
 # all topics
-./scripts/brod commits -b localhost:9092 --id the-group-id --describe
+brod commits -b localhost:9092 --id the-group-id --describe
 
 # a specific topic
-./scripts/brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
+brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
 ```
 
 ### Commit Offsets
@@ -495,16 +490,16 @@ NOTE: This feature is designed for force overwriting commits, not for regular us
 
 ```
 # Commit 'latest' offsets of all partitions with 2 days retention
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
 
 # Commit offset=100 for partition 0 and 200 for partition 1
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets "0:100,1:200"
 
 # Use --retention 0 to delete commits (may linger in kafka before cleaner does its job)
-./scripts/brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
+brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 0
 
 # Try join an active consumer group using 'range' protocol and steal one partition assignment then commit offset=10000
-./scripts/brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
+brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --protocol range
 ```
 
 ## TODOs

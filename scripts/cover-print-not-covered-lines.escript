@@ -1,9 +1,9 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa ebin -pa ../ebin
+%%! -pa _build/test/lib/brod/ebin
 
 %%%
-%%%   Copyright (c) 2015-2016, Klarna AB
+%%%   Copyright (c) 2015-2018, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -18,18 +18,10 @@
 %%%   limitations under the License.
 %%%
 
-%%%=============================================================================
-%%% @doc
-%%% @copyright 2016 Klarna AB
-%%% @end
-%%%=============================================================================
-
 -mode(compile).
 
 main([]) ->
-  io:format(user, "expecting at least one coverdata file\n", []),
-  halt(1);
-main(Files) ->
+  Files = filelib:wildcard("_build/test/cover/*.coverdata"),
   ok = import_coverdata(Files),
   Modules = get_imported_modules(),
   Result = [{Mod, analyse_module(Mod)} || Mod <- Modules],
@@ -109,8 +101,8 @@ print_lines(Fd, N, [M | Rest] = Lines) ->
       Line when N =:= M ->
         io:format(user, "~5p: ~s", [N, Line]),
         Rest;
-     _ ->
-       Lines
+      _ ->
+        Lines
     end,
   print_lines(Fd, N+1, Continue).
 

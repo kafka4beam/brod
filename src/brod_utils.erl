@@ -39,6 +39,7 @@
         , list_all_groups/2
         , list_groups/2
         , log/3
+        , make_batch_input/2
         , make_fetch_fun/4
         , os_time_utc_str/0
         , parse_rsp/1
@@ -46,7 +47,6 @@
         , request_sync/3
         , resolve_offset/4
         , resolve_offset/5
-        , unify_batch_input/1
         ]).
 
 -include("brod_int.hrl").
@@ -350,19 +350,19 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
 %% @doc Return message set size in number of bytes.
 %% NOTE: This does not include the overheads of encoding protocol.
 %% such as magic bytes, attributes, and length tags etc.
--spec bytes(brod:key() | brod:value()) -> non_neg_integer().
-bytes([]) -> 0;
-bytes(B) when is_binary(B) -> erlang:size(B);
-bytes(?TKV(T, K, V)) when is_integer(T) -> 8 + bytes(K) + bytes(V);
-bytes(?KV(K, V)) -> bytes(K) + bytes(V);
-bytes([H | T]) -> bytes(H) + bytes(T);
-bytes(#{} = Msg) ->
-  %% this is message from a magic v2 batch
-  %% last 8 bytes are for timestamp although it is encoded as varint
-  %% which in best case scenario takes only 1 byte.
-  bytes(maps:get(key, Msg, <<>>)) +
-  bytes(maps:get(value, Msg, <<>>)) +
-  bytes(maps:get(headers, Msg, [])) + 8.
+-spec bytes(bord:batch_input()) -> non_neg_integer().
+bytes(Msgs) ->
+  F = fun(#{key := Key, value := Value} = Msg, Acc) ->
+          %% this is message from a magic v2 batch
+          %% last 8 bytes are for timestamp although it is encoded as varint
+          %% which in best case scenario takes only 1 byte.
+          HeaderSize = lists:foldl(
+                         fun({K, V}, AccH) ->
+                             size(K) + size(V) + AccH
+                         end, 0, maps:get(headers, Msg, [])),
+          size(Key) + size(Value) + HeaderSize + 8 + Acc
+      end,
+  lists:foldl(F, 0, Msgs).
 
 %% @doc Group values per-key in a key-value list.
 -spec group_per_key([{Key, Val}]) -> [{Key, [Val]}]
@@ -415,13 +415,13 @@ request_sync(Conn, #kpro_req{ref = Ref} = Req, Timeout) ->
     {error, Reason} -> {error, Reason}
   end.
 
-%% @doc Ensure batch-input is in the right format for kafka_protocol.
-%% This is to be backward compatible with prior brod versions.
--spec unify_batch_input([?KV(_, _) | ?TKV(_, _, _) | map()]) ->
-        brod:batch_input().
-unify_batch_input(BatchInput) ->
-  F = fun(M, Acc) -> [unify_msg(M) | Acc] end,
-  lists:reverse(foldl_batch(F, [], BatchInput)).
+%% @doc Make batch input for kafka_protocol.
+-spec make_batch_input(brod:key(), brod:value()) -> brod:batch_input().
+make_batch_input(Key, Value) ->
+  case is_batch(Value) of
+    true  -> unify_batch(Value);
+    false -> [unify_msg(make_msg_input(Key, Value))]
+  end.
 
 %%%_* Internal functions =======================================================
 
@@ -610,11 +610,35 @@ throw_error_code([Struct | Structs]) ->
       throw_error_code(Structs)
   end.
 
+-spec make_msg_input(brod:key(), brod:value()) -> brod:msg_input().
+make_msg_input(Key, {Ts, Value}) when is_integer(Ts) ->
+  #{ts => Ts, key => Key, value => Value};
+make_msg_input(Key, M) when is_map(M) ->
+  ensure_ts(ensure_key(M, Key));
+make_msg_input(Key, Value) ->
+  ensure_ts(#{key => Key, value => Value}).
+
+%% put 'Key' arg as 'key' field in the 'Value' map
+ensure_key(#{key := _} = M, _) -> M;
+ensure_key(M, Key) -> M#{key => Key}.
+
+%% take current timestamp if 'ts' field is not found in the 'Value' map
+ensure_ts(#{ts := _} = M) -> M;
+ensure_ts(M) -> M#{ts => kpro_lib:now_ts()}.
+
+-spec unify_batch([?KV(_, _) | ?TKV(_, _, _) | map()]) ->
+        brod:batch_input().
+unify_batch(BatchInput) ->
+  F = fun(M, Acc) -> [unify_msg(M) | Acc] end,
+  lists:reverse(foldl_batch(F, [], BatchInput)).
+
 bin(?undef) -> <<>>;
 bin(X) -> iolist_to_binary(X).
 
-unify_msg(?KV(K, V)) -> #{key => bin(K), value => bin(V)};
-unify_msg(?TKV(T, K, V)) -> #{ts => T, key => bin(K), value => bin(V)};
+unify_msg(?KV(K, V)) ->
+  #{ts => kpro_lib:now_ts(), key => bin(K), value => bin(V)};
+unify_msg(?TKV(T, K, V)) ->
+  #{ts => T, key => bin(K), value => bin(V)};
 unify_msg(M) when is_map(M) ->
   M#{key => bin(maps:get(key, M, <<>>)),
      value => bin(maps:get(value, M, <<>>)),
@@ -634,6 +658,10 @@ foldl_batch(Fun, Acc, [Msg | Rest]) ->
              Nested -> foldl_batch(Fun, Acc, Nested)
            end,
   foldl_batch(Fun, NewAcc, Rest).
+
+is_batch([M | _]) when is_map(M) -> true;
+is_batch([T | _]) when is_tuple(T) -> true;
+is_batch(_) -> false.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

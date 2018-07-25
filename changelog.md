@@ -106,4 +106,6 @@
   * Add `brod:produce_no_ack/3` and `brod:produce_no_ack/5`.
   * `min_compression_batch_size` is removed from producer config.
   * Support magic v2 batch/message format (message headers).
+  * Use rebar3 as primary build tool for travis-ci, erlang.mk is still supported.
+  * Support `SCRAM-SHA-256` and `SCRAM-SHA-512` SASL authentication mechanisms.
 

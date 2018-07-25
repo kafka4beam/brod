@@ -11,13 +11,16 @@ while [ -L "$TARGET_FILE" ]; do
     TARGET_FILE=`basename $TARGET_FILE`
 done
 BINDIR=`pwd -P`
+export NIF_BIN_DIR=$BINDIR
 cd "$CUR_DIR"
 
-ERTS_BIN="$BINDIR/../erts/bin"
+ERTS_DIR=`find $BINDIR/.. -maxdepth 1 -type d -name 'erts-*' -print -quit`
 
-if [ -d  "$ERTS_BIN" ]; then
+export NIF_BIN_DIR=$BINDIR
+
+if [ -d  "$ERTS_DIR" ]; then
   # this is a release, try to use erts in release
-  exec $ERTS_BIN/escript $BINDIR/brod_cli "$@"
+  exec $ERTS_DIR/bin/escript $BINDIR/brod_cli "$@"
 else
   # hoping the user has erts in PATH
   exec $BINDIR/brod_cli "$@"

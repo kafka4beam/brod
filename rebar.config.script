@@ -1,8 +1,29 @@
 IsRebar3 = erlang:function_exported(rebar3, main, 1),
-
-case IsRebar3 of
+DocoptUrl = "https://github.com/zmstone/docopt-erl.git",
+DocOptTag = "0.1.3",
+DocoptDep = {docopt, {git, DocoptUrl, {branch, DocOptTag}}},
+Profiles =
+  {profiles, [
+    {brod_cli, [
+      {deps, [jsone, DocoptDep]},
+      {erl_opts, [{d, build_brod_cli}]},
+      {escript_name, brod_cli},
+      {relx, [{release, {brod, "i"}, % release the interactive shell as brod-i
+               [brod, jsone, docopt]},
+              {include_erts, true},
+              {overlay, [{copy, "scripts/brod", "bin"},
+                         {copy, "{{lib_dirs}}/crc32cer/priv/crc32cer.so", "bin"},
+                         {copy, "{{lib_dirs}}/snappyer/priv/snappyer.so", "bin"}
+                        ]}
+             ]}]},
+    {test, [
+      {deps, [meck, proper, jsone, DocoptDep]},
+      {erl_opts, [{d, build_brod_cli}]}
+    ]}
+  ]},
+CONFIG1 = case IsRebar3 of
   true ->
-    CONFIG;
+    [Profiles | CONFIG];
   false ->
     URLs = [ {supervisor3, "https://github.com/klarna/supervisor3.git"}
            , {kafka_protocol, "https://github.com/klarna/kafka_protocol.git"}
@@ -17,4 +38,15 @@ case IsRebar3 of
           end
         end, URLs),
    lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
+end,
+case os:getenv("TRAVIS") of
+  "true" ->
+    JobId = os:getenv("TRAVIS_JOB_ID"),
+    [{coveralls_service_job_id, JobId},
+     {plugins, [coveralls]},
+     {coveralls_coverdata, "_build/test/cover/*.coverdata"},
+     {coveralls_service_name , "travis-ci"} | CONFIG1];
+  _ ->
+    CONFIG1
 end.
+
