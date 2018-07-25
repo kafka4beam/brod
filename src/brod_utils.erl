@@ -659,9 +659,9 @@ foldl_batch(Fun, Acc, [Msg | Rest]) ->
            end,
   foldl_batch(Fun, NewAcc, Rest).
 
-is_batch(X) ->
-  is_list(X) andalso X =/= [] andalso
-  (is_tuple(hd(X)) orelse is_map(hd(X))).
+is_batch([M | _]) when is_map(M) -> true;
+is_batch([T | _]) when is_tuple(T) -> true;
+is_batch(_) -> false.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
