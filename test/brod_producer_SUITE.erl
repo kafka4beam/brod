@@ -39,6 +39,7 @@
         , t_produce_batch_callback/1
         , t_produce_buffered_offset/1
         , t_produce_fire_n_forget/1
+        , t_configure_produce_api_vsn/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -98,8 +99,8 @@ init_client(Case, Config) ->
 
 end_per_testcase(_Case, Config) ->
   Subscriber = ?config(subscriber),
-  unlink(Subscriber),
-  exit(Subscriber, kill),
+  is_pid(Subscriber) andalso unlink(Subscriber),
+  is_pid(Subscriber) andalso exit(Subscriber, kill),
   Pid = whereis(?config(client)),
   try
     Ref = erlang:monitor(process, Pid),
@@ -413,6 +414,30 @@ t_produce_buffered_offset(Config) when is_list(Config) ->
   ReceiveFun(OP1, K1, V1),
   ReceiveFun(OP2, K2, V2).
 
+t_configure_produce_api_vsn({init, Config}) ->
+  Client = t_configure_produce_api_vsn,
+  Topic = ?TOPIC,
+  case whereis(Client) of
+    ?undef -> ok;
+    PidX   -> brod:stop_client(PidX)
+  end,
+  {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, client_config()),
+  ok = brod:start_producer(Client, Topic, [{max_linger_ms, 100},
+                                           {max_linger_count, 3},
+                                           {produce_req_vsn, 0}]),
+  [{client, Client}, {client_pid, ClientPid} | Config];
+t_configure_produce_api_vsn(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Partition = 0,
+  {K, V} = make_unique_kv(),
+  Msg = #{value => V, headers => [{"foo", "bar"}]},
+  {ok, Offset} = brod:produce_sync_offset(Client, ?TOPIC, Partition, K, Msg),
+  Bootstrap = {?HOSTS,  client_config()},
+  {ok, {_, MsgSet}} = brod:fetch(Bootstrap, ?TOPIC, Partition, Offset),
+  ?assertMatch([#kafka_message{key = K,
+                               value = V,
+                               headers = [] % foo bar is dropped
+                               }], MsgSet).
 
 %%%_* Help functions ===========================================================
 

@@ -108,4 +108,6 @@
   * Support magic v2 batch/message format (message headers).
   * Use rebar3 as primary build tool for travis-ci, erlang.mk is still supported.
   * Support `SCRAM-SHA-256` and `SCRAM-SHA-512` SASL authentication mechanisms.
+* 3.?.?
+  * Make produce request version configurable as `produce_req_vsn` in `brod:producer_config()`
 

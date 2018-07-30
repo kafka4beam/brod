@@ -181,8 +181,8 @@ The `Value` arg in these APIs can be:
 When `Value` is a batch, the `Key` argument is only used as partitioner input.
 All messages are unified into a batch format of below spec:
 `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`.
-`ts` field is dropped for kafka prior to version `0.10`
-`headers` field is dropped for kafka prior to version `0.11`
+`ts` field is dropped for kafka prior to version `0.10` (produce API version 0, magic version 0)
+`headers` field is dropped for kafka prior to version `0.11` (produce API version 0-2, magic version 0-1)
 
 ## Synchronized Produce API
 
