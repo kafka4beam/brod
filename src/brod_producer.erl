@@ -84,7 +84,8 @@
         , retry_backoff_ms  :: non_neg_integer()
         , retry_tref        :: ?undef | reference()
         , delay_send_ref    :: delay_send_ref()
-        , produce_req_vsn   :: brod_kafka_apis:vsn()
+        , produce_req_vsn   :: {default | resolved | configured,
+                                brod_kafka_apis:vsn()}
         }).
 
 -type state() :: #state{}.
@@ -139,7 +140,7 @@
 %%     Time in milli-seconds to sleep before retry the failed produce request.
 %%   compression (optional, default = no_compression):
 %%     'gzip' or 'snappy' to enable compression
-%%   max_linger_ms(optional, default = 0):
+%%   max_linger_ms (optional, default = 0):
 %%     Messages are allowed to 'linger' in buffer for this amount of
 %%     milli-seconds before being sent.
 %%     Definition of 'linger': A message is in 'linger' state when it is allowed
@@ -147,12 +148,19 @@
 %%     The default value is 0 for 2 reasons:
 %%     1. Backward compatibility (for 2.x releases)
 %%     2. Not to surprise `brod:produce_sync' callers
-%%   max_linger_count(optional, default = 0):
+%%   max_linger_count (optional, default = 0):
 %%     At most this amount (count not size) of messages are allowed to 'linger'
 %%     in buffer. Messages will be sent regardless of 'linger' age when this
 %%     threshold is hit.
 %%     NOTE: It does not make sense to have this value set larger than
 %%           `partition_buffer_limit'
+%%  produce_req_vsn (optional, default = undefined):
+%%     User determined produce API version to use, discard the API version range
+%%     received from kafka. This is to be used when a topic in newer version
+%%     kafka is configured to store older version message format.
+%%     e.g. When a topic in kafka 0.11 is configured to have message format
+%%     0.10, sending message with headers would result in `unknown_server_error'
+%%     error code.
 -spec start_link(pid(), topic(), partition(), config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
@@ -264,14 +272,18 @@ init({ClientPid, Topic, Partition, Config}) ->
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
-  DefaultReqVersion = brod_kafka_apis:default_version(produce),
+  DefaultVsn = brod_kafka_apis:default_version(produce),
+  ReqVersion = case ?config(produce_req_vsn, ?undef) of
+                 ?undef -> {default, DefaultVsn};
+                 Vsn    -> {configured, Vsn}
+               end,
   State = #state{ client_pid       = ClientPid
                 , topic            = Topic
                 , partition        = Partition
                 , buffer           = Buffer
                 , retry_backoff_ms = RetryBackoffMs
                 , connection       = ?undef
-                , produce_req_vsn  = DefaultReqVersion
+                , produce_req_vsn  = ReqVersion
                 },
   %% Register self() to client.
   ok = brod_client:register_producer(ClientPid, Topic, Partition),
@@ -403,12 +415,13 @@ do_handle_produce(BufCb, Batch, #state{buffer = Buffer} = State) ->
   {noreply, NewState}.
 
 -spec maybe_reinit_connection(state()) -> {ok, state()}.
-maybe_reinit_connection(#state{ client_pid = ClientPid
-                              , connection = OldConnection
-                              , conn_mref  = OldConnMref
-                              , topic      = Topic
-                              , partition  = Partition
-                              , buffer     = Buffer0
+maybe_reinit_connection(#state{ client_pid      = ClientPid
+                              , connection      = OldConnection
+                              , conn_mref       = OldConnMref
+                              , topic           = Topic
+                              , partition       = Partition
+                              , buffer          = Buffer0
+                              , produce_req_vsn = ReqVersion
                               } = State) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
@@ -420,11 +433,10 @@ maybe_reinit_connection(#state{ client_pid = ClientPid
       ConnMref = erlang:monitor(process, Connection),
       %% Make sure the sent but not acked ones are put back to buffer
       Buffer = brod_producer_buffer:nack_all(Buffer0, new_leader),
-      ReqVersion = brod_kafka_apis:pick_version(Connection, produce),
       {ok, State#state{ connection      = Connection
                       , conn_mref       = ConnMref
                       , buffer          = Buffer
-                      , produce_req_vsn = ReqVersion
+                      , produce_req_vsn = req_vsn(Connection, ReqVersion)
                       }};
     {error, Reason} ->
       ok = maybe_demonitor(OldConnMref),
@@ -444,7 +456,7 @@ maybe_produce(#state{retry_tref = Ref} = State) when is_reference(Ref) ->
 maybe_produce(#state{ buffer = Buffer0
                     , connection = Connection
                     , delay_send_ref = DelaySendRef0
-                    , produce_req_vsn = Vsn
+                    , produce_req_vsn = {_, Vsn}
                     } = State) ->
   _ = cancel_delay_send_timer(DelaySendRef0),
   case brod_producer_buffer:maybe_send(Buffer0, Connection, Vsn) of
@@ -464,6 +476,16 @@ maybe_produce(#state{ buffer = Buffer0
       %% Failed to send, e.g. due to connection error, retry later
       schedule_retry(State#state{buffer = Buffer})
   end.
+
+%% Resolve produce API version to use.
+%% If api version is configured by user, always use configured version,
+%% Otherwise if we have a connection to partition leader
+%% pick the highest version supported by kafka.
+%% If connection is down, keep using the version previously used.
+req_vsn(_, {configured, Vsn}) ->
+  {configured, Vsn};
+req_vsn(Conn, _NotConfigured) when is_pid(Conn) ->
+  {resolved, brod_kafka_apis:pick_version(Conn, produce)}.
 
 %% Start delay send timer.
 -spec start_delay_send_timer(milli_sec()) -> delay_send_ref().
