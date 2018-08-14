@@ -315,8 +315,9 @@ subscribe_partition(Client, Topic, Consumer) ->
             %% the default or configured 'begin_offset' will be used
             [];
           false ->
-            AckedOffset >= 0 orelse erlang:error({invalid_offset, AckedOffset}),
-            [{begin_offset, AckedOffset + 1}]
+            StartOffset = AckedOffset + 1,
+            StartOffset >= 0 orelse erlang:error({invalid_offset, AckedOffset}),
+            [{begin_offset, StartOffset}]
         end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
