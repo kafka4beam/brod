@@ -111,4 +111,7 @@
 * 3.6.1
   * Make produce request version configurable as `produce_req_vsn` in `brod:producer_config()`
   * Upgrade `kafka_protocol` to `2.1.2` to support alpine/busybox build
+* 3.6.2
+  * Allow `brod_topic_subscriber` to explicitly start consuming from partition offset 0 (by passing in
+    a committed offset of -1).
 
