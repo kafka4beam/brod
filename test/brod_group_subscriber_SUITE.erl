@@ -40,6 +40,7 @@
         , t_loc_demo/1
         , t_loc_demo_message_set/1
         , t_2_members_subscribe_to_different_topics/1
+        , t_async_commit/1
         ]).
 
 
@@ -51,12 +52,13 @@
 -define(TOPIC1, <<"brod-group-subscriber-1">>).
 -define(TOPIC2, <<"brod-group-subscriber-2">>).
 -define(TOPIC3, <<"brod-group-subscriber-3">>).
+-define(TOPIC4, <<"brod-group-subscriber-4">>).
 -define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 -define(config(Name), proplists:get_value(Name, Config)).
 
 %%%_* ct callbacks =============================================================
 
-suite() -> [{timetrap, {seconds, 30}}].
+suite() -> [{timetrap, {seconds, 60}}].
 
 init_per_suite(Config) ->
   {ok, _} = application:ensure_all_started(brod),
@@ -72,6 +74,7 @@ init_per_testcase(Case, Config) ->
   ok = brod:start_producer(ClientId, ?TOPIC1, _ProducerConfig = []),
   ok = brod:start_producer(ClientId, ?TOPIC2, _ProducerConfig = []),
   ok = brod:start_producer(ClientId, ?TOPIC3, _ProducerConfig = []),
+  ok = brod:start_producer(ClientId, ?TOPIC4, _ProducerConfig = []),
   try
     ?MODULE:Case({init, Config})
   catch
@@ -101,29 +104,33 @@ all() -> [F || {F, _A} <- module_info(exports),
 -record(state, { ct_case_ref
                , ct_case_pid
                , is_async_ack
+               , is_async_commit
                }).
 
 -define(MSG(Ref, Pid, Topic, Partition, Offset, Value),
         {Ref, Pid, Topic, Partition, Offset, Value}).
 
-init(_GroupId, {CaseRef, CasePid, IsAsyncAck}) ->
-  {ok, #state{ ct_case_ref  = CaseRef
-             , ct_case_pid  = CasePid
-             , is_async_ack = IsAsyncAck
+init(_GroupId, {CaseRef, CasePid, IsAsyncAck, IsAsyncCommit}) ->
+  {ok, #state{ ct_case_ref     = CaseRef
+             , ct_case_pid     = CasePid
+             , is_async_ack    = IsAsyncAck
+             , is_async_commit = IsAsyncCommit
              }}.
 
-handle_message(Topic, Partition, Message, #state{ ct_case_ref  = Ref
-                                                , ct_case_pid  = Pid
-                                                , is_async_ack = IsAsyncAck
+handle_message(Topic, Partition, Message, #state{ ct_case_ref     = Ref
+                                                , ct_case_pid     = Pid
+                                                , is_async_ack    = IsAsyncAck
+                                                , is_async_commit = IsAsyncCommit
                                                 } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
   %% forward the message to ct case for verification.
   Pid ! ?MSG(Ref, self(), Topic, Partition, Offset, Value),
-  case IsAsyncAck of
-    true  -> {ok, State};
-    false -> {ok, ack, State}
+  case {IsAsyncAck, IsAsyncCommit} of
+    {true, _}      -> {ok, State};
+    {false, false} -> {ok, ack, State};
+    {false, true}  -> {ok, ack_no_commit, State}
   end.
 
 get_committed_offsets(_GroupId, _TopicPartitions, State) ->
@@ -237,7 +244,7 @@ t_async_acks(Config) when is_list(Config) ->
                    ],
   CaseRef = t_async_acks,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false},
   Partition = ?config(partition),
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
@@ -308,7 +315,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
                    ],
   CaseRef = t_2_members_subscribe_to_different_topics,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = false},
   {ok, SubscriberPid1} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC2],
                                      GroupConfig, ConsumerConfig,
@@ -359,6 +366,79 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   ok = brod_group_subscriber:stop(SubscriberPid2),
   ok.
 
+t_async_commit({init, Config}) ->
+  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
+  CasePid = self(),
+  meck:expect(brod, subscribe,
+              fun(Client, Pid, Topic, Partition, Opts) ->
+                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
+                                                       Partition, Opts]),
+                  CasePid ! {subscribed, {Topic, Partition}, ConsumerPid},
+                  {ok, ConsumerPid}
+              end),
+  meck:new(brod_group_coordinator, [passthrough, no_passthrough_cover, no_history]),
+  Config;
+t_async_commit({'end', _Config}) ->
+  meck:unload(brod);
+t_async_commit(Config) when is_list(Config) ->
+  CaseRef = t_async_commit,
+  CasePid = self(),
+  Partition = 0,
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = true},
+  StartSubscriber =
+    fun() ->
+        GroupConfig = [],
+        ConsumerConfig = [ {sleep_timeout, 0}
+                         , {begin_offset, latest}
+                         , {prefetch_bytes, 0}
+                         , {sleep_timeout, 0}
+                         , {max_wait_time, 100}
+                         ],
+        {ok, SubscriberPid} =
+          brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC4],
+                                           GroupConfig, ConsumerConfig,
+                                           ?MODULE, InitArgs),
+        wait_for_subscribers([?TOPIC4]),
+        SubscriberPid
+    end,
+  EmulateRestart =
+    fun(Pid) ->
+        ct:pal("Stopping consumer for ~p", [?TOPIC4]),
+        brod_group_subscriber:stop(Pid),
+        StartSubscriber()
+    end,
+  CommitOffset =
+    fun(Pid, Offset) ->
+        ct:pal("Acking offset = ~p", [Offset]),
+        ok = brod_group_subscriber:commit(Pid, ?TOPIC4, 0, Offset),
+        timer:sleep(5500)
+    end,
+  Pid1 = StartSubscriber(),
+  {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4, Partition, <<>>, <<"test">>),
+  ct:pal("Produced at offset = ~p", [Offset]),
+  ?assertEqual([[Offset]],
+               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4, Partition, '$1', '_'))
+              ),
+  %% Slightly unsound: commit _previous_ offset to avoid starting
+  %% brod_consumer with `latest' offset and thus losing all data
+  %% during restart:
+  CommitOffset(Pid1, Offset - 1),
+  %% Emulate subscriber restart:
+  Pid2 = EmulateRestart(Pid1),
+  %% Since we haven't commited offset, our message should be replayed:
+  ?assertEqual([[Offset]],
+               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4, Partition, '$1', '_'))
+              ),
+  %% Commit offset and restart subscriber again:
+  CommitOffset(Pid2, Offset),
+  Pid3 = EmulateRestart(Pid2),
+  %% This time we shouldn't receive anything:
+  ?assertEqual([],
+               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4, 0, '$1', '_'))
+              ),
+  brod_group_subscriber:stop(Pid3),
+  ok.
+
 %%%_* Help funtions ============================================================
 
 %% For test deterministc, we wait until all consumer group members are
@@ -407,6 +487,22 @@ client_config() ->
   case os:getenv("KAFKA_VERSION") of
     "0.9" ++ _ -> [{query_api_versions, false}];
     _ -> []
+  end.
+
+receive_match(Timeout, MatchSpec) ->
+  MS = ets:match_spec_compile([{MatchSpec, [], ['$$']}]),
+  Messages = receive_all(Timeout),
+  ets:match_spec_run(Messages, MS).
+
+receive_all(Timeout) ->
+  lists:reverse(receive_all([], Timeout)).
+receive_all(Msgs, Timeout) ->
+  receive
+    A ->
+      ct:pal("Received ~p", [A]),
+      receive_all([A|Msgs], Timeout)
+  after Timeout ->
+      Msgs
   end.
 
 %%%_* Emacs ====================================================================

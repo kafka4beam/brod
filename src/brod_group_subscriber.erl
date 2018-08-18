@@ -39,7 +39,9 @@
 -behaviour(brod_group_member).
 
 -export([ ack/4
+        , ack/5
         , commit/1
+        , commit/4
         , start_link/7
         , start_link/8
         , stop/1
@@ -77,6 +79,11 @@
 %% {ok, ack, NewCallbackState}
 %%   The subscriber has completed processing the message.
 %%
+%% {ok, ack_no_commit, NewCallbackState}
+%%   The subscriber has completed processing the message, but it
+%%   is not ready to commit offset yet. It should call
+%%   brod_group_subscriber:commit/4 later.
+%%
 %% While this callback function is being evaluated, the fetch-ahead
 %% partition-consumers are fetching more messages behind the scene
 %% unless prefetch_count and prefetch_bytes are set to 0 in consumer config.
@@ -85,7 +92,8 @@
                          brod:partition(),
                          brod:message(),
                          cb_state()) -> {ok, cb_state()} |
-                                        {ok, ack, cb_state()}.
+                                        {ok, ack, cb_state()} |
+                                        {ok, ack_no_commit, cb_state()}.
 
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
@@ -148,7 +156,7 @@
 
 -type state() :: #state{}.
 
-%% delay 2 seconds retry the failed subscription to partiton consumer process
+%% delay 2 seconds retry the failed subscription to partition consumer process
 -define(RESUBSCRIBE_DELAY, 2000).
 
 -define(LO_CMD_SUBSCRIBE_PARTITIONS, '$subscribe_partitions').
@@ -228,7 +236,7 @@ stop(Pid) ->
       ok
   end.
 
-%% @doc Acknowledge an offset.
+%% @doc Acknowledge and commit an offset.
 %% The subscriber may ack a later (greater) offset which will be considered
 %% as multi-acking the earlier (smaller) offsets. This also means that
 %% disordered acks may overwrite offset commits and lead to unnecessary
@@ -236,23 +244,37 @@ stop(Pid) ->
 %% @end
 -spec ack(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
 ack(Pid, Topic, Partition, Offset) ->
-  gen_server:cast(Pid, {ack, Topic, Partition, Offset}).
+  ack(Pid, Topic, Partition, Offset, true).
+
+%% @doc Acknowledge an offset.
+%% This call may or may not commit group subscriber offset depending on
+%% the value of `Commit' argument
+%% @end
+-spec ack(pid(), brod:topic(), brod:partition(), brod:offset(), boolean()) ->
+             ok.
+ack(Pid, Topic, Partition, Offset, Commit) ->
+  gen_server:cast(Pid, {ack, Topic, Partition, Offset, Commit}).
 
 %% @doc Commit all acked offsets. NOTE: This is an async call.
 -spec commit(pid()) -> ok.
 commit(Pid) ->
   gen_server:cast(Pid, commit_offsets).
 
+%% @doc Commit offset for a topic. This is an asynchronous call
+-spec commit(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
+commit(Pid, Topic, Partition, Offset) ->
+  gen_server:cast(Pid, {commit_offset, Topic, Partition, Offset}).
+
 %%%_* APIs for group coordinator ===============================================
 
-%% @doc Called by group coordinator when there is new assignemnt received.
+%% @doc Called by group coordinator when there is new assignment received.
 -spec assignments_received(pid(), member_id(), integer(),
                            brod:received_assignments()) -> ok.
 assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
   gen_server:cast(Pid, {new_assignments, MemberId,
                         GenerationId, TopicAssignments}).
 
-%% @doc Called by group coordinator before re-joinning the consumer group.
+%% @doc Called by group coordinator before re-joining the consumer group.
 -spec assignments_revoked(pid()) -> ok.
 assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
@@ -389,12 +411,18 @@ handle_call(unsubscribe_all_partitions, _From,
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
-handle_cast({ack, Topic, Partition, Offset}, State) ->
+handle_cast({ack, Topic, Partition, Offset, Commit}, State) ->
   AckRef = {Topic, Partition, Offset},
-  NewState = handle_ack(AckRef, State),
+  NewState = handle_ack(AckRef, State, Commit),
   {noreply, NewState};
 handle_cast(commit_offsets, State) ->
   ok = brod_group_coordinator:commit_offsets(State#state.coordinator),
+  {noreply, State};
+handle_cast({commit_offset, Topic, Partition, Offset}, State) ->
+  #state{ coordinator  = Coordinator
+        , generationId = GenerationId
+        } = State,
+  do_commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
   {noreply, State};
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ client          = Client
@@ -454,12 +482,14 @@ handle_message_set(MessageSet, State) ->
                     , messages  = Messages
                     } = MessageSet,
   #state{cb_module = CbModule, cb_state = CbState} = State,
-  {AckNow, NewCbState} =
+  {AckNow, CommitNow, NewCbState} =
     case CbModule:handle_message(Topic, Partition, MessageSet, CbState) of
       {ok, NewCbState_} ->
-        {false, NewCbState_};
+        {false, false, NewCbState_};
       {ok, ack, NewCbState_} ->
-        {true, NewCbState_};
+        {true, true, NewCbState_};
+      {ok, ack_no_commit, NewCbState_} ->
+        {true, false, NewCbState_};
       Unknown ->
         erlang:error({bad_return_value,
                       {CbModule, handle_message, Unknown}})
@@ -470,7 +500,7 @@ handle_message_set(MessageSet, State) ->
       LastMessage = lists:last(Messages),
       LastOffset  = LastMessage#kafka_message.offset,
       AckRef      = {Topic, Partition, LastOffset},
-      handle_ack(AckRef, State1);
+      handle_ack(AckRef, State1, CommitNow);
     false -> State1
   end.
 
@@ -480,12 +510,14 @@ handle_messages(Topic, Partition, [Msg | Rest], State) ->
   #kafka_message{offset = Offset} = Msg,
   #state{cb_module = CbModule, cb_state = CbState} = State,
   AckRef = {Topic, Partition, Offset},
-  {AckNow, NewCbState} =
+  {AckNow, CommitNow, NewCbState} =
     case CbModule:handle_message(Topic, Partition, Msg, CbState) of
       {ok, NewCbState_} ->
-        {false, NewCbState_};
+        {false, false, NewCbState_};
       {ok, ack, NewCbState_} ->
-        {true, NewCbState_};
+        {true, true, NewCbState_};
+      {ok, ack_no_commit, NewCbState_} ->
+        {true, false, NewCbState_};
       Unknown ->
         erlang:error({bad_return_value,
                      {CbModule, handle_message, Unknown}})
@@ -493,27 +525,31 @@ handle_messages(Topic, Partition, [Msg | Rest], State) ->
   State1 = State#state{cb_state = NewCbState},
   NewState =
     case AckNow of
-      true  -> handle_ack(AckRef, State1);
+      true  -> handle_ack(AckRef, State1, CommitNow);
       false -> State1
     end,
   handle_messages(Topic, Partition, Rest, NewState).
 
--spec handle_ack(ack_ref(), state()) -> state().
+-spec handle_ack(ack_ref(), state(), boolean()) -> state().
 handle_ack(AckRef, #state{ generationId = GenerationId
                          , consumers    = Consumers
                          , coordinator  = Coordinator
-                         } = State) ->
+                         } = State, CommitNow) ->
   {Topic, Partition, Offset} = AckRef,
   case lists:keyfind({Topic, Partition},
                      #consumer.topic_partition, Consumers) of
     #consumer{consumer_pid = ConsumerPid} = Consumer ->
       ok = consume_ack(ConsumerPid, Offset),
-      ok = commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
-      NewConsumer = Consumer#consumer{acked_offset = Offset},
-      NewConsumers = lists:keyreplace({Topic, Partition},
-                                      #consumer.topic_partition,
-                                      Consumers, NewConsumer),
-      State#state{consumers = NewConsumers};
+      if CommitNow ->
+          do_commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
+          NewConsumer = Consumer#consumer{acked_offset = Offset},
+          NewConsumers = lists:keyreplace({Topic, Partition},
+                                          #consumer.topic_partition,
+                                          Consumers, NewConsumer),
+          State#state{consumers = NewConsumers};
+         true ->
+          State
+      end;
     false ->
       %% stale ack, ignore.
       State
@@ -527,7 +563,7 @@ consume_ack(_Down, _Offset) ->
   ok.
 
 %% Send an async message to group coordinator for offset commit.
-commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
+do_commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
 subscribe_partitions(#state{ client    = Client

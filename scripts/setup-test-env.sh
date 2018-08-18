@@ -49,6 +49,7 @@ create_topic "brod_topic_subscriber_SUITE"    3 2
 create_topic "brod-group-subscriber-1"        3 2
 create_topic "brod-group-subscriber-2"        3 2
 create_topic "brod-group-subscriber-3"        3 2
+create_topic "brod-group-subscriber-4"
 create_topic "brod-demo-topic-subscriber"     3 2
 create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
@@ -63,4 +64,3 @@ sudo docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-ser
 if [[ "$KAFKA_VERSION" != 0.9* ]] && [[ "$KAFKA_VERSION" != 0.10* ]]; then
   sudo docker exec kafka-1 /opt/kafka/bin/kafka-configs.sh --zookeeper zookeeper:2181 --alter --add-config 'SCRAM-SHA-256=[iterations=8192,password=ecila],SCRAM-SHA-512=[password=ecila]' --entity-type users --entity-name alice
 fi
-
