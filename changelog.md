@@ -114,4 +114,6 @@
 * 3.6.2
   * Allow `brod_topic_subscriber` to explicitly start consuming from partition offset 0 (by passing in
     a committed offset of -1).
-
+* 3.7.0
+  * Add `brod_group_subscriber:ack/5` and `brod_group_subscriber:commit/4` to let group subscribers
+    commit offsets asynchronously
