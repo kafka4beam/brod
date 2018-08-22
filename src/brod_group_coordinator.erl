@@ -383,6 +383,7 @@ terminate(Reason, #state{ connection = Connection
                         } = State) ->
   log(State, info, "Leaving group, reason: ~p\n", [Reason]),
   Body = [{group_id, GroupId}, {member_id, MemberId}],
+  _ = try_commit_offsets(State),
   Request = kpro:make_request(leave_group, _V = 0, Body),
   try
     _ = send_sync(Connection, Request, 1000),
