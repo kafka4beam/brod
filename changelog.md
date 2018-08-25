@@ -117,5 +117,7 @@
 * 3.7.0
   * Add `brod_group_subscriber:ack/5` and `brod_group_subscriber:commit/4` to let group subscribers
     commit offsets asynchronously
-  * Fix issue #384: In compacted topics, Kafka may return a MessageSet which contains only
+  * Pr #284: In compacted topics, Kafka may return a MessageSet which contains only
     messages before the desired offset. Just keep reading forward in this case.
+  * Issue #285 `brod_consumer` no longer restart on `leader_not_availble` and `not_leader_for_partition`
+    error codes received in fetch response. It resets connection and rediscover leader after delay.

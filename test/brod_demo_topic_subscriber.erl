@@ -146,9 +146,9 @@ commit_offset(Dir, Partition, Offset) ->
 
 spawn_consumer(ClientId, Topic, MessageType) ->
   CallbackInitArg = MessageType,
+  Config = [{offset_reset_policy, reset_to_earliest}],
   brod_topic_subscriber:start_link(ClientId, Topic, all,
-                                   _ConsumerConfig  = [],
-                                   MessageType,
+                                   Config, MessageType,
                                    _CallbackModule = ?MODULE,
                                    CallbackInitArg).
 
