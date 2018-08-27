@@ -38,7 +38,7 @@ function create_topic {
   TOPIC_NAME="$1"
   PARTITIONS="${2:-1}"
   REPLICAS="${3:-1}"
-  CMD="/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions $PARTITIONS --replication-factor $REPLICAS --topic $TOPIC_NAME"
+  CMD="/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions $PARTITIONS --replication-factor $REPLICAS --topic $TOPIC_NAME --config min.insync.replicas=1"
   sudo docker exec kafka-1 bash -c "$CMD"
 }
 

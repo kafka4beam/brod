@@ -87,6 +87,7 @@
                , max_bytes           :: bytes()
                , size_stat_window    :: non_neg_integer()
                , prefetch_bytes      :: non_neg_integer()
+               , connection_mref     :: ?undef | reference()
                }).
 
 -type state() :: #state{}.
@@ -235,6 +236,7 @@ init({ClientPid, Topic, Partition, Config}) ->
              , avg_bytes           = 0
              , max_bytes           = MaxBytes
              , size_stat_window    = Cfg(size_stat_window, ?DEFAULT_AVG_WINDOW)
+             , connection_mref     = ?undef
              }}.
 
 handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber} = State0) ->
@@ -264,10 +266,10 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
                                      }),
   {noreply, NewState};
 handle_info({'DOWN', _MonitorRef, process, Pid, _Reason},
-            #state{connection = Pid} = State) ->
+            #state{connection = Pid} = State0) ->
+  State = State0#state{connection = ?undef, connection_mref = ?undef},
   ok = maybe_send_init_connection(State),
-  State1 = State#state{connection = ?undef},
-  {noreply, State1};
+  {noreply, State};
 handle_info(Info, State) ->
   error_logger:warning_msg("~p ~p got unexpected info: ~p",
                           [?MODULE, self(), Info]),
@@ -476,20 +478,37 @@ err_op(?request_timed_out)          -> retry;
 err_op(?unknown_topic_or_partition) -> stop;
 err_op(?invalid_topic_exception)    -> stop;
 err_op(?offset_out_of_range)        -> reset_offset;
+err_op(?leader_not_available)       -> reset_connection;
+err_op(?not_leader_for_partition)   -> reset_connection;
 err_op(_)                           -> restart.
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
-                   #state{ topic      = Topic
-                         , partition  = Partition
-                         , subscriber = Subscriber
+                   #state{ topic           = Topic
+                         , partition       = Partition
+                         , subscriber      = Subscriber
+                         , connection_mref = MRef
                          } = State) ->
   case err_op(ErrorCode) of
+    reset_connection ->
+      error_logger:info_msg("Fetch error ~p-~p: ~p",
+                            [Topic, Partition, ErrorCode]),
+      %% The current connection in use is not connected to the partition leader,
+      %% so we dereference and demonitor the connection pid, but leave it alive,
+      %% Can not kill it because it might be shared with other partition workers
+      %% Worst case scenario, kafka will close the connection after it
+      %% idles for a few minutes.
+      is_reference(MRef) andalso erlang:demonitor(MRef),
+      NewState = State#state{ connection = ?undef
+                            , connection_mref = ?undef
+                            },
+      ok = maybe_send_init_connection(NewState),
+      {noreply, NewState};
     retry ->
       {noreply, maybe_send_fetch_request(State)};
     stop ->
       ok = cast_to_subscriber(Subscriber, Error),
-      error_logger:error_msg("consumer of topic ~p partition ~p shutdown, "
-                             "reason: ~p", [Topic, Partition, ErrorCode]),
+      error_logger:error_msg("Consumer ~p-~p shutdown\nReason: ~p",
+                             [Topic, Partition, ErrorCode]),
       {stop, normal, State};
     reset_offset ->
       handle_reset_offset(State, Error);
@@ -709,11 +728,12 @@ maybe_init_connection(#state{ client_pid = ClientPid
   %% Lookup, or maybe (re-)establish a connection to partition leader
   case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
     {ok, Connection} ->
-      _ = erlang:monitor(process, Connection),
+      Mref = erlang:monitor(process, Connection),
       %% Switching to a new connection
       %% the response for last_req_ref will be lost forever
       State = State0#state{ last_req_ref = ?undef
                           , connection = Connection
+                          , connection_mref = Mref
                           },
       {ok, State};
     {error, Reason} ->
