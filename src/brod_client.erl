@@ -18,6 +18,7 @@
 -behaviour(gen_server).
 
 -export([ get_consumer/3
+        , get_connection/3
         , get_group_coordinator/2
         , get_leader_connection/3
         , get_metadata/2
@@ -206,6 +207,16 @@ stop_consumer(Client, TopicName) ->
 get_leader_connection(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
+%% @doc Get connection to a kafka broker.
+%% Return already established connection towards the borker,
+%% otherwise a new one is established and cached in client state.
+%% If the old connection was dead less than a configurable N seconds ago,
+%% {error, LastReason} is returned.
+-spec get_connection(client(), brod:hostname(), brod:portnum()) ->
+        {ok, pid()} | {error, any()}.
+get_connection(Client, Host, Port) ->
+  safe_gen_call(Client, {get_connection, Host, Port}, infinity).
+
 %% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
 -spec get_metadata(client(), all | ?undef | topic()) ->
         {ok, kpro:struct()} | {error, any()}.
@@ -301,6 +312,9 @@ handle_call({stop_consumer, Topic}, _From, State) ->
   {reply, ok, State};
 handle_call({get_leader_connection, Topic, Partition}, _From, State) ->
   {Result, NewState} = do_get_leader_connection(State, Topic, Partition),
+  {reply, Result, NewState};
+handle_call({get_connection, Host, Port}, _From, State) ->
+  {Result, NewState} = maybe_connect(State, {Host, Port}),
   {reply, Result, NewState};
 handle_call({get_group_coordinator, GroupId}, _From, State) ->
   {Result, NewState} = do_get_group_coordinator(State, GroupId),
