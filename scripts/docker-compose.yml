@@ -1,20 +1,37 @@
 version: '2'
 
 services:
-  zookeeper:
-    image: "zmstone/kafka:${KAFKA_VERSION}"
+  pause:
+    image: "gcr.io/google_containers/pause-amd64:3.0"
+    networks:
+      - pausenet
     ports:
       - "2181:2181"
-    container_name: zookeeper
-    command: run zookeeper
-  kafka_1:
-    image: "zmstone/kafka:${KAFKA_VERSION}"
-    container_name: 'kafka-1'
-    ports:
       - "9092:9092"
       - "9093:9093"
       - "9094:9094"
       - "9095:9095"
+      - "9192:9192"
+      - "9193:9193"
+      - "9194:9194"
+      - "9195:9195"
+    container_name: pause
+  zookeeper:
+    depends_on:
+      - pause
+    image: "zmstone/kafka:${KAFKA_VERSION}"
+    container_name: zookeeper
+    command: run zookeeper
+    ipc: container:pause
+    network_mode: service:pause
+  kafka_1:
+    depends_on:
+      - pause
+      - zookeeper
+    image: "zmstone/kafka:${KAFKA_VERSION}"
+    container_name: 'kafka-1'
+    ipc: container:pause
+    network_mode: service:pause
     environment:
       BROKER_ID: 0
       PLAINTEXT_PORT: 9092
@@ -22,17 +39,19 @@ services:
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
   kafka_2:
+    depends_on:
+      - pause
+      - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: 'kafka-2'
-    ports:
-      - "9192:9092"
-      - "9193:9093"
-      - "9194:9094"
-      - "9195:9095"
+    ipc: container:pause
+    network_mode: service:pause
     environment:
       BROKER_ID: 1
-      PLAINTEXT_PORT: 9092
-      SSL_PORT: 9093
-      SASL_SSL_PORT: 9094
-      SASL_PLAINTEXT_PORT: 9095
+      PLAINTEXT_PORT: 9192
+      SSL_PORT: 9193
+      SASL_SSL_PORT: 9194
+      SASL_PLAINTEXT_PORT: 9195
 
+networks:
+  pausenet:

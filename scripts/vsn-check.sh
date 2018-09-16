@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-THIS_DIR="$(dirname $(readlink -f $0))"
+THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
 MAKEFILE="$THIS_DIR/../Makefile"
 APP_SRC="$THIS_DIR/../src/brod.app.src"
 REBAR_CONFIG="$THIS_DIR/../rebar.config"

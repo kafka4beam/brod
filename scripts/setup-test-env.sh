@@ -25,7 +25,7 @@ sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f $TD/docker-compose.yml dow
 sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f $TD/docker-compose.yml up -d
 
 n=0
-while [ "$(sudo docker exec kafka-1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --describe')" != '' ]; do
+while [ "$(sudo docker exec kafka-1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper localhost --describe')" != '' ]; do
   if [ $n -gt 4 ]; then
     echo "timeout waiting for kakfa_1"
     exit 1
@@ -38,7 +38,7 @@ function create_topic {
   TOPIC_NAME="$1"
   PARTITIONS="${2:-1}"
   REPLICAS="${3:-1}"
-  CMD="/opt/kafka/bin/kafka-topics.sh --zookeeper zookeeper --create --partitions $PARTITIONS --replication-factor $REPLICAS --topic $TOPIC_NAME --config min.insync.replicas=1"
+  CMD="/opt/kafka/bin/kafka-topics.sh --zookeeper localhost --create --partitions $PARTITIONS --replication-factor $REPLICAS --topic $TOPIC_NAME --config min.insync.replicas=1"
   sudo docker exec kafka-1 bash -c "$CMD"
 }
 
@@ -62,5 +62,5 @@ sudo docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-ser
 
 # for kafka 0.11 or later, add sasl-scram test credentials
 if [[ "$KAFKA_VERSION" != 0.9* ]] && [[ "$KAFKA_VERSION" != 0.10* ]]; then
-  sudo docker exec kafka-1 /opt/kafka/bin/kafka-configs.sh --zookeeper zookeeper:2181 --alter --add-config 'SCRAM-SHA-256=[iterations=8192,password=ecila],SCRAM-SHA-512=[password=ecila]' --entity-type users --entity-name alice
+  sudo docker exec kafka-1 /opt/kafka/bin/kafka-configs.sh --zookeeper localhost:2181 --alter --add-config 'SCRAM-SHA-256=[iterations=8192,password=ecila],SCRAM-SHA-512=[password=ecila]' --entity-type users --entity-name alice
 fi
