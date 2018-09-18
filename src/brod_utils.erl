@@ -41,6 +41,7 @@
         , log/3
         , make_batch_input/2
         , make_fetch_fun/4
+        , make_part_fun/1
         , os_time_utc_str/0
         , parse_rsp/1
         , request_sync/2
@@ -199,6 +200,17 @@ make_fetch_fun(Conn, Topic, Partition, FetchOpts) ->
   MaxBytes = maps:get(max_bytes, FetchOpts, 1 bsl 20),
   ReqFun = make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes),
   fun(Offset) -> fetch(Conn, ReqFun, Offset, MaxBytes) end.
+
+-spec make_part_fun(brod:partitioner()) -> brod:partition_fun().
+make_part_fun(random) ->
+  fun(_, PartitionCount, _, _) ->
+      {ok, rand:uniform(PartitionCount) -1}
+  end;
+make_part_fun(hash) ->
+  fun(_, PartitionCount, Key, _) ->
+      {ok, erlang:phash2(Key) rem PartitionCount}
+  end;
+make_part_fun(F) -> F.
 
 %% @doc Hide sasl plain password in an anonymous function to avoid
 %% the plain text being dumped to crash logs
