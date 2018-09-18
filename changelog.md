@@ -124,3 +124,4 @@
 * 3.7.1
   * Fix brod_topic_subscriber and brod_group_subscriber re-subscribe behaviour
     to avoid fetching duplicated messages.
+  * Add 'random' and 'hash' partitioner for produce APIs

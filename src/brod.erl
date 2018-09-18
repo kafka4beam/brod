@@ -141,6 +141,7 @@
              , partition/0
              , partition_assignment/0
              , partition_fun/0
+             , partitioner/0
              , portnum/0
              , produce_ack_cb/0
              , producer_config/0
@@ -187,8 +188,9 @@
 %% producers
 -type produce_reply() :: #brod_produce_reply{}.
 -type producer_config() :: brod_producer:config().
--type partition_fun() :: fun((topic(), partition(), key(), value()) ->
+-type partition_fun() :: fun((topic(), pos_integer(), key(), value()) ->
                                 {ok, partition()}).
+-type partitioner() :: partition_fun() | random | hash.
 -type produce_ack_cb() :: fun((partition(), offset()) -> _).
 -type compression() :: no_compression | gzip | snappy.
 -type call_ref() :: #brod_call_ref{}.
@@ -433,20 +435,21 @@ produce(ProducerPid, Key, Value) ->
 %% so the caller can used it to expect (match) a
 %% `#brod_produce_reply{result = brod_produce_req_acked}'
 %% message after the produce request has been acked by kafka.
--spec produce(client(), topic(), partition() | partition_fun(),
+-spec produce(client(), topic(), partition() | partitioner(),
               key(), value()) -> {ok, call_ref()} | {error, any()}.
-produce(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
+produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
+  case get_producer(Client, Topic, Partition) of
+    {ok, Pid} -> produce(Pid, Key, Value);
+    {error, Reason} -> {error, Reason}
+  end;
+produce(Client, Topic, Partitioner, Key, Value) ->
+  PartFun = brod_utils:make_part_fun(Partitioner),
   case brod_client:get_partitions_count(Client, Topic) of
     {ok, PartitionsCnt} ->
       {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
       produce(Client, Topic, Partition, Key, Value);
     {error, Reason} ->
       {error, Reason}
-  end;
-produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
-  case get_producer(Client, Topic, Partition) of
-    {ok, Pid} -> produce(Pid, Key, Value);
-    {error, Reason} -> {error, Reason}
   end.
 
 %% @doc Same as `produce/3' only the ack is not delivered as a message,
@@ -461,11 +464,16 @@ produce_cb(ProducerPid, Key, Value, AckCb) ->
 %% instead, the callback is evaluated by producer worker when ack is received
 %% from kafka. Return the partition to caller as `{ok, Partition}' for caller
 %% to correlate the callback when the 3rd arg is not a partition number.
--spec produce_cb(client(), topic(), partition() | partition_fun(),
+-spec produce_cb(client(), topic(), partition() | partitioner(),
                  key(), value(), produce_ack_cb()) ->
         ok | {ok, partition()} | {error, any()}.
-produce_cb(Client, Topic, PartFun, Key, Value, AckCb)
- when is_function(PartFun) ->
+produce_cb(Client, Topic, Part, Key, Value, AckCb) when is_integer(Part) ->
+  case get_producer(Client, Topic, Part) of
+    {ok, Pid} -> produce_cb(Pid, Key, Value, AckCb);
+    {error, Reason} -> {error, Reason}
+  end;
+produce_cb(Client, Topic, Partitioner, Key, Value, AckCb) ->
+  PartFun = brod_utils:make_part_fun(Partitioner),
   case brod_client:get_partitions_count(Client, Topic) of
     {ok, PartitionsCnt} ->
       {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
@@ -475,11 +483,6 @@ produce_cb(Client, Topic, PartFun, Key, Value, AckCb)
       end;
     {error, Reason} ->
       {error, Reason}
-  end;
-produce_cb(Client, Topic, Partition, Key, Value, AckCb) ->
-  case get_producer(Client, Topic, Partition) of
-    {ok, Pid} -> produce_cb(Pid, Key, Value, AckCb);
-    {error, Reason} -> {error, Reason}
   end.
 
 %% @doc Send the message to partition worker without any ack.
@@ -492,9 +495,15 @@ produce_no_ack(ProducerPid, Key, Value) ->
 %% @doc Find the partition worker and send message without any ack.
 %% NOTE: This call has no back-pressure to the caller,
 %%       excessive usage may cause beam to run out of memory.
--spec produce_no_ack(client(), topic(), partition() | partition_fun(),
+-spec produce_no_ack(client(), topic(), partition() | partitioner(),
            key(), value()) -> ok | {error, any()}.
-produce_no_ack(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
+produce_no_ack(Client, Topic, Part, Key, Value) when is_integer(Part) ->
+  case get_producer(Client, Topic, Part) of
+    {ok, Pid} -> produce_no_ack(Pid, Key, Value);
+    {error, Reason} -> {error, Reason}
+  end;
+produce_no_ack(Client, Topic, Partitioner, Key, Value) ->
+  PartFun = brod_utils:make_part_fun(Partitioner),
   case brod_client:get_partitions_count(Client, Topic) of
     {ok, PartitionsCnt} ->
       {ok, Partition} = PartFun(Topic, PartitionsCnt, Key, Value),
@@ -502,11 +511,6 @@ produce_no_ack(Client, Topic, PartFun, Key, Value) when is_function(PartFun) ->
     {error, _Reason} ->
       %% error ignored
       ok
-  end;
-produce_no_ack(Client, Topic, Partition, Key, Value) ->
-  case get_producer(Client, Topic, Partition) of
-    {ok, Pid} -> produce_no_ack(Pid, Key, Value);
-    {error, Reason} -> {error, Reason}
   end.
 
 %% @doc Same as `produce/5' only the ack is not d
@@ -534,7 +538,7 @@ produce_sync(Pid, Key, Value) ->
 %% This function will not return until a response is received from kafka,
 %% however if producer is started with required_acks set to 0, this function
 %% will return once the messages are buffered in the producer process.
--spec produce_sync(client(), topic(), partition() | partition_fun(),
+-spec produce_sync(client(), topic(), partition() | partitioner(),
                    key(), value()) -> ok | {error, any()}.
 produce_sync(Client, Topic, Partition, Key, Value) ->
   case produce_sync_offset(Client, Topic, Partition, Key, Value) of
@@ -545,7 +549,7 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 %% @doc Version of produce_sync/5 that returns the offset assigned by Kafka
 %% If producer is started with required_acks set to 0, the offset will be
 %% `?BROD_PRODUCE_UNKNOWN_OFFSET'.
--spec produce_sync_offset(client(), topic(), partition() | partition_fun(),
+-spec produce_sync_offset(client(), topic(), partition() | partitioner(),
                           key(), value()) -> {ok, offset()} | {error, any()}.
 produce_sync_offset(Client, Topic, Partition, Key, Value) ->
   case produce(Client, Topic, Partition, Key, Value) of
