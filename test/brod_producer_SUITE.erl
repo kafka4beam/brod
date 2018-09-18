@@ -40,6 +40,7 @@
         , t_produce_buffered_offset/1
         , t_produce_fire_n_forget/1
         , t_configure_produce_api_vsn/1
+        , t_produce_pre_defined_partitioner/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -286,6 +287,13 @@ t_produce_partitioner(Config) when is_list(Config) ->
   ReceiveFun(0, K1, V1),
   ok = brod:produce_sync(Client, ?TOPIC, PartFun, K2, V2),
   ReceiveFun(1, K2, V2).
+
+t_produce_pre_defined_partitioner(Config) when is_list(Config) ->
+  Client = ?config(client),
+  {K1, V1} = make_unique_kv(),
+  {K2, V2} = make_unique_kv(),
+  ok = brod:produce_sync(Client, ?TOPIC, random, K1, V1),
+  ok = brod:produce_sync(Client, ?TOPIC, hash, K2, V2).
 
 t_produce_fire_n_forget(Config) when is_list(Config) ->
   Client = ?config(client),
