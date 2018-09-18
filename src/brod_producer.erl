@@ -390,7 +390,7 @@ terminate(_Reason, _State) ->
 
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
-  brod_utils:log(error, "Produce error ~w-~s ~B Offset: ~B Error: ~p",
+  brod_utils:log(error, "Produce error ~s-~B Offset: ~B Error: ~p",
                  [Topic, Partition, Offset, ErrorCode]).
 
 handle_produce(BufCb, Batch,
