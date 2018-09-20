@@ -35,6 +35,7 @@
 -export([ t_async_acks/1
         , t_demo/1
         , t_demo_message_set/1
+        , t_consumer_crash/1
         ]).
 
 
@@ -84,27 +85,24 @@ all() -> [F || {F, _A} <- module_info(exports),
 -record(state, { ct_case_ref
                , ct_case_pid
                , is_async_ack
-               , my_id
                }).
 
-init(_Topic, {CaseRef, SubscriberId, CasePid, IsAsyncAck}) ->
+init(_Topic, {CaseRef, CasePid, IsAsyncAck}) ->
   State = #state{ ct_case_ref  = CaseRef
                 , ct_case_pid  = CasePid
                 , is_async_ack = IsAsyncAck
-                , my_id        = SubscriberId
                 },
   {ok, [], State}.
 
 handle_message(Partition, Message, #state{ ct_case_ref  = Ref
                                          , ct_case_pid  = Pid
                                          , is_async_ack = IsAsyncAck
-                                         , my_id        = MyId
                                          } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
   %% forward the message to ct case for verification.
-  Pid ! {Ref, MyId, Partition, Offset, Value},
+  Pid ! {Ref, Partition, Offset, Value},
   case IsAsyncAck of
     true  -> {ok, State};
     false -> {ok, ack, State}
@@ -157,30 +155,29 @@ t_async_acks(Config) when is_list(Config) ->
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
                    ],
-  CaseRef        = t_async_acks,
-  CasePid        = self(),
-  InitArgs       = {CaseRef, _SubscriberId = 0, CasePid, _IsAsyncAck = true},
-  Partition      = 0,
+  CaseRef = t_async_acks,
+  CasePid = self(),
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
+  Partition = 0,
   {ok, SubscriberPid} =
     brod:start_link_topic_subscriber(?CLIENT_ID, ?TOPIC, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
-      Value = list_to_binary(integer_to_list(I)),
+      Value = integer_to_binary(I),
       ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, Partition, <<>>, Value)
     end,
   RecvFun =
-    fun(Timeout, {ContinueFun, Acc}) ->
+    fun F(Timeout, Acc) ->
       receive
-        {CaseRef, 0, 0, Offset, Value} ->
+        {CaseRef, Partition, Offset, Value} ->
           ok = brod_topic_subscriber:ack(SubscriberPid, Partition, Offset),
-          I = binary_to_list(Value),
-          NewAcc = [list_to_integer(I) | Acc],
-          ContinueFun(0, {ContinueFun, NewAcc});
+          I = binary_to_integer(Value),
+          F(0, [I | Acc]);
         Msg ->
           erlang:error({unexpected_msg, Msg})
       after Timeout ->
-        {ContinueFun, Acc}
+        Acc
       end
     end,
   ok = SendFun(0),
@@ -188,15 +185,76 @@ t_async_acks(Config) when is_list(Config) ->
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
   %% is produced.
-  _ = RecvFun(2000, {RecvFun, []}),
+  _ = RecvFun(2000, []),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
-  %% worst case scenario, the receive loop will cost (1000 * 5 + 5 * 1000) ms
+  %% worst case scenario, the receive loop will cost (100 * 5 + 5 * 1000) ms
   Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  {_, ReceivedL} = lists:foldl(RecvFun, {RecvFun, []}, Timeouts ++ [1,2,3,4,5]),
+  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
   ?assertEqual(L, lists:reverse(ReceivedL)),
   ok = brod_topic_subscriber:stop(SubscriberPid),
   ok.
+
+t_consumer_crash(Config) when is_list(Config) ->
+  ConsumerConfig = [ {prefetch_count, 10}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   , {partition_restart_delay_seconds, 1}
+                   ],
+  CaseRef = t_consumer_crash,
+  CasePid = self(),
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
+  Partition = 0,
+  {ok, SubscriberPid} =
+    brod:start_link_topic_subscriber(?CLIENT_ID, ?TOPIC, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  SendFun =
+    fun(I) ->
+        ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, Partition, <<>>, <<I>>)
+    end,
+  ReceiveFun =
+    fun F(MaxI, Acc) ->
+        receive
+          {CaseRef, Partition, Offset, <<MaxI>>} ->
+            lists:unzip(lists:reverse([{Offset, MaxI} | Acc]));
+          {CaseRef, Partition, Offset, <<I>>} when I < MaxI ->
+            F(MaxI, [{Offset, I} | Acc]);
+          Msg ->
+            ct:fail("Unexpected msg: ~p", [Msg])
+        after 5000 ->
+            lists:unzip(lists:reverse(Acc))
+        end
+    end,
+  SendFun(0),
+  %% the first message may or may not be received depending on when
+  %% the consumer starts polling
+  ReceiveFun(0, []),
+  %% send and receive some messages, ack some of them
+  [SendFun(I) || I <- lists:seq(1, 5)],
+  {[_, _, O3, _, O5], [1, 2, 3, 4, 5]} = ReceiveFun(5, []),
+  ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O3),
+  %% do a sync request to the subscriber, so that we know it has
+  %% processed the ack, then kill the brod_consumer process
+  sys:get_state(SubscriberPid),
+  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC, Partition),
+  Mon = monitor(process, ConsumerPid),
+  exit(ConsumerPid, test_consumer_restart),
+  receive {'DOWN', Mon, process, ConsumerPid, test_consumer_restart} -> ok
+  after 1000 -> ct:fail("timed out waiting for the consumer process to die")
+  end,
+  %% ack all previously received messages
+  %% so topic subscriber can re-subscribe to the restarted consumer
+  ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O5),
+  %% send and receive some more messages, check each message arrives only once
+  [SendFun(I) || I <- lists:seq(6, 8)],
+  {_, [6, 7, 8]} = ReceiveFun(8, []),
+  %% stop the subscriber and check there are no more late messages delivered
+  ok = brod_topic_subscriber:stop(SubscriberPid),
+  receive
+    {CaseRef, Partition, Offset, Value} ->
+      ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
+  after 0 -> ok
+  end.
 
 %%%_* Help funtions ============================================================
 

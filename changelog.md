@@ -121,3 +121,6 @@
     messages before the desired offset. Just keep reading forward in this case.
   * Issue #285 `brod_consumer` no longer restart on `leader_not_availble` and `not_leader_for_partition`
     error codes received in fetch response. It resets connection and rediscover leader after delay.
+* 3.7.1
+  * Fix brod_topic_subscriber and brod_group_subscriber re-subscribe behaviour
+    to avoid fetching duplicated messages.
