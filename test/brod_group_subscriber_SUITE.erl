@@ -41,6 +41,7 @@
         , t_loc_demo_message_set/1
         , t_2_members_subscribe_to_different_topics/1
         , t_async_commit/1
+        , t_consumer_crash/1
         ]).
 
 
@@ -216,20 +217,8 @@ t_koc_demo_message_set(Config) when is_list(Config) ->
   end.
 
 t_async_acks({init, Config}) when is_list(Config) ->
-  PARTITION = 0,
-  CasePid = self(),
-  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(brod, subscribe,
-              fun(Client, Pid, Topic, Partition, Opts) ->
-                  Result = meck:passthrough([Client, Pid, Topic,
-                                             Partition, Opts]),
-                  case Partition =:= PARTITION of
-                    true -> CasePid ! subscribed;
-                    false -> ok
-                  end,
-                  Result
-              end),
-  [{partition, PARTITION} | Config];
+  meck_subscribe_unsubscribe(),
+  Config;
 t_async_acks({'end', Config}) when is_list(Config) ->
   meck:unload(brod);
 t_async_acks(Config) when is_list(Config) ->
@@ -245,14 +234,14 @@ t_async_acks(Config) when is_list(Config) ->
   CaseRef = t_async_acks,
   CasePid = self(),
   InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false},
-  Partition = ?config(partition),
+  Partition = 0,
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
-      Value = list_to_binary(integer_to_list(I)),
+      Value = integer_to_binary(I),
       ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, Value)
     end,
   Timeout = 4000,
@@ -275,31 +264,89 @@ t_async_acks(Config) when is_list(Config) ->
           erlang:error({timeout, Acc})
       end
     end,
-  %% Make sure subscriber is ready before sending messages
-  receive subscribed -> ok
-  after 4000 -> erlang:error(<<"timeout waiting for subscriber">>) end,
+  ok = wait_for_subscribers([?TOPIC1], [SubscriberPid]),
   L = lists:seq(1, MaxSeqNo),
   ok = lists:foreach(SendFun, L),
   ?assertEqual(L, RecvFun([])),
   ok = brod_group_subscriber:stop(SubscriberPid),
   ok.
 
-t_2_members_subscribe_to_different_topics({init, Config}) ->
+t_consumer_crash({init, Config}) when is_list(Config) ->
+  meck_subscribe_unsubscribe(),
+  Config;
+t_consumer_crash({'end', Config}) when is_list(Config) ->
+  meck:unload(brod);
+t_consumer_crash(Config) when is_list(Config) ->
+  %% use consumer managed offset commit behaviour
+  %% so we can control where to start fetching messages from
+  GroupConfig = [{offset_commit_policy, consumer_managed}],
+  ConsumerConfig = [ {prefetch_count, 10}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   , {partition_restart_delay_seconds, 1}
+                   ],
+  CaseRef = t_consumer_crash,
   CasePid = self(),
-  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(brod, subscribe,
-              fun(Client, Pid, Topic, Partition, Opts) ->
-                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
-                                                       Partition, Opts]),
-                  CasePid ! {subscribed, {Topic, Partition}, ConsumerPid},
-                  {ok, ConsumerPid}
-              end),
-  meck:expect(brod, unsubscribe,
-              fun(ConsumerPid, SubscriberPid) ->
-                  meck:passthrough([ConsumerPid, SubscriberPid]),
-                  CasePid ! {unsubscribed, ConsumerPid},
-                  ok
-              end),
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false},
+  Partition = 0,
+  {ok, SubscriberPid} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  SendFun =
+    fun(I) ->
+        ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, <<I>>)
+    end,
+  ReceiveFun =
+    fun F(MaxI, Acc) ->
+        receive
+          ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, <<MaxI>>) ->
+            lists:unzip(lists:reverse([{Offset, MaxI} | Acc]));
+          ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, <<I>>) when
+              I < MaxI ->
+            F(MaxI, [{Offset, I} | Acc]);
+          Msg ->
+            ct:fail("Unexpected msg: ~p", [Msg])
+        after 5000 ->
+            lists:unzip(lists:reverse(Acc))
+        end
+    end,
+  ok = wait_for_subscribers([?TOPIC1], [SubscriberPid]),
+  %% send and receive some messages, ack some of them
+  [SendFun(I) || I <- lists:seq(1, 5)],
+  {[_, _, O3, _, O5], [1, 2, 3, 4, 5]} = ReceiveFun(5, []),
+  ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1, Partition, O3),
+  %% do a sync request to the subscriber, so that we know it has
+  %% processed the ack, then kill the brod_consumer process
+  sys:get_state(SubscriberPid),
+  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC1, Partition),
+  Mon = monitor(process, ConsumerPid),
+  exit(ConsumerPid, test_consumer_restart),
+  receive {'DOWN', Mon, process, ConsumerPid, test_consumer_restart} -> ok
+  after 1000 -> ct:fail("timed out waiting for the consumer process to die")
+  end,
+  %% send more messages, but should not be received until after re-subscribe
+  [SendFun(I) || I <- lists:seq(6, 8)],
+  %% group subscriber should not subscribe when there are outstadning messages
+  ?assertError({timeout, wait_for_subscribers},
+               wait_for_subscribers([{?TOPIC1, [Partition]}],
+                                    [SubscriberPid], _Seconds = 3)),
+  %% ack all previously received messages
+  %% so topic subscriber can re-subscribe to the restarted consumer
+  ok = brod_group_subscriber:ack(SubscriberPid, ?TOPIC1, Partition, O5),
+  ok = wait_for_subscribers([{?TOPIC1, [Partition]}], [SubscriberPid]),
+  %% receive some more messages, check each message arrives only once
+  {_, [6, 7, 8]} = ReceiveFun(8, []),
+  %% stop the subscriber and check there are no more late messages delivered
+  ok = brod_group_subscriber:stop(SubscriberPid),
+  receive
+    ?MSG(CaseRef, SubscriberPid, ?TOPIC1, Partition, Offset, Value) ->
+      ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
+  after 0 -> ok
+  end.
+
+t_2_members_subscribe_to_different_topics({init, Config}) ->
+  meck_subscribe_unsubscribe(),
   Config;
 t_2_members_subscribe_to_different_topics({'end', Config}) when is_list(Config) ->
   meck:unload(brod);
@@ -324,7 +371,8 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC3],
                                      GroupConfig, ConsumerConfig,
                                      ?MODULE, InitArgs),
-  ok = wait_for_subscribers([?TOPIC2, ?TOPIC3]),
+  ok = wait_for_subscribers([?TOPIC2, ?TOPIC3],
+                            [SubscriberPid1, SubscriberPid2]),
   Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
                     {ok, rand_uniform(PartitionCnt)}
                 end,
@@ -367,15 +415,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   ok.
 
 t_async_commit({init, Config}) ->
-  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
-  CasePid = self(),
-  meck:expect(brod, subscribe,
-              fun(Client, Pid, Topic, Partition, Opts) ->
-                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
-                                                       Partition, Opts]),
-                  CasePid ! {subscribed, {Topic, Partition}, ConsumerPid},
-                  {ok, ConsumerPid}
-              end),
+  meck_subscribe_unsubscribe(),
   meck:new(brod_group_coordinator, [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_async_commit({'end', _Config}) ->
@@ -385,6 +425,8 @@ t_async_commit(Config) when is_list(Config) ->
   CasePid = self(),
   Partition = 0,
   InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = true},
+  %% use a one-time gid for clean test
+  GroupId = list_to_binary("one-time-gid-" ++ integer_to_list(rand:uniform(1000000000))),
   StartSubscriber =
     fun() ->
         GroupConfig = [],
@@ -395,10 +437,10 @@ t_async_commit(Config) when is_list(Config) ->
                          , {max_wait_time, 100}
                          ],
         {ok, SubscriberPid} =
-          brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC4],
+          brod:start_link_group_subscriber(?CLIENT_ID, GroupId, [?TOPIC4],
                                            GroupConfig, ConsumerConfig,
                                            ?MODULE, InitArgs),
-        wait_for_subscribers([?TOPIC4]),
+        wait_for_subscribers([?TOPIC4], [SubscriberPid]),
         SubscriberPid
     end,
   EmulateRestart =
@@ -450,32 +492,53 @@ t_async_commit(Config) when is_list(Config) ->
 %%
 %% This function maintains a list of subscription states,
 %% and returns once all topic-partitions reach 'subscribed' state.
-wait_for_subscribers(Topics) ->
+wait_for_subscribers(TPs, SubPids) ->
+  wait_for_subscribers(TPs, SubPids, 10).
+
+wait_for_subscribers(TPs, SubPids, TimeoutSecs) ->
   PerTopic =
-    fun(Topic) ->
+    fun(Topic) when is_binary(Topic) ->
         {ok, Count} = brod_client:get_partitions_count(?CLIENT_ID, Topic),
         lists:map(fun(Partition) ->
                       {{Topic, Partition}, _ConsumerPid = undefined}
-                  end, lists:seq(0, Count - 1))
+                  end, lists:seq(0, Count - 1));
+       ({Topic, Partitions}) ->
+        [{{Topic, Partition}, undefined} || Partition <- Partitions]
     end,
-  States = lists:flatten(lists:map(PerTopic, Topics)),
-  do_wait_for_subscribers(States).
+  States = lists:flatten(lists:map(PerTopic, TPs)),
+  Timeout = timer:seconds(TimeoutSecs),
+  Tref = erlang:start_timer(Timeout, self(), wait_for_subscribers),
+  try
+    do_wait_for_subscribers(States, SubPids)
+  after
+      erlang:cancel_timer(Tref),
+      receive {timeout, Tref, _} -> ok after 0 -> ok end
+  end.
 
-do_wait_for_subscribers(States) ->
+do_wait_for_subscribers(States, SubPids) ->
   case lists:all(fun({_, Pid}) -> is_pid(Pid) end, States) of
     true -> ok;
     false ->
       receive
-        {subscribed, TP, ConsumerPid} ->
-          NewStates = lists:keystore(TP, 1, States, {TP, ConsumerPid}),
-          do_wait_for_subscribers(NewStates);
-        {unsubscribed, ConsumerPid} ->
-          {TP, ConsumerPid} = lists:keyfind(ConsumerPid, 2, States),
-          NewStates = lists:keystore(TP, 1, States, {TP, undefined}),
-          do_wait_for_subscribers(NewStates)
-        after
-          10000 ->
-            erlang:error({timeout, States})
+        {subscribed, TP, SubscriberPid, ConsumerPid} ->
+          case lists:member(SubscriberPid, SubPids) of
+            true ->
+              NewStates = lists:keystore(TP, 1, States, {TP, ConsumerPid}),
+              do_wait_for_subscribers(NewStates, SubPids);
+            false ->
+              do_wait_for_subscribers(States, SubPids)
+          end;
+        {unsubscribed, SubscriberPid, ConsumerPid} ->
+          case lists:member(SubscriberPid, SubPids) of
+            true ->
+              {TP, ConsumerPid} = lists:keyfind(ConsumerPid, 2, States),
+              NewStates = lists:keystore(TP, 1, States, {TP, undefined}),
+              do_wait_for_subscribers(NewStates, SubPids);
+            false ->
+              do_wait_for_subscribers(States, SubPids)
+          end;
+        {timeout, _Tref, wait_for_subscribers} ->
+          erlang:error({timeout, wait_for_subscribers})
       end
   end.
 
@@ -504,6 +567,24 @@ receive_all(Msgs, Timeout) ->
   after Timeout ->
       Msgs
   end.
+
+meck_subscribe_unsubscribe() ->
+  CasePid = self(),
+  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(brod, subscribe,
+              fun(Client, Pid, Topic, Partition, Opts) ->
+                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
+                                                        Partition, Opts]),
+                  CasePid ! {subscribed, {Topic, Partition}, Pid, ConsumerPid},
+                  {ok, ConsumerPid}
+              end),
+  meck:expect(brod, unsubscribe,
+              fun(ConsumerPid, SubscriberPid) ->
+                  meck:passthrough([ConsumerPid, SubscriberPid]),
+                  CasePid ! {unsubscribed, SubscriberPid, ConsumerPid},
+                  ok
+              end),
+  ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

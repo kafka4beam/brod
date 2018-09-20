@@ -132,6 +132,7 @@
         , consumer_mref   :: ?undef | reference()
         , begin_offset    :: ?undef | brod:offset()
         , acked_offset    :: ?undef | brod:offset()
+        , last_offset     :: ?undef | brod:offset()
         }).
 
 -type consumer() :: #consumer{}.
@@ -324,18 +325,9 @@ init({Client, GroupId, Topics, GroupConfig,
                 },
   {ok, State}.
 
-handle_info({_ConsumerPid,
-             #kafka_message_set{ topic     = Topic
-                               , partition = Partition
-                               , messages  = Messages
-                               }},
-            #state{message_type = message} = State) ->
-  NewState = handle_messages(Topic, Partition, Messages, State),
-  {noreply, NewState};
-handle_info( {_ConsumerPid, MessageSet}
-           , #state{message_type = message_set} = State) ->
-  NewState = handle_message_set(MessageSet, State),
-  {noreply, NewState};
+handle_info({_ConsumerPid, #kafka_message_set{} = MsgSet}, State0) ->
+  State = handle_consumer_delivery(MsgSet, State0),
+  {noreply, State};
 handle_info({'DOWN', Mref, process, _Pid, _Reason},
             #state{client_mref = Mref} = State) ->
   %% restart, my supervisor should restart me
@@ -344,13 +336,12 @@ handle_info({'DOWN', Mref, process, _Pid, _Reason},
   {stop, client_down, State};
 handle_info({'DOWN', _Mref, process, Pid, Reason},
             #state{consumers = Consumers} = State) ->
-  case lists:keyfind(Pid, #consumer.consumer_pid, Consumers) of
-    #consumer{topic_partition = TP} = Consumer ->
+  case get_consumer(Pid, Consumers) of
+    #consumer{} = Consumer ->
       NewConsumer = Consumer#consumer{ consumer_pid  = ?DOWN(Reason)
                                      , consumer_mref = ?undef
                                      },
-      NewConsumers = lists:keyreplace(TP, #consumer.topic_partition,
-                                      Consumers, NewConsumer),
+      NewConsumers = put_consumer(NewConsumer, Consumers),
       NewState = State#state{consumers = NewConsumers},
       {noreply, NewState};
     false ->
@@ -468,6 +459,24 @@ terminate(_Reason, #state{}) ->
 
 %%%_* Internal Functions =======================================================
 
+handle_consumer_delivery(#kafka_message_set{ topic     = Topic
+                                           , partition = Partition
+                                           , messages  = Messages
+                                           } = MsgSet,
+                         #state{message_type = MsgType} = State0) ->
+  State = update_last_offset({Topic, Partition}, Messages, State0),
+  case MsgType of
+    message -> handle_messages(Topic, Partition, Messages, State);
+    message_set -> handle_message_set(MsgSet, State)
+  end.
+
+update_last_offset(TP, Messages, #state{consumers = Consumers} = State) ->
+  %% brod_consumer never delivers empty message set, lists:last is safe
+  #kafka_message{offset = LastOffset} = lists:last(Messages),
+  C = get_consumer(TP, Consumers),
+  Consumer = C#consumer{last_offset = LastOffset},
+  State#state{consumers = put_consumer(Consumer, Consumers)}.
+
 -spec start_subscribe_timer(?undef | reference(), timeout()) -> reference().
 start_subscribe_timer(?undef, Delay) ->
   erlang:send_after(Delay, self(), ?LO_CMD_SUBSCRIBE_PARTITIONS);
@@ -536,22 +545,16 @@ handle_ack(AckRef, #state{ generationId = GenerationId
                          , coordinator  = Coordinator
                          } = State, CommitNow) ->
   {Topic, Partition, Offset} = AckRef,
-  case lists:keyfind({Topic, Partition},
-                     #consumer.topic_partition, Consumers) of
-    #consumer{consumer_pid = ConsumerPid} = Consumer ->
-      ok = consume_ack(ConsumerPid, Offset),
-      if CommitNow ->
-          do_commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
-          NewConsumer = Consumer#consumer{acked_offset = Offset},
-          NewConsumers = lists:keyreplace({Topic, Partition},
-                                          #consumer.topic_partition,
-                                          Consumers, NewConsumer),
-          State#state{consumers = NewConsumers};
-         true ->
-          State
-      end;
+  Consumer = get_consumer({Topic, Partition}, Consumers),
+  #consumer{consumer_pid = ConsumerPid} = Consumer,
+  ok = consume_ack(ConsumerPid, Offset),
+  case CommitNow of
+    true ->
+      ok = do_commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
+      NewConsumer = Consumer#consumer{acked_offset = Offset},
+      NewConsumers = put_consumer(NewConsumer, Consumers),
+      State#state{consumers = NewConsumers};
     false ->
-      %% stale ack, ignore.
       State
   end.
 
@@ -578,9 +581,16 @@ subscribe_partition(Client, Consumer) ->
            , consumer_pid    = Pid
            , begin_offset    = BeginOffset0
            , acked_offset    = AckedOffset
+           , last_offset     = LastOffset
            } = Consumer,
   case brod_utils:is_pid_alive(Pid) of
     true ->
+      Consumer;
+    false when AckedOffset =/= LastOffset ->
+      %% The last fetched offset is not yet acked,
+      %% do not re-subscribe now to keep it simple and slow.
+      %% Otherwise if we subscribe with {begin_offset, LastOffset + 1}
+      %% we may exceed pre-fetch window size.
       Consumer;
     false ->
       %% fetch from the last acked offset + 1
@@ -615,6 +625,14 @@ log(#state{ groupId  = GroupId
     Level,
     "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
     [GroupId, MemberId, GenerationId, self() | Args]).
+
+get_consumer(Pid, Consumers) when is_pid(Pid) ->
+  lists:keyfind(Pid, #consumer.consumer_pid, Consumers);
+get_consumer({_, _} = TP, Consumers) ->
+  lists:keyfind(TP, #consumer.topic_partition, Consumers).
+
+put_consumer(#consumer{topic_partition = TP} = C, Consumers) ->
+  lists:keyreplace(TP, #consumer.topic_partition, Consumers, C).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
