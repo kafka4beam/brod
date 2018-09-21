@@ -558,11 +558,9 @@ handle_ack(AckRef, #state{ generationId = GenerationId
       State
   end.
 
-%% Tell consumer process to fetch more (if pre-fetch count allows).
-consume_ack(Pid, Offset) when is_pid(Pid) ->
-  ok = brod:consume_ack(Pid, Offset);
-consume_ack(_Down, _Offset) ->
-  %% consumer is down, should be restarted by its supervisor
+%% Tell consumer process to fetch more (if pre-fetch count/byte limit allows).
+consume_ack(Pid, Offset) ->
+  is_pid(Pid) andalso brod:consume_ack(Pid, Offset),
   ok.
 
 %% Send an async message to group coordinator for offset commit.
