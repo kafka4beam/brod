@@ -189,9 +189,9 @@ unsubscribe(Pid, SubscriberPid) ->
 
 %% @doc Subscriber confirms that a message (identified by offset) has been
 %% consumed, consumer process now may continue to fetch more messages.
-%% @end
 -spec ack(pid(), brod:offset()) -> ok.
-ack(Pid, Offset) -> safe_gen_call(Pid, {ack, Offset}, infinity).
+ack(Pid, Offset) ->
+  gen_server:cast(Pid, {ack, Offset}).
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
@@ -302,17 +302,16 @@ handle_call({unsubscribe, SubscriberPid}, _From,
     false ->
       {reply, {error, ignored}, State}
   end;
-handle_call({ack, Offset}, _From,
-            #state{pending_acks = PendingAcks} = State0) ->
-  NewPendingAcks = handle_ack(PendingAcks, Offset),
-  State1 = State0#state{pending_acks = NewPendingAcks},
-  State = maybe_send_fetch_request(State1),
-  {reply, ok, State};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+handle_cast({ack, Offset}, #state{pending_acks = PendingAcks} = State0) ->
+  NewPendingAcks = handle_ack(PendingAcks, Offset),
+  State1 = State0#state{pending_acks = NewPendingAcks},
+  State = maybe_send_fetch_request(State1),
+  {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:warning_msg("~p ~p got unexpected cast: ~p",
                           [?MODULE, self(), Cast]),
