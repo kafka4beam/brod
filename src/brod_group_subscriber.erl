@@ -379,8 +379,14 @@ handle_call({assign_partitions, Members, TopicPartitions}, _From,
             #state{ cb_module = CbModule
                   , cb_state  = CbState
                   } = State) ->
-  Result = CbModule:assign_partitions(Members, TopicPartitions, CbState),
-  {reply, Result, State};
+  case CbModule:assign_partitions(Members, TopicPartitions, CbState) of
+    {NewCbState, Result} ->
+      {reply, Result, State#state{ cb_state = NewCbState }};
+    %% Returning an updated cb_state is optional and clients that implemented
+    %% brod prior to version 3.7.1 need this backwards compatibly case clause
+    Result when is_list(Result) ->
+      {reply, Result, State}
+  end;
 handle_call(unsubscribe_all_partitions, _From,
             #state{ consumers = Consumers
                   } = State) ->
