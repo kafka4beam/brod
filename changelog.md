@@ -125,3 +125,4 @@
   * Fix brod_topic_subscriber and brod_group_subscriber re-subscribe behaviour
     to avoid fetching duplicated messages.
   * Add 'random' and 'hash' partitioner for produce APIs
+  * Allow `brod_group_subscrber:assign_partitions/3` to return an updated cb_state
