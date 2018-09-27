@@ -38,6 +38,8 @@ services:
       SSL_PORT: 9093
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
+      ADVERTISED_HOSTNAME: localhost
+      ZOOKEEPER_CONNECT: "localhost:2181"
   kafka_2:
     depends_on:
       - pause
@@ -52,6 +54,8 @@ services:
       SSL_PORT: 9193
       SASL_SSL_PORT: 9194
       SASL_PLAINTEXT_PORT: 9195
+      ADVERTISED_HOSTNAME: localhost
+      ZOOKEEPER_CONNECT: "localhost:2181"
 
 networks:
   pausenet:
