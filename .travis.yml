@@ -60,6 +60,11 @@ script:
     make test-env
     make t
     make cover
+
+after_success:
+  - |
+    OTP_VSN=`erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)'`
     if [ $OTP_VSN -eq 21 ]; then
       make coveralls
     fi
+
