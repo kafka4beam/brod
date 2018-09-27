@@ -1,14 +1,14 @@
 KAFKA_VERSION ?= 1.1
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 3.7.0
+PROJECT_VERSION = 3.7.1
 
 DEPS = supervisor3 kafka_protocol
 
 ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info -Dbuild_brod_cli
 
 dep_supervisor3_commit = 1.1.7
-dep_kafka_protocol_commit = 2.1.2
+dep_kafka_protocol_commit = 2.2.2
 dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafka_protocol_commit)
 
 EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
