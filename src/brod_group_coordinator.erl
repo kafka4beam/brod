@@ -53,7 +53,7 @@
 -define(REJOIN_DELAY_SECONDS, 1).
 -define(OFFSET_COMMIT_POLICY, commit_to_kafka_v2).
 -define(OFFSET_COMMIT_INTERVAL_SECONDS, 5).
-%% use kfaka's offset meta-topic retention policy
+%% use kafka's offset meta-topic retention policy
 -define(OFFSET_RETENTION_DEFAULT, -1).
 
 -define(ESCALATE_EC(EC), ?IS_ERROR(EC) andalso erlang:throw(EC)).
