@@ -1012,14 +1012,7 @@ make_offset_commit_metadata() ->
 %% member's init callback, and pass it to members via
 %% `brod_received_assignments()'
 -spec user_data(join | assign) -> binary().
-user_data(Action) ->
-  term_to_binary(
-    [ coordinator_info(Action)
-    ]).
-
--spec coordinator_info(join | assign) -> {atom(), pid()}.
-coordinator_info(join) -> {member_coordinator, self()};
-coordinator_info(assign) -> {leader_coordinator, self()}.
+user_data(_Action) -> <<"">>.
 
 %% Make a client ID to be used in the requests sent over the group
 %% coordinator's connection (group coordinator broker on the other end),
