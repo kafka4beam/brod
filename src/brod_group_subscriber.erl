@@ -115,6 +115,7 @@
 %
 %% This function is called only when 'partition_assignment_strategy' is
 %% 'callback_implemented' in group config.
+%% The first element in the group member list is ensured to be the group leader.
 %
 % commented out as it's an optional callback
 %-callback assign_partitions([brod:group_member()],
