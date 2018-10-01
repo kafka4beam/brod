@@ -174,8 +174,7 @@ handle_call(sync, From, State0) ->
   State = maybe_reply_sync(State1),
   {noreply, State};
 handle_call({assign_partitions, Members, TopicPartitions}, _From,
-            #state{coordinator = CoordinatorPid,
-                   topic = MyTopic,
+            #state{topic = MyTopic,
                    offsets = Offsets} = State) ->
   log(State, info, "Assigning all topic partitions to self", []),
   MyTP = [{MyTopic, P} || {P, _} <- Offsets],
@@ -195,7 +194,7 @@ handle_call({assign_partitions, Members, TopicPartitions}, _From,
   %% To keep it simple, assign all my topic-partitions to self
   %% but discard all other topic-partitions.
   %% After all, I will leave group as soon as offsets are committed
-  Result = assign_all_to_self(CoordinatorPid, Members, MyTP),
+  Result = assign_all_to_self(Members, MyTP),
   {reply, Result, State#state{is_elected = true}};
 handle_call(unsubscribe_all_partitions, _From, #state{} = State) ->
   %% nothing to do, because I do not subscribe to any partition
@@ -284,31 +283,15 @@ maybe_reply_sync(#state{pending_sync = From} = State) ->
   log(State, info, "done\n", []),
   State#state{pending_sync = ?undef}.
 
--spec assign_all_to_self(pid(), [brod:group_member()],
-                         [{topic(), partition()}]) ->
+%% I am the current leader because I am assigning partitions.
+%% My member ID should be positioned at the head of the member list.
+-spec assign_all_to_self([brod:group_member()], [{topic(), partition()}]) ->
         [{member_id(), [brod:partition_assignment()]}].
-assign_all_to_self(CoordinatorPid, Members, TopicPartitions) ->
-  MyMemberId = find_my_member_id(CoordinatorPid, Members),
+assign_all_to_self([{MyMemberId, _} | Members], TopicPartitions) ->
   Groupped = brod_utils:group_per_key(TopicPartitions),
-  [{MyMemberId, Groupped}].
-
-%% I am the current leader because I am assigning partitions,
-%% however my member ID is kept in `brod_group_coordinator' looping state,
-%% i.e. not exposed to callback module. So I make use of the coordinator
-%% pid in member's `user_data' to find my member ID.
-%%
-%% NOTE: I can not make a gen_server call to `brod_group_coordinator' because
-%% I am currently being called by coordinator -- deadlock otherwise.
-find_my_member_id(CoordinatorPid, [H | T]) ->
-  {MemberId, #kafka_group_member_metadata{user_data = UD}} = H,
-  try
-    L = binary_to_term(UD),
-    {_, CoordinatorPid} = lists:keyfind(member_coordinator, 1, L),
-    MemberId
-  catch
-    _ : _ ->
-      find_my_member_id(CoordinatorPid, T)
-  end.
+  [ {MyMemberId, Groupped}
+  | [{Id, []} || {Id, _MemberMeta} <- Members]
+  ].
 
 log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
   brod_utils:log(Level,

@@ -537,13 +537,15 @@ join_group(#state{ groupId                 = GroupId
   GenerationId = kpro:find(generation_id, RspBody),
   LeaderId = kpro:find(leader_id, RspBody),
   MemberId = kpro:find(member_id, RspBody),
-  Members = kpro:find(members, RspBody),
+  Members0 = kpro:find(members, RspBody),
+  Members1 = translate_members(Members0),
+  Members  = ensure_leader_at_hd(LeaderId, Members1),
   IsGroupLeader = (LeaderId =:= MemberId),
   State =
     State0#state{ memberId     = MemberId
                 , leaderId     = LeaderId
                 , generationId = GenerationId
-                , members      = translate_members(Members)
+                , members      = Members
                 },
   log(State, info, "elected=~p", [IsGroupLeader]),
   {ok, State}.
@@ -748,6 +750,18 @@ assign_partitions(State) when ?IS_LEADER(State) ->
 assign_partitions(#state{}) ->
   %% only leader can assign partitions to members
   [].
+
+%% Ensure leader member is positioned at head of the list.
+%% This is sort of a hidden feature but the easiest way to ensure
+%% backward compatibility for MemberModule:assign_partitions
+ensure_leader_at_hd(LeaderId, Members) ->
+  case lists:keytake(LeaderId, 1, Members) of
+    {value, Leader, Followers} ->
+      [Leader | Followers];
+    false ->
+      %% leader is not elected yet.
+      Members
+  end.
 
 -spec translate_members([kpro:struct()]) -> [member()].
 translate_members(Members) ->

@@ -56,6 +56,7 @@
             {ok, [{{brod:topic(), brod:partition()}, brod:offset()}]}.
 
 %% Called when the member is elected as the consumer group leader.
+%% The first element in the group member list is ensured to be the leader.
 %% NOTE: this function is called only when 'partition_assignment_strategy' is
 %% 'callback_implemented' in group config.
 %% see brod_group_coordinator:start_link/6. for more group config details.

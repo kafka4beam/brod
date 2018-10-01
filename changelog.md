@@ -127,4 +127,5 @@
   * Add 'random' and 'hash' partitioner for produce APIs
   * Allow `brod_group_subscrber:assign_partitions/3` to return an updated cb_state
   * `brod_client:get_connection` is back
-  * make it possible to run tests on both mac and linux
+  * Make it possible to run tests on both mac and linux
+  * Position group leader member at the head of members list when assigning partitions
