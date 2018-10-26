@@ -579,7 +579,10 @@ subscribe_partitions(#state{ client    = Client
                            , consumer_config = ConsumerConfig
                            } = State) ->
   Consumers =
-    lists:map(fun(C) -> subscribe_partition(Client, C, ConsumerConfig) end, Consumers0),
+    lists:map(
+      fun(C) ->
+        subscribe_partition(Client, C, ConsumerConfig)
+      end, Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
 subscribe_partition(Client, Consumer, ConsumerConfig) ->
@@ -605,7 +608,8 @@ subscribe_partition(Client, Consumer, ConsumerConfig) ->
                       ?undef        -> BeginOffset0;
                       N when N >= 0 -> N + 1
                     end,
-      BeginOffsetFromConfig = proplists:get_value(begin_offset, ConsumerConfig, ?undef),
+      BeginOffsetFromConfig =
+          proplists:get_value(begin_offset, ConsumerConfig, ?undef),
       Options =
         if BeginOffsetFromConfig =/= ?undef ->
           [{begin_offset, BeginOffsetFromConfig}];
