@@ -576,12 +576,13 @@ do_commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
 
 subscribe_partitions(#state{ client    = Client
                            , consumers = Consumers0
+                           , consumer_config = ConsumerConfig
                            } = State) ->
   Consumers =
-    lists:map(fun(C) -> subscribe_partition(Client, C) end, Consumers0),
+    lists:map(fun(C) -> subscribe_partition(Client, C, ConsumerConfig) end, Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
-subscribe_partition(Client, Consumer) ->
+subscribe_partition(Client, Consumer, ConsumerConfig) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid
            , begin_offset    = BeginOffset0
@@ -604,10 +605,14 @@ subscribe_partition(Client, Consumer) ->
                       ?undef        -> BeginOffset0;
                       N when N >= 0 -> N + 1
                     end,
+      BeginOffsetFromConfig = proplists:get_value(begin_offset, ConsumerConfig, ?undef),
       Options =
-        case BeginOffset =:= ?undef of
-          true  -> []; %% fetch from 'begin_offset' in consumer config
-          false -> [{begin_offset, BeginOffset}]
+        if BeginOffsetFromConfig =/= ?undef ->
+          [{begin_offset, BeginOffsetFromConfig}];
+        BeginOffset =/= ?undef ->
+          [{begin_offset, BeginOffset}];
+        true ->
+          [] %% fetch from default 'begin_offset'
         end,
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
