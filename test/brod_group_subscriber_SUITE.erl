@@ -444,7 +444,6 @@ t_async_commit(Config) when is_list(Config) ->
     fun() ->
         GroupConfig = [],
         ConsumerConfig = [ {sleep_timeout, 0}
-                         , {begin_offset, latest}
                          , {prefetch_bytes, 0}
                          , {sleep_timeout, 0}
                          , {max_wait_time, 100}
