@@ -474,11 +474,11 @@ update_avg_size(#state{ avg_bytes        = AvgBytes
   update_avg_size(State#state{avg_bytes = NewAvgBytes}, Rest).
 
 err_op(?request_timed_out)          -> retry;
-err_op(?unknown_topic_or_partition) -> stop;
 err_op(?invalid_topic_exception)    -> stop;
 err_op(?offset_out_of_range)        -> reset_offset;
 err_op(?leader_not_available)       -> reset_connection;
 err_op(?not_leader_for_partition)   -> reset_connection;
+err_op(?unknown_topic_or_partition) -> reset_connection;
 err_op(_)                           -> restart.
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
