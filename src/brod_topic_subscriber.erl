@@ -229,6 +229,7 @@ handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
                       end,
         #consumer{ partition    = Partition
                  , acked_offset = AckedOffset
+                 , last_offset  = AckedOffset
                  }
       end, Partitions),
   NewState = State#state{consumers = Consumers},
