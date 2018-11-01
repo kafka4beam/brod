@@ -321,14 +321,13 @@ subscribe_partition(Client, Topic, Consumer) ->
     true ->
       %% already subscribed
       Consumer;
-    false when AckedOffset =/= LastOffset ->
+    false when AckedOffset =/= LastOffset andalso LastOffset =/= ?undef ->
       %% The last fetched offset is not yet acked,
       %% do not re-subscribe now to keep it simple and slow.
       %% Otherwise if we subscribe with {begin_offset, LastOffset + 1}
       %% we may exceed pre-fetch window size.
       Consumer;
     false ->
-      AckedOffset = LastOffset, %% assert
       Options =
         case AckedOffset =:= ?undef of
           true ->

@@ -591,7 +591,7 @@ subscribe_partition(Client, Consumer) ->
   case brod_utils:is_pid_alive(Pid) of
     true ->
       Consumer;
-    false when AckedOffset =/= LastOffset ->
+    false when AckedOffset =/= LastOffset andalso LastOffset =/= ?undef ->
       %% The last fetched offset is not yet acked,
       %% do not re-subscribe now to keep it simple and slow.
       %% Otherwise if we subscribe with {begin_offset, LastOffset + 1}
