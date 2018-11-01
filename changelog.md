@@ -129,3 +129,6 @@
   * `brod_client:get_connection` is back
   * Make it possible to run tests on both mac and linux
   * Position group leader member at the head of members list when assigning partitions
+* 3.7.2
+  * Pr #298: Subscriber now automatically reconnects to Kafka on topic rebalances where
+    the previous partition leader no longer holds the partition at all.
