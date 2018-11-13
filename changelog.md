@@ -133,3 +133,5 @@
   * Pr #298: Subscriber now automatically reconnects to Kafka on topic rebalances where
     the previous partition leader no longer holds the partition at all.
   * Pr #299: Fix topic subscriber returning partition offsets from callback module's init.
+* 3.7.3
+  * Bump kafka_protocol version to 2.2.3
