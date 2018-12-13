@@ -552,16 +552,18 @@ handle_ack(AckRef, #state{ generationId = GenerationId
                          , coordinator  = Coordinator
                          } = State, CommitNow) ->
   {Topic, Partition, Offset} = AckRef,
-  Consumer = get_consumer({Topic, Partition}, Consumers),
-  #consumer{consumer_pid = ConsumerPid} = Consumer,
-  ok = consume_ack(ConsumerPid, Offset),
-  case CommitNow of
-    true ->
+  case get_consumer({Topic, Partition}, Consumers) of
+    #consumer{consumer_pid = ConsumerPid} = Consumer when CommitNow ->
+      ok = consume_ack(ConsumerPid, Offset),
       ok = do_commit_ack(Coordinator, GenerationId, Topic, Partition, Offset),
       NewConsumer = Consumer#consumer{acked_offset = Offset},
       NewConsumers = put_consumer(NewConsumer, Consumers),
       State#state{consumers = NewConsumers};
+    #consumer{consumer_pid = ConsumerPid} ->
+      ok = consume_ack(ConsumerPid, Offset),
+      State;
     false ->
+      %% Stale async-ack, discard.
       State
   end.
 

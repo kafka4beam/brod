@@ -135,3 +135,4 @@
   * Pr #299: Fix topic subscriber returning partition offsets from callback module's init.
 * 3.7.3
   * Bump kafka_protocol version to 2.2.3
+  * Discard stale async-ack messages to group subscriber
