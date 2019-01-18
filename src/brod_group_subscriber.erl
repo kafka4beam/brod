@@ -52,6 +52,7 @@
         , assignments_received/4
         , assignments_revoked/1
         , assign_partitions/3
+        , user_data/1
         ]).
 
 -export([ code_change/3
@@ -266,6 +267,8 @@ commit(Pid) ->
 -spec commit(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
 commit(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {commit_offset, Topic, Partition, Offset}).
+
+user_data(_Pid) -> <<>>.
 
 %%%_* APIs for group coordinator ===============================================
 

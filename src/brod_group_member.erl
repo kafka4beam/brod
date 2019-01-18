@@ -46,6 +46,10 @@
 
 -include("brod_int.hrl").
 
+-optional_callbacks([assign_partitions/3,
+                     user_data/1
+                    ]).
+
 %% Call the callback module to initialize assignments.
 %% NOTE: This function is called only when `offset_commit_policy' is
 %%       `consumer_managed' in group config.
@@ -75,6 +79,11 @@
 %% Called before group re-balancing, the member should call
 %% brod:unsubscribe/3 to unsubscribe from all currently subscribed partitions.
 -callback assignments_revoked(pid()) -> ok.
+
+%% Called when making join request. This metadata is to let group leader know
+%% more details about the member. e.g. its location and or capacity etc.
+%% so that leader can make smarter decisions when assigning partitions to it.
+-callback user_data(pid()) -> binary().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

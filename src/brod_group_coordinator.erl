@@ -512,11 +512,13 @@ join_group(#state{ groupId                 = GroupId
                  , connection              = Connection
                  , session_timeout_seconds = SessionTimeoutSec
                  , protocol_name           = ProtocolName
+                 , member_module           = MemberModule
+                 , member_pid              = MemberPid
                  } = State0) ->
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
     , {topics, Topics}
-    , {user_data, user_data(join)}
+    , {user_data, user_data(MemberModule, MemberPid)}
     ],
   Protocol =
     [ {protocol_name, ProtocolName}
@@ -743,7 +745,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
       , {member_assignment,
          [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
          , {topic_partitions, PartitionAssignments}
-         , {user_data, user_data(assign)}
+         , {user_data, <<>>}
          ]}
       ]
     end, Assignments);
@@ -1007,12 +1009,16 @@ make_offset_commit_metadata() ->
 %% then received by group leader, group leader (may mutate it and)
 %% assigns it back to members in topic-partition assignments.
 %%
-%% Currently user_data is created in this module and terminated in this
-%% module, when needed for advanced features, we can originate it from
-%% member's init callback, and pass it to members via
-%% `brod_received_assignments()'
--spec user_data(join | assign) -> binary().
-user_data(_Action) -> <<"">>.
+%% Currently user_data in join requests can be created from a
+%% callback to member module.
+%% user_data assigned back to members is always an empty binary
+%% if assign_partitions callback is not implemented, otherwise
+%% should be set in the assign_partitions callback implemenation.
+user_data(Module, Pid) ->
+  case lists:member({user_data, 1}, Module:module_info(exports)) of
+    true -> Module:user_data(Pid);
+    false -> <<>>
+  end.
 
 %% Make a client ID to be used in the requests sent over the group
 %% coordinator's connection (group coordinator broker on the other end),
