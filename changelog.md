@@ -136,3 +136,6 @@
 * 3.7.3
   * Bump kafka_protocol version to 2.2.3
   * Discard stale async-ack messages to group subscriber
+* 3.7.4
+  * Add callback to make user_data in group join request
+
