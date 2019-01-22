@@ -1015,7 +1015,8 @@ make_offset_commit_metadata() ->
 %% if assign_partitions callback is not implemented, otherwise
 %% should be set in the assign_partitions callback implemenation.
 user_data(Module, Pid) ->
-  case lists:member({user_data, 1}, Module:module_info(exports)) of
+  %% Module is ensured to be loaded already
+  case erlang:function_exported(Module, user_data, 1) of
     true -> Module:user_data(Pid);
     false -> <<>>
   end.
