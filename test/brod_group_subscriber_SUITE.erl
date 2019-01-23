@@ -41,6 +41,7 @@
         , t_loc_demo/1
         , t_loc_demo_message_set/1
         , t_2_members_subscribe_to_different_topics/1
+        , t_2_members_one_partition/1
         , t_async_commit/1
         , t_consumer_crash/1
         , t_assign_partitions_handles_updating_state/1
@@ -422,6 +423,65 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   %% since the nubmers are produced to different partitions and collected
   %% by different consumers, they have a very good chance to go out of the
   %% original order, hence we do not verify the order here
+  ?assertEqual(L, RecvFun([])),
+  ok = brod_group_subscriber:stop(SubscriberPid1),
+  ok = brod_group_subscriber:stop(SubscriberPid2),
+  ok.
+
+%% TOPIC4 has only one partition, this case is to test two group members
+%% working with only one partition, this makes one member idle but should
+%% not crash.
+t_2_members_one_partition({init, Config}) ->
+  meck_subscribe_unsubscribe(),
+  Config;
+t_2_members_one_partition({'end', Config}) when is_list(Config) ->
+  meck:unload(brod);
+t_2_members_one_partition(Config) when is_list(Config) ->
+  Topic = ?TOPIC4,
+  MaxSeqNo = 100,
+  GroupConfig = [],
+  ConsumerConfig = [ {prefetch_count, MaxSeqNo}
+                   , {prefetch_bytes, 0}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 100}
+                   ],
+  CaseRef = t_2_members_one_partition,
+  CasePid = self(),
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = false, _IsAssignPartitions = false},
+  {ok, SubscriberPid1} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [Topic],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  {ok, SubscriberPid2} =
+    brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [Topic],
+                                     GroupConfig, ConsumerConfig,
+                                     ?MODULE, InitArgs),
+  ok = wait_for_subscribers([Topic], [SubscriberPid1, SubscriberPid2]),
+  SendFun =
+    fun(I) ->
+      Value = integer_to_binary(I),
+      ok = brod:produce_sync(?CLIENT_ID, Topic, 0, <<>>, Value)
+    end,
+  RecvFun =
+    fun Continue(Acc) when length(Acc) =:= MaxSeqNo -> lists:reverse(Acc);
+        Continue(Acc) ->
+          receive
+            ?MSG(CaseRef, SubscriberPid, T, _Partition, _Offset, Value) ->
+            %% assert subscribers assigned with only topics in subscription list
+            ?assert((SubscriberPid =:= SubscriberPid1 andalso T =:= Topic)
+                    orelse
+                    (SubscriberPid =:= SubscriberPid2 andalso T =:= Topic)
+                   ),
+            Continue([binary_to_integer(Value) | Acc]);
+        Msg ->
+          erlang:error({unexpected_msg, Msg})
+      after
+        4000 ->
+          erlang:error({timeout, Acc})
+      end
+    end,
+  L = lists:seq(1, MaxSeqNo),
+  ok = lists:foreach(SendFun, L),
   ?assertEqual(L, RecvFun([])),
   ok = brod_group_subscriber:stop(SubscriberPid1),
   ok = brod_group_subscriber:stop(SubscriberPid2),
