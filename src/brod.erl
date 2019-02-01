@@ -716,7 +716,7 @@ get_metadata(Hosts) ->
 %% @doc Fetch broker/topic metadata
 %% Return the message body of `metadata' response.
 %% See `kpro_schema.erl' for struct details
--spec get_metadata([endpoint()], [topic()]) ->
+-spec get_metadata([endpoint()], all | [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
@@ -724,7 +724,7 @@ get_metadata(Hosts, Topics) ->
 %% @doc Fetch broker/topic metadata
 %% Return the message body of `metadata' response.
 %% See `kpro_schema.erl' for struct details
--spec get_metadata([endpoint()], [topic()], conn_config()) ->
+-spec get_metadata([endpoint()], all | [topic()], conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
