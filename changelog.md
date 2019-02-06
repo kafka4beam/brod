@@ -139,7 +139,7 @@
 * 3.7.4
   * Add callback to make user_data in group join request
 * 3.7.5
-  * Bump kafka protocol version to 2.2.5
+  * Bump kafka protocol version to 2.2.7
   * Fix empty assignment handling. In case a group member has no partition assigned,
     `member_assignment` data field in group sync response can either be `null` (kafka 0.10)
     or a struct having empty `topic_partitions` (kafka 0.11 or later). The later case
