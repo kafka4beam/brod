@@ -837,7 +837,7 @@ roundrobin_assign_loop([{Topic, Partition} | Rest] = TopicPartitions,
 -spec get_topic_assignments(state(), binary() | [kpro:struct()]) ->
         brod:received_assignments().
 get_topic_assignments(#state{}, ?kpro_cg_no_assignment) -> [];
-get_topic_assignments(#state{} = State, #{topic_partitions := []}) -> [];
+get_topic_assignments(#state{}, #{topic_partitions := []}) -> [];
 get_topic_assignments(#state{} = State, Assignment) ->
   PartitionAssignments = kpro:find(topic_partitions, Assignment),
   TopicPartitions0 =
