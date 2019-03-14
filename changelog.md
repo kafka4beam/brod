@@ -144,3 +144,5 @@
     `member_assignment` data field in group sync response can either be `null` (kafka 0.10)
     or a struct having empty `topic_partitions` (kafka 0.11 or later). The later case
     was not handled properly in `brod` before this fix.
+* 3.7.6
+  * Fix produce message input type spec to make it backward compatible (bug introduced in 3.7.3)
