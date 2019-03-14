@@ -87,7 +87,6 @@
 %%    , [ {client_1 %% unique client ID
 %%        , [ {endpoints, [{"localhost", 9092}]}
 %%          , {restart_delay_seconds, 10}
-%%          , {max_metadata_sock_retry, 1}
 %%          , {get_metadata_timeout_seconds, 5}
 %%          , {reconnect_cool_down_seconds, 1}
 %%          , {allow_topic_auto_creation, true}

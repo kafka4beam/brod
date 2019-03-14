@@ -489,7 +489,7 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                          } = State) ->
   case err_op(ErrorCode) of
     reset_connection ->
-      error_logger:info_msg("Fetch error ~p-~p: ~p",
+      error_logger:info_msg("Fetch error ~s-~p: ~p",
                             [Topic, Partition, ErrorCode]),
       %% The current connection in use is not connected to the partition leader,
       %% so we dereference and demonitor the connection pid, but leave it alive,
@@ -506,7 +506,7 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       {noreply, maybe_send_fetch_request(State)};
     stop ->
       ok = cast_to_subscriber(Subscriber, Error),
-      error_logger:error_msg("Consumer ~p-~p shutdown\nReason: ~p",
+      error_logger:error_msg("Consumer ~s-~p shutdown\nReason: ~p",
                              [Topic, Partition, ErrorCode]),
       {stop, normal, State};
     reset_offset ->

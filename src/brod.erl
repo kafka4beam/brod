@@ -168,6 +168,8 @@
 -type value() :: undefined %% no value, transformed to <<>>
                | iodata() %% single value
                | {msg_ts(), binary()} %% one message with timestamp
+               | ?KV(key(), value()) %% backward compatible
+               | ?TKV(msg_ts(), key(), value()) %% backward compatible
                | kpro:msg_input() %% one magic v2 message
                | kpro:batch_input(). %% maybe nested batch
 
