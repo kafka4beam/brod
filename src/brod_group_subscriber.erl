@@ -473,19 +473,26 @@ handle_consumer_delivery(#kafka_message_set{ topic     = Topic
                                            , partition = Partition
                                            , messages  = Messages
                                            } = MsgSet,
-                         #state{message_type = MsgType} = State0) ->
-  State = update_last_offset({Topic, Partition}, Messages, State0),
-  case MsgType of
-    message -> handle_messages(Topic, Partition, Messages, State);
-    message_set -> handle_message_set(MsgSet, State)
+                         #state{ message_type = MsgType
+                               , consumers = Consumers0
+                               } = State0) ->
+  case get_consumer({Topic, Partition}, Consumers0) of
+    #consumer{} = C ->
+      Consumers = update_last_offset(Messages, C, Consumers0),
+      State = State0#state{consumers = Consumers},
+      case MsgType of
+        message -> handle_messages(Topic, Partition, Messages, State);
+        message_set -> handle_message_set(MsgSet, State)
+      end;
+    false ->
+      State0
   end.
 
-update_last_offset(TP, Messages, #state{consumers = Consumers} = State) ->
+update_last_offset(Messages, Consumer0, Consumers) ->
   %% brod_consumer never delivers empty message set, lists:last is safe
   #kafka_message{offset = LastOffset} = lists:last(Messages),
-  C = get_consumer(TP, Consumers),
-  Consumer = C#consumer{last_offset = LastOffset},
-  State#state{consumers = put_consumer(Consumer, Consumers)}.
+  Consumer = Consumer0#consumer{last_offset = LastOffset},
+  put_consumer(Consumer, Consumers).
 
 -spec start_subscribe_timer(?undef | reference(), timeout()) -> reference().
 start_subscribe_timer(?undef, Delay) ->
