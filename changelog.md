@@ -146,3 +146,6 @@
     was not handled properly in `brod` before this fix.
 * 3.7.6
   * Fix produce message input type spec to make it backward compatible (bug introduced in 3.7.3)
+* 3.7.7
+  * Fix `badrecord` race: message-set is delivered to `brod_group_subscriber` after
+    unsubscribed from `brod_consumer`.
