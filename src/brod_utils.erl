@@ -232,6 +232,8 @@ decode_messages(BeginOffset, Messages) when is_binary(Messages) ->
   decode_messages(BeginOffset, kpro:decode_message_set(Messages));
 decode_messages(_BeginOffset, ?incomplete_message(_) = Incomplete) ->
   Incomplete;
+decode_messages(_BeginOffset, {jump_to_begin_offset, O}) ->
+  {jump_to_begin_offset, O};
 decode_messages(BeginOffset, Messages) when is_list(Messages) ->
   drop_old_messages(BeginOffset, Messages).
 
@@ -365,6 +367,8 @@ fetch(SockPid, ReqFun, Offset, MaxBytes) when is_pid(SockPid) ->
       case decode_messages(Offset, Messages0) of
         ?incomplete_message(Size) ->
           fetch(SockPid, ReqFun, Offset, Size);
+        {jump_to_begin_offset, O} ->
+          fetch(SockPid, ReqFun, O, MaxBytes);
         Messages ->
           {ok, Messages}
       end

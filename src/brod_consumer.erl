@@ -351,6 +351,10 @@ handle_fetch_response(#kpro_rsp{corr_id = CorrId, msg = Rsp}, State0) ->
   end.
 
 %% @private
+handle_message_set(#kafka_message_set{messages = {jump_to_begin_offset, Offset}}, State0) ->
+  State1 = State0#state{begin_offset = Offset},
+  State = maybe_send_fetch_request(State1),
+  {noreply, State};
 handle_message_set(#kafka_message_set{messages = ?incomplete_message(Size)},
                    #state{max_bytes = MaxBytes} = State0) ->
   %% max_bytes is too small to fetch ONE complete message
