@@ -27,7 +27,9 @@
         ]).
 
 %% Test cases
--export([ t_direct_fetch/1
+-export([ t_drop_aborted/1
+        , t_fetch_aborted_from_the_middle/1
+        , t_direct_fetch/1
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
@@ -128,6 +130,147 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 
 %%%_* Test functions ===========================================================
+
+%% produce two transactions, abort the first and commit the second
+%% messages fetched back should only contain the committed message
+%% i.e. aborted messages (testing with isolation_level=read_committed)
+%% should be dropped, control messages (transaction abort) should be dropped
+t_drop_aborted(Config) when is_list(Config) ->
+  case has_txn() of
+    true ->
+      test_drop_aborted(Config, true),
+      test_drop_aborted(Config, false);
+    false ->
+      ok
+  end.
+
+%% When QueryApiVsn is set to false,
+%% brod will use lowest supported API version.
+%% This is to test fethcing transactional messages using old version API
+test_drop_aborted(Config, QueryApiVsn) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  TxnProduceFun =
+    fun(CommitOrAbort) ->
+        TxnId = make_transactional_id(),
+        {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
+        {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId),
+        ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
+        Key = bin([atom_to_list(CommitOrAbort), "-", make_unique_key()]),
+        Vsn = 3, %% lowest API version which supports transactional produce
+        Opts = #{txn_ctx => TxnCtx, first_sequence => 0},
+        Batch = [#{key => Key, value => <<>>}],
+        ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition, Batch, Opts),
+        {ok, LeaderConn} = brod_client:get_leader_connection(Client, Topic, Partition),
+        {ok, ProduceRsp} = kpro:request_sync(LeaderConn, ProduceReq, 5000),
+        {ok, Offset} = brod_utils:parse_rsp(ProduceRsp),
+        case CommitOrAbort of
+          commit -> ok = kpro:txn_commit(TxnCtx);
+          abort -> ok = kpro:txn_abort(TxnCtx)
+        end,
+        ok = kpro:close_connection(Conn),
+        {Offset, Key}
+    end,
+  {Offset1, Key1} = TxnProduceFun(abort),
+  {Offset2, Key2} = TxnProduceFun(commit),
+  Cfg = [{query_api_versions, QueryApiVsn} | ?config(client_config)],
+  Fetch =
+    fun(Offset, Opts) ->
+        {ok, {_HighWmOffset, Msgs}} =
+          brod:fetch({?HOSTS, Cfg}, Topic, Partition, Offset, Opts),
+          Msgs
+    end,
+  case QueryApiVsn of
+    true ->
+      %% Always expect only one message in fetch result: the committed
+      [Msg] = Fetch(Offset1, #{}),
+      [Msg] = Fetch(Offset1, #{min_bytes => 0, max_bytes => 1}),
+      [Msg] = Fetch(Offset1, #{min_bytes => 0, max_bytes => 12}),
+      [Msg] = Fetch(Offset1 + 1, #{}),
+      [Msg] = Fetch(Offset2, #{}),
+      ?assertMatch(#kafka_message{offset = Offset2, key = Key2}, Msg);
+    false ->
+      %% Kafka sends aborted batches to old version clients!
+      Msgs = Fetch(Offset1, #{max_bytes => 1000}),
+      ?assertMatch([#kafka_message{offset = Offset1, key = Key1},
+                    #kafka_message{offset = Offset2, key = Key2}
+                   ], Msgs)
+  end.
+
+%% Produce large(-ish) transactional batches, then abort them all
+%% try fetch from offsets in the middle of large batches,
+%% expect no delivery of any aborted batches.
+t_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
+  case has_txn() of
+    true ->
+      test_fetch_aborted_from_the_middle(Config);
+    false ->
+      ok
+  end.
+
+test_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  TxnId = make_transactional_id(),
+  {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
+  {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId),
+  ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
+  %% make a large-ish message
+  MkMsg = fun(Key) ->
+              #{ key => Key
+               , value => bin(lists:duplicate(10000, 0))
+               }
+          end,
+  %% produce a non-transactional message
+  Send =
+    fun() ->
+        Key = make_unique_key(),
+        {ok, Offset} =
+          brod:produce_sync_offset(Client, Topic, Partition, Key, <<>>),
+        {Offset, Key}
+    end,
+  %% Send a transactional batch and return base offset
+  SendTxn =
+    fun(N) ->
+        Keys = [make_unique_key() || _ <- lists:duplicate(N, 0)],
+        Batch = [MkMsg(Key) || Key <- Keys],
+        Seqno = case get({seqno, TxnId}) of
+                  undefined -> 0;
+                  S -> S
+                end,
+        put({seqno, TxnId}, Seqno + length(Batch)),
+        Opts = #{txn_ctx => TxnCtx, first_sequence => Seqno},
+        Vsn = 3, %% lowest API version which supports transactional produce
+        Req = kpro_req_lib:produce(Vsn, Topic, Partition, Batch, Opts),
+        {ok, Leader} =
+          brod_client:get_leader_connection(Client, Topic, Partition),
+        {ok, Rsp} = kpro:request_sync(Leader, Req, 5000),
+        {ok, Offset} = brod_utils:parse_rsp(Rsp),
+        {Offset, Keys}
+    end,
+  Cfg = ?config(client_config),
+  Fetch =
+    fun(Offset, Opts) ->
+        {ok, {_HighWmOffset, Msgs}} =
+          brod:fetch({?HOSTS, Cfg}, Topic, Partition, Offset, Opts),
+        lists:map(fun(#kafka_message{key = Key, offset = OffsetX}) ->
+                      {OffsetX, Key}
+                  end, Msgs)
+    end,
+  {OffsetBgn, KeyBgn} = Send(), %% the begin mark
+  {Offset1, Keys1} = SendTxn(10),
+  {Offset2, Keys2} = SendTxn(20),
+  ok = kpro:txn_abort(TxnCtx),
+  ok = kpro:close_connection(Conn),
+  {OffsetEnd, KeyEnd} = Send(), %% the end mark
+  ?assertEqual([{OffsetBgn, KeyBgn}], Fetch(OffsetBgn, #{max_bytes => 12})),
+  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(OffsetEnd, #{max_bytes => 1000000})),
+  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset1, #{max_bytes => 12})),
+  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset1 + 1, #{max_bytes => 12})),
+  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset2, #{max_bytes => 12})),
+  ok.
 
 t_direct_fetch(Config) when is_list(Config) ->
   Client = ?config(client),
@@ -518,6 +661,39 @@ wait_for_max_bytes_sequence([{Compare, MaxBytes} | Rest] = Waiting, Cnt) ->
   after
     3000 ->
       ct:fail("timeout", [])
+  end.
+
+%% Make a random transactional id, so test cases would not interfere each other.
+make_transactional_id() ->
+  bin([atom_to_list(?MODULE), "-txn-", bin(rand())]).
+
+bin(I) when is_integer(I) -> integer_to_binary(I);
+bin(X) -> iolist_to_binary(X).
+
+rand() -> rand:uniform(1000000).
+
+connect_txn_coordinator(TxnId, Config) ->
+  connect_txn_coordinator(TxnId, Config, 5, false).
+
+%% Freshly setup kafka often fails on first few attempts for transaction
+%% coordinator discovery, use a fail-retry loop to workaround
+connect_txn_coordinator(_TxnId, _Config, 0, LastError) ->
+  error({failed_to_connect_transaction_coordinator, LastError});
+connect_txn_coordinator(TxnId, Config, RetriesLeft, _LastError) ->
+  Args = #{type => txn, id => TxnId},
+  case kpro:connect_coordinator(?HOSTS, Config, Args) of
+    {ok, Conn} ->
+      {ok, Conn};
+    {error, Reason} ->
+      timer:sleep(1000),
+      connect_txn_coordinator(TxnId, Config, RetriesLeft - 1, Reason)
+  end.
+
+has_txn() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> false;
+    "0.10" ++ _ -> false;
+    _ -> true
   end.
 
 %%%_* Emacs ====================================================================

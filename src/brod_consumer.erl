@@ -397,31 +397,27 @@ handle_batches(Header, Batches,
                      , partition    = Partition
                      } = State0) ->
   HighWmOffset = kpro:find(high_watermark, Header),
-  State1 = case brod_utils:flatten_batches(BeginOffset, Batches) of
-    [] ->
-      %% flatten_batches might remove all actual messages
-      %% (if they were all before BeginOffset), leaving us
-      %% with nothing in this batch.  Since there is no way
-      %% to know how big the 'hole' is we can only bump
-      %% begin_offset with +1 and try again.
-      State0#state{ begin_offset = BeginOffset + 1 };
-    Messages ->
-      MsgSet = #kafka_message_set{ topic          = Topic
-                                 , partition      = Partition
-                                 , high_wm_offset = HighWmOffset
-                                 , messages       = Messages
-                                 },
-      ok = cast_to_subscriber(Subscriber, MsgSet),
-      NewPendingAcks = add_pending_acks(PendingAcks, Messages),
-      {value, ?PENDING(LastOffset, _LastMsgSize)} =
-        queue:peek_r(NewPendingAcks#pending_acks.queue),
-      State2 = State0#state{ pending_acks = NewPendingAcks
-                           , begin_offset = LastOffset + 1
-                           },
-      maybe_shrink_max_bytes(State2, MsgSet#kafka_message_set.messages)
-  end,
-  State = maybe_send_fetch_request(State1),
-  {noreply, State}.
+  %% for API version 4 or higher, use last_stable_offset
+  LatestOffset = kpro:find(last_stable_offset, Header, HighWmOffset),
+  {NewBeginOffset, Messages} =
+    brod_utils:flatten_batches(BeginOffset, Header, Batches),
+  State1 = State0#state{begin_offset = NewBeginOffset},
+  State =
+    case Messages =:= [] of
+      true ->
+        State1;
+      false ->
+        MsgSet = #kafka_message_set{ topic          = Topic
+                                   , partition      = Partition
+                                   , high_wm_offset = LatestOffset
+                                   , messages       = Messages
+                                   },
+        ok = cast_to_subscriber(Subscriber, MsgSet),
+        NewPendingAcks = add_pending_acks(PendingAcks, Messages),
+        State2 = State1#state{pending_acks = NewPendingAcks},
+        maybe_shrink_max_bytes(State2, MsgSet#kafka_message_set.messages)
+    end,
+  {noreply, maybe_send_fetch_request(State)}.
 
 %% Add received offsets to pending queue.
 add_pending_acks(PendingAcks, Messages) ->
