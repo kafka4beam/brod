@@ -146,9 +146,11 @@ t_produce_sync_offset(Config) when is_list(Config) ->
   Client = ?config(client),
   Partition = 0,
   {T1, K1, V1} = make_unique_tkv(),
-  {ok, O1} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>, [{T1, K1, V1}]),
+  {ok, O1} = brod:produce_sync_offset(Client, ?TOPIC, Partition,
+                                      <<>>, [{T1, K1, V1}]),
   {T2, K2, V2} = make_unique_tkv(),
-  {ok, O2} = brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>, [{T2, K2, V2}]),
+  {ok, O2} = brod:produce_sync_offset(Client, ?TOPIC, Partition,
+                                      <<>>, [{T2, K2, V2}]),
   ReceiveFun =
     fun(ExpectedK, ExpectedV) ->
       receive

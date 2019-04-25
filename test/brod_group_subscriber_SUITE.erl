@@ -124,12 +124,13 @@ init(_GroupId,
              , is_assign_partitions = IsAssignPartitions
              }}.
 
-handle_message(Topic, Partition, Message, #state{ ct_case_ref     = Ref
-                                                , ct_case_pid     = Pid
-                                                , is_async_ack    = IsAsyncAck
-                                                , is_async_commit = IsAsyncCommit
-                                                , is_assign_partitions = IsAssignPartitions
-                                                } = State) ->
+handle_message(Topic, Partition, Message,
+               #state{ ct_case_ref     = Ref
+                     , ct_case_pid     = Pid
+                     , is_async_ack    = IsAsyncAck
+                     , is_async_commit = IsAsyncCommit
+                     , is_assign_partitions = IsAssignPartitions
+                     } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
@@ -145,11 +146,15 @@ get_committed_offsets(_GroupId, _TopicPartitions, State) ->
   %% always return []: always fetch from latest available offset
   {ok, [], State}.
 
-assign_partitions(MemberPid, TopicPartitions, #state{is_assign_partitions = false} = _CbState) ->
-  PartitionsAssignments = [{Topic, [PartitionsN]} || {Topic, PartitionsN} <- TopicPartitions],
+assign_partitions(MemberPid, TopicPartitions,
+                  #state{is_assign_partitions = false} = _CbState) ->
+  PartitionsAssignments = [{Topic, [PartitionsN]}
+                           || {Topic, PartitionsN} <- TopicPartitions],
   [{element(1, hd(MemberPid)), PartitionsAssignments}];
-assign_partitions(MemberPid, TopicPartitions, #state{is_assign_partitions = true} = CbState) ->
-  PartitionsAssignments = [{Topic, [PartitionsN]} || {Topic, PartitionsN} <- TopicPartitions],
+assign_partitions(MemberPid, TopicPartitions,
+                  #state{is_assign_partitions = true} = CbState) ->
+  PartitionsAssignments = [{Topic, [PartitionsN]}
+                           || {Topic, PartitionsN} <- TopicPartitions],
   {CbState, [{element(1, hd(MemberPid)), PartitionsAssignments}]}.
 
 %%%_* Test functions ===========================================================
@@ -247,7 +252,8 @@ t_async_acks(Config) when is_list(Config) ->
                    ],
   CaseRef = t_async_acks,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false, _IsAssignPartitions = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true,
+              _IsAsyncCommit = false, _IsAssignPartitions = false},
   Partition = 0,
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
@@ -301,7 +307,8 @@ t_consumer_crash(Config) when is_list(Config) ->
                    ],
   CaseRef = t_consumer_crash,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false, _IsAssignPartitions = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true,
+              _IsAsyncCommit = false, _IsAssignPartitions = false},
   Partition = 0,
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
@@ -362,7 +369,7 @@ t_consumer_crash(Config) when is_list(Config) ->
 t_2_members_subscribe_to_different_topics({init, Config}) ->
   meck_subscribe_unsubscribe(),
   Config;
-t_2_members_subscribe_to_different_topics({'end', Config}) when is_list(Config) ->
+t_2_members_subscribe_to_different_topics({'end', Conf}) when is_list(Conf) ->
   meck:unload(brod);
 t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
   MaxSeqNo = 100,
@@ -376,7 +383,8 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
                    ],
   CaseRef = t_2_members_subscribe_to_different_topics,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = false, _IsAssignPartitions = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false,
+              _IsAsyncCommit = false, _IsAssignPartitions = false},
   {ok, SubscriberPid1} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC2],
                                      GroupConfig, ConsumerConfig,
@@ -447,7 +455,8 @@ t_2_members_one_partition(Config) when is_list(Config) ->
                    ],
   CaseRef = t_2_members_one_partition,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = false, _IsAssignPartitions = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false,
+              _IsAsyncCommit = false, _IsAssignPartitions = false},
   {ok, SubscriberPid1} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [Topic],
                                      GroupConfig, ConsumerConfig,
@@ -489,7 +498,8 @@ t_2_members_one_partition(Config) when is_list(Config) ->
 
 t_async_commit({init, Config}) ->
   meck_subscribe_unsubscribe(),
-  meck:new(brod_group_coordinator, [passthrough, no_passthrough_cover, no_history]),
+  meck:new(brod_group_coordinator,
+           [passthrough, no_passthrough_cover, no_history]),
   Config;
 t_async_commit({'end', _Config}) ->
   meck:unload(brod);
@@ -497,9 +507,11 @@ t_async_commit(Config) when is_list(Config) ->
   CaseRef = t_async_commit,
   CasePid = self(),
   Partition = 0,
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false, _IsAsyncCommit = true, _IsAssignPartitions = false},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = false,
+              _IsAsyncCommit = true, _IsAssignPartitions = false},
   %% use a one-time gid for clean test
-  GroupId = list_to_binary("one-time-gid-" ++ integer_to_list(rand:uniform(1000000000))),
+  GroupId = list_to_binary("one-time-gid-" ++
+                           integer_to_list(rand:uniform(1000000000))),
   StartSubscriber =
     fun() ->
         GroupConfig = [],
@@ -529,11 +541,12 @@ t_async_commit(Config) when is_list(Config) ->
         timer:sleep(5500)
     end,
   Pid1 = StartSubscriber(),
-  {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4, Partition, <<>>, <<"test">>),
+  {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4,
+                                          Partition, <<>>, <<"test">>),
   ct:pal("Produced at offset = ~p", [Offset]),
   ?assertEqual([[Offset]],
-               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4, Partition, '$1', '_'))
-              ),
+               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4,
+                                        Partition, '$1', '_'))),
   %% Slightly unsound: commit _previous_ offset to avoid starting
   %% brod_consumer with `latest' offset and thus losing all data
   %% during restart:
@@ -542,7 +555,8 @@ t_async_commit(Config) when is_list(Config) ->
   Pid2 = EmulateRestart(Pid1),
   %% Since we haven't commited offset, our message should be replayed:
   ?assertEqual([[Offset]],
-               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4, Partition, '$1', '_'))
+               receive_match(4000, ?MSG(CaseRef, '_', ?TOPIC4,
+                                        Partition, '$1', '_'))
               ),
   %% Commit offset and restart subscriber again:
   CommitOffset(Pid2, Offset),
@@ -554,10 +568,10 @@ t_async_commit(Config) when is_list(Config) ->
   brod_group_subscriber:stop(Pid3),
   ok.
 
-t_assign_partitions_handles_updating_state({init, Config}) when is_list(Config) ->
+t_assign_partitions_handles_updating_state({init, Cfg}) when is_list(Cfg) ->
   meck_subscribe_unsubscribe(),
-  Config;
-t_assign_partitions_handles_updating_state({'end', Config}) when is_list(Config) ->
+  Cfg;
+t_assign_partitions_handles_updating_state({'end', Cfg}) when is_list(Cfg) ->
   meck:unload(brod);
 t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
   %% use consumer managed offset commit behaviour
@@ -572,7 +586,8 @@ t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
                    ],
   CaseRef = t_assign_partitions_handles_updating_state,
   CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true, _IsAsyncCommit = false, _IsAssignPartitions = true},
+  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true,
+              _IsAsyncCommit = false, _IsAssignPartitions = true},
   {ok, SubscriberPid} =
     brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, [?TOPIC1],
                                      GroupConfig, ConsumerConfig,

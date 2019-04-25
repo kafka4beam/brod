@@ -162,7 +162,8 @@ test_drop_aborted(Config, QueryApiVsn) ->
         Opts = #{txn_ctx => TxnCtx, first_sequence => 0},
         Batch = [#{key => Key, value => <<>>}],
         ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition, Batch, Opts),
-        {ok, LeaderConn} = brod_client:get_leader_connection(Client, Topic, Partition),
+        {ok, LeaderConn} =
+          brod_client:get_leader_connection(Client, Topic, Partition),
         {ok, ProduceRsp} = kpro:request_sync(LeaderConn, ProduceReq, 5000),
         {ok, Offset} = brod_utils:parse_rsp(ProduceRsp),
         case CommitOrAbort of
@@ -266,7 +267,7 @@ test_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
   ok = kpro:close_connection(Conn),
   {OffsetEnd, KeyEnd} = Send(), %% the end mark
   ?assertEqual([{OffsetBgn, KeyBgn}], Fetch(OffsetBgn, #{max_bytes => 12})),
-  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(OffsetEnd, #{max_bytes => 1000000})),
+  ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(OffsetEnd, #{max_bytes => 100000})),
   ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset1, #{max_bytes => 12})),
   ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset1 + 1, #{max_bytes => 12})),
   ?assertEqual([{OffsetEnd, KeyEnd}], Fetch(Offset2, #{max_bytes => 12})),
