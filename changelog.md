@@ -149,3 +149,7 @@
 * 3.7.7
   * Fix `badrecord` race: message-set is delivered to `brod_group_subscriber` after
     unsubscribed from `brod_consumer`.
+* 3.7.8
+  * Drop batches in aborted transactions (and all control batches)
+    also improve offset fast-forwarding when empty batches are received
+
