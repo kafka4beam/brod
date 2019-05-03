@@ -198,7 +198,7 @@ stop_consumer(Client, TopicName) ->
 
 %% @doc Get the connection to kafka broker which is a leader for given
 %% Topic-Partition.
-%% Return already established connection towards the leader borker,
+%% Return already established connection towards the leader broker,
 %% Otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.
@@ -208,7 +208,7 @@ get_leader_connection(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
 %% @doc Get connection to a kafka broker.
-%% Return already established connection towards the borker,
+%% Return already established connection towards the broker,
 %% otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
 %% {error, LastReason} is returned.

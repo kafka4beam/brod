@@ -70,9 +70,9 @@ commands:
 "  --ssl                  Use TLS, validate server using trusted CAs
   --cacertfile=<cacert>  Use TLS, validate server using the given certificate
   --certfile=<certfile>  Client certificate in case client authentication
-                         is enabled in borkers
+                         is enabled in brokers
   --keyfile=<keyfile>    Client private key in case client authentication
-                         is enabled in borkers
+                         is enabled in brokers
   --sasl-plain=<file>    Tell brod to use username/password stored in the
                          given file, the file should have username and
                          password in two lines.

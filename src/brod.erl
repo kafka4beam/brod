@@ -282,7 +282,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%   allow_topic_auto_creation (optional, default=true)
 %%     By default, brod respects what is configured in broker about
 %%     topic auto-creation. i.e. whatever `auto.create.topics.enable'
-%%     is set in borker configuration.
+%%     is set in broker configuration.
 %%     However if `allow_topic_auto_creation' is set to `false' in client
 %%     config, brod will avoid sending metadata requests that may cause an
 %%     auto-creation of the topic regardless of what broker config is.
