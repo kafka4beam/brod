@@ -704,7 +704,10 @@ pp_fmt_struct(Indent, Fields0) when is_list(Fields0) ->
              [_] -> Fields0;
              _ -> lists:keydelete(no_error, 2, Fields0)
            end,
-  F = fun(IsFirst, {N, V}) ->
+  F = fun(IsFirst, {N, V}) when is_map(V) ->
+          indent_fmt(IsFirst, Indent,
+                     "~p:\n~s", [N, pp_fmt_struct(Indent + 1, V)]);
+          (IsFirst, {N, V}) ->
           indent_fmt(IsFirst, Indent,
                      "~p: ~s", [N, pp_fmt_struct_value(Indent, V)])
       end,
@@ -717,18 +720,16 @@ pp_fmt_struct_value(_Indent, X) when is_integer(X) orelse
                                      is_binary(X) orelse
                                      X =:= [] ->
   [pp_fmt_prim(X), "\n"];
-pp_fmt_struct_value(Indent, [{_, _}|_] = SubStruct) ->
-  ["\n", pp_fmt_struct(Indent + 1, SubStruct)];
-pp_fmt_struct_value(Indent, Array) when is_list(Array) ->
-  case hd(Array) of
-    [{_, _}|_] ->
+pp_fmt_struct_value(Indent, [H | _] = Array) when is_list(Array) ->
+  case is_tuple(H) orelse is_map(H) of
+    true ->
       %% array of sub struct
       ["\n",
        lists:map(fun(Item) ->
                      pp_fmt_struct(Indent + 1, Item)
                  end, Array)
       ];
-    _ ->
+    false ->
       %% array of primitive values
       [[pp_fmt_prim(V) || V <- Array], "\n"]
   end.
@@ -739,7 +740,7 @@ pp_fmt_prim(A) when is_atom(A) -> atom_to_list(A);
 pp_fmt_prim(S) when is_binary(S) -> S.
 
 indent_fmt(true, Indent, Fmt, Args) ->
-  ["- ", indent_fmt(false, Indent - 1, Fmt, Args)];
+  io_lib:format(lists:duplicate((Indent - 1) * 2, $\s) ++ "- " ++ Fmt, Args);
 indent_fmt(false, Indent, Fmt, Args) ->
   io_lib:format(lists:duplicate(Indent * 2, $\s) ++ Fmt, Args).
 
