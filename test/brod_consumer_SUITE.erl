@@ -261,8 +261,8 @@ test_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
                   end, Msgs)
     end,
   {OffsetBgn, KeyBgn} = Send(), %% the begin mark
-  {Offset1, Keys1} = SendTxn(10),
-  {Offset2, Keys2} = SendTxn(20),
+  {Offset1, _Keys1} = SendTxn(10),
+  {Offset2, _Keys2} = SendTxn(20),
   ok = kpro:txn_abort(TxnCtx),
   ok = kpro:close_connection(Conn),
   {OffsetEnd, KeyEnd} = Send(), %% the end mark
