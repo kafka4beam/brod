@@ -359,11 +359,14 @@ handle_fetch_response(#kpro_rsp{ref = Ref} = Rsp,
       handle_fetch_error(Error, State)
   end.
 
-handle_batches(?undef, [], #state{begin_offset = LastOffset} = State0) ->
-  %% A meta-batch. e.g. transactional session ID initialization message
-  %% fast-forward to the next offset.
-  %% This clause is not possilbe for fetch requests prior to version 4
-  State = State0#state{begin_offset = LastOffset + 1},
+handle_batches(?undef, [], #state{} = State0) ->
+  %% It is only possible to end up here in a incremental
+  %% fetch session, empty fetch response implies no
+  %% new messages to fetch, and no changes in partition
+  %% metadata (e.g. high watermark offset, or last stable offset) either.
+  %% Do not advance offset, try again (maybe after a delay) with
+  %% the last begin_offset in use.
+  State = maybe_delay_fetch_request(State0),
   {noreply, State};
 handle_batches(_Header, ?incomplete_batch(Size),
                #state{max_bytes = MaxBytes} = State0) ->
