@@ -152,4 +152,7 @@
 * 3.7.8
   * Drop batches in aborted transactions (and all control batches)
     also improve offset fast-forwarding when empty batches are received
+* 3.7.9
+  * Fix brod-cli escript include apps
+  * Fix brod-cli sub-record formatting crash
 
