@@ -157,4 +157,10 @@
   * Fix brod-cli sub-record formatting crash
   * Upgrade to kafka_protocol 2.2.8 to discard replica_not_available error code in metadata response
   * Fix empty responses field in fetch response #323
+* 3.7.10
+  * Compare begin_offset with last stable offset before advancing to next offset in case empty
+    batch is received. Prior to this version, fetch attempts on unstable messages (messages
+    belong to open transactions (transactions which are neigher committed nor aborted),
+    may result in an empty message set, then `brod_consumer` or `brod_utils:fetch` jumps to
+    the next offset (if it is less than high-watermark offset).
 
