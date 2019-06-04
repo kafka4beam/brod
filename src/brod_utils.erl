@@ -205,13 +205,20 @@ flatten_batches(BeginOffset, Header, Batches0) ->
   end.
 
 %% @doc Fetch a single message set from the given topic-partition.
--spec fetch(connection() | {[endpoint()], conn_config()},
+-spec fetch(connection() | {[endpoint()], conn_config()} | brod:client_id(),
             topic(), partition(), offset(), brod:fetch_opts()) ->
               {ok, {offset(), [brod:message()]}} | {error, any()}.
 fetch({Hosts, ConnCfg}, Topic, Partition, Offset, Opts) ->
   with_conn(
     kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
     fun(Conn) -> fetch(Conn, Topic, Partition, Offset, Opts) end);
+fetch(Client, Topic, Partition, Offset, Opts) when is_atom(Client) ->
+  case brod_client:get_leader_connection(Client, Topic, Partition) of
+    {ok, Conn} ->
+      fetch(Conn, Topic, Partition, Offset, Opts);
+    {error, Reason} ->
+      {error, Reason}
+  end;
 fetch(Conn, Topic, Partition, Offset, Opts) ->
   Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
   Fetch(Offset).

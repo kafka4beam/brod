@@ -753,8 +753,8 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
 %% @doc Fetch a single message set from the given topic-partition.
 %% The first arg can either be an already established connection to leader,
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
--spec fetch(connection() | [endpoint()] | {[endpoint()], conn_config()},
-            topic(), partition(), integer()) ->
+-spec fetch(connection() | [endpoint()] | {[endpoint()], conn_config()}
+            | client_id(), topic(), partition(), integer()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
   Opts = #{ max_wait_time => 1000
@@ -766,7 +766,7 @@ fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
 %% @doc Fetch a single message set from the given topic-partition.
 %% The first arg can either be an already established connection to leader,
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
--spec fetch(connection() | {[endpoint()], conn_config()},
+-spec fetch(connection() | {[endpoint()], conn_config()} | client_id(),
             topic(), partition(), offset(), fetch_opts()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->

@@ -343,6 +343,7 @@ t_direct_fetch(Config) when is_list(Config) ->
                                      ?OFFSET_LATEST, ?config(client_config)),
   {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
                                  Topic, Partition, Offset - 1),
+  {ok, {_, [Msg]}} = brod:fetch(Client, Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
