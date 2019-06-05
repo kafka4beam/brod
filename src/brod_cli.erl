@@ -432,9 +432,9 @@ run(?OFFSET_CMD, Brokers, Topic, SockOpts, Args) ->
   after
     brod_client:stop(?CLIENT)
   end;
-run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
+run(?FETCH_CMD, Brokers, Topic, ConnOpts, Args) ->
   Partition = parse(Args, "--partition", fun int/1), %% not parse_partition/1
-  Count0 = parse(Args, "--count", fun int/1),
+  Count = parse(Args, "--count", fun int/1),
   Offset0 = parse(Args, "--offset", fun parse_offset_time/1),
   Wait = parse(Args, "--wait", fun parse_timeout/1),
   KvDeli = parse(Args, "--kv-deli", fun parse_delimiter/1),
@@ -444,15 +444,32 @@ run(?FETCH_CMD, Brokers, Topic, SockOpts, Args) ->
                      parse_fmt(FmtOption, KvDeli, MsgDeli)
                  end),
   MaxBytes = parse(Args, "--max-bytes", fun parse_size/1),
-  {ok, Sock} = brod:connect_leader(Brokers, Topic, Partition, SockOpts),
-  Offset = resolve_begin_offset(Sock, Topic, Partition, Offset0),
+  {ok, Conn} = brod:connect_leader(Brokers, Topic, Partition, ConnOpts),
+  Offset = resolve_begin_offset(Conn, Topic, Partition, Offset0),
   FetchOpts = #{max_wait_time => Wait, max_bytes => MaxBytes},
-  FetchFun = brod_utils:make_fetch_fun(Sock, Topic, Partition, FetchOpts),
-  Count = case Count0 < 0 of
-            true -> 1000000000; %% as if an infinite loop
-            false -> Count0
+  FoldLimits = case Count < 0 of
+                 true -> #{};
+                 false -> #{msg_count => Count}
+               end,
+  FoldFun =
+    fun(M, Acc) ->
+      #kafka_message{offset = O, key = K, value = V} = M,
+      R = case is_function(FmtFun, 3) of
+            true -> FmtFun(O, K, V);
+            false -> FmtFun(M)
           end,
-  fetch_loop(FmtFun, FetchFun, Offset, Count);
+      case R of
+        ok -> ok;
+        IoData -> print(IoData)
+      end,
+      {ok, Acc + 1}
+    end,
+  {FetchedCount, NextOffset, Reason} =
+    brod:fold(Conn, Topic, Partition, Offset, FetchOpts,
+              0, FoldFun, FoldLimits),
+  logerr("Fetch loop stopped after ~p messages~n", [FetchedCount]),
+  logerr("Continue at Offset: ~p~n", [NextOffset]),
+  logerr("Reason: ~p~n", [Reason]);
 run(?SEND_CMD, Brokers, Topic, SockOpts, Args) ->
   Partition = parse(Args, "--partition", fun parse_partition/1),
   Acks = parse(Args, "--acks", fun parse_acks/1),
@@ -798,40 +815,6 @@ flush_pending_acks(Queue, Timeout) ->
         {error, timeout} ->
           Queue
       end
-  end.
-
-fetch_loop(_FmtFun, _FetchFun, _Offset, 0) ->
-  verbose("done (count)\n"),
-  ok;
-fetch_loop(FmtFun, FetchFun, Offset, Count) ->
-  debug("Fetching from offset: ~p\n", [Offset]),
-  case FetchFun(Offset) of
-    {ok, {_, []}} ->
-      %% reached max_wait, no message received
-      verbose("done (wait)\n"),
-      ok;
-    {ok, {_HmOffset, Messages0}} ->
-      {Messages, NewCount} =
-        case length(Messages0) of
-          N when N > Count ->
-            {lists:sublist(Messages0, Count), 0};
-          N ->
-            {Messages0, Count - N}
-        end,
-      #kafka_message{offset = LastOffset} = lists:last(Messages),
-      lists:foreach(
-        fun(M) ->
-            #kafka_message{offset = O, key = K, value = V} = M,
-            R = case is_function(FmtFun, 3) of
-                  true -> FmtFun(O, K, V);
-                  false -> FmtFun(M)
-                end,
-            case R of
-              ok -> ok;
-              IoData -> print(IoData)
-            end
-        end, Messages),
-      fetch_loop(FmtFun, FetchFun, LastOffset + 1, NewCount)
   end.
 
 resolve_begin_offset(_Sock, _T, _P, Offset) when is_integer(Offset) ->
@@ -1209,8 +1192,6 @@ logerr(IoData) -> io:put_chars(stderr(), ["*** ", IoData]).
 
 logerr(Fmt, Args) ->
   io:put_chars(stderr(), io_lib:format("*** " ++ Fmt, Args)).
-
-verbose(Str) -> verbose(Str, []).
 
 verbose(Fmt, Args) ->
   case erlang:get(brod_cli_log_level) >= ?LOG_LEVEL_VERBOSE of

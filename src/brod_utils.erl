@@ -254,7 +254,11 @@ fold(Conn, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
   Infinity = 1 bsl 64,
   EndOffset = maps:get(reach_offset, Limits, Infinity),
   CountLimit = maps:get(msg_count, Limits, Infinity),
-  do_fold(Fetch, Offset, Acc, Fun, EndOffset, CountLimit).
+  CountLimit < 1 andalso error(bad_msg_count),
+  %% Function to spawn an async fetcher so it can fetch
+  %% the next batch while self() is folding the current
+  Spawn = fun(O) -> spawn_monitor(fun() -> exit(Fetch(O)) end) end,
+  do_fold(Spawn, Spawn(Offset), Offset, Acc, Fun, EndOffset, CountLimit).
 
 %% @doc Make a fetch function which should expand `max_bytes' when
 %% it is not big enough to fetch one signle message.
@@ -518,36 +522,50 @@ get_stable_offset(Header) ->
 
 %%%_* Internal functions =======================================================
 
-do_fold(Fetch, Offset, Acc, Fun, EndOffset, Count) ->
-  case Fetch(Offset) of
-    {error, Reason} ->
-      ?BROD_FOLD_RET(Acc, Offset, {error, Reason});
-    {ok, {StableOffset, []}} when Offset >= StableOffset ->
-      ?BROD_FOLD_RET(Acc, Offset, reached_end_of_partition);
-    {ok, {_StableOffset, Msgs}} ->
-      Continue =
-        fun(NextOffset, NewAcc, NewCount) ->
-            do_fold(Fetch, NextOffset, NewAcc, Fun, EndOffset, NewCount)
-        end,
-      do_fold_acc(Acc, Fun, Msgs, EndOffset, Count, Continue)
+do_fold(Spawn, {Pid, Mref}, Offset, Acc, Fun, End, Count) ->
+  receive
+    {'DOWN', Mref, process, Pid, Result} ->
+      handle_fetch_rsp(Spawn, Result, Offset, Acc, Fun, End, Count)
   end.
 
-do_fold_acc(Acc, Fun, [Msg | Rest], EndOffset, Count, Continue) ->
-  #kafka_message{offset = Offset} = Msg,
-  case Count =:= 0 of
-    true ->
-      ?BROD_FOLD_RET(Acc, Offset, reached_msg_count_limit);
-    false when Offset > EndOffset ->
-      ?BROD_FOLD_RET(Acc, Offset, reached_target_offset);
-    false ->
-      case Fun(Msg, Acc) of
-        {ok, NewAcc} when Rest =:= [] ->
-          Continue(Offset + 1, NewAcc, Count - 1);
-        {ok, NewAcc} ->
-          do_fold_acc(NewAcc, Fun, Rest, EndOffset, Count - 1, Continue);
-        {error, Reason} ->
-          ?BROD_FOLD_RET(Acc, Offset, Reason)
-      end
+handle_fetch_rsp(_Spawn, {error, Reason}, Offset, Acc, _Fun, _, _) ->
+  ?BROD_FOLD_RET(Acc, Offset, {fetch_failure, Reason});
+handle_fetch_rsp(_Spawn, {ok, {StableOffset, []}}, Offset, Acc, _Fun,
+                _End, _Count) when Offset >= StableOffset ->
+  ?BROD_FOLD_RET(Acc, Offset, reached_end_of_partition);
+handle_fetch_rsp(Spawn, {ok, {_StableOffset, Msgs}}, Offset, Acc, Fun,
+                 End, Count) ->
+  #kafka_message{offset = LastOffset} = lists:last(Msgs),
+  %% start fetching the next batch if not stopping at current
+  Fetcher = case LastOffset < End andalso length(Msgs) < Count of
+              true -> Spawn(LastOffset + 1);
+              false -> undefined
+            end,
+  do_acc(Spawn, Fetcher, Offset, Acc, Fun, Msgs, End, Count).
+
+do_acc(_Spawn, Fetcher, Offset, Acc, _Fun, _, _End, 0) ->
+  undefined = Fetcher, %% assert
+  ?BROD_FOLD_RET(Acc, Offset, reached_msg_count_limit);
+do_acc(_Spawn, Fetcher, Offset, Acc, _Fun, _, End, _Count) when Offset > End ->
+  undefined = Fetcher, %% assert
+  ?BROD_FOLD_RET(Acc, Offset, reached_target_offset);
+do_acc(Spawn, Fetcher, Offset, Acc, Fun, [], End, Count) ->
+  do_fold(Spawn, Fetcher, Offset, Acc, Fun, End, Count);
+do_acc(Spawn, Fetcher, Offset, Acc, Fun, [Msg | Rest], End, Count) ->
+  case Fun(Msg, Acc) of
+    {ok, NewAcc} ->
+      NextOffset = Msg#kafka_message.offset + 1,
+      do_acc(Spawn, Fetcher, NextOffset, NewAcc, Fun, Rest, End, Count - 1);
+    {error, Reason} ->
+      ok = kill_fetcher(Fetcher),
+      ?BROD_FOLD_RET(Acc, Offset, Reason)
+  end.
+
+kill_fetcher({Pid, Mref}) ->
+  exit(Pid, kill),
+  receive
+    {'DOWN', Mref, process, _, _} ->
+      ok
   end.
 
 drop_aborted(#{aborted_transactions := AbortedL}, Batches) ->
