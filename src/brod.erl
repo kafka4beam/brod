@@ -164,7 +164,7 @@
 %%%_* Types ====================================================================
 
 %% basics
--type hostname() :: string().
+-type hostname() :: kpro:hostname().
 -type portnum() :: pos_integer().
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().

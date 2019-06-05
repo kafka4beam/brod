@@ -35,7 +35,7 @@
 -include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
--define(BROKERS, [{"localhost", 9092}]).
+-define(BROKERS, [{localhost, 9092}]).
 -define(TOPIC1, <<"brod-group-subscriber-1">>).
 -define(TOPIC2, <<"brod-group-subscriber-2">>).
 -define(TOPIC3, <<"brod-group-subscriber-3">>).
