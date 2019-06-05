@@ -163,4 +163,9 @@
     belong to open transactions (transactions which are neigher committed nor aborted),
     may result in an empty message set, then `brod_consumer` or `brod_utils:fetch` jumps to
     the next offset (if it is less than high-watermark offset).
+* 3.8.0
+  * Bump to kafka_protocol 2.2.9 (allow `atom()` hostname)
+  * Add `brod:fold/8`. This API spawns a process to fetch-ahead while folding the prefiously
+    fetched batch. `brod-cli`'s `fetch` command is updated to call this `fold` API for better
+    performance.
 
