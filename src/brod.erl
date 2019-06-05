@@ -238,11 +238,11 @@
                          {ok, fold_acc()} | {error, any()}).
 %% fold always returns when reaches the high watermark offset
 %% fold also returns when any of the limits is hit
--type fold_limits() :: #{ msg_count => pos_integer()
+-type fold_limits() :: #{ message_count => pos_integer()
                         , reach_offset => offset()
                         }.
 -type fold_stop_reason() :: reached_end_of_partition
-                          | reached_msg_count_limit
+                          | reached_message_count_limit
                           | reached_target_offset
                           | {error, any()}.
  %% OffsetToContinue: begin offset for the next fold call

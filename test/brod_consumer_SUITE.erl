@@ -365,10 +365,10 @@ t_fold(Config) when is_list(Config) ->
   ?assertMatch({Sum, O, reached_end_of_partition}
                  when O =:= Offset + length(Nums),
     brod:fold(Client, Topic, Partition, Offset, FetchOpts, 0, FoldF, #{})),
-  ?assertMatch({10, O, reached_msg_count_limit}
+  ?assertMatch({10, O, reached_message_count_limit}
                 when O =:= Offset + 4,
     brod:fold(Client, Topic, Partition, Offset, FetchOpts,
-              0, FoldF, #{msg_count => 4})),
+              0, FoldF, #{message_count => 4})),
   ?assertMatch({SumX, O, reached_end_of_partition}
                 when O =:= Offset + length(Nums) andalso SumX =:= Sum - 10,
     brod:fold(Client, Topic, Partition, Offset + 4, FetchOpts, 0, FoldF, #{})),

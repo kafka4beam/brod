@@ -449,7 +449,7 @@ run(?FETCH_CMD, Brokers, Topic, ConnOpts, Args) ->
   FetchOpts = #{max_wait_time => Wait, max_bytes => MaxBytes},
   FoldLimits = case Count < 0 of
                  true -> #{};
-                 false -> #{msg_count => Count}
+                 false -> #{message_count => Count}
                end,
   FoldFun =
     fun(M, Acc) ->

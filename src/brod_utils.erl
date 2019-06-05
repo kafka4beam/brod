@@ -253,8 +253,8 @@ fold(Conn, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
   Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
   Infinity = 1 bsl 64,
   EndOffset = maps:get(reach_offset, Limits, Infinity),
-  CountLimit = maps:get(msg_count, Limits, Infinity),
-  CountLimit < 1 andalso error(bad_msg_count),
+  CountLimit = maps:get(message_count, Limits, Infinity),
+  CountLimit < 1 andalso error(bad_message_count),
   %% Function to spawn an async fetcher so it can fetch
   %% the next batch while self() is folding the current
   Spawn = fun(O) -> spawn_monitor(fun() -> exit(Fetch(O)) end) end,
@@ -545,7 +545,7 @@ handle_fetch_rsp(Spawn, {ok, {_StableOffset, Msgs}}, Offset, Acc, Fun,
 
 do_acc(_Spawn, Fetcher, Offset, Acc, _Fun, _, _End, 0) ->
   undefined = Fetcher, %% assert
-  ?BROD_FOLD_RET(Acc, Offset, reached_msg_count_limit);
+  ?BROD_FOLD_RET(Acc, Offset, reached_message_count_limit);
 do_acc(_Spawn, Fetcher, Offset, Acc, _Fun, _, End, _Count) when Offset > End ->
   undefined = Fetcher, %% assert
   ?BROD_FOLD_RET(Acc, Offset, reached_target_offset);
