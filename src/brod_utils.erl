@@ -24,7 +24,9 @@
         , bytes/1
         , describe_groups/3
         , epoch_ms/0
+        , fetch/4
         , fetch/5
+        , fold/8
         , fetch_committed_offsets/3
         , fetch_committed_offsets/4
         , flatten_batches/3
@@ -223,6 +225,37 @@ fetch(Conn, Topic, Partition, Offset, Opts) ->
   Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
   Fetch(Offset).
 
+-spec fold(connection() | {[endpoint()], conn_config()} | brod:client_id(),
+           topic(), partition(), offset(), brod:fetch_opts(),
+           brod:fold_acc(), brod:fold_fun(), brod:fold_limits()) ->
+             brod:fold_result().
+fold({Hosts, ConnCfg}, Topic, Partition, Offset, Opts,
+     Acc, Fun, Limits) ->
+  case with_conn(
+         kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+         fun(Conn) -> fold(Conn, Topic, Partition, Offset, Opts,
+                           Acc, Fun, Limits) end) of
+    {error, Reason} ->
+      ?BROD_FOLD_RET(Acc, Offset, {error, Reason});
+    ?BROD_FOLD_RET(_, _, _) = FoldResult ->
+      FoldResult
+  end;
+fold(Client, Topic, Partition, Offset, Opts,
+     Acc, Fun, Limits) when is_atom(Client) ->
+  case brod_client:get_leader_connection(Client, Topic, Partition) of
+    {ok, Conn} ->
+      %% do not close connection after use, managed by client
+      fold(Conn, Topic, Partition, Offset, Opts, Acc, Fun, Limits);
+    {error, Reason} ->
+      ?BROD_FOLD_RET(Acc, Offset, {error, Reason})
+  end;
+fold(Conn, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
+  Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
+  Infinity = 1 bsl 64,
+  EndOffset = maps:get(reach_offset, Limits, Infinity),
+  CountLimit = maps:get(msg_count, Limits, Infinity),
+  do_fold(Fetch, Offset, Acc, Fun, EndOffset, CountLimit).
+
 %% @doc Make a fetch function which should expand `max_bytes' when
 %% it is not big enough to fetch one signle message.
 -spec make_fetch_fun(pid(), topic(), partition(), brod:fetch_opts()) ->
@@ -232,7 +265,7 @@ make_fetch_fun(Conn, Topic, Partition, FetchOpts) ->
   MinBytes = maps:get(min_bytes, FetchOpts, 1),
   MaxBytes = maps:get(max_bytes, FetchOpts, 1 bsl 20),
   ReqFun = make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes),
-  fun(Offset) -> fetch(Conn, ReqFun, Offset, MaxBytes) end.
+  fun(Offset) -> ?MODULE:fetch(Conn, ReqFun, Offset, MaxBytes) end.
 
 -spec make_part_fun(brod:partitioner()) -> brod:partition_fun().
 make_part_fun(random) ->
@@ -484,6 +517,38 @@ get_stable_offset(Header) ->
   StableOffset.
 
 %%%_* Internal functions =======================================================
+
+do_fold(Fetch, Offset, Acc, Fun, EndOffset, Count) ->
+  case Fetch(Offset) of
+    {error, Reason} ->
+      ?BROD_FOLD_RET(Acc, Offset, {error, Reason});
+    {ok, {StableOffset, []}} when Offset >= StableOffset ->
+      ?BROD_FOLD_RET(Acc, Offset, reached_end_of_partition);
+    {ok, {_StableOffset, Msgs}} ->
+      Continue =
+        fun(NextOffset, NewAcc, NewCount) ->
+            do_fold(Fetch, NextOffset, NewAcc, Fun, EndOffset, NewCount)
+        end,
+      do_fold_acc(Acc, Fun, Msgs, EndOffset, Count, Continue)
+  end.
+
+do_fold_acc(Acc, Fun, [Msg | Rest], EndOffset, Count, Continue) ->
+  #kafka_message{offset = Offset} = Msg,
+  case Count =:= 0 of
+    true ->
+      ?BROD_FOLD_RET(Acc, Offset, reached_msg_count_limit);
+    false when Offset > EndOffset ->
+      ?BROD_FOLD_RET(Acc, Offset, reached_target_offset);
+    false ->
+      case Fun(Msg, Acc) of
+        {ok, NewAcc} when Rest =:= [] ->
+          Continue(Offset + 1, NewAcc, Count - 1);
+        {ok, NewAcc} ->
+          do_fold_acc(NewAcc, Fun, Rest, EndOffset, Count - 1, Continue);
+        {error, Reason} ->
+          ?BROD_FOLD_RET(Acc, Offset, Reason)
+      end
+  end.
 
 drop_aborted(#{aborted_transactions := AbortedL}, Batches) ->
   %% Drop batches for each abored transaction

@@ -76,6 +76,8 @@
                  , protocol_type :: brod:cg_protocol_type()
                  }).
 
+-define(BROD_FOLD_RET(Acc, NextOffset, Reason), {Acc, NextOffset, Reason}).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

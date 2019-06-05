@@ -31,6 +31,7 @@
         , t_wait_for_unstable_offsets/1
         , t_fetch_aborted_from_the_middle/1
         , t_direct_fetch/1
+        , t_fold/1
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
@@ -345,6 +346,43 @@ t_direct_fetch(Config) when is_list(Config) ->
                                  Topic, Partition, Offset - 1),
   {ok, {_, [Msg]}} = brod:fetch(Client, Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
+  ok.
+
+t_fold(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Nums = lists:seq(1, 100),
+  Batch = [#{value => integer_to_binary(I)} || I <- Nums],
+  {ok, Offset} =
+    brod:produce_sync_offset(Client, ?TOPIC, Partition, <<>>, Batch),
+  FoldF =
+    fun F(#kafka_message{value = V}, Acc) -> {ok, F(binary_to_integer(V), Acc)};
+        F(I, Acc) -> I + Acc
+    end,
+  Sum = lists:foldl(FoldF, 0, Nums),
+  ?assertMatch({Sum, O, reached_end_of_partition}
+                 when O =:= Offset + length(Nums),
+    brod:fold(Client, Topic, Partition, Offset, #{},
+              0, FoldF, #{})),
+  ?assertMatch({10, O, reached_msg_count_limit}
+                when O =:= Offset + 4,
+    brod:fold(Client, Topic, Partition, Offset, #{},
+              0, FoldF, #{msg_count => 4})),
+  ?assertMatch({SumX, O, reached_end_of_partition}
+                when O =:= Offset + length(Nums) andalso SumX =:= Sum - 10,
+    brod:fold(Client, Topic, Partition, Offset + 4, #{},
+              0, FoldF, #{})),
+  ?assertMatch({10, _, reached_target_offset},
+    brod:fold({?HOSTS, ?config(client_config)}, Topic, Partition, Offset, #{},
+              0, FoldF, #{reach_offset => Offset + 3})),
+  ErrorFoldF =
+    fun(#kafka_message{value = <<"5">>}, _) -> {error, <<"stop now">>};
+       (#kafka_message{value = V}, Acc) -> {ok, binary_to_integer(V) + Acc}
+    end,
+  ?assertMatch({10, _, <<"stop now">>},
+    brod:fold(Client, Topic, Partition, Offset, #{},
+              0, ErrorFoldF, #{})),
   ok.
 
 t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
