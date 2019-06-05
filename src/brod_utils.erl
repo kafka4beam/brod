@@ -31,6 +31,7 @@
         , get_metadata/1
         , get_metadata/2
         , get_metadata/3
+        , get_stable_offset/1
         , group_per_key/1
         , group_per_key/2
         , init_sasl_opt/1
@@ -322,18 +323,16 @@ fetch(Conn, ReqFun, Offset, MaxBytes) ->
     {ok, #{batches := ?incomplete_batch(Size)}} ->
       fetch(Conn, ReqFun, Offset, Size);
     {ok, #{header := Header, batches := Batches}} ->
-      HighWm = kpro:find(high_watermark, Header),
-      %% for API version 4 or higher, use last_stable_offset
-      LatestOffset = kpro:find(last_stable_offset, Header, HighWm),
+      StableOffset = get_stable_offset(Header),
       {NewBeginOffset, Msgs} = flatten_batches(Offset, Header, Batches),
-      case Offset < LatestOffset andalso Msgs =:= [] of
+      case Offset < StableOffset andalso Msgs =:= [] of
         true ->
           %% Not reached the latest stable offset yet,
           %% but received an empty batch-set (all messages are dropped).
           %% try again with new begin-offset
           fetch(Conn, ReqFun, NewBeginOffset, MaxBytes);
         false ->
-          {ok, {LatestOffset, Msgs}}
+          {ok, {StableOffset, Msgs}}
       end;
     {error, Reason} ->
       {error, Reason}
@@ -466,6 +465,16 @@ make_batch_input(Key, Value) ->
     true  -> unify_batch(Value);
     false -> [unify_msg(make_msg_input(Key, Value))]
   end.
+
+%% @doc last_stable_offset is added in fetch response version 4
+%% This function takes high watermark offset as last_stable_offset
+%% in case it's missing.
+%% Offsets are considered 'unstable' if they belong to open transactions
+get_stable_offset(Header) ->
+  HighWmOffset = kpro:find(high_watermark, Header),
+  StableOffset = kpro:find(last_stable_offset, Header, HighWmOffset),
+  StableOffset > HighWmOffset andalso error(unexpected_last_stable_offset),
+  StableOffset.
 
 %%%_* Internal functions =======================================================
 

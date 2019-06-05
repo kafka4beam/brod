@@ -28,6 +28,7 @@
 
 %% Test cases
 -export([ t_drop_aborted/1
+        , t_wait_for_unstable_offsets/1
         , t_fetch_aborted_from_the_middle/1
         , t_direct_fetch/1
         , t_direct_fetch_with_small_max_bytes/1
@@ -198,6 +199,64 @@ test_drop_aborted(Config, QueryApiVsn) ->
                     #kafka_message{offset = Offset2, key = Key2}
                    ], Msgs)
   end.
+
+t_wait_for_unstable_offsets(Config) when is_list(Config) ->
+  case has_txn() of
+    true -> t_wait_for_unstable_offsets({run, Config});
+    false -> ok
+  end;
+t_wait_for_unstable_offsets({run, Config}) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  TxnId = make_transactional_id(),
+  {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
+  %% ensure we have enough time to test before expire
+  TxnOpts = #{txn_timeout => timer:seconds(30)},
+  {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId, TxnOpts),
+  ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
+  %% Send one message in this transaction, return the offset in kafka
+  ProduceFun =
+    fun(Seqno, Msg) ->
+      Vsn = 3, %% lowest API version which supports transactional produce
+      Opts = #{txn_ctx => TxnCtx, first_sequence => Seqno},
+      Batch = [#{value => Msg}],
+      ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition, Batch, Opts),
+      {ok, LeaderConn} =
+          brod_client:get_leader_connection(Client, Topic, Partition),
+      {ok, ProduceRsp} = kpro:request_sync(LeaderConn, ProduceReq, 5000),
+      {ok, Offset} = brod_utils:parse_rsp(ProduceRsp),
+      Offset
+    end,
+  Seqnos = lists:seq(0, 100),
+  Msgs = [{Seqno, iolist_to_binary(make_ts_str())} || Seqno <- Seqnos],
+  Offsets = [{Seqno, ProduceFun(Seqno, Msg)} || {Seqno, Msg} <- Msgs],
+  {_, BaseOffset} = hd(Offsets),
+  {_, LastOffset} = lists:last(Offsets),
+  Cfg = ?config(client_config),
+  Fetch = fun(O) ->
+              {ok, {StableOffset, MsgL}} =
+                brod:fetch({?HOSTS, Cfg}, Topic, Partition, O,
+                           #{max_wait_time => 100}),
+              {StableOffset, MsgL}
+          end,
+  %% Transaction is not committed yet, fetch should not see anything
+  ?assertMatch({BaseOffset, []}, Fetch(BaseOffset)),
+  ?assertMatch({BaseOffset, []}, Fetch(BaseOffset + 1)),
+  ?assertMatch({BaseOffset, []}, Fetch(LastOffset)),
+  ?assertMatch({BaseOffset, []}, Fetch(LastOffset + 1)),
+  ok = kpro:txn_commit(TxnCtx),
+  ok = kpro:close_connection(Conn),
+  %% A commit batch is appended behind last message
+  %% commit batch is empty but takes one offset, hence + 2
+  StableOffset = LastOffset + 2,
+  {FetchedStableOffset, [FetchedFirstMsg | _]} = Fetch(BaseOffset),
+  {_, ExpectedMsg} = hd(Msgs),
+  ?assertMatch(#kafka_message{value = ExpectedMsg}, FetchedFirstMsg),
+  ?assertEqual(StableOffset, FetchedStableOffset),
+  ?assertMatch({StableOffset, [_ | _]}, Fetch(BaseOffset + 1)),
+  ?assertMatch({StableOffset, []}, Fetch(StableOffset)),
+  ok.
 
 %% Produce large(-ish) transactional batches, then abort them all
 %% try fetch from offsets in the middle of large batches,

@@ -376,18 +376,19 @@ handle_batches(_Header, ?incomplete_batch(Size),
   State = maybe_send_fetch_request(State1),
   {noreply, State};
 handle_batches(Header, [], #state{begin_offset = BeginOffset} = State0) ->
-  HighWmOffset = kpro:find(high_watermark, Header),
+  StableOffset = brod_utils:get_stable_offset(Header),
   State =
-    case BeginOffset < HighWmOffset of
+    case BeginOffset < StableOffset of
       true ->
         %% There are chances that kafka may return empty message set
-        %% when messages are delete from a compacted topic.
+        %% when messages are deleted from a compacted topic.
         %% Since there is no way to know how big the 'hole' is
         %% we can only bump begin_offset with +1 and try again.
         State1 = State0#state{begin_offset = BeginOffset + 1},
         maybe_send_fetch_request(State1);
       false ->
-        %% we have reached the end of partition
+        %% we have either reached the end of a partition
+        %% or trying to read uncommitted messages
         %% try to poll again (maybe after a delay)
         maybe_delay_fetch_request(State0)
     end,
@@ -399,20 +400,19 @@ handle_batches(Header, Batches,
                      , topic        = Topic
                      , partition    = Partition
                      } = State0) ->
-  HighWmOffset = kpro:find(high_watermark, Header),
-  %% for API version 4 or higher, use last_stable_offset
-  LatestOffset = kpro:find(last_stable_offset, Header, HighWmOffset),
+  StableOffset = brod_utils:get_stable_offset(Header),
   {NewBeginOffset, Messages} =
     brod_utils:flatten_batches(BeginOffset, Header, Batches),
   State1 = State0#state{begin_offset = NewBeginOffset},
   State =
     case Messages =:= [] of
       true ->
+        %% All messages are before requested offset, hence dropped
         State1;
       false ->
         MsgSet = #kafka_message_set{ topic          = Topic
                                    , partition      = Partition
-                                   , high_wm_offset = LatestOffset
+                                   , high_wm_offset = StableOffset
                                    , messages       = Messages
                                    },
         ok = cast_to_subscriber(Subscriber, MsgSet),
