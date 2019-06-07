@@ -36,10 +36,12 @@
         , t_direct_fetch_expand_max_bytes/1
         , t_consumer_max_bytes_too_small/1
         , t_consumer_connection_restart/1
+        , t_consumer_connection_restart_2/1
         , t_consumer_resubscribe/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
         , t_offset_reset_policy/1
+        , t_stop_kill/1
         ]).
 
 
@@ -54,16 +56,22 @@
 
 -define(WAIT(Pattern, Expr),
         fun() ->
-          receive
-            Pattern ->
-              Expr;
-            _Msg ->
-              ct:pal("exp: ~s\ngot: ~p\n", [??Pattern, _Msg]),
-              erlang:error(unexpected_msg)
-          after
-            3000 ->
-              erlang:error({timeout, ??Pattern})
+          receive Pattern -> Expr
+          after 5000 -> erlang:error({timeout, ??Pattern})
           end
+        end()).
+-define(WAIT_ONLY(Pattern, Expr),
+        fun() ->
+            Msg = receive X -> X
+                  after 5000 -> erlang:error({timeout, ??Pattern})
+                  end,
+            case Msg of
+              Pattern ->
+                Expr;
+              _ ->
+                ct:pal("exp: ~s\ngot: ~p\n", [??Pattern, Msg]),
+                erlang:error({unexpected_msg, Msg})
+            end
         end()).
 
 %%%_* ct callbacks =============================================================
@@ -101,8 +109,14 @@ init_per_testcase(Case, Config0) ->
     end ++ ClientConfig0 ++ ClientConfig1,
   ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
-  ok = brod:start_consumer(Client, Topic, [{max_wait_time, 1000},
-                                           {sleep_timeout, 0}]),
+  try ?MODULE:Case(standalone_consumer) of
+    true ->
+      ok
+  catch
+    error : function_clause ->
+      ConsumerCfg = consumer_config(),
+      ok = brod:start_consumer(Client, Topic, ConsumerCfg)
+  end,
   [{client, Client}, {client_config, ClientConfig} | Config].
 
 end_per_testcase(Case, Config) ->
@@ -459,12 +473,13 @@ t_consumer_max_bytes_too_small(Config) ->
                                     {'=', MaxBytes2},
                                     {'>', MaxBytes3}],
                                    _TriedCount = 0),
-  ?WAIT({ConsumerPid, #kafka_message_set{messages = Messages}},
-        begin
-          [#kafka_message{key = KeyReceived, value = ValueReceived}] = Messages,
-          ?assertEqual(Key, KeyReceived),
-          ?assertEqual(Value, ValueReceived)
-        end).
+  ?WAIT_ONLY(
+     {ConsumerPid, #kafka_message_set{messages = Messages}},
+     begin
+       [#kafka_message{key = KeyReceived, value = ValueReceived}] = Messages,
+       ?assertEqual(Key, KeyReceived),
+       ?assertEqual(Value, ValueReceived)
+     end).
 
 %% @doc Consumer shoud auto recover from connection down, subscriber should not
 %% notice a thing except for a few seconds of break in data streaming
@@ -472,65 +487,125 @@ t_consumer_connection_restart(Config) ->
   Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
+  %% ensure slow fetch
+  ConsumerCfg = [ {prefetch_count, 0}
+                , {prefetch_bytes, 0}
+                , {min_bytes, 1}
+                , {max_bytes, 12} %% ensure fetch exactly one message at a time
+                | consumer_config()
+                ],
+  {ok, ConsumerPid} =
+    brod_consumer:start_link(whereis(Client), Topic, Partition, ConsumerCfg),
   ProduceFun =
     fun(I) ->
       Value = Key= integer_to_binary(I),
-      brod:produce_sync(Client, Topic, Partition, Key, Value)
+      {ok, Offset} =
+        brod:produce_sync_offset(Client, Topic, Partition, Key, Value),
+      Offset
     end,
-  Parent = self(),
-  SubscriberPid =
-    erlang:spawn_link(
-      fun() ->
-        {ok, _ConsumerPid} =
-          brod:subscribe(Client, self(), Topic, Partition, []),
-        Parent ! {subscriber_ready, self()},
-        seqno_consumer_loop(0, _ExitSeqNo = undefined)
-      end),
-  receive
-    {subscriber_ready, SubscriberPid} ->
-      ok
-  end,
-  ProducerPid =
-    erlang:spawn_link(
-      fun() -> seqno_producer_loop(ProduceFun, 0, undefined, Parent) end),
-  receive
-    {produce_result_change, ProducerPid, ok} ->
-      ok
-  after 1000 ->
-    ct:fail("timed out waiting for seqno producer loop to start")
-  end,
-  {ok, ConnPid} = brod_client:get_leader_connection(Client, Topic, Partition),
+  NumsCnt = 100,
+  Nums = lists:seq(1, NumsCnt),
+  Offsets = lists:map(ProduceFun, Nums),
+  ok = brod_consumer:subscribe(ConsumerPid, self(),
+                               [{begin_offset, hd(Offsets)}]),
+  ConnPid = brod_consumer:get_connection(ConsumerPid),
+  MatchNum = fun(#kafka_message{key = N, value = N}, [H | T]) ->
+                 ?assertEqual(binary_to_integer(N), H),
+                 T
+             end,
+  Receive =
+    fun(NumsIn, Timeout) ->
+        receive
+          {ConsumerPid, #kafka_message_set{messages = Msgs}} ->
+            lists:foldl(MatchNum, NumsIn, Msgs)
+        after Timeout -> error(timeout)
+        end
+    end,
+  %% Match exactly one message
+  Nums1 = Receive(Nums, 5000),
+  ?assertError(timeout, Receive(Nums1, 100)),
+  ?assertEqual(NumsCnt - 1, length(Nums1)),
+  %% kill connection, expect a restart later
   exit(ConnPid, kill),
-  receive
-    {produce_result_change, ProducerPid, error} ->
-      ok
-  after 1000 ->
-    ct:fail("timed out receiving seqno producer loop to report error")
-  end,
-  receive
-    {produce_result_change, ProducerPid, ok} ->
-      ok
-  after 5000 ->
-    ct:fail("timed out waiting for seqno producer to recover")
-  end,
-  ProducerPid ! stop,
-  ExitSeqNo =
-    receive
-      {producer_exit, ProducerPid, SeqNo} ->
-        SeqNo
-    after 2000 ->
-      ct:fail("timed out waiting for seqno producer to report last seqno")
+  ok = brod:consume_ack(ConsumerPid, hd(Offsets)),
+  NewConnPid = wait_for_consumer_connection(ConsumerPid, ConnPid),
+  Nums2 = Receive(Nums1, 5000),
+  ?assertError(timeout, Receive(Nums2, 100)),
+  ?assertEqual(NumsCnt - 2, length(Nums2)),
+  ?assertEqual({ok, NewConnPid},
+               brod_client:get_leader_connection(Client, Topic, Partition)),
+  ok = brod_consumer:stop(ConsumerPid),
+  ?assertNot(is_process_alive(ConsumerPid)),
+  ?assert(is_process_alive(NewConnPid)), %% managed by brod_client
+  ok.
+
+%% @doc same as t_consumer_connection_restart_2,
+%% but test with brod_consumer started standalone.
+%% i.e. not under brod_client's management
+t_consumer_connection_restart_2(standalone_consumer) ->
+  true;
+t_consumer_connection_restart_2(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  %% ensure slow fetch
+  ConsumerCfg = [ {prefetch_count, 0}
+                , {prefetch_bytes, 0}
+                , {min_bytes, 1}
+                , {max_bytes, 12} %% ensure fetch exactly one message at a time
+                | consumer_config()
+                ],
+  Bootstrap = {?HOSTS, ?config(client_config)},
+  {ok, ConsumerPid} =
+    brod_consumer:start_link(Bootstrap, Topic, Partition, ConsumerCfg),
+  ProduceFun =
+    fun(I) ->
+      Value = Key= integer_to_binary(I),
+      {ok, Offset} =
+        brod:produce_sync_offset(Client, Topic, Partition, Key, Value),
+      Offset
     end,
-  Mref = erlang:monitor(process, SubscriberPid),
-  %% tell subscriber to stop at ExitSeqNo because producer stopped before
-  %% that number.
-  SubscriberPid ! {exit_seqno, ExitSeqNo},
-  receive
-    {'DOWN', Mref, process, SubscriberPid, Reason} ->
-      ?assertEqual(normal, Reason)
-  after 6000 ->
-    ct:fail("timed out waiting for seqno subscriber to exit")
-  end.
+  NumsCnt = 100,
+  Nums = lists:seq(1, NumsCnt),
+  Offsets = lists:map(ProduceFun, Nums),
+  ok = brod_consumer:subscribe(ConsumerPid, self(),
+                               [{begin_offset, hd(Offsets)}]),
+  ConnPid = brod_consumer:get_connection(ConsumerPid),
+  MatchNum = fun(#kafka_message{key = N, value = N}, [H | T]) ->
+                 ?assertEqual(binary_to_integer(N), H),
+                 T
+             end,
+  Receive =
+    fun(NumsIn, Timeout) ->
+        receive
+          {ConsumerPid, #kafka_message_set{messages = Msgs}} ->
+            lists:foldl(MatchNum, NumsIn, Msgs)
+        after Timeout -> error(timeout)
+        end
+    end,
+  %% Match exactly one message
+  Nums1 = Receive(Nums, 5000),
+  ?assertError(timeout, Receive(Nums1, 100)),
+  ?assertEqual(NumsCnt - 1, length(Nums1)),
+  %% kill connection, expect a restart later
+  exit(ConnPid, kill),
+  ok = brod:consume_ack(ConsumerPid, hd(Offsets)),
+  NewConnPid = wait_for_consumer_connection(ConsumerPid, ConnPid),
+  Nums2 = Receive(Nums1, 5000),
+  ?assertError(timeout, Receive(Nums2, 100)),
+  ?assertEqual(NumsCnt - 2, length(Nums2)),
+  %% assert normal shutdown
+  Ref1 = erlang:monitor(process, NewConnPid),
+  Ref2 = erlang:monitor(process, ConsumerPid),
+  %% assert connection linked to consumer
+  {links, Links} = process_info(ConsumerPid, links),
+  ?assert(lists:member(NewConnPid, Links)),
+  ok = brod_consumer:stop(ConsumerPid),
+  ?WAIT_ONLY({'DOWN', Ref1, process, _, Reason},
+             ?assertEqual(normal, Reason)),
+  ?WAIT_ONLY({'DOWN', Ref2, process, _, Reason},
+             ?assertEqual(normal, Reason)),
+  ok.
 
 %% @doc Data stream should resume after re-subscribe starting from the
 %% the last acked offset
@@ -662,65 +737,14 @@ t_offset_reset_policy(Config) when is_list(Config) ->
     ct:fail("timed out receiving kafka message set", [])
   end.
 
+t_stop_kill(Config) when is_list(Config) ->
+  {Pid, Mref} = spawn_monitor(fun() -> timer:sleep(100000) end),
+  ?assert(is_process_alive(Pid)),
+  ok = brod_consumer:stop_maybe_kill(Pid, 100),
+  ?WAIT_ONLY({'DOWN', Mref, process, Pid, killed}, ok),
+  ok = brod_consumer:stop_maybe_kill(Pid, 100).
+
 %%%_* Help functions ===========================================================
-
-%% Expecting sequence numbers delivered from kafka
-%% not expecting any error messages.
-seqno_consumer_loop(ExitSeqNo, ExitSeqNo) ->
-  %% we have verified all sequence numbers, time to exit
-  exit(normal);
-seqno_consumer_loop(ExpectedSeqNo, ExitSeqNo) ->
-  receive
-    {ConsumerPid, #kafka_message_set{messages = Messages}} ->
-      MapFun = fun(#kafka_message{ offset = Offset
-                                 , key    = SeqNo
-                                 , value  = SeqNo}) ->
-                 ok = brod:consume_ack(ConsumerPid, Offset),
-                 list_to_integer(binary_to_list(SeqNo))
-               end,
-      SeqNoList = lists:map(MapFun, Messages),
-      NextSeqNoToExpect = verify_seqno(ExpectedSeqNo, SeqNoList),
-      seqno_consumer_loop(NextSeqNoToExpect, ExitSeqNo);
-    {exit_seqno, SeqNo} ->
-      seqno_consumer_loop(ExpectedSeqNo, SeqNo);
-    Msg ->
-      exit({"unexpected message received", Msg})
-  end.
-
-%% Verify if a received sequence number list is as expected
-%% sequence numbers are allowed to get redelivered,
-%% but should not be re-ordered.
-verify_seqno(SeqNo, []) ->
-  SeqNo + 1;
-verify_seqno(SeqNo, [X | _] = SeqNoList) when X < SeqNo ->
-  verify_seqno(X, SeqNoList);
-verify_seqno(SeqNo, [SeqNo | Rest]) ->
-  verify_seqno(SeqNo + 1, Rest);
-verify_seqno(SeqNo, SeqNoList) ->
-  exit({"sequence number received is not as expected", SeqNo, SeqNoList}).
-
-%% Produce sequence numbers in a retry loop.
-%% Report produce API return value pattern changes to parent pid
-seqno_producer_loop(ProduceFun, SeqNo, LastResult, Parent) ->
-  {Result, NextSeqNo} =
-    case ProduceFun(SeqNo) of
-      ok ->
-        {ok, SeqNo + 1};
-      {error, _Reason} ->
-        {error, SeqNo}
-    end,
-  case Result =/= LastResult of
-    true  -> Parent ! {produce_result_change, self(), Result};
-    false -> ok
-  end,
-  receive
-    stop ->
-      Parent ! {producer_exit, self(), NextSeqNo},
-      exit(normal)
-  after 100 ->
-    ok
-  end,
-  seqno_producer_loop(ProduceFun, NextSeqNo, Result, Parent).
 
 %% os:timestamp should be unique enough for testing
 make_unique_key() ->
@@ -797,6 +821,25 @@ has_txn() ->
     "0.10" ++ _ -> false;
     _ -> true
   end.
+
+consumer_config() -> [{max_wait_time, 1000}, {sleep_timeout, 10}].
+
+retry(_F, 0) -> error(timeout);
+retry(F, Seconds) ->
+  case F() of
+    false ->
+      timer:sleep(1000),
+      retry(F, Seconds - 1);
+    Value ->
+      Value
+  end.
+
+wait_for_consumer_connection(Consumer, OldConn) ->
+  F = fun() ->
+          Pid = brod_consumer:get_connection(Consumer),
+          Pid =/= undefined andalso Pid =/= OldConn andalso Pid
+      end,
+  retry(F, 5).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
