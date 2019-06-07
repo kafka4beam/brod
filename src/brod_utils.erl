@@ -207,9 +207,11 @@ flatten_batches(BeginOffset, Header, Batches0) ->
   end.
 
 %% @doc Fetch a single message set from the given topic-partition.
--spec fetch(connection() | {[endpoint()], conn_config()} | brod:client_id(),
+-spec fetch(connection() | brod:client_id() | brod:bootstrap(),
             topic(), partition(), offset(), brod:fetch_opts()) ->
               {ok, {offset(), [brod:message()]}} | {error, any()}.
+fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->
+  fetch({Hosts, []}, Topic, Partition, Offset, Opts);
 fetch({Hosts, ConnCfg}, Topic, Partition, Offset, Opts) ->
   with_conn(
     kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
@@ -225,12 +227,14 @@ fetch(Conn, Topic, Partition, Offset, Opts) ->
   Fetch = make_fetch_fun(Conn, Topic, Partition, Opts),
   Fetch(Offset).
 
--spec fold(connection() | {[endpoint()], conn_config()} | brod:client_id(),
+-spec fold(connection() | brod:client_id() | brod:bootstrap(),
            topic(), partition(), offset(), brod:fetch_opts(),
-           brod:fold_acc(), brod:fold_fun(), brod:fold_limits()) ->
-             brod:fold_result().
-fold({Hosts, ConnCfg}, Topic, Partition, Offset, Opts,
-     Acc, Fun, Limits) ->
+           Acc, brod:fold_fun(Acc), brod:fold_limits()) ->
+             brod:fold_result() when Acc :: brod:fold_acc().
+fold(Hosts, Topic, Partition, Offset, Opts,
+     Acc, Fun, Limits) when is_list(Hosts) ->
+  fold({Hosts, []}, Topic, Partition, Offset, Opts, Acc, Fun, Limits);
+fold({Hosts, ConnCfg}, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
   case with_conn(
          kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
          fun(Conn) -> fold(Conn, Topic, Partition, Offset, Opts,
@@ -552,13 +556,18 @@ do_acc(_Spawn, Fetcher, Offset, Acc, _Fun, _, End, _Count) when Offset > End ->
 do_acc(Spawn, Fetcher, Offset, Acc, Fun, [], End, Count) ->
   do_fold(Spawn, Fetcher, Offset, Acc, Fun, End, Count);
 do_acc(Spawn, Fetcher, Offset, Acc, Fun, [Msg | Rest], End, Count) ->
-  case Fun(Msg, Acc) of
+  try Fun(Msg, Acc) of
     {ok, NewAcc} ->
       NextOffset = Msg#kafka_message.offset + 1,
       do_acc(Spawn, Fetcher, NextOffset, NewAcc, Fun, Rest, End, Count - 1);
     {error, Reason} ->
       ok = kill_fetcher(Fetcher),
       ?BROD_FOLD_RET(Acc, Offset, Reason)
+  catch
+    C : E ?BIND_STACKTRACE(Stack) ->
+      ?GET_STACKTRACE(Stack),
+      kill_fetcher(Fetcher),
+      erlang:raise(C, E, Stack)
   end.
 
 kill_fetcher({Pid, Mref}) ->

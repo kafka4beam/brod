@@ -24,14 +24,6 @@
 
 -define(CLIENT, brod_cli_client).
 
--ifdef(OTP_RELEASE).
--define(BIND_STACKTRACE(Var), :Var).
--define(GET_STACKTRACE(Var), ok).
--else.
--define(BIND_STACKTRACE(Var), ).
--define(GET_STACKTRACE(Var), Var = erlang:get_stacktrace()).
--endif.
-
 %% 'halt' is for escript, stop the vm immediately
 %% 'exit' is for testing, we want eunit or ct to be able to capture
 -define(STOP(How),
