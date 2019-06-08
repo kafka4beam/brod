@@ -58,6 +58,14 @@
 -define(KAFKA_1_1,  {1,  1}).
 -define(LATEST_KAFKA_VERSION, ?KAFKA_1_1).
 
+-ifdef(OTP_RELEASE).
+-define(BIND_STACKTRACE(Var), :Var).
+-define(GET_STACKTRACE(Var), ok).
+-else.
+-define(BIND_STACKTRACE(Var), ).
+-define(GET_STACKTRACE(Var), Var = erlang:get_stacktrace()).
+-endif.
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

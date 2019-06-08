@@ -86,6 +86,7 @@
         , resolve_offset/5
         , fetch/4
         , fetch/5
+        , fold/8
         , connect_leader/4
         , list_all_groups/2
         , list_groups/2
@@ -95,21 +96,20 @@
         , fetch_committed_offsets/3
         ]).
 
-%% deprecated
--export([ fetch/7
-        , fetch/8
-        ]).
-
 -deprecated([ {fetch, 7, next_version}
             , {fetch, 8, next_version}
             ]).
 
+-export([ fetch/7
+        , fetch/8
+        ]).
 
 -ifdef(build_brod_cli).
 -export([main/1]).
 -endif.
 
 -export_type([ batch_input/0
+             , bootstrap/0
              , call_ref/0
              , cg/0
              , cg_protocol_type/0
@@ -125,6 +125,11 @@
              , endpoint/0
              , error_code/0
              , fetch_opts/0
+             , fold_acc/0
+             , fold_fun/1
+             , fold_limits/0
+             , fold_stop_reason/0
+             , fold_result/0
              , group_config/0
              , group_generation_id/0
              , group_id/0
@@ -157,7 +162,7 @@
 %%%_* Types ====================================================================
 
 %% basics
--type hostname() :: string().
+-type hostname() :: kpro:hostname().
 -type portnum() :: pos_integer().
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
@@ -180,6 +185,8 @@
 -type client_id() :: atom().
 -type client() :: client_id() | pid().
 -type client_config() :: brod_client:config().
+-type bootstrap() :: [endpoint()] %% default client config
+                   | {[endpoint()], client_config()}.
 -type offset_time() :: integer()
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
@@ -226,6 +233,21 @@
 -type cg() :: #brod_cg{}.
 -type cg_protocol_type() :: binary().
 -type fetch_opts() :: kpro:fetch_opts().
+-type fold_acc() :: term().
+-type fold_fun(Acc) :: fun((message(), Acc) -> {ok, Acc} | {error, any()}).
+%% fold always returns when reaches the high watermark offset
+%% fold also returns when any of the limits is hit
+-type fold_limits() :: #{ message_count => pos_integer()
+                        , reach_offset => offset()
+                        }.
+-type fold_stop_reason() :: reached_end_of_partition
+                          | reached_message_count_limit
+                          | reached_target_offset
+                          | {error, any()}.
+ %% OffsetToContinue: begin offset for the next fold call
+-type fold_result() :: ?BROD_FOLD_RET(fold_acc(),
+                                      OffsetToContinue :: offset(),
+                                      fold_stop_reason()).
 
 %%%_* APIs =====================================================================
 
@@ -753,7 +775,7 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
 %% @doc Fetch a single message set from the given topic-partition.
 %% The first arg can either be an already established connection to leader,
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
--spec fetch(connection() | [endpoint()] | {[endpoint()], conn_config()},
+-spec fetch(connection() | client_id() | bootstrap(),
             topic(), partition(), integer()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
 fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
@@ -766,13 +788,25 @@ fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
 %% @doc Fetch a single message set from the given topic-partition.
 %% The first arg can either be an already established connection to leader,
 %% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
--spec fetch(connection() | {[endpoint()], conn_config()},
+-spec fetch(connection() | client_id() | bootstrap(),
             topic(), partition(), offset(), fetch_opts()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
-fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->
-  fetch({Hosts, _ConnConfig = []}, Topic, Partition, Offset, Opts);
 fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts) ->
   brod_utils:fetch(ConnOrBootstrap, Topic, Partition, Offset, Opts).
+
+%% @doc Fold through messages in a partition.
+%% Works like `lists:foldl/2' but with below stop conditions:
+%% * Always return after reach high watermark offset
+%% * Return after the given message count limit is reached
+%% * Return after the given kafka offset is reached.
+%% * Return if the `FoldFun' returns an `{error, Reason}' tuple.
+%% NOTE: Exceptions from evaluating `FoldFun' are not caught.
+-spec fold(connection() | client_id() | bootstrap(),
+           topic(), partition(), offset(), fetch_opts(),
+           Acc, fold_fun(Acc), fold_limits()) ->
+             fold_result() when Acc :: fold_acc().
+fold(Bootstrap, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
+  brod_utils:fold(Bootstrap, Topic, Partition, Offset, Opts, Acc, Fun, Limits).
 
 %% @deprecated
 %% fetch(Hosts, Topic, Partition, Offset, Wait, MinBytes, MaxBytes, [])
