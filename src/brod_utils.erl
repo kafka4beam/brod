@@ -588,6 +588,9 @@ drop_aborted(_, Batches) ->
   Batches.
 
 do_drop_aborted(_, _, [], Acc) -> lists:reverse(Acc);
+do_drop_aborted(ProducerId, FirstOffset, [{_Meta, []} | Batches], Acc) ->
+  %% all messages are deleted (compacted topic)
+  do_drop_aborted(ProducerId, FirstOffset, Batches, Acc);
 do_drop_aborted(ProducerId, FirstOffset, [{Meta, Msgs} | Batches], Acc) ->
   #kafka_message{offset = BaseOffset} = hd(Msgs),
   case {is_txn(Meta, ProducerId), is_control(Meta)} of
