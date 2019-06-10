@@ -62,7 +62,8 @@ start_producer(SupPid, ClientPid, TopicName, Config) ->
 %% @doc Dynamically stop a per-topic supervisor
 -spec stop_producer(pid(), brod:topic()) -> ok | {}.
 stop_producer(SupPid, TopicName) ->
-  supervisor3:terminate_child(SupPid, TopicName).
+  supervisor3:terminate_child(SupPid, TopicName),
+  supervisor3:delete_child(SupPid, TopicName).
 
 %% @doc Find a brod_producer process pid running under ?PARTITIONS_SUP.
 -spec find_producer(pid(), brod:topic(), brod:partition()) ->

@@ -162,8 +162,14 @@ get_consumer(Client, Topic, Partition) ->
         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   case get_producer(Client, TopicName, _Partition = 0) of
-    {ok, _Pid} ->
-      ok; %% already started
+    {ok, Pid} ->
+      case is_process_alive(Pid) of
+        true ->
+          ok; %% already started
+        false ->
+          Call = {start_producer, TopicName, ProducerConfig},
+          safe_gen_call(Client, Call, infinity)
+      end;
     {error, {producer_not_found, TopicName}} ->
       Call = {start_producer, TopicName, ProducerConfig},
       safe_gen_call(Client, Call, infinity);
@@ -182,8 +188,14 @@ stop_producer(Client, TopicName) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
   case get_consumer(Client, TopicName, _Partition = 0) of
-    {ok, _Pid} ->
-      ok; %% already started
+    {ok, Pid} ->
+      case is_process_alive(Pid) of
+        true ->
+          ok; %% already started
+        false ->
+          Call = {start_consumer, TopicName, ConsumerConfig},
+          safe_gen_call(Client, Call, infinity)
+        end;
     {error, {consumer_not_found, TopicName}} ->
       Call = {start_consumer, TopicName, ConsumerConfig},
       safe_gen_call(Client, Call, infinity);

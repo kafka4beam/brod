@@ -58,7 +58,8 @@ start_consumer(SupPid, ClientPid, TopicName, Config) ->
 %% @doc Dynamically stop a per-topic supervisor.
 -spec stop_consumer(pid(), brod:topic()) -> ok | {error, any()}.
 stop_consumer(SupPid, TopicName) ->
-  supervisor3:terminate_child(SupPid, TopicName).
+  supervisor3:terminate_child(SupPid, TopicName),
+  supervisor3:delete_child(SupPid, TopicName).
 
 %% @doc Find a brod_consumer process pid running under ?PARTITIONS_SUP
 -spec find_consumer(pid(), brod:topic(), brod:partition()) ->
