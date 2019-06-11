@@ -384,13 +384,16 @@ handle_cast(_Cast, #state{} = State) ->
 code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
-terminate(shutdown, #state{client_pid = ClientPid
+terminate(Reason, #state{client_pid = ClientPid
                           , topic = Topic
                           , partition = Partition
                           }) ->
-  brod_client:deregister_producer(ClientPid, Topic, Partition),
-  ok;
-terminate(_Reason, _State) ->
+  case brod_utils:is_normal_reason(Reason) of
+    true ->
+      brod_client:deregister_producer(ClientPid, Topic, Partition);
+    false ->
+      ok
+  end,
   ok.
 
 %%%_* Internal Functions =======================================================
