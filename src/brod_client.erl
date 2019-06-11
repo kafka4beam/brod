@@ -255,9 +255,9 @@ register_producer(Client, Topic, Partition) ->
   Key = ?PRODUCER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Producer}).
 
-%% @doc De-register the producer for a partition. The partition producer entry is
-%% deleted from the ETS table to allow cleanup of purposefully stopped producers
-%% and allow later restart.
+%% @doc De-register the producer for a partition. The partition producer
+%% entry is deleted from the ETS table to allow cleanup of purposefully
+%% stopped producers and allow later restart.
 -spec deregister_producer(client(), topic(), partition()) -> ok.
 deregister_producer(Client, Topic, Partition) ->
   Key = ?PRODUCER_KEY(Topic, Partition),
@@ -272,9 +272,9 @@ register_consumer(Client, Topic, Partition) ->
   Key = ?CONSUMER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Consumer}).
 
-%% @doc De-register the consumer for a partition. The partition consumer entry is
-%% deleted from the ETS table to allow cleanup of purposefully stopped consumers
-%% and allow later restart.
+%% @doc De-register the consumer for a partition. The partition consumer
+%% entry is deleted from the ETS table to allow cleanup of purposefully
+%% stopped consumers and allow later restart.
 -spec deregister_consumer(client(), topic(), partition()) -> ok.
 deregister_consumer(Client, Topic, Partition) ->
   Key = ?CONSUMER_KEY(Topic, Partition),

@@ -318,7 +318,10 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), Cast]),
   {noreply, State}.
 
-terminate(Reason, #state{client_pid = ClientPid, topic = Topic, partition = Partition}) ->
+terminate(Reason, #state{client_pid = ClientPid
+                        , topic = Topic
+                        , partition = Partition
+                        }) ->
   case brod_utils:is_normal_reason(Reason) of
     true ->
       brod_client:deregister_consumer(ClientPid, Topic, Partition);
