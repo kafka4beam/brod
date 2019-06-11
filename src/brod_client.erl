@@ -26,6 +26,8 @@
         , get_producer/3
         , register_consumer/3
         , register_producer/3
+        , deregister_consumer/3
+        , deregister_producer/3
         , start_link/3
         , start_producer/3
         , start_consumer/3
@@ -162,14 +164,8 @@ get_consumer(Client, Topic, Partition) ->
         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
   case get_producer(Client, TopicName, _Partition = 0) of
-    {ok, Pid} ->
-      case is_process_alive(Pid) of
-        true ->
-          ok; %% already started
-        false ->
-          Call = {start_producer, TopicName, ProducerConfig},
-          safe_gen_call(Client, Call, infinity)
-      end;
+    {ok, _Pid} ->
+      ok; %% already started
     {error, {producer_not_found, TopicName}} ->
       Call = {start_producer, TopicName, ProducerConfig},
       safe_gen_call(Client, Call, infinity);
@@ -188,14 +184,8 @@ stop_producer(Client, TopicName) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
   case get_consumer(Client, TopicName, _Partition = 0) of
-    {ok, Pid} ->
-      case is_process_alive(Pid) of
-        true ->
-          ok; %% already started
-        false ->
-          Call = {start_consumer, TopicName, ConsumerConfig},
-          safe_gen_call(Client, Call, infinity)
-        end;
+    {ok, _Pid} ->
+      ok; %% already started
     {error, {consumer_not_found, TopicName}} ->
       Call = {start_consumer, TopicName, ConsumerConfig},
       safe_gen_call(Client, Call, infinity);
@@ -265,13 +255,30 @@ register_producer(Client, Topic, Partition) ->
   Key = ?PRODUCER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Producer}).
 
+%% @doc De-register the producer for a partition. The partition producer entry is
+%% deleted from the ETS table to allow cleanup of purposefully stopped producers
+%% and allow later restart.
+-spec deregister_producer(client(), topic(), partition()) -> ok.
+deregister_producer(Client, Topic, Partition) ->
+  Key = ?PRODUCER_KEY(Topic, Partition),
+  gen_server:cast(Client, {deregister, Key}).
+
 %% @doc Register self() as a partition consumer. The pid is registered in an ETS
 %% table, then the callers may lookup a consumer pid from the table ane make
 %% subscribe calls to the process directly.
+-spec register_consumer(client(), topic(), partition()) -> ok.
 register_consumer(Client, Topic, Partition) ->
   Consumer = self(),
   Key = ?CONSUMER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Consumer}).
+
+%% @doc De-register the consumer for a partition. The partition consumer entry is
+%% deleted from the ETS table to allow cleanup of purposefully stopped consumers
+%% and allow later restart.
+-spec deregister_consumer(client(), topic(), partition()) -> ok.
+deregister_consumer(Client, Topic, Partition) ->
+  Key = ?CONSUMER_KEY(Topic, Partition),
+  gen_server:cast(Client, {deregister, Key}).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -363,6 +370,9 @@ handle_call(Call, _From, State) ->
 
 handle_cast({register, Key, Pid}, #state{workers_tab = Tab} = State) ->
   ets:insert(Tab, {Key, Pid}),
+  {noreply, State};
+handle_cast({deregister, Key}, #state{workers_tab = Tab} = State) ->
+  ets:delete(Tab, Key),
   {noreply, State};
 handle_cast(Cast, State) ->
   error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",
