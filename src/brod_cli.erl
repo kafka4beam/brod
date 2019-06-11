@@ -68,6 +68,8 @@ commands:
   --sasl-plain=<file>    Tell brod to use username/password stored in the
                          given file, the file should have username and
                          password in two lines.
+  --scram256=<file>      Like sasl-plain option, but to use scram-sha-256
+  --scram512=<file>      Like sasl-plain option, but to use scram-sha-512
   --ebin-paths=<dirs>    Comma separated directory names for extra beams,
                          This is to support user compiled message formatters
   --no-api-vsn-query     Do not query api version (for kafka 0.9 or earlier)
@@ -1125,12 +1127,18 @@ parse_connection_config(Args) ->
            {keyfile, KeyFile}],
         lists:filter(FilterPred, Files)
     end,
-  SaslOpt = parse(Args, "--sasl-plain", fun parse_file/1),
-  SaslOpts = sasl_opts(SaslOpt),
+  SaslPlain = parse(Args, "--sasl-plain", fun parse_file/1),
+  SaslScram256 = parse(Args, "--scram256", fun parse_file/1),
+  SaslScram512 = parse(Args, "--scram512", fun parse_file/1),
+  SaslOpts0 = [ {scram_sha_512, SaslScram512}
+              , {scram_sha_256, SaslScram256}
+              , {plain, SaslPlain}
+              ],
+  SaslOpts = case lists:filter(FilterPred, SaslOpts0) of
+               [] -> [];
+               [H | _] -> [{sasl, H}]
+             end,
   lists:filter(FilterPred, [{ssl, SslOpt} | SaslOpts]).
-
-sasl_opts(?undef) -> [];
-sasl_opts(File)   -> [{sasl, {plain, File}}].
 
 parse_boolean(true) -> true;
 parse_boolean(false) -> false;
