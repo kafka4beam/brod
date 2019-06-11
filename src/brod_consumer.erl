@@ -329,7 +329,7 @@ terminate(Reason, #state{client_pid = ClientPid
       ok
   end,
   error_logger:warning_msg("~p ~p terminating, reason:\n~p",
-                          [?MODULE, self(), Reason]),
+                           [?MODULE, self(), Reason]),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
