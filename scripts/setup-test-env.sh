@@ -12,8 +12,10 @@ case $VERSION in
     VERSION="0.11";;
   1.*)
     VERSION="1.1";;
+  2.*)
+    VERSION="2.2";;
   *)
-    VERSION="1.1";;
+    VERSION="2.2";;
 esac
 
 echo "Using KAFKA_VERSION=$VERSION"
@@ -25,7 +27,7 @@ sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f $TD/docker-compose.yml dow
 sudo KAFKA_VERSION=${KAFKA_VERSION} docker-compose -f $TD/docker-compose.yml up -d
 
 n=0
-while [ "$(sudo docker exec kafka-1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper localhost --describe')" != '' ]; do
+while [ "$(sudo docker exec kafka-1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper localhost --list')" != '' ]; do
   if [ $n -gt 4 ]; then
     echo "timeout waiting for kakfa_1"
     exit 1
@@ -42,6 +44,7 @@ function create_topic {
   sudo docker exec kafka-1 bash -c "$CMD"
 }
 
+create_topic "dummy" || true
 create_topic "brod-client-SUITE-topic"
 create_topic "brod_consumer_SUITE"
 create_topic "brod_producer_SUITE"            2
@@ -57,8 +60,13 @@ create_topic "brod_compression_SUITE"
 create_topic "lz4-test"
 create_topic "test-topic"
 
+if [[ "$KAFKA_VERSION" = 2* ]]; then
+  MAYBE_NEW_CONSUMER=""
+else
+  MAYBE_NEW_CONSUMER="--new-consumer"
+fi
 # this is to warm-up kafka group coordinator for deterministic in tests
-sudo docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --new-consumer --group test-group --describe > /dev/null 2>&1
+sudo docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 $MAYBE_NEW_CONSUMER --group test-group --describe > /dev/null 2>&1
 
 # for kafka 0.11 or later, add sasl-scram test credentials
 if [[ "$KAFKA_VERSION" != 0.9* ]] && [[ "$KAFKA_VERSION" != 0.10* ]]; then

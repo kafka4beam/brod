@@ -797,7 +797,6 @@ maybe_init_connection(
 maybe_init_connection(State) ->
   {ok, State}.
 
-
 connect_leader(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
   brod_client:get_leader_connection(ClientPid, Topic, Partition);
 connect_leader(Endpoints, Topic, Partition) when is_list(Endpoints) ->
