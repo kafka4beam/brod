@@ -67,7 +67,7 @@
 %%
 %% {ok, NewCallbackState}:
 %%   The subscriber has received the message for processing async-ly.
-%%   It should call brod_group_subscriber:ack/4 to acknowledge later.
+%%   It should call brod_topic_subscriber:ack/3 to acknowledge later.
 %%
 %% {ok, ack, NewCallbackState}
 %%   The subscriber has completed processing the message
