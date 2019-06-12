@@ -36,6 +36,8 @@
         , t_payload_connection_restart/1
         , t_auto_start_producers/1
         , t_auto_start_producer_for_unknown_topic/1
+        , t_restart_previous_producers/1
+        , t_restart_previous_consumers/1
         , t_ssl/1
         , t_sasl_plain_ssl/1
         , t_sasl_plain_file_ssl/1
@@ -236,6 +238,38 @@ t_auto_start_producers(Config) when is_list(Config) ->
   ok = brod:stop_client(Client),
   ok = start_client(?HOSTS, Client, ClientConfig),
   ?assertEqual(ok, brod:produce_sync(Client, ?TOPIC, 0, <<"k">>, <<"v">>)),
+  ok.
+
+t_restart_previous_producers({init, Config}) ->
+  Config;
+t_restart_previous_producers({'end', Config}) ->
+  brod:stop_client(t_restart_previous_producers),
+  Config;
+t_restart_previous_producers(Config) when is_list(Config) ->
+  Client = t_restart_previous_producers,
+  Topic = ?TOPIC,
+  ok = start_client(?HOSTS, Client),
+  ok = brod:start_producer(Client, Topic, []),
+  ok = brod_client:stop_producer(Client, Topic),
+  ?assertEqual(ok, brod:start_producer(Client, Topic, [])),
+  {ok, Pid} = brod_client:get_producer(Client, Topic, 0),
+  ?assertEqual(true, erlang:is_process_alive(Pid)),
+  ok.
+
+t_restart_previous_consumers({init, Config}) ->
+  Config;
+t_restart_previous_consumers({'end', Config}) ->
+  brod:stop_client(t_restart_previous_consumers),
+  Config;
+t_restart_previous_consumers(Config) when is_list(Config) ->
+  Client = t_restart_previous_consumers,
+  Topic =?TOPIC,
+  ok = start_client(?HOSTS, Client),
+  ok = brod:start_consumer(Client, Topic, []),
+  ok = brod_client:stop_consumer(Client, Topic),
+  ?assertEqual(ok, brod:start_consumer(Client, Topic, [])),
+  {ok, Pid} = brod_client:get_consumer(Client, Topic, 0),
+  ?assertEqual(true, erlang:is_process_alive(Pid)),
   ok.
 
 t_auto_start_producer_for_unknown_topic({'end', Config}) ->

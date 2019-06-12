@@ -207,6 +207,7 @@ debug(Pid, File) when is_list(File) ->
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
+  erlang:process_flag(trap_exit, true),
   Cfg = fun(Name, Default) ->
           proplists:get_value(Name, Config, Default)
         end,
@@ -317,7 +318,16 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), Cast]),
   {noreply, State}.
 
-terminate(Reason, _State) ->
+terminate(Reason, #state{client_pid = ClientPid
+                        , topic = Topic
+                        , partition = Partition
+                        }) ->
+  case brod_utils:is_normal_reason(Reason) of
+    true ->
+      brod_client:deregister_consumer(ClientPid, Topic, Partition);
+    false ->
+      ok
+  end,
   error_logger:warning_msg("~p ~p terminating, reason:\n~p",
                            [?MODULE, self(), Reason]),
   ok.

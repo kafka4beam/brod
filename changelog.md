@@ -170,3 +170,6 @@
   * Add `brod:fold/8`. This API spawns a process to fetch-ahead while folding the previously
     fetched batch. `brod-cli`'s `fetch` command is updated to call this `fold` API for better
     performance.
+  * Add callbacks to allow `brod_client:stop_producer` and `brod_client:stop_consumer` to remove
+    the stopped child references from the supervisor and clean up the client ets table to allow
+    later restart.

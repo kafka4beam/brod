@@ -245,6 +245,7 @@ stop(Pid) -> ok = gen_server:call(Pid, stop).
 %%%_* gen_server callbacks =====================================================
 
 init({ClientPid, Topic, Partition, Config}) ->
+  erlang:process_flag(trap_exit, true),
   BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
   OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
   MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
@@ -383,7 +384,16 @@ handle_cast(_Cast, #state{} = State) ->
 code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, #state{client_pid = ClientPid
+                          , topic = Topic
+                          , partition = Partition
+                          }) ->
+  case brod_utils:is_normal_reason(Reason) of
+    true ->
+      brod_client:deregister_producer(ClientPid, Topic, Partition);
+    false ->
+      ok
+  end,
   ok.
 
 %%%_* Internal Functions =======================================================

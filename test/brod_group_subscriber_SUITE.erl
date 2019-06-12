@@ -342,8 +342,8 @@ t_consumer_crash(Config) when is_list(Config) ->
   sys:get_state(SubscriberPid),
   {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC1, Partition),
   Mon = monitor(process, ConsumerPid),
-  exit(ConsumerPid, test_consumer_restart),
-  receive {'DOWN', Mon, process, ConsumerPid, test_consumer_restart} -> ok
+  exit(ConsumerPid, kill),
+  receive {'DOWN', Mon, process, ConsumerPid, killed} -> ok
   after 1000 -> ct:fail("timed out waiting for the consumer process to die")
   end,
   %% send more messages, but should not be received until after re-subscribe
