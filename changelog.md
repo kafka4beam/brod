@@ -173,3 +173,6 @@
   * Add callbacks to allow `brod_client:stop_producer` and `brod_client:stop_consumer` to remove
     the stopped child references from the supervisor and clean up the client ets table to allow
     later restart.
+  * Support scram SASL authentication in brod-cli
+  * Made possible to start-link or supervise `brod_consumer` in user apps, instead of always
+    under `brod_client`'s `brod_consumers_sup`
