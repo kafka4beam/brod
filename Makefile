@@ -1,4 +1,4 @@
-KAFKA_VERSION ?= 1.1
+KAFKA_VERSION ?= 2.2
 PROJECT = brod
 PROJECT_DESCRIPTION = Kafka client library in Erlang
 PROJECT_VERSION = 3.8.0
