@@ -517,12 +517,11 @@ make_batch_input(Key, Value) ->
 %% @doc last_stable_offset is added in fetch response version 4
 %% This function takes high watermark offset as last_stable_offset
 %% in case it's missing.
-%% Offsets are considered 'unstable' if they belong to open transactions
 get_stable_offset(Header) ->
   HighWmOffset = kpro:find(high_watermark, Header),
   StableOffset = kpro:find(last_stable_offset, Header, HighWmOffset),
-  StableOffset > HighWmOffset andalso error(unexpected_last_stable_offset),
-  StableOffset.
+  %% handle the case when high_watermark < last_stable_offset
+  min(StableOffset, HighWmOffset).
 
 %%%_* Internal functions =======================================================
 
