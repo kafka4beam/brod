@@ -21,12 +21,11 @@
 -behaviour(brod_group_member).
 
 %% API:
--export([ ack/4
-        , ack/5
-        , commit/1
-        , commit/4
-        , start_link/7
-        , start_link/8
+-export([ %% ack/4
+        %% , ack/5
+        %% , commit/1
+        %% , commit/4
+         start_link/1
         , stop/1
         ]).
 
@@ -65,7 +64,6 @@
                       , brod:topic()
                       , brod:partition()
                       , _Configuration
-                      , _ConsumerPid :: pid()
                       ) -> {ok, pid()}.
 
 %% Stop a partition worker when the partition assignment is revoked
@@ -78,30 +76,28 @@
 
 -record(worker,
         { worker_pid      :: pid()
-        , worker_mref     :: reference()
-        , consumer_pid    :: pid()
-        , consumer_mref   :: ?reference()
         }).
 
 -type worker() :: #worker{}.
-
--type ack_ref() :: {brod:topic(), brod:partition(), brod:offset()}.
 
 -type topic_partition() :: {brod:topic(), brod:partition()}.
 
 -type workers() :: #{topic_partition() => workers()}.
 
--type committed_offsets() :: #{topic_partition() => { brod:offset()
-                                                    , boolean()
-                                                    }}.
+-type committed_offsets() :: #{topic_partition() =>
+                                 { brod:offset()
+                                 , boolean()
+                                 }}.
 
 -record(state,
-        { config                  :: consumer_config()
+        { config                  :: subscriber_config()
+        , group_id                :: brod:group_id()
         , coordinator             :: pid()
         , generation_id           :: integer() | ?undef
         , workers = #{}           :: workers()
         , committed_offsets = #{} :: committed_offsets()
         , cb_module               :: module()
+        , cb_config               :: term()
         , client                  :: brod:client()
         }).
 
@@ -179,6 +175,17 @@ assignments_revoked(Pid) ->
 get_committed_offsets(Pid, TopicPartitions) ->
   gen_server:call(Pid, {get_committed_offsets, TopicPartitions}, infinity).
 
+%% @doc This function is called only when `partition_assignment_strategy'
+%% is set for `callback_implemented' in group config.
+%% @end
+-spec assign_partitions(pid(), [brod:group_member()],
+                        [{brod:topic(), brod:partition()}]) ->
+        [{member_id(), [brod:partition_assignment()]}].
+assign_partitions(Pid, Members, TopicPartitionList) ->
+  %% TODO: Not implemented
+  Call = {assign_partitions, Members, TopicPartitionList},
+  gen_server:call(Pid, Call, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -199,6 +206,7 @@ init(Config) ->
    } = Config,
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
+  CbConfig = maps:get(callback_config, Config, undefined),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_group_id(GroupId),
   ok = brod_utils:assert_topics(Topics),
@@ -213,6 +221,8 @@ init(Config) ->
                 , client      = Client
                 , coordinator = Pid
                 , cb_module   = CbModule
+                , cb_config   = CbConfig
+                , group_id    = GroupId
                 },
   {ok, State}.
 
@@ -237,19 +247,8 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
   {reply, Result, State};
 handle_call(unsubscribe_all_partitions, _From,
             #state{ workers   = Workers
-                  , cb_module = CbModule
                   } = State) ->
-  lists:foreach(
-    fun(#worker{ worker_pid    = WorkerPid
-               , worker_mref   = WorkerMref
-               , consumer_pid  = ConsumerPid
-               , consumer_mref = ConsumerMref
-               }) ->
-        _ = brod:unsubscribe(ConsumerPid, self()),
-        _ = erlang:demonitor(ConsumerMref, [flush]),
-        _ = CbModule:stop_worker(WorkerPid),
-        _ = erlang:demonitor(WorkerMref, [flush])
-    end, Consumers),
+  terminate_all_workers(Workers),
   {reply, ok, State#state{ workers = #{}
                          }};
 handle_call(Call, _From, State) ->
@@ -257,50 +256,26 @@ handle_call(Call, _From, State) ->
 
 %% @private
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
-            #state{ client          = Client
-                  , config          = Config
-                  , subscribe_tref  = Tref
-                  } = State) ->
+            #state{ config = Config
+                  } = State0) ->
+  %% Start worker processes:
   DefaultConsumerConfig = [],
   ConsumerConfig = maps:get( consumer_config
                            , Config
                            , DefaultConsumerConfig
                            ),
-  NewWorkers = lists:filtermap( fun(I) ->
-                                    maybe_start_worker( State
-                                                      , MemberId
-                                                      , GenerationId
-                                                      , I
-                                                      )
-                                end
-                              , Assignments
-                              ),
-  AllTopics =
-    lists:map(fun(#brod_received_assignment{topic = Topic}) ->
-                Topic
-              end, Assignments),
-  lists:foreach(
-    fun(Topic) ->
-      ok = brod:start_consumer(Client, Topic, ConsumerConfig)
-    end, lists:usort(AllTopics)),
-  Consumers =
-    [ #consumer{ topic_partition = {Topic, Partition}
-               , consumer_pid    = ?undef
-               , begin_offset    = BeginOffset
-               , acked_offset    = ?undef
-               }
-    || #brod_received_assignment{ topic        = Topic
-                                , partition    = Partition
-                                , begin_offset = BeginOffset
-                                } <- Assignments
-    ],
-  NewState = State#state{ consumers      = Consumers
-                        , is_blocked     = false
-                        , memberId       = MemberId
-                        , generationId   = GenerationId
-                        , subscribe_tref = start_subscribe_timer(Tref, 0)
-                        },
-  {noreply, NewState};
+  State1 = State0#state{generation_id = GenerationId},
+  State = lists:foldl( fun(TopicPartition, State_) ->
+                           maybe_start_worker( MemberId
+                                             , ConsumerConfig
+                                             , TopicPartition
+                                             , State_
+                                             )
+                       end
+                     , State1
+                     , Assignments
+                     ),
+  {noreply, State};
 handle_cast(stop, State) ->
   {stop, normal, State};
 handle_cast(_Cast, State) ->
@@ -323,46 +298,89 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
+%% Terminate all workers and brod consumers
 %% @end
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{ workers = Workers
+                         }) ->
+  terminate_all_workers(Workers),
   ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
--spec code_change(OldVsn :: term() | {down, term()},
-                  State :: term(),
-                  Extra :: term()) -> {ok, NewState :: term()} |
-                                      {error, Reason :: term()}.
-code_change(_OldVsn, State, _Extra) ->
-  {ok, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for changing the form and appearance
-%% of gen_server status when it is returned from sys:get_status/1,2
-%% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
-format_status(_Opt, Status) ->
-  Status.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+-spec terminate_all_workers(workers()) -> ok.
+terminate_all_workers(Workers) ->
+  maps:map( fun({_, Worker}) ->
+                terminate_worker(Worker)
+            end
+          , Workers
+          ),
+  ok.
+
+-spec terminate_worker(worker()) -> ok.
+terminate_worker(#worker{ worker_pid  = WorkerPid
+                        }) ->
+  case is_process_alive(WorkerPid) of
+    true ->
+      brod_topic_subscriber:stop(WorkerPid);
+    false ->
+      ok
+  end.
+
+-spec maybe_start_worker( member_id()
+                        , brod:consumer_config()
+                        , topic_partition()
+                        , state()
+                        ) -> state().
+maybe_start_worker( _MemberId
+                  , ConsumerConfig
+                  , TopicPartition = {Topic, Partition}
+                  , State
+                  ) ->
+  #state{ workers   = Workers
+        , client    = Client
+        , cb_module = CbModule
+        , cb_config = CbConfig
+        , group_id  = GroupId
+        } = State,
+  case Workers of
+    #{TopicPartition := _Worker} ->
+      State;
+    _ ->
+      StartOptions = #{ group_id  => GroupId
+                      , topic     => Topic
+                      , partition => Partition
+                      , cb_module => CbModule
+                      , cb_config => CbConfig
+                      },
+      {ok, Pid} = start_worker( Client
+                              , Topic
+                              , Partition
+                              , ConsumerConfig
+                              , StartOptions
+                              ),
+      NewWorkers = Workers #{TopicPartition => Pid},
+      State#state{workers = NewWorkers}
+  end.
+
+-spec start_worker( brod:client()
+                  , brod:topic()
+                  , brod:partition()
+                  , brod:consumer_config()
+                  , brod_group_subscriber_worker:start_options()
+                  ) -> {ok, pid()}.
+start_worker(Client, Topic, Partition, ConsumerConfig, StartOptions) ->
+  brod_topic_subscriber:start_link( Client
+                                  , Topic
+                                  , [Partition]
+                                  , ConsumerConfig
+                                  , brod_group_subscriber_worker
+                                  , StartOptions
+                                  ).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
