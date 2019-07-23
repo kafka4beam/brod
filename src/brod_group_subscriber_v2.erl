@@ -21,11 +21,9 @@
 -behaviour(brod_group_member).
 
 %% API:
--export([ %% ack/4
-        %% , ack/5
-        %% , commit/1
-        %% , commit/4
-         start_link/1
+-export([ ack/4
+        , commit/4
+        , start_link/1
         , stop/1
         ]).
 
@@ -44,6 +42,11 @@
         , terminate/2
         ]).
 
+-export_type([ init_info/0
+             , subscriber_config/0
+             , commit_fun/0
+             ]).
+
 -include("brod_int.hrl").
 
 -type subscriber_config() ::
@@ -51,34 +54,38 @@
          , group_id        := brod:group_id()
          , topics          := [bord:topic()]
          , callback_module := module()
-         , callback_config => term()
+         , init_data       => term()
          , message_type    => message | message_set
          , consumer_config => brod:consumer_config()
          , group_config    => brod:group_config()
          }.
 
+-type commit_fun() :: fun((brod:offset()) -> ok).
+
+-type init_info() ::
+        #{ group_id     := brod:group_id()
+         , topic        := brod:topic()
+         , partition    := brod:partition()
+         , commit_fun   := commit_fun()
+         }.
+
 -type member_id() :: brod:group_member_id().
 
-%% Start a partition worker
--callback start_worker( brod:group_id()
-                      , brod:topic()
-                      , brod:partition()
-                      , _Configuration
-                      ) -> {ok, pid()}.
+-callback init(brod_group_subscriber_v2:init_info(), _CbConfig) ->
+  {ok, _State}.
 
-%% Stop a partition worker when the partition assignment is revoked
--callback stop_worker(pid()) -> term().
+-callback handle_message(brod:kafka_message(), State) ->
+      {ok, commit, State}
+    | {ok, ack, State}
+    | {ok, State}.
 
 %% Get committed offset (in case it is managed by the subscriber):
--callback get_committed_offset(pid()) -> brod:offset() | undefined.
+-callback get_committed_offset(State) ->
+  {ok, brod:offset() | undefined, State}.
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
--record(worker,
-        { worker_pid      :: pid()
-        }).
-
--type worker() :: #worker{}.
+-type worker() :: pid().
 
 -type topic_partition() :: {brod:topic(), brod:partition()}.
 
@@ -145,6 +152,17 @@ stop(Pid) ->
       ok
   end.
 
+%% @doc Commit offset for a topic-partition, but don't commit it to
+%% Kafka. This is an asynchronous call
+-spec ack(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
+ack(Pid, Topic, Partition, Offset) ->
+  gen_server:cast(Pid, {ack_offset, Topic, Partition, Offset}).
+
+%% @doc Ack offset for a topic-partition. This is an asynchronous call
+-spec commit(pid(), brod:topic(), brod:partition(), brod:offset()) -> ok.
+commit(Pid, Topic, Partition, Offset) ->
+  gen_server:cast(Pid, {commit_offset, Topic, Partition, Offset}).
+
 %%%===================================================================
 %%% group_coordinator callbacks
 %%%===================================================================
@@ -206,7 +224,7 @@ init(Config) ->
    } = Config,
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
-  CbConfig = maps:get(callback_config, Config, undefined),
+  CbConfig = maps:get(init_data, Config, undefined),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_group_id(GroupId),
   ok = brod_utils:assert_topics(Topics),
@@ -232,7 +250,7 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
                   } = State) ->
   Fun = fun(TopicPartition) ->
             case Workers of
-              #{TopicPartition := #worker{worker_pid = Pid}} ->
+              #{TopicPartition := Pid} ->
                 case CbModule:get_committed_offset(Pid) of
                   Offset when is_integer(Offset) ->
                     {true, {TopicPartition, Offset}};
@@ -244,7 +262,7 @@ handle_call({get_committed_offsets, TopicPartitions}, _From,
             end
         end,
   Result = lists:filtermap(Fun, TopicPartitions),
-  {reply, Result, State};
+  {reply, {ok, Result}, State};
 handle_call(unsubscribe_all_partitions, _From,
             #state{ workers   = Workers
                   } = State) ->
@@ -255,6 +273,23 @@ handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 %% @private
+handle_cast({commit_offset, Topic, Partition, Offset}, State) ->
+  #state{ coordinator   = Coordinator
+        , generation_id = GenerationId
+        } = State,
+  %% Ask brod_consumer for more data:
+  do_ack(Topic, Partition, Offset, State),
+  %% Send an async message to group coordinator for offset commit:
+  ok = brod_group_coordinator:ack( Coordinator
+                                 , GenerationId
+                                 , Topic
+                                 , Partition
+                                 , Offset
+                                 ),
+  {noreply, State};
+handle_cast({ack_offset, Topic, Partition, Offset}, State) ->
+  do_ack(Topic, Partition, Offset, State),
+  {noreply, State};
 handle_cast({new_assignments, MemberId, GenerationId, Assignments},
             #state{ config = Config
                   } = State0) ->
@@ -265,10 +300,17 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                            , DefaultConsumerConfig
                            ),
   State1 = State0#state{generation_id = GenerationId},
-  State = lists:foldl( fun(TopicPartition, State_) ->
+  State = lists:foldl( fun(Assignment, State_) ->
+                           #brod_received_assignment
+                             { topic        = Topic
+                             , partition    = Partition
+                             , begin_offset = BeginOffset
+                             } = Assignment,
                            maybe_start_worker( MemberId
                                              , ConsumerConfig
-                                             , TopicPartition
+                                             , Topic
+                                             , Partition
+                                             , BeginOffset
                                              , State_
                                              )
                        end
@@ -314,7 +356,7 @@ terminate(_Reason, #state{ workers = Workers
 
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
-  maps:map( fun({_, Worker}) ->
+  maps:map( fun(_, Worker) ->
                 terminate_worker(Worker)
             end
           , Workers
@@ -322,8 +364,7 @@ terminate_all_workers(Workers) ->
   ok.
 
 -spec terminate_worker(worker()) -> ok.
-terminate_worker(#worker{ worker_pid  = WorkerPid
-                        }) ->
+terminate_worker(WorkerPid) ->
   case is_process_alive(WorkerPid) of
     true ->
       brod_topic_subscriber:stop(WorkerPid);
@@ -333,12 +374,16 @@ terminate_worker(#worker{ worker_pid  = WorkerPid
 
 -spec maybe_start_worker( member_id()
                         , brod:consumer_config()
-                        , topic_partition()
+                        , brod:topic()
+                        , brod:partition()
+                        , brod:offset() | undefined
                         , state()
                         ) -> state().
 maybe_start_worker( _MemberId
                   , ConsumerConfig
-                  , TopicPartition = {Topic, Partition}
+                  , Topic
+                  , Partition
+                  , BeginOffset
                   , State
                   ) ->
   #state{ workers   = Workers
@@ -347,15 +392,21 @@ maybe_start_worker( _MemberId
         , cb_config = CbConfig
         , group_id  = GroupId
         } = State,
+  TopicPartition = {Topic, Partition},
   case Workers of
     #{TopicPartition := _Worker} ->
       State;
     _ ->
-      StartOptions = #{ group_id  => GroupId
-                      , topic     => Topic
-                      , partition => Partition
-                      , cb_module => CbModule
-                      , cb_config => CbConfig
+      CommitFun = fun(Offset) ->
+                      commit(self(), Topic, Partition, Offset)
+                  end,
+      StartOptions = #{ cb_module    => CbModule
+                      , cb_config    => CbConfig
+                      , partition    => Partition
+                      , begin_offset => BeginOffset
+                      , group_id     => GroupId
+                      , commit_fun   => CommitFun
+                      , topic        => Topic
                       },
       {ok, Pid} = start_worker( Client
                               , Topic
@@ -381,6 +432,19 @@ start_worker(Client, Topic, Partition, ConsumerConfig, StartOptions) ->
                                   , brod_group_subscriber_worker
                                   , StartOptions
                                   ).
+
+-spec do_ack(brod:topic(), brod:partition(), brod:offset(), state()) ->
+                ok | {error, term()}.
+do_ack(Topic, Partition, Offset, #state{ workers = Workers
+                                       }) ->
+  TopicPartition = {Topic, Partition},
+  case Workers of
+    #{TopicPartition := Pid} ->
+      brod_topic_subscriber:ack(Pid, Partition, Offset),
+      ok;
+    _ ->
+      {error, unknown_topic_or_partition}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

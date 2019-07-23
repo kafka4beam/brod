@@ -56,13 +56,23 @@ init(Topic, StartOpts) ->
   InitInfo = maps:with( [topic, partition, group_id, commit_fun]
                       , StartOpts
                       ),
+  brod_utils:log(info, "Starting group_subscriber_worker: ~p~n"
+                       "Offset: ~p~nPid: ~p~n"
+                     , [InitInfo, BeginOffset, self()]
+                     ),
   {ok, CbState} = CbModule:init(InitInfo, CbConfig),
   State = #state{ start_options = StartOpts
                 , cb_module     = CbModule
                 , cb_state      = CbState
                 , commit_fun    = CommitFun
                 },
-  {ok, [{Partition, BeginOffset}], State}.
+  CommittedOffsets = case BeginOffset of
+                       undefined ->
+                         [];
+                       _ when is_integer(BeginOffset) ->
+                         [{Partition, BeginOffset}]
+                     end,
+  {ok, CommittedOffsets, State}.
 
 handle_message(_Partition, Msg, State) ->
   #state{ cb_module  = CbModule
