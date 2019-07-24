@@ -1,3 +1,5 @@
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
+
 -record(state, { ct_case_ref
                , ct_case_pid
                , is_async_ack

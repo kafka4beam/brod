@@ -55,8 +55,14 @@ handle_message(Message,
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
-  %% forward the message to ct case for verification.
-  Pid ! ?MSG(Ref, self(), Topic, Partition, Offset, Value),
+  ?tp(group_subscriber_handle_message,
+      #{ topic     => Topic
+       , partition => Partition
+       , offset    => Offset
+       , value     => Value
+       , ref       => Ref
+       , worker    => self()
+       }),
   case {IsAsyncAck, IsAsyncCommit, IsAssignPartitions} of
     {true, _, _}      -> {ok, State};
     {false, false, _} -> {ok, commit, State};

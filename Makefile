@@ -13,6 +13,10 @@ dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafk
 
 EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
 
+.PHONY: todo
+todo:
+	rebar3 ct --suite test/brod_group_subscriber_SUITE.erl
+
 compile: vsn-check
 	@rebar3 compile
 
