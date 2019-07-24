@@ -30,13 +30,13 @@
 
 init(InitInfo, Config) ->
   #{topic := Topic, partition := Partition} = InitInfo,
-  {CaseRef, CasePid, IsAsyncAck, IsAsyncCommit, IsAssignPartitions} = Config,
+  IsAsyncAck         = maps:get(async_ack, Config, false),
+  IsAsyncCommit      = maps:get(async_ack, Config, false),
+  IsAssignPartitions = maps:get(assign_partitions, Config, false),
   brod_utils:log(info, "Started a test group subscriber.~n"
                        "Config: ~p~nInitInfo: ~p~n"
                      , [Config, InitInfo]),
-  {ok, #state{ ct_case_ref          = CaseRef
-             , ct_case_pid          = CasePid
-             , is_async_ack         = IsAsyncAck
+  {ok, #state{ is_async_ack         = IsAsyncAck
              , is_async_commit      = IsAsyncCommit
              , is_assign_partitions = IsAssignPartitions
              , topic                = Topic
@@ -44,11 +44,8 @@ init(InitInfo, Config) ->
              }}.
 
 handle_message(Message,
-               #state{ ct_case_ref          = Ref
-                     , ct_case_pid          = Pid
-                     , is_async_ack         = IsAsyncAck
+               #state{ is_async_ack         = IsAsyncAck
                      , is_async_commit      = IsAsyncCommit
-                     , is_assign_partitions = IsAssignPartitions
                      , topic                = Topic
                      , partition            = Partition
                      } = State) ->
@@ -60,13 +57,12 @@ handle_message(Message,
        , partition => Partition
        , offset    => Offset
        , value     => Value
-       , ref       => Ref
        , worker    => self()
        }),
-  case {IsAsyncAck, IsAsyncCommit, IsAssignPartitions} of
-    {true, _, _}      -> {ok, State};
-    {false, false, _} -> {ok, commit, State};
-    {false, true, _}  -> {ok, ack, State}
+  case {IsAsyncAck, IsAsyncCommit} of
+    {true,  _}     -> {ok, State};
+    {false, false} -> {ok, commit, State};
+    {false, true}  -> {ok, ack, State}
   end.
 
 get_committed_offset(_State) ->
