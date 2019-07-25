@@ -268,12 +268,12 @@ start(_StartType, _StartArgs) -> brod_sup:start_link().
 %% @doc Application behaviour callback
 stop(_State) -> ok.
 
-%% @equiv stat_client(BootstrapEndpoints, brod_default_client)
+%% @equiv start_client(BootstrapEndpoints, brod_default_client)
 -spec start_client([endpoint()]) -> ok | {error, any()}.
 start_client(BootstrapEndpoints) ->
   start_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
-%% @equiv stat_client(BootstrapEndpoints, ClientId, [])
+%% @equiv start_client(BootstrapEndpoints, ClientId, [])
 -spec start_client([endpoint()], client_id()) -> ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId) ->
   start_client(BootstrapEndpoints, ClientId, []).
@@ -361,12 +361,12 @@ start_client(BootstrapEndpoints, ClientId, Config) ->
     {error, Reason}                  -> {error, Reason}
   end.
 
-%% @equiv stat_link_client(BootstrapEndpoints, brod_default_client)
+%% @equiv start_link_client(BootstrapEndpoints, brod_default_client)
 -spec start_link_client([endpoint()]) -> {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints) ->
   start_link_client(BootstrapEndpoints, ?BROD_DEFAULT_CLIENT_ID).
 
-%% @equiv stat_link_client(BootstrapEndpoints, ClientId, [])
+%% @equiv start_link_client(BootstrapEndpoints, ClientId, [])
 -spec start_link_client([endpoint()], client_id()) ->
         {ok, pid()} | {error, any()}.
 start_link_client(BootstrapEndpoints, ClientId) ->
