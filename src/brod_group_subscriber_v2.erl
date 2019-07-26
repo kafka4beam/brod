@@ -357,6 +357,7 @@ terminate(_Reason, #state{ workers = Workers
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
   maps:map( fun(_, Worker) ->
+                brod_utils:log(info, "Terminating worker pid=~p", [Worker]),
                 terminate_worker(Worker)
             end
           , Workers

@@ -54,12 +54,15 @@
 -include("brod.hrl").
 -include("brod_group_subscriber_test.hrl").
 
+-define(handled_message(Topic, Partition, Value),
+        #{ kind      := group_subscriber_handle_message
+         , topic     := Topic
+         , partition := Partition
+         , value     := Value
+         }).
+
 -define(wait_message(Topic, Partition, Value),
-        ?block_until( #{ kind      := group_subscriber_handle_message
-                       , topic     := Topic
-                       , partition := Partition
-                       , value     := Value
-                       }
+        ?block_until( ?handled_message(Topic, Partition, Value)
                     , 5000, infinity
                     )).
 
@@ -262,7 +265,7 @@ t_async_acks(Config) when is_list(Config) ->
        lists:foreach(SendFun, L),
        %% And ack/commit them asynchronously:
        [begin
-          #{offset := Offset} = ?wait_message(?TOPIC1, Partition, I),
+          {ok, #{offset := Offset}} = ?wait_message(?TOPIC1, Partition, I),
           ok = Behavior:ack(SubscriberPid, ?TOPIC1, Partition, Offset),
           ok = Behavior:commit(SubscriberPid, ?TOPIC1, Partition, Offset)
         end || I <- L],
@@ -295,9 +298,7 @@ t_consumer_crash(Config) when is_list(Config) ->
        %% send some messages
        [_, _, O3, _, O5] = [SendFun(I) || I <- lists:seq(1, 5)],
        %% Wait until the last one is processed
-       ?assertMatch( #{}
-                   , ?wait_message(?TOPIC1, Partition, <<5>>)
-                   ),
+       {ok, _} = ?wait_message(?TOPIC1, Partition, <<5>>),
        %% Ack the 3rd one and do a sync request to the subscriber, so
        %% that we know it has processed the ack, then kill the
        %% brod_consumer process
@@ -426,10 +427,11 @@ t_async_commit(Config) when is_list(Config) ->
     end,
   CommitOffset =
     fun(Pid, Offset) ->
-        ct:pal("Acking offset = ~p", [Offset]),
+        ct:pal("Committing offset = ~p", [Offset]),
         ok = Behavior:commit(Pid, ?TOPIC4, 0, Offset),
         timer:sleep(5500)
     end,
+  Msg = <<"test">>,
   ?check_trace(
      #{ timeout => 10000 },
      %% Run stage:
@@ -437,20 +439,21 @@ t_async_commit(Config) when is_list(Config) ->
        Pid1 = StartSubscriber(),
        %% Produce a message and wait for the subscriber to receive it:
        {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4,
-                                               Partition, <<>>, <<"test">>),
+                                               Partition, <<>>, Msg),
        ct:pal("Produced at offset = ~p", [Offset]),
-       ?assertMatch( #{}
-                   , ?wait_message(?TOPIC4, Partition, <<"test">>)
-                   ),
+       {ok, _} = ?wait_message(?TOPIC4, Partition, Msg),
        %% Slightly unsound: commit _previous_ offset to avoid starting
        %% brod_consumer with `latest' offset and thus losing all data
        %% during restart:
        CommitOffset(Pid1, Offset - 1),
        %% Emulate subscriber restart:
-       Pid2 = EmulateRestart(Pid1),
+       {Pid2, {ok, _}} =
+         ?wait_async_action( EmulateRestart(Pid1)
+                           , ?handled_message(?TOPIC4, Partition, Msg)
+                           ),
        %% Commit offset and restart subscriber again:
        CommitOffset(Pid2, Offset),
-       Pid3 = EmulateRestart(Pid2)
+       EmulateRestart(Pid2)
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
@@ -502,10 +505,7 @@ t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
 check_all_messages_were_received_once(Trace, Values) ->
   Handled = handled_messages(Trace),
   %% Check that all messages were handled:
-  ?projection_complete( value
-                      , Handled
-                      , [<<I>> || I <- lists:seq(1, 8)]
-                      ),
+  ?projection_complete(value, Handled, Values),
   %% ...and each message was handled only once:
   snabbkaffe:unique(Handled).
 

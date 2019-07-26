@@ -13,18 +13,14 @@ dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafk
 
 EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
 
-.PHONY: todo
-todo:
-	rebar3 ct --suite test/brod_group_subscriber_SUITE.erl
-
-compile: vsn-check
-	@rebar3 compile
-
 ## Make app the default target
 ## To avoid building a release when brod is used as a erlang.mk project's dependency
 app:: vsn-check
 
 include erlang.mk
+
+compile: vsn-check
+	@rebar3 compile
 
 test-env:
 	@./scripts/setup-test-env.sh

@@ -70,7 +70,9 @@ init(Topic, StartOpts) ->
                        undefined ->
                          [];
                        _ when is_integer(BeginOffset) ->
-                         [{Partition, BeginOffset}]
+                         %% TODO: Double-check why this decrement is
+                         %% needed
+                         [{Partition, max(0, BeginOffset - 1)}]
                      end,
   {ok, CommittedOffsets, State}.
 
