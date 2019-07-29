@@ -7,8 +7,8 @@ services:
 
 # install latest rebar3 because the one travis provides doesn't support cover_export_name option
 before_install:
-  - git clone https://github.com/erlang/rebar3.git; cd rebar3; ./bootstrap; sudo mv rebar3 /usr/local/bin/; cd ..
-  - git clone https://github.com/inaka/elvis.git; cd elvis; rebar3 escriptize; sudo cp _build/default/bin/elvis /usr/bin; cd ..
+  - git clone https://github.com/erlang/rebar3.git && cd rebar3 && git checkout 3.11.1 && ./bootstrap && sudo mv rebar3 /usr/local/bin/ && cd ..
+  - git clone https://github.com/inaka/elvis.git && cd elvis && rebar3 escriptize && sudo cp _build/default/bin/elvis /usr/bin && cd ..
   - sudo docker info
 
 notifications:
@@ -72,4 +72,3 @@ after_success:
     if [ $OTP_VSN -eq 21 ]; then
       make coveralls
     fi
-
