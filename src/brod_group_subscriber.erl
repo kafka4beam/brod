@@ -91,7 +91,7 @@
 %%
 -callback handle_message(brod:topic(),
                          brod:partition(),
-                         brod:message(),
+                         brod:message() | brod:message_set(),
                          cb_state()) -> {ok, cb_state()} |
                                         {ok, ack, cb_state()} |
                                         {ok, ack_no_commit, cb_state()}.
