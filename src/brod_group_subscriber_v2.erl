@@ -53,7 +53,7 @@
         #{ client          := brod:client()
          , group_id        := brod:group_id()
          , topics          := [bord:topic()]
-         , callback_module := module()
+         , cb_module       := module()
          , init_data       => term()
          , message_type    => message | message_set
          , consumer_config => brod:consumer_config()
@@ -83,15 +83,19 @@
 -callback get_committed_offset(State) ->
   {ok, brod:offset() | undefined, State}.
 
+%% Assign partitions (in case `partition_assignment_strategy' is set
+%% for `callback_implemented' in group config).
+-callback assign_partitions(_CbConfig, [brod:group_member()],
+                            [brod:topic_partition()]) ->
+  [{member_id(), [brod:partition_assignment()]}].
+
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
 -type worker() :: pid().
 
--type topic_partition() :: {brod:topic(), brod:partition()}.
+-type workers() :: #{brod:topic_partition() => worker()}.
 
--type workers() :: #{topic_partition() => workers()}.
-
--type committed_offsets() :: #{topic_partition() =>
+-type committed_offsets() :: #{brod:topic_partition() =>
                                  { brod:offset()
                                  , boolean()
                                  }}.
@@ -115,34 +119,47 @@
 %%%===================================================================
 
 %% @doc Start (link) a group subscriber.
-%% Client:
-%%   Client ID (or pid, but not recommended) of the brod client.
-%% GroupId:
-%%   Consumer group ID which should be unique per kafka cluster
-%% Topics:
-%%   Predefined set of topic names to join the group.
-%%   NOTE: The group leader member will collect topics from all members and
-%%         assign all collected topic-partitions to members in the group.
-%%         i.e. members can join with arbitrary set of topics.
-%% GroupConfig:
-%%   For group coordinator, @see brod_group_coordinator:start_link/5
-%% ConsumerConfig:
-%%   For partition consumer, @see brod_consumer:start_link/4
-%% MessageType:
-%%   The type of message that is going to be handled by the callback
-%%   module. Can be either message or message set.
-%% CbModule:
-%%   Callback module which should have the callback functions
-%%   implemented for message processing.
-%% CbInitArg:
-%%   The term() that is going to be passed to CbModule:init/1 when
-%%   initializing the subscriger.
+%%
+%% Possible `Config' keys:
+%%
+%% <ul><li> `client': Client ID (or pid, but not recommended) of the
+%% brod client. Mandatory</li>
+%%
+%% <li>`group_id': Consumer group ID which should be unique per kafka
+%% cluster. Mandatory</li>
+%%
+%% <li>`topics': Predefined set of topic names to join the
+%% group. Mandatory
+%%
+%%   NOTE: The group leader member will collect topics from all
+%%   members and assign all collected topic-partitions to members in
+%%   the group.  i.e. members can join with arbitrary set of
+%%   topics.</li>
+%%
+%% <li>`cb_module': Callback module which should have the callback
+%% functions implemented for message processing. Mandatory</li>
+%%
+%% <li>`group_config': For group coordinator, see {@link
+%% brod_group_coordinator:start_link/6} Optional</li>
+%%
+%% <li>`consumer_config': For partition consumer,
+%% {@link brod_topic_subscriber:start_link/6}. Optional
+%% </li>
+%%
+%% <li>`message_type': The type of message that is going to be handled
+%% by the callback module. Can be either message or message set.
+%% Optional, defaults to `message'</li>
+%%
+%% <li>`init_data': The `term()' that is going to be passed to
+%% `CbModule:init/2' when initializing the subscriber. Optional,
+%% defaults to `undefined'</li>
+%% </ul>
 %% @end
 -spec start_link(subscriber_config()) -> {ok, pid()} | {error, any()}.
 start_link(Config) ->
   gen_server:start_link(?MODULE, Config, []).
 
-%% @doc Stop group subscriber, wait for pid DOWN before return.
+%% @doc Stop group subscriber, wait for pid `DOWN' before return.
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),
@@ -188,8 +205,8 @@ assignments_revoked(Pid) ->
 %% NOTE: The committed offsets should be the offsets for successfully processed
 %%       (acknowledged) messages, not the `begin_offset' to start fetching from.
 %% @end
--spec get_committed_offsets(pid(), [topic_partition()]) ->
-        {ok, [{topic_partition(), brod:offset()}]}.
+-spec get_committed_offsets(pid(), [brod:topic_partition()]) ->
+        {ok, [{brod:topic_partition(), brod:offset()}]}.
 get_committed_offsets(Pid, TopicPartitions) ->
   gen_server:call(Pid, {get_committed_offsets, TopicPartitions}, infinity).
 
@@ -197,10 +214,9 @@ get_committed_offsets(Pid, TopicPartitions) ->
 %% is set for `callback_implemented' in group config.
 %% @end
 -spec assign_partitions(pid(), [brod:group_member()],
-                        [{brod:topic(), brod:partition()}]) ->
+                        [brod:topic_partition()]) ->
         [{member_id(), [brod:partition_assignment()]}].
 assign_partitions(Pid, Members, TopicPartitionList) ->
-  %% TODO: Not implemented
   Call = {assign_partitions, Members, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
 
@@ -269,6 +285,12 @@ handle_call(unsubscribe_all_partitions, _From,
   terminate_all_workers(Workers),
   {reply, ok, State#state{ workers = #{}
                          }};
+handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
+  #state{ cb_module = CbModule
+        , cb_config = CbConfig
+        } = State,
+  Reply = CbModule:assign_partitions(CbConfig, Members, TopicPartitionList),
+  {reply, Reply, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -329,11 +351,6 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_info(Info :: timeout() | term(), State :: term()) ->
-                     {noreply, NewState :: term()} |
-                     {noreply, NewState :: term(), Timeout :: timeout()} |
-                     {noreply, NewState :: term(), hibernate} |
-                     {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(_Info, State) ->
   {noreply, State}.
 

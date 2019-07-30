@@ -155,6 +155,7 @@
              , produce_result/0
              , received_assignments/0
              , topic/0
+             , topic_partition/0
              , value/0
              ]).
 
@@ -168,6 +169,7 @@
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
+-type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset().
 -type key() :: undefined %% no key, transformed to <<>>
              | binary().
