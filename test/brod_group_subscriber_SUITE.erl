@@ -399,21 +399,21 @@ t_2_members_one_partition(Config) when is_list(Config) ->
 t_async_commit({init, Config}) ->
   meck:new(brod_group_coordinator,
            [passthrough, no_passthrough_cover, no_history]),
-  Config;
+  GroupId = list_to_binary("one-time-gid-" ++
+                           integer_to_list(rand:uniform(1000000000))),
+  [{group_id, GroupId} | Config];
 t_async_commit(Config) when is_list(Config) ->
   Behavior = ?config(behavior),
   Partition = 0,
   InitArgs = #{async_commit => true},
-  %% use a one-time gid for clean test
-  GroupId = list_to_binary("one-time-gid-" ++
-                           integer_to_list(rand:uniform(1000000000))),
   GroupConfig = [],
-  ConsumerConfig = [ {sleep_timeout, 0}
-                   , {max_wait_time, 100}
-                   , {partition_restart_delay_seconds, 1}
-                   ],
   StartSubscriber =
-    fun() ->
+    fun(Offset) ->
+        ConsumerConfig = [ {sleep_timeout, 0}
+                         , {max_wait_time, 100}
+                         , {partition_restart_delay_seconds, 1}
+                         , {begin_offset, Offset}
+                         ],
         {ok, SubscriberPid, _ConsumerPids} =
           start_subscriber(Config, [?TOPIC4], GroupConfig, ConsumerConfig,
                            InitArgs),
@@ -423,36 +423,39 @@ t_async_commit(Config) when is_list(Config) ->
     fun(Pid) ->
         ?tp(emulate_restart, #{old_pid => Pid}),
         stop_subscriber(Config, Pid),
-        StartSubscriber()
+        StartSubscriber(latest)
     end,
   CommitOffset =
     fun(Pid, Offset) ->
         ct:pal("Committing offset = ~p", [Offset]),
-        ok = Behavior:commit(Pid, ?TOPIC4, 0, Offset),
-        timer:sleep(5500)
+        ok = Behavior:commit(Pid, ?TOPIC4, 0, Offset)
     end,
   Msg = <<"test">>,
   ?check_trace(
      #{ timeout => 10000 },
      %% Run stage:
      begin
-       Pid1 = StartSubscriber(),
-       %% Produce a message and wait for the subscriber to receive it:
+       %% Produce a message, start group subscriber from offset of
+       %% that message and wait for the subscriber to receive it:
        {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4,
                                                Partition, <<>>, Msg),
-       ct:pal("Produced at offset = ~p", [Offset]),
+       ct:pal("Produced at offset = ~p~n", [Offset]),
+       Pid1 = StartSubscriber(Offset),
        {ok, _} = ?wait_message(?TOPIC4, Partition, Msg),
-       %% Slightly unsound: commit _previous_ offset to avoid starting
+       %% Slightly commit _previous_ offset to avoid starting
        %% brod_consumer with `latest' offset and thus losing all data
        %% during restart:
        CommitOffset(Pid1, Offset - 1),
+       ct:pal("Pre restart~n", []),
        %% Emulate subscriber restart:
        {Pid2, {ok, _}} =
          ?wait_async_action( EmulateRestart(Pid1)
                            , ?handled_message(?TOPIC4, Partition, Msg)
                            ),
+       ct:pal("Post restart~n", []),
        %% Commit offset and restart subscriber again:
        CommitOffset(Pid2, Offset),
+       ct:pal("Post commit~n", []),
        EmulateRestart(Pid2)
      end,
      %% Check stage:
@@ -461,13 +464,11 @@ t_async_commit(Config) when is_list(Config) ->
            ?split_trace_at(#{kind := emulate_restart}, Trace),
          {BeforeRestart2, [_|AfterRestart2]} =
            ?split_trace_at(#{kind := emulate_restart}, AfterRestart1),
-         %% %% Check that the message was processed once before 1st
-         %% %% restart: (TODO: take care of messages that are already in
-         %% %% the topic. Pre-commit offsets?)
-         %% ?assertMatch( [_]
-         %%             , ?projection(value, handled_messages(BeforeRestart1))
-         %%             ),
-
+         %% check that the message was processed once before 1st
+         %% restart:
+         ?assertMatch( [_]
+                     , ?projection(value, handled_messages(BeforeRestart1))
+                     ),
          %% Check that the message was processed once after 1st
          %% restart:
          ?assertMatch( [_]
@@ -594,20 +595,25 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
       meck_subscribe_unsubscribe(),
       Subscribers = []
   end,
+  GroupId = case ?config(group_id) of
+              undefined -> ?GROUP_ID;
+              A         -> A
+            end,
   {ok, SubscriberPid} =
     case ?config(behavior) of
      brod_group_subscriber_v2 ->
         GSConfig = #{ client          => ?CLIENT_ID
-                    , group_id        => ?GROUP_ID
+                    , group_id        => GroupId
                     , topics          => Topics
                     , cb_module       => brod_test_group_subscriber
+                    , message_type    => message
                     , init_data       => InitArgs
                     , consumer_config => ConsumerConfig
                     , group_config    => GroupConfig
                     },
         brod:start_link_group_subscriber_v2(GSConfig);
       brod_group_subscriber ->
-        brod:start_link_group_subscriber(?CLIENT_ID, ?GROUP_ID, Topics,
+        brod:start_link_group_subscriber(?CLIENT_ID, GroupId, Topics,
                                          GroupConfig, ConsumerConfig,
                                          ?MODULE, InitArgs)
     end,

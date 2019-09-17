@@ -70,8 +70,11 @@ init(Topic, StartOpts) ->
                        undefined ->
                          [];
                        _ when is_integer(BeginOffset) ->
-                         %% TODO: Double-check why this decrement is
-                         %% needed
+                         %% Note: brod_topic_subscriber expects
+                         %% _acked_ offset rather than _begin_ offset
+                         %% in `init' callback return. In order to get
+                         %% begin offset it increments the value,
+                         %% which we don't want, hence decrement.
                          [{Partition, max(0, BeginOffset - 1)}]
                      end,
   {ok, CommittedOffsets, State}.

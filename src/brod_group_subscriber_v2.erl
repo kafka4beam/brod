@@ -14,6 +14,13 @@
 %%%   limitations under the License.
 %%%
 
+%%%=============================================================================
+%%% @doc This module implements an improved version of
+%%% `brod_group_subscriber' behavior. Key difference is that each partition
+%%% worker runs in a separate Erlang process, allowing parallel message
+%%% processing.
+%%% @end
+%%%=============================================================================
 -module(brod_group_subscriber_v2).
 
 -behaviour(gen_server).
@@ -52,7 +59,7 @@
 -type subscriber_config() ::
         #{ client          := brod:client()
          , group_id        := brod:group_id()
-         , topics          := [bord:topic()]
+         , topics          := [brod:topic()]
          , cb_module       := module()
          , init_data       => term()
          , message_type    => message | message_set
@@ -80,14 +87,16 @@
     | {ok, State}.
 
 %% Get committed offset (in case it is managed by the subscriber):
--callback get_committed_offset(State) ->
-  {ok, brod:offset() | undefined, State}.
+-callback get_committed_offset(_CbConfig, brod:topic(), brod:partition()) ->
+  {ok, brod:offset() | undefined}.
 
 %% Assign partitions (in case `partition_assignment_strategy' is set
 %% for `callback_implemented' in group config).
 -callback assign_partitions(_CbConfig, [brod:group_member()],
                             [brod:topic_partition()]) ->
   [{member_id(), [brod:partition_assignment()]}].
+
+-optional_callbacks([assign_partitions/3, get_committed_offset/3]).
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
@@ -102,6 +111,7 @@
 
 -record(state,
         { config                  :: subscriber_config()
+        , message_type            :: message | message_set
         , group_id                :: brod:group_id()
         , coordinator             :: pid()
         , generation_id           :: integer() | ?undef
@@ -238,6 +248,7 @@ init(Config) ->
    , topics    := Topics
    , cb_module := CbModule
    } = Config,
+  MessageType = maps:get(message_type, Config, message_set),
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
   CbConfig = maps:get(init_data, Config, undefined),
@@ -251,29 +262,25 @@ init(Config) ->
                                                , ?MODULE
                                                , self()
                                                ),
-  State = #state{ config      = Config
-                , client      = Client
-                , coordinator = Pid
-                , cb_module   = CbModule
-                , cb_config   = CbConfig
-                , group_id    = GroupId
+  State = #state{ config       = Config
+                , message_type = MessageType
+                , client       = Client
+                , coordinator  = Pid
+                , cb_module    = CbModule
+                , cb_config    = CbConfig
+                , group_id     = GroupId
                 },
   {ok, State}.
 
 handle_call({get_committed_offsets, TopicPartitions}, _From,
             #state{ cb_module = CbModule
-                  , workers   = Workers
+                  , cb_config = CbConfig
                   } = State) ->
-  Fun = fun(TopicPartition) ->
-            case Workers of
-              #{TopicPartition := Pid} ->
-                case CbModule:get_committed_offset(Pid) of
-                  Offset when is_integer(Offset) ->
-                    {true, {TopicPartition, Offset}};
-                  undefined ->
-                    false
-                end;
-              _ ->
+  Fun = fun(TP = {Topic, Partition}) ->
+            case CbModule:get_committed_offset(CbConfig, Topic, Partition) of
+              {ok, Offset} ->
+                {true, {TP, Offset}};
+              undefined ->
                 false
             end
         end,
@@ -404,19 +411,21 @@ maybe_start_worker( _MemberId
                   , BeginOffset
                   , State
                   ) ->
-  #state{ workers   = Workers
-        , client    = Client
-        , cb_module = CbModule
-        , cb_config = CbConfig
-        , group_id  = GroupId
+  #state{ workers      = Workers
+        , client       = Client
+        , cb_module    = CbModule
+        , cb_config    = CbConfig
+        , group_id     = GroupId
+        , message_type = MessageType
         } = State,
   TopicPartition = {Topic, Partition},
   case Workers of
     #{TopicPartition := _Worker} ->
       State;
     _ ->
+      Self = self(),
       CommitFun = fun(Offset) ->
-                      commit(self(), Topic, Partition, Offset)
+                      commit(Self, Topic, Partition, Offset)
                   end,
       StartOptions = #{ cb_module    => CbModule
                       , cb_config    => CbConfig
@@ -428,6 +437,7 @@ maybe_start_worker( _MemberId
                       },
       {ok, Pid} = start_worker( Client
                               , Topic
+                              , MessageType
                               , Partition
                               , ConsumerConfig
                               , StartOptions
@@ -438,15 +448,18 @@ maybe_start_worker( _MemberId
 
 -spec start_worker( brod:client()
                   , brod:topic()
+                  , message | message_set
                   , brod:partition()
                   , brod:consumer_config()
                   , brod_group_subscriber_worker:start_options()
                   ) -> {ok, pid()}.
-start_worker(Client, Topic, Partition, ConsumerConfig, StartOptions) ->
+start_worker(Client, Topic, MessageType, Partition, ConsumerConfig,
+             StartOptions) ->
   brod_topic_subscriber:start_link( Client
                                   , Topic
                                   , [Partition]
                                   , ConsumerConfig
+                                  , MessageType
                                   , brod_group_subscriber_worker
                                   , StartOptions
                                   ).

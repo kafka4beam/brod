@@ -687,9 +687,9 @@ start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
                                    ConsumerConfig, CbModule, CbInitArg).
 
 %% @doc Start group_subscriber_v2
--spec start_link_group_subscriber_v2( brod_group_subscriber_v2:subscriber_config()
-                                    ) ->
-          {ok, pid()} | {error, any()}.
+-spec start_link_group_subscriber_v2(
+        brod_group_subscriber_v2:subscriber_config()
+       ) -> {ok, pid()} | {error, any()}.
 start_link_group_subscriber_v2(Config) ->
   brod_group_subscriber_v2:start_link(Config).
 

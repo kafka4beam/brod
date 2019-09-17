@@ -24,8 +24,9 @@
 
 %% brod subscriber callbacks
 -export([ init/2
-        , get_committed_offset/1
+        , get_committed_offset/3
         , handle_message/2
+        , assign_partitions/3
         ]).
 
 init(InitInfo, Config) ->
@@ -65,6 +66,11 @@ handle_message(Message,
     {false, true}  -> {ok, ack, State}
   end.
 
-get_committed_offset(_State) ->
+get_committed_offset(_CbConfig, _Topic, _Partition) ->
   %% always return undefined: always fetch from latest available offset
   undefined.
+
+assign_partitions(_CbConfig, Members, TopicPartitions) ->
+  PartitionsAssignments = [{Topic, [PartitionsN]}
+                           || {Topic, PartitionsN} <- TopicPartitions],
+  [{element(1, hd(Members)), PartitionsAssignments}].
