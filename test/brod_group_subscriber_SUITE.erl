@@ -125,7 +125,7 @@ common_end_per_testcase(Case, Config) when is_list(Config) ->
 
 init(_GroupId, Config) ->
   IsAsyncAck         = maps:get(async_ack, Config, false),
-  IsAsyncCommit      = maps:get(async_ack, Config, false),
+  IsAsyncCommit      = maps:get(async_commit, Config, false),
   IsAssignPartitions = maps:get(assign_partitions, Config, false),
   {ok, #state{ is_async_ack         = IsAsyncAck
              , is_async_commit      = IsAsyncCommit
