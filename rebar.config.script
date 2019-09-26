@@ -2,6 +2,7 @@ IsRebar3 = erlang:function_exported(rebar3, main, 1),
 DocoptUrl = "https://github.com/zmstone/docopt-erl.git",
 DocOptTag = "0.1.3",
 DocoptDep = {docopt, {git, DocoptUrl, {branch, DocOptTag}}},
+Snabbkaffe = {snabbkaffe, {git, "https://github.com/klarna/snabbkaffe.git", {branch, "master"}}}, % TODO: use release tag
 Profiles =
   {profiles, [
     {brod_cli, [
@@ -17,7 +18,7 @@ Profiles =
                         ]}
              ]}]},
     {test, [
-      {deps, [meck, proper, jsone, DocoptDep]},
+      {deps, [meck, proper, jsone, DocoptDep, Snabbkaffe]},
       {erl_opts, [{d, build_brod_cli}]}
     ]}
   ]},
@@ -49,4 +50,3 @@ case os:getenv("TRAVIS") of
   _ ->
     CONFIG1
 end.
-

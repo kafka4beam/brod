@@ -72,6 +72,7 @@
 %% Subscriber API
 -export([ start_link_group_subscriber/7
         , start_link_group_subscriber/8
+        , start_link_group_subscriber_v2/1
         , start_link_topic_subscriber/5
         , start_link_topic_subscriber/6
         , start_link_topic_subscriber/7
@@ -154,6 +155,7 @@
              , produce_result/0
              , received_assignments/0
              , topic/0
+             , topic_partition/0
              , value/0
              ]).
 
@@ -167,6 +169,7 @@
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
 -type partition() :: kpro:partition().
+-type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset().
 -type key() :: undefined %% no key, transformed to <<>>
              | binary().
@@ -682,6 +685,13 @@ start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
                             ConsumerConfig, CbModule, CbInitArg) ->
   brod_group_subscriber:start_link(Client, GroupId, Topics, GroupConfig,
                                    ConsumerConfig, CbModule, CbInitArg).
+
+%% @doc Start group_subscriber_v2
+-spec start_link_group_subscriber_v2(
+        brod_group_subscriber_v2:subscriber_config()
+       ) -> {ok, pid()} | {error, any()}.
+start_link_group_subscriber_v2(Config) ->
+  brod_group_subscriber_v2:start_link(Config).
 
 %% @equiv brod_group_subscriber:start_link/8
 -spec start_link_group_subscriber(

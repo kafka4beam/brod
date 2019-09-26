@@ -22,7 +22,7 @@
 %%%
 %%% An overview of what it does behind the scene:
 %%%  1. Start a consumer group coordinator to manage the consumer group states,
-%%%     @see brod_group_coordinator:start_link/4.
+%%%     {@link brod_group_coordinator:start_link/6}.
 %%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
 %%%     to the partition workers when group assignment is received from the
 %%      group leader, @see brod:start_consumer/3.
@@ -177,9 +177,9 @@
 %%         assign all collected topic-partitions to members in the group.
 %%         i.e. members can join with arbitrary set of topics.
 %% GroupConfig:
-%%   For group coordinator, @see brod_group_coordinator:start_link/5
+%%   For group coordinator, {@link brod_group_coordinator:start_link/6}
 %% ConsumerConfig:
-%%   For partition consumer, @see brod_consumer:start_link/4
+%%   For partition consumer, {@link brod_consumer:start_link/4}
 %% CbModule:
 %%   Callback module which should have the callback functions
 %%   implemented for message processing.
@@ -206,7 +206,7 @@ start_link(Client, GroupId, Topics, GroupConfig,
 %%         assign all collected topic-partitions to members in the group.
 %%         i.e. members can join with arbitrary set of topics.
 %% GroupConfig:
-%%   For group coordinator, @see brod_group_coordinator:start_link/5
+%%   For group coordinator, {@link brod_group_coordinator:start_link/6}
 %% ConsumerConfig:
 %%   For partition consumer, @see brod_consumer:start_link/4
 %% MessageType:
