@@ -405,8 +405,20 @@ await response and then close the connection.
 Hosts = [{"localhost", 9092}].
 Topic = <<"topic">>.
 Partition = 0.
+Timeout = 1000.
+TopicConfigs = [
+  #{
+    config_entries => [],
+    num_partitions => 1,
+    replica_assignment => [],
+    replication_factor => 1,
+    topic => Topic
+  }
+]
 brod:get_metadata(Hosts).
+brod:create_topics(Hosts, TopicConfigs, #{timeout => Timeout}).
 brod:get_metadata(Hosts, [Topic]).
+brod:delete_topics(Hosts, [Topic], Timeout).
 brod:resolve_offset(Hosts, Topic, Partition).
 ```
 

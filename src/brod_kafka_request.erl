@@ -17,7 +17,8 @@
 %% @doc Help functions to build request messages.
 -module(brod_kafka_request).
 
--export([ delete_topics/3
+-export([ create_topics/3
+        , delete_topics/3
         , fetch/7
         , list_groups/1
         , list_offsets/4
@@ -34,6 +35,7 @@
 -type api() :: brod_kafka_apis:api().
 -type vsn() :: brod_kafka_apis:vsn().
 -type topic() :: brod:topic().
+-type topic_config() :: kpro:struct().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
 -type conn() :: kpro:connection().
@@ -53,6 +55,15 @@ produce(MaybePid, Topic, Partition, BatchInput,
                         , ack_timeout => AckTimeout
                         , compression => Compression
                         }).
+
+%% @doc Make a delete_topics request.
+-spec create_topics(vsn() | conn(), [topic_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}) -> kpro:req().
+create_topics(Connection, TopicConfigs, RequestConfigs) when is_pid(Connection) ->
+  Vsn = brod_kafka_apis:pick_version(Connection, create_topics),
+  create_topics(Vsn, TopicConfigs, RequestConfigs);
+create_topics(Vsn, TopicConfigs, RequestConfigs) ->
+  kpro_req_lib:create_topics(Vsn, TopicConfigs, RequestConfigs).
 
 %% @doc Make a delete_topics request.
 -spec delete_topics(vsn() | conn(), [topic()], pos_integer()) -> kpro:req().

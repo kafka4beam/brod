@@ -23,6 +23,8 @@
         , assert_topic/1
         , bytes/1
         , describe_groups/3
+        , create_topics/3
+        , create_topics/4
         , delete_topics/3
         , delete_topics/4
         , epoch_ms/0
@@ -63,6 +65,7 @@
 -type connection() :: kpro:connection().
 -type conn_config() :: brod:conn_config().
 -type topic() :: brod:topic().
+-type topic_config() :: kpro:struct().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
 -type endpoint() :: brod:endpoint().
@@ -70,6 +73,26 @@
 -type group_id() :: brod:group_id().
 
 %%%_* APIs =====================================================================
+
+%% @doc Try to connect to any of the bootstrap nodes and create topics
+%% for the given topics with configs
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}) ->
+        {ok, kpro:struct()} | {error, any()}.
+create_topics(Hosts, TopicConfigs, RequestConfigs) ->
+  create_topics(Hosts, TopicConfigs, RequestConfigs, _ConnCfg = []).
+
+%% @doc Try to connect to any of the bootstrap nodes using the given
+%% connection options and create the given topics with configs
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}, conn_config()) ->
+        {ok, kpro:struct()} | {error, any()}.
+create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
+  with_conn(Hosts, ConnCfg,
+            fun(Pid) ->
+                Request = brod_kafka_request:create_topics(Pid, TopicConfigs, RequestConfigs),
+                request_sync(Pid, Request)
+            end).
 
 %% @doc Try to connect to any of the bootstrap nodes and delete topics
 %% for the given topics with a timeout

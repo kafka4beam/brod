@@ -79,7 +79,9 @@
         ]).
 
 %% Topic APIs
--export([ delete_topics/3
+-export([ create_topics/3
+        , create_topics/4
+        , delete_topics/3
         , delete_topics/4
         ]).
 
@@ -173,6 +175,7 @@
 -type portnum() :: pos_integer().
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
+-type topic_config() :: kpro:struct().
 -type partition() :: kpro:partition().
 -type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset().
@@ -744,6 +747,24 @@ start_link_topic_subscriber(Client, Topic, Partitions,
   brod_topic_subscriber:start_link(Client, Topic, Partitions,
                                    ConsumerConfig, MessageType,
                                    CbModule, CbInitArg).
+
+%% @doc create topic(s) in kafka
+%% Return the message body of `create_topics, response.
+%% See `kpro_schema.erl' for struct details
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}) ->
+        {ok, kpro:struct()} | {error, any()}.
+create_topics(Hosts, TopicConfigs, RequestConfigs) ->
+  brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs).
+
+%% @doc create topic(s) in kafka
+%% Return the message body of `create_topics, response.
+%% See `kpro_schema.erl' for struct details
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}, conn_config()) ->
+        {ok, kpro:struct()} | {error, any()}.
+create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
+  brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
 
 %% @doc delete topic(s) from kafka
 %% Return the message body of `delete_topics, response.
