@@ -78,6 +78,11 @@
         , start_link_topic_subscriber/7
         ]).
 
+%% Topic APIs
+-export([ delete_topics/3
+        , delete_topics/4
+        ]).
+
 %% APIs for quick metadata or message inspection and brod_cli
 -export([ get_metadata/1
         , get_metadata/2
@@ -739,6 +744,22 @@ start_link_topic_subscriber(Client, Topic, Partitions,
   brod_topic_subscriber:start_link(Client, Topic, Partitions,
                                    ConsumerConfig, MessageType,
                                    CbModule, CbInitArg).
+
+%% @doc delete topic(s) from kafka
+%% Return the message body of `delete_topics, response.
+%% See `kpro_schema.erl' for struct details
+-spec delete_topics([endpoint()], [topic()], pos_integer()) ->
+        {ok, kpro:struct()} | {error, any()}.
+delete_topics(Hosts, Topics, Timeout) ->
+  brod_utils:delete_topics(Hosts, Topics, Timeout).
+
+%% @doc delete topic(s) from kafka
+%% Return the message body of `delete_topics, response.
+%% See `kpro_schema.erl' for struct details
+-spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
+        {ok, kpro:struct()} | {error, any()}.
+delete_topics(Hosts, Topics, Timeout, Options) ->
+  brod_utils:delete_topics(Hosts, Topics, Timeout, Options).
 
 %% @doc Fetch broker metadata
 %% Return the message body of `metadata' response.

@@ -149,6 +149,7 @@ supported_versions(API) ->
     sync_group       -> {0, 0};
     describe_groups  -> {0, 0};
     list_groups      -> {0, 0};
+    delete_topics    -> {0, 0};
     _                -> erlang:error({unsupported_api, API})
   end.
 

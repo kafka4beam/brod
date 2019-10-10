@@ -17,7 +17,8 @@
 %% @doc Help functions to build request messages.
 -module(brod_kafka_request).
 
--export([ fetch/7
+-export([ delete_topics/3
+        , fetch/7
         , list_groups/1
         , list_offsets/4
         , join_group/2
@@ -52,6 +53,14 @@ produce(MaybePid, Topic, Partition, BatchInput,
                         , ack_timeout => AckTimeout
                         , compression => Compression
                         }).
+
+%% @doc Make a delete_topics request.
+-spec delete_topics(vsn() | conn(), [topic()], pos_integer()) -> kpro:req().
+delete_topics(Connection, Topics, Timeout) when is_pid(Connection) ->
+  Vsn = brod_kafka_apis:pick_version(Connection, delete_topics),
+  delete_topics(Vsn, Topics, Timeout);
+delete_topics(Vsn, Topics, Timeout) ->
+  kpro_req_lib:delete_topics(Vsn, Topics, #{timeout => Timeout}).
 
 %% @doc Make a fetch request, If the first arg is a connection pid, call
 %% `brod_kafka_apis:pick_version/2' to resolve version.

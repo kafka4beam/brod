@@ -23,6 +23,8 @@
         , assert_topic/1
         , bytes/1
         , describe_groups/3
+        , delete_topics/3
+        , delete_topics/4
         , epoch_ms/0
         , fetch/4
         , fetch/5
@@ -68,6 +70,24 @@
 -type group_id() :: brod:group_id().
 
 %%%_* APIs =====================================================================
+
+%% @doc Try to connect to any of the bootstrap nodes and delete topics
+%% for the given topics with a timeout
+-spec delete_topics([endpoint()], [topic()], pos_integer()) ->
+        {ok, kpro:struct()} | {error, any()}.
+delete_topics(Hosts, Topics, Timeout) ->
+  delete_topics(Hosts, Topics, Timeout, _ConnCfg = []).
+
+%% @doc Try to connect to any of the bootstrap nodes using the given
+%% connection options and delete the given topics with a timeout
+-spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
+        {ok, kpro:struct()} | {error, any()}.
+delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
+  with_conn(Hosts, ConnCfg,
+            fun(Pid) ->
+                Request = brod_kafka_request:delete_topics(Pid, Topics, Timeout),
+                request_sync(Pid, Request)
+            end).
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for all topics
