@@ -45,6 +45,7 @@ function create_topic {
 }
 
 create_topic "dummy" || true
+create_topic "brod_SUITE"
 create_topic "brod-client-SUITE-topic"
 create_topic "brod_consumer_SUITE"
 create_topic "brod_producer_SUITE"            2

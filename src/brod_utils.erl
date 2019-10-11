@@ -74,8 +74,7 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Try to connect to any of the bootstrap nodes and create topics
-%% for the given topics with configs
+%% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) ->
         {ok, kpro:struct()} | {error, any()}.
@@ -88,14 +87,11 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
                     validate_only => boolean()}, conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
-  with_conn(Hosts, ConnCfg,
-            fun(Pid) ->
-                Request = brod_kafka_request:create_topics(Pid, TopicConfigs, RequestConfigs),
-                request_sync(Pid, Request)
-            end).
+  {ok, Conn} = kpro:connect_controller(Hosts, ConnCfg),
+  Request = brod_kafka_request:create_topics(Conn, TopicConfigs, RequestConfigs),
+  request_sync(Conn, Request).
 
-%% @doc Try to connect to any of the bootstrap nodes and delete topics
-%% for the given topics with a timeout
+%% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
         {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout) ->
@@ -106,11 +102,9 @@ delete_topics(Hosts, Topics, Timeout) ->
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
-  with_conn(Hosts, ConnCfg,
-            fun(Pid) ->
-                Request = brod_kafka_request:delete_topics(Pid, Topics, Timeout),
-                request_sync(Pid, Request)
-            end).
+  {ok, Conn} = kpro:connect_controller(Hosts, ConnCfg),
+  Request = brod_kafka_request:delete_topics(Conn, Topics, Timeout),
+  request_sync(Conn, Request).
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for all topics

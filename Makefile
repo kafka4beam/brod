@@ -48,7 +48,7 @@ hex-publish: distclean
 	@rebar3 hex docs
 
 ## tests that require kafka running at localhost
-INTEGRATION_CTS = brod_cg_commits brod_client brod_compression brod_consumer brod_producer brod_group_subscriber brod_topic_subscriber
+INTEGRATION_CTS = brod brod_cg_commits brod_client brod_compression brod_consumer brod_producer brod_group_subscriber brod_topic_subscriber
 
 ## integration tests
 it: ut $(INTEGRATION_CTS:%=it-%)

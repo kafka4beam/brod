@@ -56,7 +56,7 @@ produce(MaybePid, Topic, Partition, BatchInput,
                         , compression => Compression
                         }).
 
-%% @doc Make a delete_topics request.
+%% @doc Make a create_topics request.
 -spec create_topics(vsn() | conn(), [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) -> kpro:req().
 create_topics(Connection, TopicConfigs, RequestConfigs) when is_pid(Connection) ->

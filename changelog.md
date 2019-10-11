@@ -178,3 +178,4 @@
     under `brod_client`'s `brod_consumers_sup`
 * 3.8.1
   * Handle the case when high_watermark < last_stable_offset in fetch resp
+  * Added in support for delete and create topics apis

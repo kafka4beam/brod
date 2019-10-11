@@ -748,9 +748,7 @@ start_link_topic_subscriber(Client, Topic, Partitions,
                                    ConsumerConfig, MessageType,
                                    CbModule, CbInitArg).
 
-%% @doc create topic(s) in kafka
-%% Return the message body of `create_topics, response.
-%% See `kpro_schema.erl' for struct details
+%% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) ->
         {ok, kpro:struct()} | {error, any()}.
@@ -766,9 +764,7 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
 
-%% @doc delete topic(s) from kafka
-%% Return the message body of `delete_topics, response.
-%% See `kpro_schema.erl' for struct details
+%% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
         {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout) ->
