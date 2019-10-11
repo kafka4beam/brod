@@ -31,7 +31,7 @@
         ]).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("eunit/include/eunit.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 -define(HOSTS, [{"localhost", 9092}, {"localhost", 9192}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).

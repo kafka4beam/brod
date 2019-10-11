@@ -87,11 +87,12 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
                     validate_only => boolean()}, conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
-  {ok, Conn} = kpro:connect_controller(Hosts, ConnCfg),
-  Request = brod_kafka_request:create_topics(
-    Conn, TopicConfigs, RequestConfigs),
-  request_sync(Conn, Request).
-
+  with_conn(kpro:connect_controller(Hosts, ConnCfg),
+            fun(Pid) ->
+                Request = brod_kafka_request:create_topics(
+                  Pid, TopicConfigs, RequestConfigs),
+                request_sync(Pid, Request)
+            end).
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
         {ok, kpro:struct()} | {error, any()}.
@@ -103,9 +104,12 @@ delete_topics(Hosts, Topics, Timeout) ->
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
-  {ok, Conn} = kpro:connect_controller(Hosts, ConnCfg),
-  Request = brod_kafka_request:delete_topics(Conn, Topics, Timeout),
-  request_sync(Conn, Request).
+  with_conn(kpro:connect_controller(Hosts, ConnCfg),
+              fun(Pid) ->
+                  Request = brod_kafka_request:delete_topics(
+                    Pid, Topics, Timeout),
+                  request_sync(Pid, Request)
+              end).
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
 %% for all topics
