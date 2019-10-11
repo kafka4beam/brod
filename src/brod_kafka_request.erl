@@ -59,7 +59,8 @@ produce(MaybePid, Topic, Partition, BatchInput,
 %% @doc Make a create_topics request.
 -spec create_topics(vsn() | conn(), [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) -> kpro:req().
-create_topics(Connection, TopicConfigs, RequestConfigs) when is_pid(Connection) ->
+create_topics(Connection, TopicConfigs, RequestConfigs)
+              when is_pid(Connection) ->
   Vsn = brod_kafka_apis:pick_version(Connection, create_topics),
   create_topics(Vsn, TopicConfigs, RequestConfigs);
 create_topics(Vsn, TopicConfigs, RequestConfigs) ->

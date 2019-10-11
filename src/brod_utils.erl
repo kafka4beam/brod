@@ -88,7 +88,8 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
         {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
   {ok, Conn} = kpro:connect_controller(Hosts, ConnCfg),
-  Request = brod_kafka_request:create_topics(Conn, TopicConfigs, RequestConfigs),
+  Request = brod_kafka_request:create_topics(
+    Conn, TopicConfigs, RequestConfigs),
   request_sync(Conn, Request).
 
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
