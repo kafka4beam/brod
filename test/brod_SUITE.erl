@@ -32,13 +32,10 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include("brod_int.hrl").
 
 -define(HOSTS, [{"localhost", 9092}, {"localhost", 9192}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
--define(TIMEOUT, 1000).
-
--define(config(Name), proplists:get_value(Name, Config)).
+-define(TIMEOUT, 50000).
 
 %%%_* ct callbacks =============================================================
 
