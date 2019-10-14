@@ -43,7 +43,7 @@ script:
       # run dialyzer only in otp 22
       rebar3 dialyzer
       # test against kafka 0.9 in otp 22
-      export KAFKA_VERSION="0.9"
+      export KAFKA_VERSION="1.0"
     fi
     if [ $OTP_VSN -eq 21 ]; then
       # test against kafka 2.2 in otp 21

@@ -422,6 +422,8 @@ brod:delete_topics(Hosts, [Topic], Timeout).
 brod:resolve_offset(Hosts, Topic, Partition).
 ```
 
+Caution the above delete_topics can fail if you do not have `delete.topic.enable` set to true in your kafka config
+
 # brod-cli: A command line tool to interact with Kafka
 
 This will build a self-contained binary with brod application
