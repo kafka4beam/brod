@@ -68,16 +68,16 @@ t_create_topics(Config) when is_list(Config) ->
   ],
   ?assertEqual(ok,
     brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
-      #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})).
+      #{connect_timeout => ?TIMEOUT})).
 
 t_delete_topics(Config) when is_list(Config) ->
   ?assertEqual(ok, brod:delete_topics(?HOSTS, [?TOPIC], ?TIMEOUT,
-    #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})).
+    #{connect_timeout => ?TIMEOUT})).
 
 t_delete_topics_not_found(Config) when is_list(Config) ->
   ?assertEqual({error, unknown_topic_or_partition},
     brod:delete_topics(?HOSTS, [<<"no-such-topic">>], ?TIMEOUT,
-      #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})).
+      #{connect_timeout => ?TIMEOUT})).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
