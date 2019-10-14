@@ -520,4 +520,3 @@ brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --prot
 * Support scram-sasl in brod-cli
 * lz4 compression & decompression
 * Transactional produce APIs
-
