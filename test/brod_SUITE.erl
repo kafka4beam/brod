@@ -42,7 +42,11 @@
 suite() -> [{timetrap, {minutes, 5}}].
 
 init_per_suite(Config) ->
-  Config.
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" -> {skip,
+      "The given Kafka test image does not have support for these apis"};
+    _ -> Config
+  end.
 
 end_per_suite(_Config) ->
   ok.
