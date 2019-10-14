@@ -81,7 +81,7 @@
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   create_topics(Hosts, TopicConfigs, RequestConfigs, _ConnCfg = []).
 
-%% @doc Try to connect to any of the bootstrap nodes using the given
+%% @doc Try to connect to the controller node using the given
 %% connection options and create the given topics with configs
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}, conn_config()) ->
@@ -99,7 +99,7 @@ create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
 delete_topics(Hosts, Topics, Timeout) ->
   delete_topics(Hosts, Topics, Timeout, _ConnCfg = []).
 
-%% @doc Try to connect to any of the bootstrap nodes using the given
+%% @doc Try to connect to the controller node using the given
 %% connection options and delete the given topics with a timeout
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
