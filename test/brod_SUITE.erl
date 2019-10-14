@@ -35,7 +35,7 @@
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
--define(TIMEOUT, 200000).
+-define(TIMEOUT, 280000).
 
 %%%_* ct callbacks =============================================================
 
@@ -68,9 +68,7 @@ t_create_topics(Config) when is_list(Config) ->
   ],
   ?assertEqual(ok,
     brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
-      #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})),
-  ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,
-    #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})).
+      #{connect_timeout => ?TIMEOUT, request_timeout => ?TIMEOUT})).
 
 t_delete_topics(Config) when is_list(Config) ->
   ?assertEqual(ok, brod:delete_topics(?HOSTS, [?TOPIC], ?TIMEOUT,
