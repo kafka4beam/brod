@@ -35,11 +35,11 @@
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
--define(TIMEOUT, 50000).
+-define(TIMEOUT, 200000).
 
 %%%_* ct callbacks =============================================================
 
-suite() -> [{timetrap, {seconds, 30}}].
+suite() -> [{timetrap, {minutes, 5}}].
 
 init_per_suite(Config) ->
   Config.
