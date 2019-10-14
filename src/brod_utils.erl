@@ -108,7 +108,7 @@ delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
               fun(Pid) ->
                   Request = brod_kafka_request:delete_topics(
                     Pid, Topics, Timeout),
-                  request_sync(Pid, Request)
+                  request_sync(Pid, Request, Timeout)
               end).
 
 %% @doc Try to connect to any of the bootstrap nodes and fetch metadata
