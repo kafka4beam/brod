@@ -29,7 +29,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 # Working With Kafka 0.9.x or Earlier
 
 Make sure `{query_api_versions, false}` exists in client config.
-This is because `ApiVersionRequest` was introduced in kafka 0.10, 
+This is because `ApiVersionRequest` was introduced in kafka 0.10,
 sending such request to older version brokers will cause connection failure.
 
 e.g. in sys.config:
@@ -95,14 +95,14 @@ Brod supervision (and process link) tree.
 
 # Clients
 
-A `brod_client` in brod is a `gen_server` responsible for establishing and 
-maintaining tcp sockets connecting to kafka brokers. 
-It also manages per-topic-partition producer and consumer processes under 
+A `brod_client` in brod is a `gen_server` responsible for establishing and
+maintaining tcp sockets connecting to kafka brokers.
+It also manages per-topic-partition producer and consumer processes under
 two-level supervision trees.
 
 ## Start clients by default
 
-You may include client configs in sys.config have them started by default 
+You may include client configs in sys.config have them started by default
 (by application controller)
 
 Example of configuration (for sys.config):
@@ -125,7 +125,7 @@ Example of configuration (for sys.config):
 
 ## Start brod client on demand
 
-You may also call `brod:start_client/1,2,3` to start a client on demand, 
+You may also call `brod:start_client/1,2,3` to start a client on demand,
 which will be added to brod supervision tree.
 
 ```erlang
@@ -239,8 +239,8 @@ brod:produce(_Client    = brod_client_1,
 
 ## Handle Acks from Kafka as Messages
 
-For async produce APIs `brod:produce/3` and `brod:produce/5`, 
-the caller should expect a message of below pattern for each produce call. 
+For async produce APIs `brod:produce/3` and `brod:produce/5`,
+the caller should expect a message of below pattern for each produce call.
 
 ```erlang
 #brod_produce_reply{ call_ref = CallRef %% returned from brod:produce
@@ -249,84 +249,84 @@ the caller should expect a message of below pattern for each produce call.
 ```
 Add `-include_lib("brod/include/brod.hrl").` to use the record.
 
-In case the `brod:produce` caller is a process like `gen_server` which 
-receives ALL messages, the callers should keep the call references in its 
-looping state and match the replies against them when received. 
+In case the `brod:produce` caller is a process like `gen_server` which
+receives ALL messages, the callers should keep the call references in its
+looping state and match the replies against them when received.
 Otherwise `brod:sync_produce_request/1` can be used to block-wait for acks.
 
-NOTE: If `required_acks` is set to `none` in producer config, 
-kafka will NOT ack the requests, and the reply message is sent back 
+NOTE: If `required_acks` is set to `none` in producer config,
+kafka will NOT ack the requests, and the reply message is sent back
 to caller immediately after the message has been sent to the socket process.
 
-NOTE: The replies are only strictly ordered per-partition. 
-i.e. if the caller is producing to two or more partitions, 
-it may receive replies ordered differently than in which order 
+NOTE: The replies are only strictly ordered per-partition.
+i.e. if the caller is producing to two or more partitions,
+it may receive replies ordered differently than in which order
 `brod:produce` API was called.
 
 ## Handle Acks from Kafka in Callback Function
 
-Async APIs `brod:produce_cb/4` and `brod:produce_cb/6` allow callers to 
-provided a callback function to handle acknowledgements from kafka. 
-In this case, the caller may want to monitor the producer process because 
+Async APIs `brod:produce_cb/4` and `brod:produce_cb/6` allow callers to
+provided a callback function to handle acknowledgements from kafka.
+In this case, the caller may want to monitor the producer process because
 then they know that the callbacks will not be evaluated if the producer is 'DOWN',
 and there is perhaps a need for retry.
 
 # Consumers
 
-Kafka consumers work in poll mode. In brod, `brod_consumer` is the poller, 
-which is constantly asking for more data from the kafka node which is a leader 
+Kafka consumers work in poll mode. In brod, `brod_consumer` is the poller,
+which is constantly asking for more data from the kafka node which is a leader
 for the given partition.
 
-By subscribing to `brod_consumer` a process should receive the polled message 
+By subscribing to `brod_consumer` a process should receive the polled message
 sets (not individual messages) into its mailbox.
 
-In brod, we have so far implemented two different subscribers 
-(`brod_topic_subscriber` and `brod_group_subscriber`), 
+In brod, we have so far implemented two different subscribers
+(`brod_topic_subscriber` and `brod_group_subscriber`),
 hopefully covered most of the common use cases.
 
-For maximum flexibility, an applications may implement their own 
+For maximum flexibility, an applications may implement their own
 per-partition subscriber.
 
-Below diagrams illustrate 3 examples of how subscriber processes may work 
+Below diagrams illustrate 3 examples of how subscriber processes may work
 with `brod_consumer`.
 
 ## Partition subscriber
 ![](https://cloud.githubusercontent.com/assets/164324/19621677/5e469350-9897-11e6-8c8e-8a6a4f723f73.jpg)
 
-This gives the best flexibility as the per-partition subscribers work 
+This gives the best flexibility as the per-partition subscribers work
 directly with per-partition pollers.
 
-The messages are delivered to subscribers in message sets (batches), 
-not individual messages, (however the subscribers are allowed to 
+The messages are delivered to subscribers in message sets (batches),
+not individual messages, (however the subscribers are allowed to
 ack individual offsets).
 
 ## Topic subscriber (`brod_topic_subscriber`)
 ![](https://cloud.githubusercontent.com/assets/164324/19621951/41e1d75e-989e-11e6-9bc2-49fe814d3020.jpg)
 
-A topic subscriber provides the easiest way to receive and process 
-messages from ALL partitions of a given topic.  See `brod_demo_cg_collector` 
+A topic subscriber provides the easiest way to receive and process
+messages from ALL partitions of a given topic.  See `brod_demo_cg_collector`
 and `brod_demo_topic_subscriber` for example.
 
-Users may choose to implement the `brod_topic_subscriber` behaviour callbacks 
-in a module, or simply provide an anonymous callback function to have the 
+Users may choose to implement the `brod_topic_subscriber` behaviour callbacks
+in a module, or simply provide an anonymous callback function to have the
 individual messages processed.
 
 ## Group subscriber (`brod_group_subscriber`)
 ![](https://cloud.githubusercontent.com/assets/164324/19621956/59d76a9a-989e-11e6-9633-a0bc677e06f3.jpg)
 
-Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks 
-are to be implemented to process individual messages. See 
-`brod_demo_group_subscriber_koc` and `brod_demo_group_subscriber_loc` 
+Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks
+are to be implemented to process individual messages. See
+`brod_demo_group_subscriber_koc` and `brod_demo_group_subscriber_loc`
 for example.
 
-A group subscriber is started by giving a set of topics, some 
-(maybe none, or maybe all) of the partitions in the topic set will be 
-assigned to it, then the subscriber should subscribe to ALL the assigned 
+A group subscriber is started by giving a set of topics, some
+(maybe none, or maybe all) of the partitions in the topic set will be
+assigned to it, then the subscriber should subscribe to ALL the assigned
 partitions.
 
-Users may also choose to implement the `brod_group_member` behaviour (callbacks 
-for `brod_group_coordinator`) for a different group subscriber (e.g. spawn 
-one subscriber per partition), see [brucke](https://github.com/klarna/brucke) 
+Users may also choose to implement the `brod_group_member` behaviour (callbacks
+for `brod_group_coordinator`) for a different group subscriber (e.g. spawn
+one subscriber per partition), see [brucke](https://github.com/klarna/brucke)
 for example.
 
 ### Example of group consumer which commits offsets to Kafka
@@ -405,10 +405,24 @@ await response and then close the connection.
 Hosts = [{"localhost", 9092}].
 Topic = <<"topic">>.
 Partition = 0.
+Timeout = 1000.
+TopicConfigs = [
+  #{
+    config_entries => [],
+    num_partitions => 1,
+    replica_assignment => [],
+    replication_factor => 1,
+    topic => Topic
+  }
+]
 brod:get_metadata(Hosts).
+brod:create_topics(Hosts, TopicConfigs, #{timeout => Timeout}).
 brod:get_metadata(Hosts, [Topic]).
+brod:delete_topics(Hosts, [Topic], Timeout).
 brod:resolve_offset(Hosts, Topic, Partition).
 ```
+
+Caution the above delete_topics can fail if you do not have `delete.topic.enable` set to true in your kafka config
 
 # brod-cli: A command line tool to interact with Kafka
 
@@ -507,6 +521,4 @@ brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --prot
 * HTML tagged EDoc
 * Support scram-sasl in brod-cli
 * lz4 compression & decompression
-* Create/delete topic APIs
 * Transactional produce APIs
-
