@@ -7,21 +7,6 @@ REBAR_CONFIG="$THIS_DIR/../rebar.config"
 
 PROJECT_VERSION=$1
 
-ESCRIPT=$(cat <<EOF
-{ok, [{_,_,L}]} = file:consult('$APP_SRC'),
-{vsn, Vsn} = lists:keyfind(vsn, 1, L),
-io:put_chars(Vsn),
-halt(0)
-EOF
-)
-
-APP_VSN=$(erl -noshell -eval "$ESCRIPT")
-
-if [ "$PROJECT_VERSION" != "$APP_VSN" ]; then
-  echo "version discrepancy, PROJECT_VERSION is '$PROJECT_VERSION', vsn in app.src is '$APP_VSN'"
-  exit 1
-fi
-
 ESCRIPT=$(cat <<-EOF
 {ok, Config} = file:consult('$REBAR_CONFIG'),
 {deps, Deps0} = lists:keyfind(deps, 1, Config),
@@ -51,4 +36,3 @@ EOF
 )
 
 grep -E "dep_.*_commit\s=" $MAKEFILE | sed 's/dep_//' | sed 's/_commit//' | erl -noshell -eval "$ESCRIPT"
-
