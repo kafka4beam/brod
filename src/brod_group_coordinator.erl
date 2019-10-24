@@ -287,14 +287,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   {ok, State}.
 
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
-  case GenerationId < State#state.generationId of
-    true  ->
-      %% Ignore stale acks
-      {noreply, State};
-    false ->
-      {ok, NewState} = handle_ack(State, Topic, Partition, Offset),
-      {noreply, NewState}
-  end;
+  {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
   {ok, NewState} =
     try
@@ -434,29 +427,36 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   %% 1. unsubscribe all currently assigned partitions
   ok = MemberModule:assignments_revoked(MemberPid),
 
-  %% 2. try to commit current offsets before re-joinning the group.
+  %% 2. some brod_group_member implementations may wait for messages
+  %%    to finish processing when assignments_revoked is called.
+  %%    The acknowledments of those messages would then be sitting
+  %%    in our inbox. So we do an explicit pass to collect all pending
+  %%    acks so they are included in the best-effort commit below.
+  State1 = receive_pending_acks(State0),
+
+  %% 3. try to commit current offsets before re-joinning the group.
   %%    try only on the first re-join attempt
   %%    do not try if it was illegal generation exception received
   %%    because it will fail on the same exception again
-  State1 =
+  State2 =
     case AttemptNo =:= 0 andalso
          Reason    =/= ?illegal_generation of
       true ->
-        {ok, #state{} = State1_} = try_commit_offsets(State0),
-        State1_;
+        {ok, #state{} = State2_} = try_commit_offsets(State1),
+        State2_;
       false ->
-        State0
+        State1
     end,
-  State2 = State1#state{is_in_group = false},
+  State3 = State2#state{is_in_group = false},
 
-  %$ 3. Clean up state based on the last failure reason
-  State = maybe_reset_member_id(State2, Reason),
+  %$ 4. Clean up state based on the last failure reason
+  State = maybe_reset_member_id(State3, Reason),
 
-  %% 4. ensure we have a connection to the (maybe new) group coordinator
+  %% 5. ensure we have a connection to the (maybe new) group coordinator
   F1 = fun discover_coordinator/1,
-  %% 5. join group
+  %% 6. join group
   F2 = fun join_group/1,
-  %% 6. sync assignemnts
+  %% 7. sync assignemnts
   F3 = fun sync_group/1,
 
   RetryFun =
@@ -473,6 +473,16 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
       {ok, StateIn}
     end,
   do_stabilize([F1, F2, F3], RetryFun, State).
+
+-spec receive_pending_acks(state()) -> state().
+receive_pending_acks(State) ->
+  receive
+    {ack, GenerationId, Topic, Partition, Offset} ->
+      NewState = handle_ack(State, GenerationId, Topic, Partition, Offset),
+      receive_pending_acks(NewState)
+  after
+    0 -> State
+  end.
 
 do_stabilize([], _RetryFun, State) ->
   {ok, State};
@@ -579,13 +589,16 @@ sync_group(#state{ groupId       = GroupId
       [format_assignments(TopicAssignments)]),
   start_offset_commit_timer(NewState).
 
--spec handle_ack(state(), brod:topic(), brod:partition(), brod:offset()) ->
-        {ok, state()}.
-handle_ack(#state{ acked_offsets = AckedOffsets
-                 } = State, Topic, Partition, Offset) ->
+-spec handle_ack(state(), brod:group_generation_id(), brod:topic(),
+                 brod:partition(), brod:offset()) -> state().
+handle_ack(State, GenerationId, _Topic, _Partition, _Offset)
+    when GenerationId < State#state.generationId ->
+  State;
+handle_ack(#state{acked_offsets = AckedOffsets} = State,
+           _GenerationId, Topic, Partition, Offset) ->
   NewAckedOffsets =
     merge_acked_offsets(AckedOffsets, [{{Topic, Partition}, Offset}]),
-  {ok, State#state{acked_offsets = NewAckedOffsets}}.
+  State#state{acked_offsets = NewAckedOffsets}.
 
 %% Add new offsets to be acked into the acked offsets collection.
 -spec merge_acked_offsets(Offsets, Offsets) -> Offsets when
