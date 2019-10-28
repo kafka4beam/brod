@@ -178,4 +178,7 @@
     under `brod_client`'s `brod_consumers_sup`
 * 3.8.1
   * Handle the case when high_watermark < last_stable_offset in fetch resp
-  * Added in support for delete and create topics apis
+* 3.9.0
+  * Updated kafka_protocol dependency to 2.3.1
+  * (Experimental) Added group_subscriber_v2 behavior
+  * Added API for topic deletion and creation
