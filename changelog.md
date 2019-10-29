@@ -182,3 +182,5 @@
   * Updated kafka_protocol dependency to 2.3.1
   * (Experimental) Added group_subscriber_v2 behavior
   * Added API for topic deletion and creation
+* 3.9.1
+  * Receive pending acks after assignments_revoked is invoked
