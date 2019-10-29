@@ -15,7 +15,7 @@
 %%%
 
 %%%=============================================================================
-%%% @doc brod supervisor
+%%% @private brod supervisor
 %%%
 %%% Hierarchy:
 %%%   brod_sup (one_for_one)

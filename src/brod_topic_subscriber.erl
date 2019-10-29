@@ -53,23 +53,24 @@
 %%%_* behaviour callbacks ======================================================
 
 %% Initialize the callback modules state.
-%% Return {ok, CommittedOffsets, CbState} where CommitedOffset is
-%% the 'last seen' before start/restart offsets of each topic in a tuple list
+%% Return `{ok, CommittedOffsets, CbState}' where `CommitedOffset' is
+%% the "last seen" before start/restart offsets of each topic in a tuple list
 %% The offset+1 of each partition will be used as the start point when fetching
 %% messages from kafka.
+%%
 %% OBS: If there is no offset committed before for certain (or all) partitions
 %%      e.g. CommittedOffsets = [], the consumer will use 'latest' by default,
-%%      or 'begin_offset' in consumer config (if found) to start fetching.
+%%      or `begin_offset' in consumer config (if found) to start fetching.
 %% CbState is the user's looping state for message processing.
 -callback init(brod:topic(), term()) -> {ok, committed_offsets(), cb_state()}.
 
 %% Handle a message. Return one of:
 %%
-%% {ok, NewCallbackState}:
+%% `{ok, NewCallbackState}'
 %%   The subscriber has received the message for processing async-ly.
 %%   It should call brod_topic_subscriber:ack/3 to acknowledge later.
 %%
-%% {ok, ack, NewCallbackState}
+%% `{ok, ack, NewCallbackState}'
 %%   The subscriber has completed processing the message
 %%
 %% NOTE: While this callback function is being evaluated, the fetch-ahead
@@ -115,9 +116,8 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Start (link) a topic subscriber which receives and processes the
-%% messages from the given partition set. Use atom 'all' to subscribe to all
-%% partitions. Messages are handled by calling CbModule:handle_message
+%% @equiv start_link(Client, Topic, Partitions, ConsumerConfig,
+%%           message, CbModule, CbInitArg)
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), module(), term()) ->
         {ok, pid()} | {error, any()}.
@@ -128,9 +128,9 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
   gen_server:start_link(?MODULE, Args, []).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
-%% messages or message sets from the given partition set. Use atom 'all'
+%% messages or message sets from the given partition set. Use atom `all'
 %% to subscribe to all partitions. Messages are handled by calling
-%% CbModule:handle_message
+%% `CbModule:handle_message'
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), message | message_set,
                  module(), term()) ->
@@ -142,11 +142,12 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
   gen_server:start_link(?MODULE, Args, []).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
-%% messages from the given partition set. Use atom 'all' to subscribe to all
+%% messages from the given partition set. Use atom `all' to subscribe to all
 %% partitions. Messages are handled by calling the callback function.
 %%
-%% NOTE: CommittedOffsets are the offsets for the messages that are successfully
-%%       processed (acknoledged), not the begin-offset ot start fetching from.
+%% NOTE: `CommittedOffsets' are the offsets for the messages that have
+%%       been successfully processed (acknowledged), not the begin-offset
+%%       to start fetching from.
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), committed_offsets(),
                  message | message_set, cb_fun(), cb_state()) ->
@@ -175,6 +176,7 @@ ack(Pid, Partition, Offset) ->
 
 %%%_* gen_server callbacks =====================================================
 
+%% @private
 init({Client, Topic, Partitions, ConsumerConfig,
       MessageType, CbModule, CbInitArg}) ->
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, CbInitArg),
@@ -198,6 +200,7 @@ init({Client, Topic, Partitions, ConsumerConfig,
           },
   {ok, State}.
 
+%% @private
 handle_info({_ConsumerPid, #kafka_message_set{} = MsgSet}, State0) ->
   State = handle_consumer_delivery(MsgSet, State0),
   {noreply, State};
@@ -261,9 +264,11 @@ handle_info({'DOWN', _Mref, process, Pid, Reason},
 handle_info(_Info, State) ->
   {noreply, State}.
 
+%% @private
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+%% @private
 handle_cast({ack, Partition, Offset}, State) ->
   AckRef = {Partition, Offset},
   NewState = handle_ack(AckRef, State),
@@ -273,9 +278,11 @@ handle_cast(stop, State) ->
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
+%% @private
 terminate(_Reason, #state{}) ->
   ok.
 

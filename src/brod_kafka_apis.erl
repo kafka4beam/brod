@@ -14,6 +14,7 @@
 %%%   limitations under the License.
 %%%
 
+%% @private
 %% Version ranges are cached per host and per connection pid in ets
 
 -module(brod_kafka_apis).

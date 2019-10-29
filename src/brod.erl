@@ -246,8 +246,8 @@
 -type fetch_opts() :: kpro:fetch_opts().
 -type fold_acc() :: term().
 -type fold_fun(Acc) :: fun((message(), Acc) -> {ok, Acc} | {error, any()}).
-%% fold always returns when reaches the high watermark offset
-%% fold also returns when any of the limits is hit
+%% `fold' always returns when reaches the high watermark offset. `fold'
+%% also returns when any of the limits is hit.
 -type fold_limits() :: #{ message_count => pos_integer()
                         , reach_offset => offset()
                         }.
@@ -255,7 +255,7 @@
                           | reached_message_count_limit
                           | reached_target_offset
                           | {error, any()}.
- %% OffsetToContinue: begin offset for the next fold call
+%% OffsetToContinue: begin offset for the next fold call
 -type fold_result() :: ?BROD_FOLD_RET(fold_acc(),
                                       OffsetToContinue :: offset(),
                                       fold_stop_reason()).
@@ -291,78 +291,102 @@ start_client(BootstrapEndpoints, ClientId) ->
 
 %% @doc Start a client.
 %%
-%% BootstrapEndpoints:
-%%   Kafka cluster endpoints, can be any of the brokers in the cluster
-%%   which does not necessarily have to be a leader of any partition,
-%%   e.g. a load-balanced entrypoint to the remote kakfa cluster.
+%% `BootstrapEndpoints':
+%%   Kafka cluster endpoints, can be any of the brokers in the cluster,
+%%   which does not necessarily have to be the leader of any partition,
+%%   e.g. a load-balanced entrypoint to the remote Kafka cluster.
 %%
-%% ClientId: Atom to identify the client process.
+%% `ClientId': Atom to identify the client process.
 %%
-%% Config is a proplist, possible values:
-%%   restart_delay_seconds (optional, default=10)
-%%     How much time to wait between attempts to restart brod_client
-%%     process when it crashes
+%% `Config' is a proplist, possible values:
+%%  <ul>
+%%   <li>`restart_delay_seconds' (optional, default=10)
 %%
-%%   get_metadata_timeout_seconds (optional, default=5)
+%%     How long to wait between attempts to restart brod_client
+%%     process when it crashes.</li>
+%%
+%%   <li>`get_metadata_timeout_seconds' (optional, default=5)
+%%
 %%     Return `{error, timeout}' from `brod_client:get_xxx' calls if
 %%     responses for APIs such as `metadata', `find_coordinator'
-%%     is not received in time.
+%%     are not received in time.</li>
 %%
-%%   reconnect_cool_down_seconds (optional, default=1)
+%%   <li>`reconnect_cool_down_seconds' (optional, default=1)
+%%
 %%     Delay this configured number of seconds before retrying to
-%%     estabilish a new connection to the kafka partition leader.
+%%     estabilish a new connection to the kafka partition leader.</li>
 %%
-%%   allow_topic_auto_creation (optional, default=true)
-%%     By default, brod respects what is configured in broker about
-%%     topic auto-creation. i.e. whatever `auto.create.topics.enable'
-%%     is set in broker configuration.
-%%     However if `allow_topic_auto_creation' is set to `false' in client
-%%     config, brod will avoid sending metadata requests that may cause an
-%%     auto-creation of the topic regardless of what broker config is.
+%%   <li>`allow_topic_auto_creation' (optional, default=true)
 %%
-%%   auto_start_producers (optional, default=false)
+%%     By default, brod respects what is configured in the broker
+%%     about topic auto-creation. i.e. whether
+%%     `auto.create.topics.enable' is set in the broker configuration.
+%%     However if `allow_topic_auto_creation' is set to `false' in
+%%     client config, brod will avoid sending metadata requests that
+%%     may cause an auto-creation of the topic regardless of what
+%%     broker config is.</li>
+%%
+%%   <li>`auto_start_producers' (optional, default=false)
+%%
 %%     If true, brod client will spawn a producer automatically when
 %%     user is trying to call `produce' but did not call `brod:start_producer'
 %%     explicitly. Can be useful for applications which don't know beforehand
-%%     which topics they will be working with.
+%%     which topics they will be working with.</li>
 %%
-%%   default_producer_config (optional, default=[])
+%%   <li>`default_producer_config' (optional, default=[])
+%%
 %%     Producer configuration to use when auto_start_producers is true.
-%%     @see brod_producer:start_link/4. for details about producer config
+%%     See `brod_producer:start_link/4' for details about producer config</li>
 %%
-%% Connection config entries can be added in the same proplist.
-%% see `kpro_connection.erl' in `kafka_protocol' for more details.
+%% </ul>
 %%
-%%   ssl (optional, default=false)
+%% Connection options can be added to the same proplist. See
+%% `kpro_connection.erl' in `kafka_protocol' for the details:
+%%
+%% <ul>
+%%   <li>`ssl' (optional, default=false)
+%%
 %%     `true | false | ssl:ssl_option()'
 %%     `true' is translated to `[]' as `ssl:ssl_option()' i.e. all default.
+%%   </li>
 %%
-%%   sasl (optional, default=undefined)
+%%   <li>`sasl' (optional, default=undefined)
+%%
 %%     Credentials for SASL/Plain authentication.
 %%     `{mechanism(), Filename}' or `{mechanism(), UserName, Password}'
-%%     where mechanism can be atoms: plain (for "PLAIN"), scram_sha_256
-%%     (for "SCRAM-SHA-256") or scram_sha_512 (for SCRAM-SHA-512).
+%%     where mechanism can be atoms: `plain' (for "PLAIN"), `scram_sha_256'
+%%     (for "SCRAM-SHA-256") or `scram_sha_512' (for SCRAM-SHA-512).
 %%     `Filename' should be a file consisting two lines, first line
-%%     is the username and second line is the password.
-%%     `Username', `Password' should be `string() | binary()'
+%%     is the username and the second line is the password.
+%%     Both `Username' and `Password' should be `string() | binary()'</li>
 %%
-%%   connect_timeout (optional, default=5000)
-%%     Timeout when trying to connect to an endpoint.
+%%   <li>`connect_timeout' (optional, default=5000)
 %%
-%%   request_timeout (optional, default=240000, constraint: >= 1000)
-%%     Timeout when waiting for a response, connection restart when timed out.
-%%   query_api_versions (optional, default=true)
+%%     Timeout when trying to connect to an endpoint.</li>
+%%
+%%   <li>`request_timeout' (optional, default=240000, constraint: >= 1000)
+%%
+%%     Timeout when waiting for a response, connection restart when timed
+%%     out.</li>
+%%
+%%   <li>`query_api_versions' (optional, default=true)
+%%
 %%     Must be set to false to work with kafka versions prior to 0.10,
 %%     When set to `true', at connection start, brod will send a query request
 %%     to get the broker supported API version ranges.
 %%     When set to 'false', brod will alway use the lowest supported API version
 %%     when sending requests to kafka.
 %%     Supported API version ranges can be found in:
-%%     `brod_kafka_apis:supported_versions/1'
-%%  extra_sock_opts (optional, default=[])
+%%     `brod_kafka_apis:supported_versions/1'</li>
+%%
+%%   <li>`extra_sock_opts' (optional, default=[])
+%%
 %%     Extra socket options to tune socket performance.
-%%     e.g. [{sndbuf, 1 bsl 20}].
-%%     ref: http://erlang.org/doc/man/gen_tcp.html#type-option
+%%     e.g. `[{sndbuf, 1 bsl 20}]'.
+%%     <a href="http://erlang.org/doc/man/gen_tcp.html#type-option">More info
+%%     </a>
+%%   </li>
+%% </ul>
 -spec start_client([endpoint()], client_id(), client_config()) ->
                       ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId, Config) ->
@@ -399,7 +423,7 @@ stop_client(Client) when is_pid(Client) ->
   brod_client:stop(Client).
 
 %% @doc Dynamically start a per-topic producer.
-%% @see brod_producer:start_link/4. for details about producer config.
+%% @see brod_producer:start_link/4
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
@@ -447,29 +471,29 @@ get_producer(Client, Topic, Partition) ->
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
 
-%% @doc Produce one message if Value is binary or iolist,
-%% Or send a batch if Value is a (nested) kv-list or a list of maps,
-%% in this case Key is discarded (only the keys in kv-list are sent to kafka).
-%% The pid should be a partition producer pid, NOT client pid.
-%% The return value is a call reference of type `call_ref()',
-%% so the caller can used it to expect (match) a
-%% `#brod_produce_reply{result = brod_produce_req_acked}'
-%% message after the produce request has been acked by kafka.
+%% @doc Produce one message if `Value' is a binary or an
+%% iolist. Otherwise send a batch, if `Value' is a (nested) key-value
+%% list, or a list of maps. In this case `Key' is discarded (only the
+%% keys in the key-value list are sent to Kafka). The pid should be a
+%% partition producer pid, NOT client pid.  The return value is a call
+%% reference of type `call_ref()', so the caller can use it to expect
+%% (match) a `#brod_produce_reply{result = brod_produce_req_acked}'
+%% message after the produce request has been acked by Kafka.
 -spec produce(pid(), key(), value()) ->
         {ok, call_ref()} | {error, any()}.
 produce(ProducerPid, Key, Value) ->
   brod_producer:produce(ProducerPid, Key, Value).
 
-%% @doc Produce one message if Value is binary or iolist,
-%% Or send a batch if Value is a (nested) kv-list or a list of maps,
-%% in this case Key is used only for partitioning, or discarded if the 3rd
-%% arg is a partition number instead of a partitioner callback.
-%% This function first lookup the producer pid,
-%% then call `produce/3' to do the real work.
-%% The return value is a call reference of type `call_ref()',
-%% so the caller can used it to expect (match) a
-%% `#brod_produce_reply{result = brod_produce_req_acked}'
-%% message after the produce request has been acked by kafka.
+%% @doc Produce one message if `Value' is a binary or an iolist.
+%% Otherwise send a batch if `Value' is a (nested) key-value list, or
+%% a list of maps. In this case `Key' is used only for partitioning,
+%% or discarded if the 3rd argument is a partition number instead of a
+%% partitioner callback. This function first looks up the producer
+%% pid, then calls `produce/3' to do the real work. The return value
+%% is a call reference of type `call_ref()', so the caller can used it
+%% to expect (match) a `#brod_produce_reply{result =
+%% brod_produce_req_acked}' message after the produce request has been
+%% acked by Kafka.
 -spec produce(client(), topic(), partition() | partitioner(),
               key(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
@@ -487,7 +511,7 @@ produce(Client, Topic, Partitioner, Key, Value) ->
       {error, Reason}
   end.
 
-%% @doc Same as `produce/3' only the ack is not delivered as a message,
+%% @doc Same as `produce/3', only the ack is not delivered as a message,
 %% instead, the callback is evaluated by producer worker when ack is received
 %% from kafka.
 -spec produce_cb(pid(), key(), value(), produce_ack_cb()) ->
@@ -522,14 +546,14 @@ produce_cb(Client, Topic, Partitioner, Key, Value, AckCb) ->
 
 %% @doc Send the message to partition worker without any ack.
 %% NOTE: This call has no back-pressure to the caller,
-%%       excessive usage may cause beam to run out of memory.
+%%       excessive usage may cause BEAM to run out of memory.
 -spec produce_no_ack(pid(), key(), value()) -> ok | {error, any()}.
 produce_no_ack(ProducerPid, Key, Value) ->
   brod_producer:produce_no_ack(ProducerPid, Key, Value).
 
 %% @doc Find the partition worker and send message without any ack.
 %% NOTE: This call has no back-pressure to the caller,
-%%       excessive usage may cause beam to run out of memory.
+%%       excessive usage may cause BEAM to run out of memory.
 -spec produce_no_ack(client(), topic(), partition() | partitioner(),
            key(), value()) -> ok | {error, any()}.
 produce_no_ack(Client, Topic, Part, Key, Value) when is_integer(Part) ->
@@ -555,9 +579,11 @@ produce_sync(Pid, Value) ->
   produce_sync(Pid, _Key = <<>>, Value).
 
 %% @doc Sync version of produce/3
-%% This function will not return until a response is received from kafka,
-%% however if producer is started with required_acks set to 0, this function
-%% will return onece the messages is buffered in the producer process.
+%%
+%% This function will not return until the response is received from
+%% Kafka. But when producer is started with `required_acks' set to 0,
+%% this function will return once the messages are buffered in the
+%% producer process.
 -spec produce_sync(pid(), key(), value()) ->
         ok | {error, any()}.
 produce_sync(Pid, Key, Value) ->
@@ -620,18 +646,22 @@ sync_produce_request_offset(CallRef) ->
 sync_produce_request_offset(CallRef, Timeout) ->
   brod_producer:sync_produce_request(CallRef, Timeout).
 
-%% @doc Subscribe data stream from the given topic-partition.
-%% If {error, Reason} is returned, the caller should perhaps retry later.
-%% {ok, ConsumerPid} is returned if success, the caller may want to monitor
-%% the consumer pid to trigger a re-subscribe in case it crashes.
+%% @doc Subscribe to a data stream from the given topic-partition.
 %%
-%% If subscribed successfully, the subscriber process should expect messages
+%% If `{error, Reason}' is returned, the caller should perhaps retry later.
+%%
+%% `{ok, ConsumerPid}' is returned on success. The caller may want to
+%% monitor the consumer pid and re-subscribe should the `ConsumerPid' crash.
+%%
+%% Upon successful subscription the subscriber process should expect messages
 %% of pattern:
-%% {ConsumerPid, #kafka_message_set{}} and
-%% {ConsumerPid, #kafka_fetch_error{}},
-%% -include_lib(brod/include/brod.hrl) to access the records.
-%% In case #kafka_fetch_error{} is received the subscriber should re-subscribe
-%% itself to resume the data stream.
+%% `{ConsumerPid, #kafka_message_set{}}' and
+%% `{ConsumerPid, #kafka_fetch_error{}}'.
+%%
+%% `-include_lib("brod/include/brod.hrl")' to access the records.
+%%
+%% In case `#kafka_fetch_error{}' is received the subscriber should
+%% re-subscribe itself to resume the data stream.
 -spec subscribe(client(), pid(), topic(), partition(),
                 consumer_options()) -> {ok, pid()} | {error, any()}.
 subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
@@ -649,7 +679,8 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
-%% @doc Unsubscribe the current subscriber. Assuming the subscriber is self().
+%% @doc Unsubscribe the current subscriber. Assuming the subscriber is
+%% `self()'.
 -spec unsubscribe(client(), topic(), partition()) -> ok | {error, any()}.
 unsubscribe(Client, Topic, Partition) ->
   unsubscribe(Client, Topic, Partition, self()).
@@ -662,7 +693,8 @@ unsubscribe(Client, Topic, Partition, SubscriberPid) ->
     Error             -> Error
   end.
 
-%% @doc Unsubscribe the current subscriber. Assuming the subscriber is self().
+%% @doc Unsubscribe the current subscriber. Assuming the subscriber is
+%% `self()'.
 -spec unsubscribe(pid()) -> ok | {error, any()}.
 unsubscribe(ConsumerPid) ->
   unsubscribe(ConsumerPid, self()).
@@ -684,7 +716,7 @@ consume_ack(Client, Topic, Partition, Offset) ->
 consume_ack(ConsumerPid, Offset) ->
   brod_consumer:ack(ConsumerPid, Offset).
 
-%% @equiv brod_group_subscriber:start_link/7
+%% @see brod_group_subscriber:start_link/7
 -spec start_link_group_subscriber(
         client(), group_id(), [topic()],
         group_config(), consumer_config(), module(), term()) ->
@@ -701,7 +733,7 @@ start_link_group_subscriber(Client, GroupId, Topics, GroupConfig,
 start_link_group_subscriber_v2(Config) ->
   brod_group_subscriber_v2:start_link(Config).
 
-%% @equiv brod_group_subscriber:start_link/8
+%% @see brod_group_subscriber:start_link/8
 -spec start_link_group_subscriber(
         client(), group_id(), [topic()], group_config(),
         consumer_config(), message | message_set,
@@ -736,7 +768,7 @@ start_link_topic_subscriber(Client, Topic, Partitions,
   start_link_topic_subscriber(Client, Topic, Partitions,
                               ConsumerConfig, message, CbModule, CbInitArg).
 
-%% @equiv brod_topic_subscriber:start_link/7
+%% @see brod_topic_subscriber:start_link/7
 -spec start_link_topic_subscriber(
         client(), topic(), all | [partition()],
         consumer_config(), message | message_set,
@@ -908,9 +940,15 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
   brod_utils:describe_groups(CoordinatorEndpoint, ConnCfg, IDs).
 
 %% @doc Connect to consumer group coordinator broker.
-%% Done in steps: 1) connect to any of the given bootstrap ednpoints;
-%% 2) send group_coordinator_request to resolve group coordinator endpoint;;
-%% 3) connect to the resolved endpoint and return the connection pid
+%%
+%% Done in steps: <ol>
+%% <li>Connect to any of the given bootstrap ednpoints</li>
+%%
+%% <li>Send group_coordinator_request to resolve group coordinator
+%% endpoint</li>
+%%
+%% <li>Connect to the resolved endpoint and return the connection
+%% pid</li></ol>
 -spec connect_group_coordinator([endpoint()], conn_config(), group_id()) ->
         {ok, pid()} | {error, any()}.
 connect_group_coordinator(BootstrapEndpoints, ConnCfg, GroupId) ->

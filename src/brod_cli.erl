@@ -14,6 +14,7 @@
 %%%   limitations under the License.
 %%%
 
+%% @private
 -module(brod_cli).
 
 -ifdef(build_brod_cli).

@@ -120,44 +120,70 @@ start_link(Bootstrap, Topic, Partition, Config) ->
   start_link(Bootstrap, Topic, Partition, Config, []).
 
 %% @doc Start (link) a partition consumer.
+%%
 %% Possible configs:
-%%   min_bytes (optional default = 0):
-%%     Minimal bytes to fetch in a batch of messages
-%%   max_bytes (optional default = 1MB):
-%%     Maximum bytes to fetch in a batch of messages
-%%     NOTE: this value might be expanded to retry when it is not enough
-%%           to fetch even one single message, then slowly shrinked back
-%%           to this given value.
-%%  max_wait_time (optional, default = 10000 ms):
-%%     Max number of seconds allowd for the broker to collect min_bytes of
-%%     messages in fetch response
-%%  sleep_timeout (optional, default = 1000 ms):
+%% <ul>
+%%   <li>`min_bytes' (optional, default = 0)
+%%
+%%     Minimal bytes to fetch in a batch of messages</li>
+%%
+%%   <li>`max_bytes' (optional, default = 1MB)
+%%
+%%     Maximum bytes to fetch in a batch of messages.
+%%
+%%     NOTE: this value might be expanded to retry when it is not
+%%           enough to fetch even a single message, then slowly
+%%           shrinked back to the given value.</li>
+%%
+%%  <li>`max_wait_time' (optional, default = 10000 ms)
+%%
+%%     Max number of seconds allowd for the broker to collect
+%%     `min_bytes' of messages in fetch response</li>
+%%
+%%  <li>`sleep_timeout' (optional, default = 1000 ms)
+%%
 %%     Allow consumer process to sleep this amout of ms if kafka replied
-%%     'empty' message-set.
-%%  prefetch_count (optional, default = 10):
-%%     The window size (number of messages) allowed to fetch-ahead.
-%%  prefetch_bytes (optional, default = 100KB):
+%%     'empty' message set.</li>
+%%
+%%  <li>`prefetch_count' (optional, default = 10)
+%%
+%%     The window size (number of messages) allowed to fetch-ahead.</li>
+%%
+%%  <li>`prefetch_bytes' (optional, default = 100KB)
+%%
 %%     The total number of bytes allowed to fetch-ahead.
 %%     brod_consumer is greed, it only stops fetching more messages in
 %%     when number of unacked messages has exceeded prefetch_count AND
-%%     the unacked total volume has exceeded prefetch_bytes
-%%  begin_offset (optional, default = latest):
-%%     The offset from which to begin fetch requests.
-%%  offset_reset_policy (optional, default = reset_by_subscriber)
-%%     How to reset begin_offset if OffsetOutOfRange exception is received.
-%%     reset_by_subscriber: consumer is suspended (is_suspended=true in state)
-%%                          and wait for subscriber to re-subscribe with a new
-%%                          'begin_offset' option.
-%%     reset_to_earliest: consume from the earliest offset.
-%%     reset_to_latest: consume from the last available offset.
-%%  size_stat_window: (optional, default = 5)
-%%     The moving-average window size to caculate average message size.
-%%     Average message size is used to shrink max_bytes in fetch requests
-%%     after it has been expanded to fetch a large message.
-%%     Use 0 to immediately shrink back to original max_bytes from config.
-%%     A size esitmation allows users to set a relatively small max_bytes,
-%%     then let it dynamically adjust to a number around
-%%     PrefetchCount * AverageSize
+%%     the unacked total volume has exceeded prefetch_bytes</li>
+%%
+%%  <li>`begin_offset' (optional, default = latest)
+%%
+%%     The offset from which to begin fetch requests.</li>
+%%
+%%  <li>`offset_reset_policy' (optional, default = reset_by_subscriber)
+%%
+%%     How to reset `begin_offset' if `OffsetOutOfRange' exception is received.
+%%
+%%     `reset_by_subscriber': consumer is suspended
+%%                           (`is_suspended=true' in state) and wait
+%%                           for subscriber to re-subscribe with a new
+%%                           `begin_offset' option.
+%%
+%%     `reset_to_earliest': consume from the earliest offset.
+%%
+%%     `reset_to_latest': consume from the last available offset.</li>
+%%
+%%  <li>`size_stat_window': (optional, default = 5)
+%%
+%%     The moving-average window size to caculate average message
+%%     size.  Average message size is used to shrink `max_bytes' in
+%%     fetch requests after it has been expanded to fetch a large
+%%     message. Use 0 to immediately shrink back to original
+%%     `max_bytes' from config.  A size estimation allows users to set
+%%     a relatively small `max_bytes', then let it dynamically adjust
+%%     to a number around `PrefetchCount * AverageSize'</li>
+%%
+%% </ul>
 %% @end
 -spec start_link(pid() | brod:bootstrap(),
                  topic(), partition(), config(), [any()]) ->
@@ -181,18 +207,23 @@ stop_maybe_kill(Pid, Timeout) ->
       ok
   end.
 
-%% @doc Subscribe or resubscribe on messages from a partition.
-%% Caller may pass in a set of options which is an extention of consumer config
-%% to update the parameters such as max_bytes and max_wait_time etc.
-%% also to update the start point (begin_offset) of the data stream.
+%% @doc Subscribe or resubscribe on messages from a partition.  Caller
+%% may specify a set of options extending consumer config. It is
+%% possible to update parameters such as `max_bytes' and
+%% `max_wait_time', or the starting point (`begin_offset') of the data
+%% stream.
+%%
 %% Possible options:
-%%   all consumer configs as documented for start_link/5
-%%   begin_offset (optional, default = latest)
-%%     A subscriber may consume and process messages then persist the associated
-%%     offset to a persistent storage, then start (or restart) with
-%%     last_processed_offset + 1 as the begin_offset to proceed.
-%%     By default, it fetches from the latest available offset.
-%% @end
+%%
+%%   All consumer configs as documented for {@link start_link/5}
+%%
+%%   `begin_offset' (optional, default = latest)
+%%
+%%     A subscriber may consume and process messages, then persist the
+%%     associated offset to a persistent storage, then start (or
+%%     restart) from `last_processed_offset + 1' as the `begin_offset'
+%%     to proceed. By default, it starts fetching from the latest
+%%     available offset.
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
@@ -210,8 +241,10 @@ ack(Pid, Offset) ->
 
 -spec debug(pid(), print | string() | none) -> ok.
 %% @doc Enable/disable debugging on the consumer process.
-%%      debug(Pid, print) prints debug info on stdout
-%%      debug(Pid, File) prints debug info into a File
+%%
+%% `debug(Pid, print)' prints debug info to stdout.
+%%
+%% `debug(Pid, File)' prints debug info to a file `File'.
 debug(Pid, none) ->
   do_debug(Pid, no_debug);
 debug(Pid, print) ->
@@ -265,6 +298,7 @@ init({Bootstrap, Topic, Partition, Config}) ->
              , connection_mref     = ?undef
              }}.
 
+%% @private
 handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber} = State0) ->
   case brod_utils:is_pid_alive(Subscriber) andalso
        maybe_init_connection(State0) of
@@ -303,6 +337,7 @@ handle_info(Info, State) ->
                           [?MODULE, self(), Info]),
   {noreply, State}.
 
+%% @private
 handle_call(get_connection, _From, #state{connection = C} = State) ->
   {reply, C, State};
 handle_call({subscribe, Pid, Options}, _From,
@@ -340,6 +375,7 @@ handle_call(stop, _From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+%% @private
 handle_cast({ack, Offset}, #state{pending_acks = PendingAcks} = State0) ->
   NewPendingAcks = handle_ack(PendingAcks, Offset),
   State1 = State0#state{pending_acks = NewPendingAcks},
@@ -350,6 +386,7 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), Cast]),
   {noreply, State}.
 
+%% @private
 terminate(Reason, #state{ bootstrap = Bootstrap
                         , topic = Topic
                         , partition = Partition
@@ -370,6 +407,7 @@ terminate(Reason, #state{ bootstrap = Bootstrap
                                          [Topic, Partition, Reason]),
   ok.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 

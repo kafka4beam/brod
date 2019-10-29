@@ -14,7 +14,7 @@
 %%%   limitations under the License.
 %%%
 
-%% @doc Help functions to build request messages.
+%% @doc Helper functions for building request messages.
 -module(brod_kafka_request).
 
 -export([ create_topics/3
