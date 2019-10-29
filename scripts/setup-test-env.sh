@@ -50,6 +50,7 @@ create_topic "brod-client-SUITE-topic"
 create_topic "brod_consumer_SUITE"
 create_topic "brod_producer_SUITE"            2
 create_topic "brod_topic_subscriber_SUITE"    3 2
+create_topic "brod-group-coordinator"         3 2
 create_topic "brod-group-subscriber-1"        3 2
 create_topic "brod-group-subscriber-2"        3 2
 create_topic "brod-group-subscriber-3"        3 2
