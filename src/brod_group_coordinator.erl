@@ -148,59 +148,95 @@
 %%%_* APIs =====================================================================
 
 %% @doc Start a kafka consumer group coordinator.
-%% Client:    ClientId (or pid, but not recommended)
-%% GroupId:   Predefined globally unique (in a kafka cluster) binary string.
-%% Topics:    Predefined set of topic names to join the group.
-%% CbModule:  The module which implements group coordinator callbacks
-%% MemberPid: The member process pid.
-%% Config: The group coordinator configs in a proplist, possible entries:
-%%  - partition_assignment_strategy  (optional, default = roundrobin_v2)
-%%      roundrobin_v2 (topic-sticky):
-%%        Take all topic-offset (sorted [{TopicName, Partition}] list)
-%%        assign one to each member in a roundrobin fashion. However only
-%%        partitions in the subscription topic list are assiged.
-%%      callback_implemented
-%%        Call CbModule:assign_partitions/2 to assign partitions.
-%%  - session_timeout_seconds (optional, default = 10)
+%%
+%% `Client': `ClientId' (or pid, but not recommended)
+%%
+%% `GroupId': Predefined globally unique (in a kafka cluster) binary string.
+%%
+%% `Topics': Predefined set of topic names to join the group.
+%%
+%% `CbModule':  The module which implements group coordinator callbacks
+%%
+%% `MemberPid': The member process pid.
+%%
+%% `Config': The group coordinator configs in a proplist, possible entries:
+%%
+%%  <ul><li>`partition_assignment_strategy' (optional, default =
+%%  `roundrobin_v2')
+%%
+%%  Possible values:
+%%
+%%      <ul><li>`roundrobin_v2' (topic-sticky)
+%%
+%%        Take all topic-offset (sorted `topic_partition()' list),
+%%        assign one to each member in a roundrobin fashion. Only
+%%        partitions in the subscription topic list are assiged.</li>
+%%
+%%      <li>`callback_implemented'
+%%
+%%        Call `CbModule:assign_partitions/2' to assign
+%%        partitions.</li>
+%%  </ul></li>
+%%
+%%  <li>`session_timeout_seconds' (optional, default = 10)
+%%
 %%      Time in seconds for the group coordinator broker to consider a member
 %%      'down' if no heartbeat or any kind of requests received from a broker
 %%      in the past N seconds.
 %%      A group member may also consider the coordinator broker 'down' if no
-%%      heartbeat response response received in the past N seconds.
-%%  - heartbeat_rate_seconds (optional, default = 2)
+%%      heartbeat response response received in the past N seconds.</li>
+%%
+%%  <li>`heartbeat_rate_seconds' (optional, default = 2)
+%%
 %%      Time in seconds for the member to 'ping' the group coordinator.
 %%      OBS: Care should be taken when picking the number, on one hand, we do
 %%           not want to flush the broker with requests if we set it too low,
 %%           on the other hand, if set it too high, it may take too long for
 %%           the members to realise status changes of the group such as
-%%           assignment rebalacing or group coordinator switchover etc.
-%%  - max_rejoin_attempts (optional, default = 5)
+%%           assignment rebalacing or group coordinator switchover etc.</li>
+%%
+%%  <li>`max_rejoin_attempts' (optional, default = 5)
+%%
 %%      Maximum number of times allowd for a member to re-join the group.
 %%      The gen_server will stop if it reached the maximum number of retries.
 %%      OBS: 'let it crash' may not be the optimal strategy here because
 %%           the group member id is kept in the gen_server looping state and
-%%           it is reused when re-joining the group.
-%%  - rejoin_delay_seconds (optional, default = 1)
-%%      Delay in seconds before re-joining the group.
-%%  - offset_commit_policy (optional, default = commit_to_kafka_v2)
-%%      How/where to commit offsets, possible values:
-%%        - commit_to_kafka_v2:
-%%            Group coordinator will commit the offsets to kafka using
-%%            version 2 OffsetCommitRequest.
-%%        - consumer_managed:
-%%            The group member (e.g. brod_group_subscriber.erl) is responsible
-%%            for persisting offsets to a local or centralized storage.
-%%            And the callback get_committed_offsets should be implemented
-%%            to allow group coordinator to retrieve the commited offsets.
-%%  - offset_commit_interval_seconds (optional, default = 5)
+%%           it is reused when re-joining the group.</li>
+%%
+%%  <li>`rejoin_delay_seconds' (optional, default = 1)
+%%
+%%      Delay in seconds before re-joining the group.</li>
+%%
+%%  <li>`offset_commit_policy' (optional, default = `commit_to_kafka_v2')
+%%
+%%      How/where to commit offsets, possible values:<ul>
+%%        <li>`commit_to_kafka_v2': Group coordinator will commit the
+%%            offsets to kafka using version 2
+%%            OffsetCommitRequest.</li>
+%%        <li> `consumer_managed': The group member
+%%            (e.g. brod_group_subscriber.erl) is responsible for
+%%            persisting offsets to a local or centralized storage.
+%%            And the callback `get_committed_offsets' should be
+%%            implemented to allow group coordinator to retrieve the
+%%            commited offsets.</li>
+%%  </ul></li>
+%%
+%%  <li>`offset_commit_interval_seconds' (optional, default = 5)
+%%
 %%      The time interval between two OffsetCommitRequest messages.
-%%      This config is irrelevant if offset_commit_policy is consumer_managed.
-%%  - offset_retention_seconds (optional, default = -1)
+%%      This config is irrelevant if `offset_commit_policy' is
+%%      `consumer_managed'.</li>
+%%
+%%  <li>`offset_retention_seconds' (optional, default = -1)
+%%
 %%      How long the time is to be kept in kafka before it is deleted.
-%%      The default special value -1 indicates that the __consumer_offsets
-%%      topic retention policy is used.
-%%      This config is irrelevant if offset_commit_policy is consumer_managed.
-%%  - protocol_name (optional, default = roundrobin_v2)
+%%      The default special value -1 indicates that the
+%%      __consumer_offsets topic retention policy is used. This config
+%%      is irrelevant if `offset_commit_policy' is
+%%      `consumer_managed'.</li>
+%%
+%%  <li>`protocol_name' (optional, default = roundrobin_v2)
+%%
 %%      This is the protocol name used when join a group, if not given,
 %%      by default `partition_assignment_strategy' is used as the protocol name.
 %%      Setting a protocol name allows to interact with consumer group members
@@ -208,6 +244,8 @@
 %%      commonly used protocol name for JAVA client. However, brod only supports
 %%      roundrobin protocol out of the box, in order to mimic 'range' protocol
 %%      one will have to do it via `callback_implemented' assignment strategy
+%%  </li>
+%% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
                  config(), module(), pid()) -> {ok, pid()} | {error, any()}.
 start_link(Client, GroupId, Topics, Config, CbModule, MemberPid) ->
@@ -228,9 +266,10 @@ commit_offsets(CoordinatorPid) ->
 
 %% @doc Force commit collected (acked) offsets plus the given extra offsets
 %% immediately.
-%% NOTE: A lists:usrot is applied on the given extra offsets to commit
+%%
+%% NOTE: `lists:usort/1' is applied on the given extra offsets to commit,
 %%       meaning if two or more offsets for the same topic-partition exist
-%%       in the list, only the one that is closer the head of the list is kept
+%%       in the list, only the one closest the head of the list is kept
 -spec commit_offsets(pid(),
                      [{{brod:topic(), brod:partition()}, brod:offset()}]) ->
                         ok | {error, any()}.

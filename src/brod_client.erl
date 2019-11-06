@@ -203,7 +203,7 @@ stop_consumer(Client, TopicName) ->
 %% Return already established connection towards the leader broker,
 %% Otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
+%% `{error, LastReason}' is returned.
 -spec get_leader_connection(client(), topic(), partition()) ->
         {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
@@ -213,13 +213,13 @@ get_leader_connection(Client, Topic, Partition) ->
 %% Return already established connection towards the broker,
 %% otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
-%% {error, LastReason} is returned.
+%% `{error, LastReason}' is returned.
 -spec get_connection(client(), brod:hostname(), brod:portnum()) ->
         {ok, pid()} | {error, any()}.
 get_connection(Client, Host, Port) ->
   safe_gen_call(Client, {get_connection, Host, Port}, infinity).
 
-%% @doc Get topic metadata, if topic is 'undefined', will fetch ALL metadata.
+%% @doc Get topic metadata, if topic is `undefined', will fetch ALL metadata.
 -spec get_metadata(client(), all | ?undef | topic()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Client, ?undef) ->
@@ -282,6 +282,7 @@ deregister_consumer(Client, Topic, Partition) ->
 
 %%%_* gen_server callbacks =====================================================
 
+%% @private
 init({BootstrapEndpoints, ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
@@ -293,6 +294,7 @@ init({BootstrapEndpoints, ClientId, Config}) ->
              , workers_tab         = Tab
              }}.
 
+%% @private
 handle_info(init, State0) ->
   Endpoints = State0#state.bootstrap_endpoints,
   State1 = ensure_metadata_connection(State0),
@@ -323,6 +325,7 @@ handle_info(Info, State) ->
                           [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
+%% @private
 handle_call({stop_producer, Topic}, _From, State) ->
   ok = brod_producers_sup:stop_producer(State#state.producers_sup, Topic),
   {reply, ok, State};
@@ -368,6 +371,7 @@ handle_call(stop, _From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+%% @private
 handle_cast({register, Key, Pid}, #state{workers_tab = Tab} = State) ->
   ets:insert(Tab, {Key, Pid}),
   {noreply, State};
@@ -379,9 +383,11 @@ handle_cast(Cast, State) ->
                           [?MODULE, self(), State#state.client_id, Cast]),
   {noreply, State}.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
+%% @private
 terminate(Reason, #state{ client_id     = ClientId
                         , meta_conn     = MetaConn
                         , payload_conns = PayloadConns

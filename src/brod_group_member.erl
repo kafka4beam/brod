@@ -16,29 +16,35 @@
 
 %%%=============================================================================
 %%% @doc
-%%% Implement brod_group_member behaviour callbacks to allow a process act like
-%%% a group member without having to deal with kafka group protocol details.
-%%% A typical work flow:
+%%% Implement `brod_group_member' behaviour callbacks to allow a
+%%% process to act as a group member without having to deal with Kafka
+%%% group protocol details. A typical workflow:
 %%%
 %%% 1. Spawn a group coordinator by calling
-%%%    @see brod_group_coordinator:start_link/6.
-%%% 2. Subscribe to partitions received in the assignemts from
-%%%    @see assignments_received/4. callback.
-%%% 3. Receive messages from subscribed partitions (delivered by the partition
-%%%    workers (the pollers) implemented in brod_consumer);
-%%% 4. Unsubscribe from all previously subscribed partitions when
-%%%    @see assignments_revoked/1. is called.
+%%%    {@link brod_group_coordinator:start_link/6}.
 %%%
-%%% For group members who commit offsets to kafka, they should:
-%%% 1. Call @see brod_group_coordinator:ack/4. to acknowledge sucessfull
+%%% 2. Subscribe to partitions received in the assignments from
+%%%    `assignments_received/4' callback.
+%%%
+%%% 3. Receive messages from the assigned partitions (delivered by
+%%%    the partition workers (the pollers) implemented in `brod_consumer').
+%%%
+%%% 4. Unsubscribe from all previously subscribed partitions when
+%%%    `assignments_revoked/1' is called.
+%%%
+%%% For group members that commit offsets to Kafka, do:
+%%%
+%%% 1. Call {@link brod_group_coordinator:ack/4}. to acknowledge sucessful
 %%%    consumption of the messages. Group coordinator will commit the
-%%%    acknowledged offsets every configured interval.
-%%% 2. Call @see brod_group_coordinator:commit_offsets/1,2.
+%%%    acknowledged offsets at configured interval.
+%%%
+%%% 2. Call {@link brod_group_coordinator:commit_offsets/2}
 %%%    to force an immediate offset commit if necessary.
 %%%
-%%% For group members who manages offsets locally, they should:
-%%% 1. Implement the get_committed_offsets/2 callback.
-%%%    This callback is evaluated everytime when new assignments are received.
+%%% For group members that manage offsets locally, do:
+%%%
+%%% 1. Implement the `get_committed_offsets/2' callback.
+%%%    This callback is evaluated every time when new assignments are received.
 %%% @end
 %%%=============================================================================
 

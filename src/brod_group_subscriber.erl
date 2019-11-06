@@ -21,15 +21,17 @@
 %%% processing.
 %%%
 %%% An overview of what it does behind the scene:
-%%%  1. Start a consumer group coordinator to manage the consumer group states,
-%%%     {@link brod_group_coordinator:start_link/6}.
-%%%  2. Start (if not already started) topic-consumers (pollers) and subscribe
+%%% <ol>
+%%% <li>Start a consumer group coordinator to manage the consumer group states,
+%%%     see {@link brod_group_coordinator:start_link/6}</li>
+%%% <li>Start (if not already started) topic-consumers (pollers) and subscribe
 %%%     to the partition workers when group assignment is received from the
-%%      group leader, @see brod:start_consumer/3.
-%%%  3. Call CallbackModule:handle_message/4 when messages are received from
-%%%     the partition consumers.
-%%%  4. Send acknowledged offsets to group coordinator which will be committed
-%%%     to kafka periodically.
+%%      group leader, see {@link brod:start_consumer/3}</li>
+%%% <li>Call `CallbackModule:handle_message/4' when messages are received from
+%%%     the partition consumers.</li>
+%%% <li>Send acknowledged offsets to group coordinator which will be committed
+%%%     to kafka periodically.</li>
+%%% </ol>
 %%% @end
 %%%=============================================================================
 
@@ -166,27 +168,8 @@
 
 %%%_* APIs =====================================================================
 
-%% @doc Start (link) a group subscriber.
-%% Client:
-%%   Client ID (or pid, but not recommended) of the brod client.
-%% GroupId:
-%%   Consumer group ID which should be unique per kafka cluster
-%% Topics:
-%%   Predefined set of topic names to join the group.
-%%   NOTE: The group leader member will collect topics from all members and
-%%         assign all collected topic-partitions to members in the group.
-%%         i.e. members can join with arbitrary set of topics.
-%% GroupConfig:
-%%   For group coordinator, {@link brod_group_coordinator:start_link/6}
-%% ConsumerConfig:
-%%   For partition consumer, {@link brod_consumer:start_link/4}
-%% CbModule:
-%%   Callback module which should have the callback functions
-%%   implemented for message processing.
-%% CbInitArg:
-%%   The term() that is going to be passed to CbModule:init/1 when
-%%   initializing the subscriber.
-%% @end
+%% @equiv start_link(Client, GroupId, Topics, GroupConfig, ConsumerConfig,
+%%             message, CbModule, CbInitArg)
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
                  brod:group_config(), brod:consumer_config(),
                  module(), term()) -> {ok, pid()} | {error, any()}.
@@ -195,28 +178,35 @@ start_link(Client, GroupId, Topics, GroupConfig,
   start_link(Client, GroupId, Topics, GroupConfig, ConsumerConfig,
              message, CbModule, CbInitArg).
 
+
 %% @doc Start (link) a group subscriber.
-%% Client:
-%%   Client ID (or pid, but not recommended) of the brod client.
-%% GroupId:
-%%   Consumer group ID which should be unique per kafka cluster
-%% Topics:
-%%   Predefined set of topic names to join the group.
+%%
+%% `Client': Client ID (or pid, but not recommended) of the brod client.
+%%
+%% `GroupId': Consumer group ID which should be unique per kafka cluster
+%%
+%% `Topics': Predefined set of topic names to join the group.
+%%
 %%   NOTE: The group leader member will collect topics from all members and
 %%         assign all collected topic-partitions to members in the group.
 %%         i.e. members can join with arbitrary set of topics.
-%% GroupConfig:
-%%   For group coordinator, {@link brod_group_coordinator:start_link/6}
-%% ConsumerConfig:
-%%   For partition consumer, @see brod_consumer:start_link/4
-%% MessageType:
+%%
+%% `GroupConfig': For group coordinator, see
+%%    {@link brod_group_coordinator:start_link/6}
+%%
+%% `ConsumerConfig': For partition consumer, see
+%% {@link brod_consumer:start_link/4}
+%%
+%% `MessageType':
 %%   The type of message that is going to be handled by the callback
-%%   module. Can be either message or message set.
-%% CbModule:
+%%   module. Can be either `message' or `message_set'.
+%%
+%% `CbModule':
 %%   Callback module which should have the callback functions
 %%   implemented for message processing.
-%% CbInitArg:
-%%   The term() that is going to be passed to CbModule:init/1 when
+%%
+%% `CbInitArg':
+%%   The term() that is going to be passed to `CbModule:init/1' when
 %%   initializing the subscriber.
 %% @end
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -229,7 +219,7 @@ start_link(Client, GroupId, Topics, GroupConfig,
           ConsumerConfig, MessageType, CbModule, CbInitArg},
   gen_server:start_link(?MODULE, Args, []).
 
-%% @doc Stop group subscriber, wait for pid DOWN before return.
+%% @doc Stop group subscriber, wait for pid `DOWN' before return.
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),

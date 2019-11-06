@@ -14,12 +14,13 @@
 %%%   limitations under the License.
 %%%
 
-%% @doc The input source of brod-cli pipe command
+%% @private The input source of brod-cli pipe command.
 %% This module implements a process that reads off the bytes
 %% from the data source (either stdin or a file)
 %% and sends the bytes to parent process.
 %% Messages sent to parent process:
-%%   {pipe, self(), [{Ts :: integer(), Key :: binary(), Val :: binary()}]}
+%%
+%% ```{pipe, self(), [{Ts :: integer(), Key :: binary(), Val :: binary()}]}'''
 %% @end
 -module(brod_cli_pipe).
 
@@ -76,7 +77,8 @@
                }).
 
 %% @doc Args explained:
-%% source:   'standard_io' | {file, "path/to/srouce"}
+%%
+%% source:   'standard_io' | {file, "path/to/source"}
 %% kv_deli:  'none' | binary().
 %%           Delimiter bytes for message key and value
 %% msg_deli: binary(). Delimiter between kafka messages

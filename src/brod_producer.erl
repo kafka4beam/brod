@@ -93,8 +93,11 @@
 %%%_* APIs =====================================================================
 
 %% @doc Start (link) a partition producer.
+%%
 %% Possible configs:
-%%   required_acks (optional, default = -1):
+%% <ul>
+%%   <li>`required_acks' (optional, default = -1):
+%%
 %%     How many acknowledgements the kafka broker should receive from the
 %%     clustered replicas before acking producer.
 %%       0: the broker will not send any response
@@ -102,65 +105,83 @@
 %%       1: The leader will wait the data is written to the local log before
 %%          sending a response.
 %%      -1: If it is -1 the broker will block until the message is committed by
-%%          all in sync replicas before acking.
-%%   ack_timeout (optional, default = 10000 ms):
+%%          all in sync replicas before acking.</li>
+%%   <li>`ack_timeout' (optional, default = 10000 ms):
+%%
 %%     Maximum time in milliseconds the broker can await the receipt of the
-%%     number of acknowledgements in RequiredAcks. The timeout is not an exact
+%%     number of acknowledgements in `RequiredAcks'. The timeout is not an exact
 %%     limit on the request time for a few reasons: (1) it does not include
 %%     network latency, (2) the timer begins at the beginning of the processing
 %%     of this request so if many requests are queued due to broker overload
 %%     that wait time will not be included, (3) kafka leader will not terminate
 %%     a local write so if the local write time exceeds this timeout it will
-%%     not be respected.
-%%   partition_buffer_limit(optional, default = 256):
+%%     not be respected.</li>
+%%   <li>`partition_buffer_limit' (optional, default = 256):
+%%
 %%     How many requests (per-partition) can be buffered without blocking the
 %%     caller. The callers are released (by receiving the
 %%     'brod_produce_req_buffered' reply) once the request is taken into buffer
 %%     and after the request has been put on wire, then the caller may expect
 %%     a reply 'brod_produce_req_acked' when the request is accepted by kafka.
-%%   partition_onwire_limit(optional, default = 1):
+%%   </li>
+%%   <li>`partition_onwire_limit' (optional, default = 1):
+%%
 %%     How many message sets (per-partition) can be sent to kafka broker
 %%     asynchronously before receiving ACKs from broker.
+%%
 %%     NOTE: setting a number greater than 1 may cause messages being persisted
-%%           in an order different from the order they were produced.
-%%   max_batch_size (in bytes, optional, default = 1M):
+%%           in an order different from the order they were produced.</li>
+%%   <li>`max_batch_size' (in bytes, optional, default = 1M):
+%%
 %%     In case callers are producing faster than brokers can handle (or
 %%     congestion on wire), try to accumulate small requests into batches
 %%     as much as possible but not exceeding max_batch_size.
+%%
 %%     OBS: If compression is enabled, care should be taken when picking
 %%          the max batch size, because a compressed batch will be produced
 %%          as one message and this message might be larger than
-%%          'max.message.bytes' in kafka config (or topic config)
-%%   max_retries (optional, default = 3):
-%%     If {max_retries, N} is given, the producer retry produce request for
+%%          'max.message.bytes' in kafka config (or topic config)</li>
+%%   <li>`max_retries' (optional, default = 3):
+%%
+%%     If `{max_retries, N}' is given, the producer retry produce request for
 %%     N times before crashing in case of failures like connection being
 %%     shutdown by remote or exceptions received in produce response from kafka.
-%%     The special value N = -1 means 'retry indefinitely'
-%%   retry_backoff_ms (optional, default = 500);
+%%     The special value N = -1 means "retry indefinitely"</li>
+%%   <li>`retry_backoff_ms' (optional, default = 500);
+%%
 %%     Time in milli-seconds to sleep before retry the failed produce request.
-%%   compression (optional, default = no_compression):
-%%     'gzip' or 'snappy' to enable compression
-%%   max_linger_ms (optional, default = 0):
+%%   </li>
+%%   <li>`compression' (optional, default = no_compression):
+%%
+%%     `gzip' or `snappy' to enable compression</li>
+%%   <li>`max_linger_ms' (optional, default = 0):
+%%
 %%     Messages are allowed to 'linger' in buffer for this amount of
 %%     milli-seconds before being sent.
-%%     Definition of 'linger': A message is in 'linger' state when it is allowed
+%%     Definition of 'linger': A message is in "linger" state when it is allowed
 %%     to be sent on-wire, but chosen not to (for better batching).
+%%
 %%     The default value is 0 for 2 reasons:
-%%     1. Backward compatibility (for 2.x releases)
-%%     2. Not to surprise `brod:produce_sync' callers
-%%   max_linger_count (optional, default = 0):
-%%     At most this amount (count not size) of messages are allowed to 'linger'
-%%     in buffer. Messages will be sent regardless of 'linger' age when this
+%%     <ol><li>Backward compatibility (for 2.x releases)</li>
+%%
+%%     <li>Not to surprise `brod:produce_sync' callers</li></ol></li>
+%%   <li>`max_linger_count' (optional, default = 0):
+%%
+%%     At most this amount (count not size) of messages are allowed to "linger"
+%%     in buffer. Messages will be sent regardless of "linger" age when this
 %%     threshold is hit.
+%%
 %%     NOTE: It does not make sense to have this value set larger than
-%%           `partition_buffer_limit'
-%%  produce_req_vsn (optional, default = undefined):
+%%           `partition_buffer_limit'</li>
+%%  <li>`produce_req_vsn' (optional, default = undefined):
+%%
 %%     User determined produce API version to use, discard the API version range
 %%     received from kafka. This is to be used when a topic in newer version
 %%     kafka is configured to store older version message format.
 %%     e.g. When a topic in kafka 0.11 is configured to have message format
 %%     0.10, sending message with headers would result in `unknown_server_error'
-%%     error code.
+%%     error code.</li>
+%% </ul>
 -spec start_link(pid(), topic(), partition(), config()) -> {ok, pid()}.
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
@@ -211,9 +232,9 @@ produce_cb(Pid, Key, Value, AckCb) ->
       {error, {producer_down, Reason}}
   end.
 
-%% @doc Block calling process until it receives an acked reply for the CallRef.
-%% The caller pid of this function must be the caller of produce/3
-%% in which the call reference was created.
+%% @doc Block calling process until it receives an acked reply for the
+%% `CallRef'. The caller pid of this function must be the caller of
+%% `produce/3' in which the call reference was created.
 -spec sync_produce_request(call_ref(), timeout()) ->
         {ok, offset()} | {error, Reason}
           when Reason :: timeout | {producer_down, any()}.
@@ -239,11 +260,13 @@ sync_produce_request(CallRef, Timeout) ->
       {error, timeout}
   end.
 
+%% @doc Stop the process
 -spec stop(pid()) -> ok.
 stop(Pid) -> ok = gen_server:call(Pid, stop).
 
 %%%_* gen_server callbacks =====================================================
 
+%% @private
 init({ClientPid, Topic, Partition, Config}) ->
   erlang:process_flag(trap_exit, true),
   BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
@@ -290,6 +313,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   ok = brod_client:register_producer(ClientPid, Topic, Partition),
   {ok, State}.
 
+%% @private
 handle_info(?DELAYED_SEND_MSG(MsgRef),
             #state{delay_send_ref = {_Tref, MsgRef}} = State0) ->
   State1 = State0#state{delay_send_ref = ?undef},
@@ -373,17 +397,21 @@ handle_info({msg, Pid, #kpro_rsp{ api = produce
 handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
+%% @private
 handle_call(stop, _From, #state{} = State) ->
   {stop, normal, ok, State};
 handle_call(Call, _From, #state{} = State) ->
   {reply, {error, {unsupported_call, Call}}, State}.
 
+%% @private
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
+%% @private
 code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
+%% @private
 terminate(Reason, #state{client_pid = ClientPid
                           , topic = Topic
                           , partition = Partition
