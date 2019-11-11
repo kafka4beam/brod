@@ -15,7 +15,7 @@ EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
 
 ## Make app the default target
 ## To avoid building a release when brod is used as a erlang.mk project's dependency
-app:: vsn-check
+app::
 
 include erlang.mk
 
