@@ -185,5 +185,7 @@
 * 3.9.1
   * Receive pending acks after assignments_revoked is invoked
 * 3.9.2
+  * Fix corrupted package published to hex
+* 3.9.3
   * Remove vsn-check dependency from default Makefile target
     This enables using brod with erlang.mk + hex
