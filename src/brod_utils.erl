@@ -612,6 +612,7 @@ do_acc(Spawn, Fetcher, Offset, Acc, Fun, [Msg | Rest], End, Count) ->
       erlang:raise(C, E, Stack)
   end.
 
+kill_fetcher(undefined) -> ok;
 kill_fetcher({Pid, Mref}) ->
   exit(Pid, kill),
   receive
