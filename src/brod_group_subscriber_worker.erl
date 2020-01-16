@@ -45,12 +45,11 @@
 %%% brod_topic_subscriber callbacks
 %%%===================================================================
 
-init(Topic, StartOpts) ->
+init(_Topic, StartOpts) ->
   #{ cb_module    := CbModule
    , cb_config    := CbConfig
    , partition    := Partition
    , begin_offset := BeginOffset
-   , group_id     := GroupId
    , commit_fun   := CommitFun
    } = StartOpts,
   InitInfo = maps:with( [topic, partition, group_id, commit_fun]
