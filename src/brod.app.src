@@ -7,7 +7,6 @@
   {env,[]},
   {mod, {brod, []}},
   {modules,[]},
-  {maintainers, ["Ivan Dyachkov", "Zaiming Shi"]},
   {licenses, ["Apache License 2.0"]},
   {links, [{"Github", "https://github.com/klarna/brod"}]},
   {build_tools, ["make", "rebar", "rebar3"]},
