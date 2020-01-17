@@ -749,7 +749,18 @@ pp_fmt_struct_value(Indent, [H | _] = Array) when is_list(Array) ->
 pp_fmt_prim([]) -> "[]";
 pp_fmt_prim(N) when is_integer(N) -> integer_to_list(N);
 pp_fmt_prim(A) when is_atom(A) -> atom_to_list(A);
-pp_fmt_prim(S) when is_binary(S) -> S.
+pp_fmt_prim(S) when is_binary(S) ->
+  case is_printable(S) of
+    true -> S;
+    false -> io_lib:format("~w", [S])
+  end.
+
+is_printable(B) when is_binary(B) ->
+  is_printable(unicode:characters_to_list(B, utf8));
+is_printable(S) when is_list(S) ->
+  io_lib:printable_unicode_list(S);
+is_printable(_) ->
+  false.
 
 indent_fmt(true, Indent, Fmt, Args) ->
   io_lib:format(lists:duplicate((Indent - 1) * 2, $\s) ++ "- " ++ Fmt, Args);
