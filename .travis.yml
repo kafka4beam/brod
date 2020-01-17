@@ -7,7 +7,7 @@ services:
 
 # install latest rebar3 because the one travis provides doesn't support cover_export_name option
 before_install:
-  - git clone https://github.com/erlang/rebar3.git && cd rebar3 && git checkout 3.11.1 && ./bootstrap && sudo mv rebar3 /usr/local/bin/ && cd ..
+  - git clone https://github.com/erlang/rebar3.git && cd rebar3 && git checkout 3.13.0 && ./bootstrap && sudo mv rebar3 /usr/local/bin/ && cd ..
   - git clone https://github.com/inaka/elvis.git && cd elvis && rebar3 escriptize && sudo cp _build/default/bin/elvis /usr/bin && cd ..
   - sudo docker info
 
@@ -29,10 +29,10 @@ script:
   - rebar compile
 
   # test with rebar3
-  - make distclean
+  - make clean
   - rebar3 compile
 
-  - make distclean
+  - make clean
   - rebar3 edoc
   - rebar3 xref
   - make brod-cli

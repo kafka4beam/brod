@@ -1,25 +1,6 @@
-KAFKA_VERSION ?= 2.2
-PROJECT = brod
-PROJECT_DESCRIPTION = Kafka client library in Erlang
-PROJECT_VERSION = 3.9.5
+all: compile
 
-DEPS = supervisor3 kafka_protocol
-
-ERLC_OPTS = -Werror +warn_unused_vars +warn_shadow_vars +warn_unused_import +warn_obsolete_guard +debug_info -Dbuild_brod_cli
-
-dep_supervisor3_commit = 1.1.8
-dep_kafka_protocol_commit = 2.3.3
-dep_kafka_protocol = git https://github.com/klarna/kafka_protocol.git $(dep_kafka_protocol_commit)
-
-EDOC_OPTS = preprocess, {macros, [{build_brod_cli, true}]}
-
-## Make app the default target
-## To avoid building a release when brod is used as a erlang.mk project's dependency
-app::
-
-include erlang.mk
-
-compile: vsn-check
+compile:
 	@rebar3 compile
 
 test-env:
@@ -29,18 +10,13 @@ ut:
 	@rebar3 eunit -v --cover_export_name ut-$(KAFKA_VERSION)
 
 # version check, eunit and all common tests
-t: vsn-check ut
+t: ut
 	@rebar3 ct -v --cover_export_name ct-$(KAFKA_VERSION)
 
-vsn-check:
-	@./scripts/vsn-check.sh $(PROJECT_VERSION)
-
-distclean:: rebar-clean
-
-rebar-clean:
+clean:
 	@rebar3 clean
 	@rm -rf _build
-	@rm -rf doc
+	@rm -rf ebin deps doc
 	@rm -f pipe.testdata
 
 hex-publish: distclean
