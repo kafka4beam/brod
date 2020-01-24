@@ -743,7 +743,7 @@ pp_fmt_struct_value(Indent, [H | _] = Array) when is_list(Array) ->
       ];
     false ->
       %% array of primitive values
-      [[pp_fmt_prim(V) || V <- Array], "\n"]
+      [infix([pp_fmt_prim(V) || V <- Array], ","), "\n"]
   end.
 
 pp_fmt_prim([]) -> "[]";

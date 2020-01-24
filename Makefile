@@ -58,8 +58,7 @@ $(INTEGRATION_CTS:%=it-%):
 
 ## build escript and a releas, and copy escript to release bin dir
 brod-cli:
-	@rebar3 as brod_cli escriptize
-	@rebar3 as brod_cli release
+	@rebar3 as brod_cli do compile,escriptize,release
 	@cp _build/brod_cli/bin/brod_cli _build/brod_cli/rel/brod/bin/
 
 cover:
