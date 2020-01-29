@@ -402,7 +402,7 @@ terminate(Reason, #state{ bootstrap = Bootstrap
     true -> kpro:close_connection(Connection);
     false -> ok
   end,
-  %% write a log if it's not shared connection
+  %% write a log if it's not a normal reason
   IsNormal orelse error_logger:error_msg("Consumer ~s-~w terminate reason: ~p",
                                          [Topic, Partition, Reason]),
   ok.

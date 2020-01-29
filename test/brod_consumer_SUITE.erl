@@ -539,7 +539,7 @@ t_consumer_connection_restart(Config) ->
   ?assert(is_process_alive(NewConnPid)), %% managed by brod_client
   ok.
 
-%% @doc same as t_consumer_connection_restart_2,
+%% @doc same as t_consumer_connection_restart,
 %% but test with brod_consumer started standalone.
 %% i.e. not under brod_client's management
 t_consumer_connection_restart_2(standalone_consumer) ->
@@ -601,10 +601,15 @@ t_consumer_connection_restart_2(Config) ->
   {links, Links} = process_info(ConsumerPid, links),
   ?assert(lists:member(NewConnPid, Links)),
   ok = brod_consumer:stop(ConsumerPid),
-  ?WAIT_ONLY({'DOWN', Ref1, process, _, Reason},
-             ?assertEqual(normal, Reason)),
-  ?WAIT_ONLY({'DOWN', Ref2, process, _, Reason},
-             ?assertEqual(normal, Reason)),
+  Wait = fun() ->
+             ?WAIT_ONLY({'DOWN', Ref, process, _, Reason},
+                        begin
+                          ?assertEqual(normal, Reason),
+                          ?assert(Ref =:= Ref1 orelse Ref =:= Ref2)
+                        end)
+         end,
+  Wait(),
+  Wait(),
   ok.
 
 %% @doc Data stream should resume after re-subscribe starting from the
