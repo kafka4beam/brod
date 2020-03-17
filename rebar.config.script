@@ -18,7 +18,7 @@ Profiles =
                         ]}
              ]}]},
     {test, [
-      {deps, [meck, proper, jsone, DocoptDep, Snabbkaffe]},
+      {deps, [meck, proper, jsone, DocoptDep, Snabbkaffe, docker_compose_cth]},
       {erl_opts, [{d, build_brod_cli}]}
     ]}
   ]},
