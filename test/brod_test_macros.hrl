@@ -10,18 +10,17 @@
 %% Macros
 %%====================================================================
 
--define(CLIENT_ID, brod_test_client).
 -define(KAFKA_HOST, "localhost").
 -define(KAFKA_PORT, 9092).
 
 -define(topic(TestCase, N),
         list_to_binary(atom_to_list(TestCase) ++ integer_to_list(N))).
--define(topic(TestCase), ?topic(TestCase, 1)).
--define(topic, ?topic(?FUNCTION_NAME)).
+-define(topic(N), ?topic(?FUNCTION_NAME, N)).
+-define(topic, ?topic(1)).
 
--define(group_id(TestCase),
+-define(group_id(TestCase, N),
         list_to_binary(atom_to_list(TestCase) ++ "_grp" ++ integer_to_list(N))).
--define(group_id(TestCase), ?group_id(TestCase, 1)).
--define(group_id, ?group_id(?FUNCTION_NAME)).
+-define(group_id(N), ?group_id(?FUNCTION_NAME, N)).
+-define(group_id, ?group_id(1)).
 
 -endif.

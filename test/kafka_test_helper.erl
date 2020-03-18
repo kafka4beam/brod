@@ -6,7 +6,7 @@
         , produce/2
         , produce/3
         , produce/4
-        , create_topic/2
+        , create_topic/3
         , get_acked_offsets/1
         , check_committed_offsets/2
         , wait_n_messages/3
@@ -15,29 +15,29 @@
         , consumer_config/0
         ]).
 
+-define(CLIENT_ID, brod_test_client).
 -include("brod_test_macros.hrl").
 
 init_per_suite(Config) ->
-  {ok, CWD} = file:get_cwd(),
   {ok, _} = application:ensure_all_started(brod),
   [ {proper_timeout, 10000}
-  , {ct_hooks, [docker_compose_cth]}
   | Config].
 
 common_init_per_testcase(Module, Case, Config) ->
   %% Create a client and a producer for putting test data to Kafka.
   %% By default name of the test topic is equal to the name of
   %% testcase.
+  {ok, _} = application:ensure_all_started(brod),
   Topics = try Module:Case(topics) of
                L -> L
            catch
-             _:_ -> [{?topic(Case), 1}]
+             _:_ -> [{?topic(Case, 1), 1}]
            end,
-  prepare_topics(Topics),
+  [prepare_topic(I) || I <- Topics],
   Config.
 
 common_end_per_testcase(Case, Config) ->
-  ok = brod:stop_client(?CLIENT_ID),
+  brod:stop_client(?CLIENT_ID),
   application:stop(brod).
 
 produce(TopicPartition, Value) ->
@@ -64,43 +64,23 @@ produce({Topic, Partition}, Key, Value, Headers) ->
 prepare_topic(Topic) when is_binary(Topic) ->
   prepare_topic({Topic, 1});
 prepare_topic({Topic, NumPartitions}) ->
-  ClientId       = ?CLIENT_ID,
-  BootstrapHosts = [{?KAFKA_HOST, ?KAFKA_PORT}],
-  ok = create_topic(Topic, NumPartitions),
-  ok = brod:start_client(BootstrapHosts, ClientId, []),
-  ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []).
+  prepare_topic({Topic, NumPartitions, 2});
+prepare_topic({Topic, NumPartitions, NumReplicas}) ->
+  ok = create_topic(Topic, NumPartitions, NumReplicas),
+  case brod:start_client(bootstrap_hosts(), ?CLIENT_ID, []) of
+    ok -> ok;
+    {error, already_started} -> ok
+  end,
+  ok = brod:start_producer(?CLIENT_ID, Topic, _ProducerConfig = []).
 
-create_topic(Name, NumPartitions) ->
-  ?log(info, "Creating Kafka topic: ~p", [Name]),
-  ConfigEntries = [ {config_name, "max.message.bytes"}
-                  , {config_value, "20485760"} % ~20 MB
-                  ],
-  TopicFields = [ {topic, Name}
-                , {num_partitions, NumPartitions}
-                , {replication_factor, 1}
-                , {replica_assignment, []}
-                , {config_entries, [ConfigEntries]}
-                ],
-  Req = kpro_req_lib:create_topics( 0
-                                  , [TopicFields]
-                                  , #{timeout => 1000}
-                                  ),
-  ?retry(_PollInterval = 2000, _NRetries = 120,
-         begin
-           {ok, Conn} = kpro:connect_any([{?KAFKA_HOST, ?KAFKA_PORT}], []),
-           try
-             {ok, Result} = kpro:request_sync(Conn, Req, 1000),
-             ?log(info, "KPRO response: ~p", [Result]),
-             #{topic_errors := [#{error_code := TopicError}]} = Result#kpro_rsp.msg,
-             case TopicError of
-               no_error -> ok;
-               topic_already_exists -> ok
-             end
-           after
-             kpro:close_connection(Conn)
-           end
-         end),
-  ok.
+create_topic(Name, NumPartitions, NumReplicas) ->
+  FMT = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
+        " --create --partitions ~p --replication-factor ~p"
+        " --topic ~s --config min.insync.replicas=1",
+  CMD = lists:flatten(io_lib:format(FMT, [NumPartitions, NumReplicas, Name])),
+  CMD1 = "docker exec kafka-1 bash -c '" ++ CMD ++ "'",
+  Result = os:cmd(CMD1),
+  ?log(notice, "Creating Kafka topic: ~s~nResult: ~p", [CMD1, Result]).
 
 -spec get_acked_offsets(brod:group_id()) -> #{brod:partition() => brod:offset()}.
 get_acked_offsets(GroupId) ->
@@ -158,4 +138,8 @@ consumer_config() ->
   [ {max_wait_time, 500}
   , {sleep_timeout, 100}
   , {max_bytes, 1}
+  ].
+
+bootstrap_hosts() ->
+  [ {"localhost", 9092}
   ].
