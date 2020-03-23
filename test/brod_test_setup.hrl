@@ -10,6 +10,8 @@
                            , wait_n_messages/2
                            , wait_n_messages/3
                            , consumer_config/0
+                           , client_config/0
+                           , bootstrap_hosts/0
                            ]).
 
 -include("brod_test_macros.hrl").

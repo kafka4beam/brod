@@ -12,12 +12,13 @@
         , wait_n_messages/3
         , wait_n_messages/2
         , consumer_config/0
+        , client_config/0
+        , bootstrap_hosts/0
         ]).
 
 -include("brod_test_macros.hrl").
 
 init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
   [ {proper_timeout, 10000}
   | Config].
 
@@ -62,6 +63,12 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                                              }]
                                          ),
   Offset.
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _          -> []
+  end.
 
 prepare_topic(Topic) when is_binary(Topic) ->
   prepare_topic({Topic, 1});

@@ -19,9 +19,8 @@
 %% Test framework
 -export([ init_per_suite/1
         , end_per_suite/1
-        , init_per_testcase/2
-        , end_per_testcase/2
-        , all/0
+        , common_init_per_testcase/2
+        , common_end_per_testcase/2
         , suite/0
         ]).
 
@@ -29,65 +28,58 @@
 -export([ t_set_then_reset/1
         ]).
 
-
--include_lib("common_test/include/ct.hrl").
--include_lib("eunit/include/eunit.hrl").
+-include("brod_test_setup.hrl").
+-include_lib("snabbkaffe/include/ct_boilerplate.hrl").
 -include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
--define(BROKERS, [{localhost, 9092}]).
--define(TOPIC1, <<"brod-group-subscriber-1">>).
--define(TOPIC2, <<"brod-group-subscriber-2">>).
--define(TOPIC3, <<"brod-group-subscriber-3">>).
+
 -define(GROUP_ID, list_to_binary(atom_to_list(?MODULE))).
 
-suite() -> [{timetrap, {seconds, 30}}].
+
+%%%_* ct callbacks =============================================================
+
+suite() -> [{timetrap, {seconds, 60}}].
 
 init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
-  Config.
+  kafka_test_helper:init_per_suite(Config).
 
 end_per_suite(_Config) -> ok.
 
-init_per_testcase(_Case, Config) ->
-  ClientId       = ?CLIENT_ID,
-  BootstrapHosts = ?BROKERS,
-  ClientConfig =
-    case os:getenv("KAFKA_VERSION") of
-      "0.9" ++ _ -> [{query_api_versions, false}];
-      _ -> []
-    end,
-  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
-  [{client_config, ClientConfig} | Config].
+common_init_per_testcase(Case, Config0) ->
+  Config = kafka_test_helper:common_init_per_testcase(?MODULE, Case, Config0),
+  ok = brod:start_client(bootstrap_hosts(), ?CLIENT_ID, client_config()),
+  Config.
 
-end_per_testcase(_Case, Config) when is_list(Config) ->
-  ok = brod:stop_client(?CLIENT_ID),
-  ok.
-
-all() ->
-  [F || {F, _A} <- module_info(exports),
-        case atom_to_list(F) of
-          "t_" ++ _ -> true;
-          _         -> false
-        end].
+common_end_per_testcase(Case, Config) ->
+  brod:stop_client(?CLIENT_ID),
+  kafka_test_helper:common_end_per_testcase(Case, Config).
 
 %%%_* Test cases ===============================================================
 
+t_set_then_reset(topics) ->
+  %% Create 1 topic with 3 partitions:
+  [{?topic(1), 3}];
 t_set_then_reset(Config) when is_list(Config) ->
-  ClientConfig = proplists:get_value(client_config, Config),
-  Topic = <<"brod-group-subscriber-1">>,
+  Topic = ?topic(1),
   Partitions = [0, 1, 2],
   Offsets0 = [{0, 0}, {1, 0}, {2, 0}],
   ok = do_commit(Topic, Offsets0),
   {ok, Rsp0} =
-    brod_utils:fetch_committed_offsets(?BROKERS, ClientConfig,
-                                       ?GROUP_ID, [{Topic, Partitions}]),
+    brod_utils:fetch_committed_offsets( bootstrap_hosts()
+                                      , client_config()
+                                      , ?GROUP_ID
+                                      , [{Topic, Partitions}]
+                                      ),
   ok = assert_offsets([{Topic, Offsets0}], Rsp0),
   Offsets1 = [{0, 1}, {1, 1}, {2, 1}],
   ok = do_commit(Topic, Offsets1),
   {ok, Rsp1} =
-    brod_utils:fetch_committed_offsets(?BROKERS, ClientConfig,
-                                       ?GROUP_ID, [{Topic, Partitions}]),
+    brod_utils:fetch_committed_offsets( bootstrap_hosts()
+                                      , client_config()
+                                      , ?GROUP_ID
+                                      , [{Topic, Partitions}]
+                                      ),
   ok = assert_offsets([{Topic, Offsets1}], Rsp1),
   ok.
 

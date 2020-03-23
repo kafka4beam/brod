@@ -103,7 +103,7 @@ end_per_group(_Group, _Config) ->
 
 common_init_per_testcase(Case, Config0) ->
   Config = kafka_test_helper:common_init_per_testcase(?MODULE, Case, Config0),
-  BootstrapHosts = [{"localhost", 9092}],
+  BootstrapHosts = bootstrap_hosts(),
   ClientConfig   = client_config(),
   ok = brod:start_client(BootstrapHosts, ?CLIENT_ID, ClientConfig),
   Config.
@@ -497,12 +497,6 @@ handled_messages(Trace) ->
 rand_uniform(Max) ->
   {_, _, Micro} = os:timestamp(),
   Micro rem Max.
-
-client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
 
 payloads(Config) ->
   [<<I>> || I <- lists:seq(1, ?config(max_seqno))].
