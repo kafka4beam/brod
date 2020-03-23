@@ -17,6 +17,7 @@
         ]).
 
 -include("brod_test_macros.hrl").
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 init_per_suite(Config) ->
   [ {proper_timeout, 10000}
@@ -28,7 +29,7 @@ common_init_per_testcase(Module, Case, Config) ->
   %% testcase.
   {ok, _} = application:ensure_all_started(brod),
   catch brod:stop_client(?TEST_CLIENT_ID),
-  ok = brod:start_client(bootstrap_hosts(), ?TEST_CLIENT_ID, []),
+  ok = brod:start_client(bootstrap_hosts(), ?TEST_CLIENT_ID, client_config()),
   Topics = try Module:Case(topics) of
                L -> L
            catch
