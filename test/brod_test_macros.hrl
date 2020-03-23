@@ -10,6 +10,8 @@
 %% Macros
 %%====================================================================
 
+-define(TEST_CLIENT_ID, brod_test_client).
+
 -define(KAFKA_HOST, "localhost").
 -define(KAFKA_PORT, 9092).
 

@@ -11,11 +11,9 @@
         , check_committed_offsets/2
         , wait_n_messages/3
         , wait_n_messages/2
-        , wait_for_port/2
         , consumer_config/0
         ]).
 
--define(CLIENT_ID, brod_test_client).
 -include("brod_test_macros.hrl").
 
 init_per_suite(Config) ->
@@ -28,6 +26,10 @@ common_init_per_testcase(Module, Case, Config) ->
   %% By default name of the test topic is equal to the name of
   %% testcase.
   {ok, _} = application:ensure_all_started(brod),
+  case brod:start_client(bootstrap_hosts(), ?TEST_CLIENT_ID, []) of
+    ok -> ok;
+    {error, already_started} -> ok
+  end,
   Topics = try Module:Case(topics) of
                L -> L
            catch
@@ -37,8 +39,7 @@ common_init_per_testcase(Module, Case, Config) ->
   Config.
 
 common_end_per_testcase(Case, Config) ->
-  brod:stop_client(?CLIENT_ID),
-  application:stop(brod).
+  brod:stop_client(?TEST_CLIENT_ID).
 
 produce(TopicPartition, Value) ->
   produce(TopicPartition, <<>>, Value).
@@ -53,7 +54,7 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                            , value     => Value
                            , headers   => Headers
                            }),
-  {ok, Offset} = brod:produce_sync_offset( ?CLIENT_ID
+  {ok, Offset} = brod:produce_sync_offset( ?TEST_CLIENT_ID
                                          , Topic
                                          , Partition
                                          , <<>>
@@ -66,26 +67,37 @@ prepare_topic(Topic) when is_binary(Topic) ->
 prepare_topic({Topic, NumPartitions}) ->
   prepare_topic({Topic, NumPartitions, 2});
 prepare_topic({Topic, NumPartitions, NumReplicas}) ->
-  ok = create_topic(Topic, NumPartitions, NumReplicas),
-  case brod:start_client(bootstrap_hosts(), ?CLIENT_ID, []) of
-    ok -> ok;
-    {error, already_started} -> ok
-  end,
-  ok = brod:start_producer(?CLIENT_ID, Topic, _ProducerConfig = []).
+  delete_topic(Topic),
+  0 = create_topic(Topic, NumPartitions, NumReplicas),
+  ok = brod:start_producer(?TEST_CLIENT_ID, Topic, _ProducerConfig = []).
+
+delete_topic(Name) ->
+  Delete = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
+    " --delete --topic ~s",
+  exec_in_kafka_container(Delete, [Name]).
 
 create_topic(Name, NumPartitions, NumReplicas) ->
-  FMT = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
-        " --create --partitions ~p --replication-factor ~p"
-        " --topic ~s --config min.insync.replicas=1",
-  CMD = lists:flatten(io_lib:format(FMT, [NumPartitions, NumReplicas, Name])),
-  CMD1 = "docker exec kafka-1 bash -c '" ++ CMD ++ "'",
-  Result = os:cmd(CMD1),
-  ?log(notice, "Creating Kafka topic: ~s~nResult: ~p", [CMD1, Result]).
+  Create = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
+    " --create --partitions ~p --replication-factor ~p"
+    " --topic ~s --config min.insync.replicas=1",
+  exec_in_kafka_container(Create, [NumPartitions, NumReplicas, Name]).
+
+exec_in_kafka_container(FMT, Args) ->
+  CMD0 = lists:flatten(io_lib:format(FMT, Args)),
+  CMD = "docker exec kafka-1 bash -c '" ++ CMD0 ++ "'",
+  Port = open_port({spawn, CMD}, [exit_status]),
+  ?log(notice, "Running ~s~nin kafka container", [CMD0]),
+  receive
+    {Port, {exit_status, ExitStatus}} ->
+      ExitStatus
+  after 20000 ->
+      error({timeout, FMT, Args})
+  end.
 
 -spec get_acked_offsets(brod:group_id()) -> #{brod:partition() => brod:offset()}.
 get_acked_offsets(GroupId) ->
   {ok, [#{partition_responses := Resp}]} =
-    brod:fetch_committed_offsets(?CLIENT_ID, GroupId),
+    brod:fetch_committed_offsets(?TEST_CLIENT_ID, GroupId),
   Fun = fun(#{partition := P, offset := O}, Acc) ->
             Acc #{P => O}
         end,
@@ -122,15 +134,6 @@ wait_n_messages(TestGroupId, Expected, NRetries) ->
 
 wait_n_messages(TestGroupId, NMessages) ->
   wait_n_messages(TestGroupId, NMessages, 30).
-
--spec wait_for_port(string(), non_neg_integer()) -> ok.
-wait_for_port(Host, Port) ->
-  ?retry(1000, 10,
-         begin
-           {ok, Sock} = gen_tcp:connect(Host, Port, []),
-           gen_tcp:close(Sock),
-           ok
-         end).
 
 consumer_config() ->
   %% Makes brod restart faster, this will hopefully shave off some
