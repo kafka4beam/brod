@@ -17,12 +17,12 @@
 %% @private
 -module(brod_topic_subscriber_SUITE).
 
+
 %% Test framework
 -export([ init_per_suite/1
         , end_per_suite/1
-        , init_per_testcase/2
-        , end_per_testcase/2
-        , all/0
+        , common_init_per_testcase/2
+        , common_end_per_testcase/2
         , suite/0
         ]).
 
@@ -39,46 +39,30 @@
         , t_begin_offset/1
         ]).
 
-
--include_lib("common_test/include/ct.hrl").
--include_lib("eunit/include/eunit.hrl").
+-include("brod_test_setup.hrl").
+-include_lib("snabbkaffe/include/ct_boilerplate.hrl").
 -include("brod.hrl").
 
 -define(CLIENT_ID, ?MODULE).
--define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
--define(BOOTSTRAP_HOSTS, [{"localhost", 9092}]).
 
 %%%_* ct callbacks =============================================================
 
-suite() -> [{timetrap, {seconds, 30}}].
+suite() -> [{timetrap, {seconds, 60}}].
 
 init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
-  Config.
+  kafka_test_helper:init_per_suite(Config).
 
 end_per_suite(_Config) -> ok.
 
-init_per_testcase(Case, Config) ->
-  ct:pal("=== ~p begin ===", [Case]),
-  ClientId       = ?CLIENT_ID,
-  ClientConfig   = client_config(),
-  Topic          = ?TOPIC,
-  ok = brod_demo_topic_subscriber:delete_commit_history(?TOPIC),
-  ok = brod:start_client(?BOOTSTRAP_HOSTS, ClientId, ClientConfig),
-  ok = brod:start_producer(ClientId, Topic, _ProducerConfig = []),
+common_init_per_testcase(Case, Config0) ->
+  ok = brod_demo_topic_subscriber:delete_commit_history(?topic(Case, 1)),
+  Config = kafka_test_helper:common_init_per_testcase(?MODULE, Case, Config0),
+  ok = brod:start_client(bootstrap_hosts(), ?CLIENT_ID, client_config()),
   Config.
 
-end_per_testcase(Case, Config) when is_list(Config) ->
-  ok = brod:stop_client(?CLIENT_ID),
-  ct:pal("=== ~p end ===", [Case]),
-  ok.
-
-all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
-
+common_end_per_testcase(Case, Config) ->
+  brod:stop_client(?CLIENT_ID),
+  kafka_test_helper:common_end_per_testcase(Case, Config).
 
 %%%_* Topic subscriber callbacks ===============================================
 
@@ -162,12 +146,12 @@ t_async_acks(Config) when is_list(Config) ->
   InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
   Partition = 0,
   {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?TOPIC, ConsumerConfig,
+    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
       Value = integer_to_binary(I),
-      ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, Partition, <<>>, Value)
+      produce({?topic, Partition}, Value)
     end,
   RecvFun =
     fun F(Timeout, Acc) ->
@@ -182,7 +166,7 @@ t_async_acks(Config) when is_list(Config) ->
         Acc
       end
     end,
-  ok = SendFun(0),
+  SendFun(0),
   %% wait at most 2 seconds to receive the first message
   %% it may or may not receive the first message (0) depending on when
   %% the consumers starts polling --- before or after the first message
@@ -209,9 +193,7 @@ t_begin_offset(Config) when is_list(Config) ->
   SendFun =
     fun(I) ->
       Value = integer_to_binary(I),
-      {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC,
-                                              Partition, <<>>, Value),
-      Offset
+      produce({?topic, Partition}, Value)
     end,
   RecvFun =
     fun F(Pid, Timeout, Acc) ->
@@ -233,7 +215,7 @@ t_begin_offset(Config) when is_list(Config) ->
   InitArgs = {CaseRef, CasePid, _IsAsyncAck = true,
               _ConsumerOffsets = [{0, Offset1}]},
   {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?TOPIC, ConsumerConfig,
+    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                      ?MODULE, InitArgs),
   ?assertEqual([{Offset2, 333}], RecvFun(SubscriberPid, 5000, [])),
   ok = brod_topic_subscriber:stop(SubscriberPid),
@@ -250,11 +232,11 @@ t_consumer_crash(Config) when is_list(Config) ->
   InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
   Partition = 0,
   {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?TOPIC, ConsumerConfig,
+    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                      ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
-        ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, Partition, <<>>, <<I>>)
+        produce({?topic, Partition}, <<I>>)
     end,
   ReceiveFun =
     fun F(MaxI, Acc) ->
@@ -280,7 +262,7 @@ t_consumer_crash(Config) when is_list(Config) ->
   %% do a sync request to the subscriber, so that we know it has
   %% processed the ack, then kill the brod_consumer process
   sys:get_state(SubscriberPid),
-  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC, Partition),
+  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?topic, Partition),
   Mon = monitor(process, ConsumerPid),
   exit(ConsumerPid, kill),
   receive {'DOWN', Mon, process, ConsumerPid, killed} -> ok
@@ -298,14 +280,6 @@ t_consumer_crash(Config) when is_list(Config) ->
     {CaseRef, Partition, Offset, Value} ->
       ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
   after 0 -> ok
-  end.
-
-%%%_* Help funtions ============================================================
-
-client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
   end.
 
 %%%_* Emacs ====================================================================
