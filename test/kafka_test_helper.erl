@@ -58,7 +58,10 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                                          , Topic
                                          , Partition
                                          , <<>>
-                                         , [#{value => Value, key => Key, headers => Headers}]
+                                         , [#{ value => Value
+                                             , key => Key
+                                             , headers => Headers
+                                             }]
                                          ),
   Offset.
 
@@ -94,7 +97,8 @@ exec_in_kafka_container(FMT, Args) ->
       error({timeout, FMT, Args})
   end.
 
--spec get_acked_offsets(brod:group_id()) -> #{brod:partition() => brod:offset()}.
+-spec get_acked_offsets(brod:group_id()) ->
+                           #{brod:partition() => brod:offset()}.
 get_acked_offsets(GroupId) ->
   {ok, [#{partition_responses := Resp}]} =
     brod:fetch_committed_offsets(?TEST_CLIENT_ID, GroupId),
@@ -112,7 +116,8 @@ check_committed_offsets(GroupId, Offsets) ->
                      %% rather than _last processed_. And this is
                      %% confusing.
                      ?assertEqual( Offset + 1
-                                 , maps:get(TopicPartition, CommittedOffsets, undefined)
+                                 , maps:get( TopicPartition, CommittedOffsets
+                                           , undefined)
                                  )
                  end
                , Offsets
@@ -126,7 +131,8 @@ wait_n_messages(TestGroupId, Expected, NRetries) ->
            Offsets = get_acked_offsets(TestGroupId),
            NMessages = lists:sum(maps:values(Offsets)),
            ?log( notice
-               , "Number of messages processed by consumer group: ~p; total: ~p/~p"
+               , "Number of messages processed by consumer group: ~p; "
+                 "total: ~p/~p"
                , [Offsets, NMessages, Expected]
                ),
            ?assert(NMessages >= Expected)

@@ -109,6 +109,7 @@ common_init_per_testcase(Case, Config0) ->
   Config.
 
 common_end_per_testcase(Case, Config) ->
+  brod:stop_client(?CLIENT_ID),
   kafka_test_helper:common_end_per_testcase(Case, Config).
 
 %%%_* Group subscriber callbacks ===============================================
@@ -522,6 +523,7 @@ start_subscriber(Config, Topics, InitArgs) ->
                           , {sleep_timeout, 0}
                           , {max_wait_time, 100}
                           , {partition_restart_delay_seconds, 1}
+                          , {begin_offset, earliest}
                           ],
   GroupConfig = proplists:get_value( group_subscriber_config
                                    , Config
@@ -535,7 +537,7 @@ start_subscriber(Config, Topics, InitArgs) ->
 
 start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
   GroupId = case ?config(group_id) of
-              undefined -> ?GROUP_ID;
+              undefined -> ?group_id;
               A         -> A
             end,
   {ok, SubscriberPid} =
