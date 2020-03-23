@@ -22,6 +22,7 @@
         , commit_offsets/1
         , commit_offsets/2
         , start_link/6
+        , update_topics/2
         ]).
 
 -export([ code_change/3
@@ -286,6 +287,12 @@ commit_offsets(CoordinatorPid, Offsets0) ->
       {error, timeout}
   end.
 
+%% @doc Update the list of topics the brod_group_coordinator follow which
+%% triggers a join group rebalance
+-spec update_topics(pid(), [brod:topic()]) -> ok
+update_topics(CoordinatorPid, Topics) ->
+  CoordinatorPid ! {topics, Topics},
+  ok.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -325,6 +332,10 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           },
   {ok, State}.
 
+handle_info({topics, Topics}, State) ->
+  NewState0 = State#state{ topics = Topics},
+  {ok, NewState1} = stabilize(NewState0, 0, topics),
+  {noreply, NewState1}.
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
