@@ -52,6 +52,7 @@
         , t_assign_partitions_handles_updating_state/1
         ]).
 
+-define(MESSAGE_TIMEOUT, 30000).
 
 -include_lib("snabbkaffe/include/ct_boilerplate.hrl").
 -include("brod.hrl").
@@ -66,7 +67,7 @@
 
 -define(wait_message(Topic, Partition, Value),
         ?block_until( ?handled_message(Topic, Partition, Value)
-                    , 20000, infinity
+                    , ?MESSAGE_TIMEOUT, infinity
                     )).
 
 %%%_* ct callbacks =============================================================
@@ -328,6 +329,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
       ok = brod:produce_sync(?TEST_CLIENT_ID, Topic, Partitioner, <<>>, Value)
     end,
   L = payloads(Config),
+  LastMsg = lists:last(L),
   ?check_trace(
      #{ timeout => 5000 },
      %% Run stage:
@@ -335,7 +337,8 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
        {ok, SubscriberPid1} = start_subscriber(Config, [Topic1], InitArgs),
        {ok, SubscriberPid2} = start_subscriber(Config, [Topic2], InitArgs),
        %% Send messages to random partitions:
-       lists:foreach(SendFun, L)
+       lists:foreach(SendFun, L),
+       ?wait_message(_, _, LastMsg)
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
