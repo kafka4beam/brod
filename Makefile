@@ -26,12 +26,6 @@ hex-publish: distclean
 ## tests that require kafka running at localhost
 INTEGRATION_CTS = brod_cg_commits brod_client brod_compression brod_consumer brod_producer brod_group_subscriber brod_topic_subscriber brod
 
-## integration tests
-it: ut $(INTEGRATION_CTS:%=it-%)
-
-$(INTEGRATION_CTS:%=it-%):
-	@rebar3 ct -v --suite=test/$(subst it-,,$@)_SUITE --cover_export_name $@-$(KAFKA_VERSION)
-
 ## build escript and a releas, and copy escript to release bin dir
 brod-cli:
 	@rebar3 as brod_cli do compile,escriptize,release
