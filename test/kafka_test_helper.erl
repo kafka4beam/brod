@@ -65,6 +65,7 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                                              , headers => Headers
                                              }]
                                          ),
+  ?log(notice, "Produced at ~p ~p, offset: ~p", [Topic, Partition, Offset]),
   Offset.
 
 payloads(Config) ->
@@ -75,7 +76,8 @@ payloads(Config) ->
 produce_payloads(Topic, Partition, Config) ->
   Payloads = payloads(Config),
   ?log(notice, "Producing payloads to ~p", [{Topic, Partition}]),
-  LastOffset = lists:last([produce({Topic, Partition}, I) + 1 || I <- payloads(Config)]),
+  L = [produce({Topic, Partition}, I) + 1 || I <- payloads(Config)],
+  LastOffset = lists:last(L),
   {LastOffset, Payloads}.
 
 client_config() ->
@@ -114,7 +116,7 @@ exec_in_kafka_container(FMT, Args) ->
 collect_port_output(Port, CMD) ->
   receive
     {Port, {data, Str}} ->
-      ?log(info, "~s", [Str]),
+      ?log(notice, "~s", [Str]),
       collect_port_output(Port, CMD);
     {Port, {exit_status, ExitStatus}} ->
       ExitStatus

@@ -248,9 +248,9 @@ t_async_acks(Config) when is_list(Config) ->
      #{ timeout => Timeout },
      %% Run stage:
      begin
-       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
        %% Produce some messages into the topic:
        {_, L} = produce_payloads(Topic, Partition, Config),
+       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
        %% And ack/commit them asynchronously:
        [begin
           {ok, #{offset := Offset}} = ?wait_message(Topic, Partition, I, _),
@@ -360,11 +360,11 @@ t_2_members_one_partition(Config) when is_list(Config) ->
   ?check_trace(
      %% Run stage:
      begin
+       %% Send messages:
+       {LastOffset, L} = produce_payloads(Topic, 0, Config),
        %% Start two subscribers competing for the partition:
        {ok, SubscriberPid1} = start_subscriber(Config, [Topic], InitArgs),
        {ok, SubscriberPid2} = start_subscriber(Config, [Topic], InitArgs),
-       %% Send messages:
-       {LastOffset, L} = produce_payloads(Topic, 0, Config),
        ?wait_message(_, _, _, LastOffset),
        L
      end,
