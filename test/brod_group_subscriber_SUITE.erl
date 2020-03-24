@@ -111,9 +111,18 @@ common_init_per_testcase(Case, Config0) ->
   Config.
 
 common_end_per_testcase(Case, Config) ->
-  catch unlink(whereis(?CLIENT_ID)),
+  %% Clean up stuff while trying not to be killed by brod
+  process_flag(trap_exit, true),
   catch brod:stop_client(?CLIENT_ID),
-  kafka_test_helper:common_end_per_testcase(Case, Config).
+  kafka_test_helper:common_end_per_testcase(Case, Config),
+  receive
+    {'EXIT', From, Reason} ->
+      ?log(warning, "Refusing to become collateral damage."
+                    " Offender: ~p Reason: ~p",
+           [From, Reason])
+  after 0 ->
+      ok
+  end.
 
 %%%_* Group subscriber callbacks ===============================================
 
