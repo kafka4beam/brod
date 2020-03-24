@@ -94,7 +94,7 @@ create_topic(Name, NumPartitions, NumReplicas) ->
 exec_in_kafka_container(FMT, Args) ->
   CMD0 = lists:flatten(io_lib:format(FMT, Args)),
   CMD = "docker exec kafka-1 bash -c '" ++ CMD0 ++ "'",
-  Port = open_port({spawn, CMD}, [exit_status]),
+  Port = open_port({spawn, CMD}, [exit_status, stderr_to_stdout]),
   ?log(notice, "Running ~s~nin kafka container", [CMD0]),
   collect_port_output(Port, CMD).
 
