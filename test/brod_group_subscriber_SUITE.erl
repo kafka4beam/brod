@@ -504,6 +504,7 @@ payloads(Config) ->
 %% Produce binaries to the topic and return offset of the last message:
 produce_payloads(Topic, Partition, Config) ->
   Payloads = payloads(Config),
+  ?log(notice, "Producing payloads to ~p", [{Topic, Partition}]),
   [produce({Topic, Partition}, I) + 1 || I <- payloads(Config)],
   Payloads.
 
