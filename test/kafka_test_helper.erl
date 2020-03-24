@@ -30,7 +30,6 @@ common_init_per_testcase(Module, Case, Config) ->
   %% By default name of the test topic is equal to the name of
   %% testcase.
   {ok, _} = application:ensure_all_started(brod),
-  catch brod:stop_client(?TEST_CLIENT_ID),
   ok = brod:start_client(bootstrap_hosts(), ?TEST_CLIENT_ID, client_config()),
   Topics = try Module:Case(topics) of
                L -> L
@@ -41,6 +40,7 @@ common_init_per_testcase(Module, Case, Config) ->
   Config.
 
 common_end_per_testcase(Case, Config) ->
+  catch brod:stop_client(?TEST_CLIENT_ID),
   ok.
 
 produce(TopicPartition, Value) ->

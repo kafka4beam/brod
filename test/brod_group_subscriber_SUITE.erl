@@ -111,7 +111,8 @@ common_init_per_testcase(Case, Config0) ->
   Config.
 
 common_end_per_testcase(Case, Config) ->
-  brod:stop_client(?CLIENT_ID),
+  catch unlink(whereis(?CLIENT_ID)),
+  catch brod:stop_client(?CLIENT_ID),
   kafka_test_helper:common_end_per_testcase(Case, Config).
 
 %%%_* Group subscriber callbacks ===============================================
@@ -243,9 +244,8 @@ t_async_acks(Config) when is_list(Config) ->
   InitArgs = #{async_ack => true},
   Topic = ?topic,
   Partition = 0,
-  Timeout = 5000,
   ?check_trace(
-     #{ timeout => Timeout },
+     #{ timeout => 5000 },
      %% Run stage:
      begin
        %% Produce some messages into the topic:
@@ -379,8 +379,6 @@ t_2_members_one_partition(Config) when is_list(Config) ->
      end).
 
 t_async_commit({init, Config}) ->
-  meck:new(brod_group_coordinator,
-           [passthrough, no_passthrough_cover, no_history]),
   GroupId = list_to_binary("one-time-gid-" ++
                            integer_to_list(rand:uniform(1000000000))),
   [{group_id, GroupId} | Config];
@@ -548,32 +546,8 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
                                          GroupConfig, ConsumerConfig,
                                          ?MODULE, InitArgs)
     end,
+  ?log(notice, "Started subscriber with pid=~p", [SubscriberPid]),
   {ok, SubscriberPid}.
-
-meck_subscribe_unsubscribe() ->
-  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(brod, subscribe,
-              fun(Client, Pid, Topic, Partition, Opts) ->
-                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
-                                                        Partition, Opts]),
-                  ?tp(subscribed_partition,
-                      #{ topic          => Topic
-                       , partition      => Partition
-                       , subscriber_pid => Pid
-                       , consumer_pid   => ConsumerPid
-                       }),
-                  {ok, ConsumerPid}
-              end),
-  meck:expect(brod, unsubscribe,
-              fun(ConsumerPid, SubscriberPid) ->
-                  meck:passthrough([ConsumerPid, SubscriberPid]),
-                  ?tp(unsubscribed_partition,
-                      #{ subscriber_pid => SubscriberPid
-                       , consumer_pid   => ConsumerPid
-                       }),
-                  ok
-              end),
-  ok.
 
 stop_subscriber(Config, Pid) ->
   (?config(behavior)):stop(Pid).
