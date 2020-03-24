@@ -517,7 +517,7 @@ start_subscriber(Config, Topics, InitArgs) ->
                           , {sleep_timeout, 0}
                           , {max_wait_time, 100}
                           , {partition_restart_delay_seconds, 1}
-                          , {begin_offset, earliest}
+                          , {begin_offset, 0}
                           ],
   GroupConfig = proplists:get_value( group_subscriber_config
                                    , Config
@@ -552,7 +552,6 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
                                          GroupConfig, ConsumerConfig,
                                          ?MODULE, InitArgs)
     end,
-  timer:sleep(10000),
   {ok, SubscriberPid}.
 
 meck_subscribe_unsubscribe() ->

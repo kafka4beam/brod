@@ -158,7 +158,7 @@ consumer_config() ->
   %% time from failure suites:
   [ {max_wait_time, 500}
   , {sleep_timeout, 100}
-  , {max_bytes, 1}
+  , {begin_offset, 0}
   ].
 
 bootstrap_hosts() ->
