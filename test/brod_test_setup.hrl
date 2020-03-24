@@ -4,6 +4,8 @@
 -import(kafka_test_helper, [ produce/2
                            , produce/3
                            , produce/4
+                           , payloads/1
+                           , produce_payloads/3
                            , create_topic/2
                            , get_acked_offsets/2
                            , check_committed_offsets/2

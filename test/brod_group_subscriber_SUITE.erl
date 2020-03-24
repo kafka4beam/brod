@@ -58,15 +58,16 @@
 -include("brod.hrl").
 -include("brod_group_subscriber_test.hrl").
 
--define(handled_message(Topic, Partition, Value),
+-define(handled_message(Topic, Partition, Value, Offset),
         #{ kind      := group_subscriber_handle_message
          , topic     := Topic
          , partition := Partition
          , value     := Value
+         , offset    := Offset
          }).
 
--define(wait_message(Topic, Partition, Value),
-        ?block_until( ?handled_message(Topic, Partition, Value)
+-define(wait_message(Topic, Partition, Value, Offset),
+        ?block_until( ?handled_message(Topic, Partition, Value, Offset)
                     , ?MESSAGE_TIMEOUT, infinity
                     )).
 
@@ -249,10 +250,10 @@ t_async_acks(Config) when is_list(Config) ->
      begin
        {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
        %% Produce some messages into the topic:
-       L = produce_payloads(Topic, Partition, Config),
+       {_, L} = produce_payloads(Topic, Partition, Config),
        %% And ack/commit them asynchronously:
        [begin
-          {ok, #{offset := Offset}} = ?wait_message(Topic, Partition, I),
+          {ok, #{offset := Offset}} = ?wait_message(Topic, Partition, I, _),
           ok = Behavior:ack(SubscriberPid, ?topic, Partition, Offset),
           ok = Behavior:commit(SubscriberPid, ?topic, Partition, Offset)
         end || I <- L],
@@ -282,7 +283,7 @@ t_consumer_crash(Config) when is_list(Config) ->
        %% send some messages
        [_, _, O3, _, O5] = [SendFun(I) || I <- lists:seq(1, 5)],
        %% Wait until the last one is processed
-       {ok, _} = ?wait_message(Topic, Partition, <<5>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<5>>, _),
        %% Ack the 3rd one and do a sync request to the subscriber, so
        %% that we know it has processed the ack, then kill the
        %% brod_consumer process
@@ -338,7 +339,7 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
        {ok, SubscriberPid2} = start_subscriber(Config, [Topic2], InitArgs),
        %% Send messages to random partitions:
        lists:foreach(SendFun, L),
-       ?wait_message(_, _, LastMsg)
+       ?wait_message(_, _, LastMsg, _)
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
@@ -357,14 +358,15 @@ t_2_members_one_partition(Config) when is_list(Config) ->
   Topic = ?topic,
   InitArgs = #{},
   ?check_trace(
-     #{ timeout => 5000 },
      %% Run stage:
      begin
        %% Start two subscribers competing for the partition:
        {ok, SubscriberPid1} = start_subscriber(Config, [Topic], InitArgs),
        {ok, SubscriberPid2} = start_subscriber(Config, [Topic], InitArgs),
        %% Send messages:
-       produce_payloads(Topic, 0, Config)
+       {LastOffset, L} = produce_payloads(Topic, 0, Config),
+       ?wait_message(_, _, _, LastOffset),
+       L
      end,
      %% Check stage:
      fun(L, Trace) ->
@@ -422,7 +424,7 @@ t_async_commit(Config) when is_list(Config) ->
        Offset = produce({Topic, Partition}, Msg),
        ct:pal("Produced at offset = ~p~n", [Offset]),
        Pid1 = StartSubscriber(Offset),
-       {ok, _} = ?wait_message(Topic, Partition, Msg),
+       {ok, _} = ?wait_message(Topic, Partition, Msg, _),
        %% Commit _previous_ offset to avoid starting brod_consumer
        %% with `latest' offset and thus losing all data during
        %% restart:
@@ -431,7 +433,7 @@ t_async_commit(Config) when is_list(Config) ->
        %% Emulate subscriber restart:
        {Pid2, {ok, _}} =
          ?wait_async_action( EmulateRestart(Pid1)
-                           , ?handled_message(Topic, Partition, Msg)
+                           , ?handled_message(Topic, Partition, Msg, _)
                            , 20000
                            ),
        ct:pal("Post restart~n", []),
@@ -500,16 +502,6 @@ handled_messages(Trace) ->
 rand_uniform(Max) ->
   {_, _, Micro} = os:timestamp(),
   Micro rem Max.
-
-payloads(Config) ->
-  [<<I>> || I <- lists:seq(1, ?config(max_seqno))].
-
-%% Produce binaries to the topic and return offset of the last message:
-produce_payloads(Topic, Partition, Config) ->
-  Payloads = payloads(Config),
-  ?log(notice, "Producing payloads to ~p", [{Topic, Partition}]),
-  [produce({Topic, Partition}, I) + 1 || I <- payloads(Config)],
-  Payloads.
 
 start_subscriber(Config, Topics, InitArgs) ->
   %% use consumer managed offset commit behaviour by default, so we

@@ -6,6 +6,8 @@
         , produce/2
         , produce/3
         , produce/4
+        , payloads/1
+        , produce_payloads/3
         , create_topic/3
         , get_acked_offsets/1
         , check_committed_offsets/2
@@ -64,6 +66,17 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                                              }]
                                          ),
   Offset.
+
+payloads(Config) ->
+  MaxSeqNo = proplists:get_value(max_seqno, Config, 10),
+  [<<I>> || I <- lists:seq(1, MaxSeqNo)].
+
+%% Produce binaries to the topic and return offset of the last message:
+produce_payloads(Topic, Partition, Config) ->
+  Payloads = payloads(Config),
+  ?log(notice, "Producing payloads to ~p", [{Topic, Partition}]),
+  LastOffset = lists:last([produce({Topic, Partition}, I) + 1 || I <- payloads(Config)]),
+  {LastOffset, Payloads}.
 
 client_config() ->
   case os:getenv("KAFKA_VERSION") of
