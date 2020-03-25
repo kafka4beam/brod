@@ -14,6 +14,7 @@
                            , consumer_config/0
                            , client_config/0
                            , bootstrap_hosts/0
+                           , kill_process/1
                            ]).
 
 -include("brod_test_macros.hrl").

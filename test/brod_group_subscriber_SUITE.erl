@@ -597,17 +597,6 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
 stop_subscriber(Config, Pid) ->
   (?config(behavior)):stop(Pid).
 
-kill_process(Pid) ->
-  Mon = monitor(process, Pid),
-  ?tp(kill_consumer, #{pid => Pid}),
-  exit(Pid, kill),
-  receive
-    {'DOWN', Mon, process, Pid, killed} ->
-      ok
-  after 1000 ->
-      ct:fail("timed out waiting for the process to die")
-  end.
-
 %%%_* Emacs ====================================================================
 %%% Local Variables:
 %%% allout-layout: t

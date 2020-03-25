@@ -16,6 +16,7 @@
         , consumer_config/0
         , client_config/0
         , bootstrap_hosts/0
+        , kill_process/1
         ]).
 
 -include("brod_test_macros.hrl").
@@ -79,6 +80,22 @@ produce_payloads(Topic, Partition, Config) ->
   L = [produce({Topic, Partition}, I) + 1 || I <- payloads(Config)],
   LastOffset = lists:last(L),
   {LastOffset, Payloads}.
+
+kill_process(Name) when is_atom(Name) ->
+  Pid = whereis(Name),
+  true = is_pid(Pid),
+  kill_process(Pid);
+kill_process(Pid) when is_pid(Pid) ->
+  unlink(Pid),
+  Mon = monitor(process, Pid),
+  ?tp(kill_process, #{pid => Pid}),
+  exit(Pid, kill),
+  receive
+    {'DOWN', Mon, process, Pid, killed} ->
+      ok
+  after 1000 ->
+      ct:fail("timed out waiting for the process to die")
+  end.
 
 client_config() ->
   case os:getenv("KAFKA_VERSION") of
