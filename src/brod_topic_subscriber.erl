@@ -317,7 +317,9 @@ subscribe_partitions(#state{ client          = Client
                            , consumer_config = ConsumerConfig
                            } = State) ->
   Consumers =
-    lists:map( fun(C) -> subscribe_partition(Client, Topic, ConsumerConfig, C) end
+    lists:map( fun(C) ->
+                   subscribe_partition(Client, Topic, ConsumerConfig, C)
+               end
              , Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
