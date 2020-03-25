@@ -291,8 +291,7 @@ commit_offsets(CoordinatorPid, Offsets0) ->
 %% triggers a join group rebalance
 -spec update_topics(pid(), [brod:topic()]) -> ok.
 update_topics(CoordinatorPid, Topics) ->
-  gen_server:cast(CoordinatorPid, {update_topics, Topics}),
-  ok.
+  gen_server:cast(CoordinatorPid, {update_topics, Topics}).
 
 %%%_* gen_server callbacks =====================================================
 
@@ -412,8 +411,8 @@ handle_call(Call, _From, State) ->
 
 handle_cast({update_topics, Topics}, State) ->
   NewState0 = State#state{ topics = Topics},
-  {ok, NewState1} = stabilize(NewState0, 0, topics),
-  {noreply, NewState1};
+  {ok, NewState} = stabilize(NewState0, 0, topics),
+  {noreply, NewState};
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 

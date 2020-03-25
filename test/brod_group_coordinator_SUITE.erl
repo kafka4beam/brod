@@ -135,18 +135,22 @@ t_acks_during_revoke(Config) when is_list(Config) ->
   ok.
 
 t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
-    {ok, GroupCoordinatorPid} =
+  {ok, GroupCoordinatorPid} =
     brod_group_coordinator:start_link(?CLIENT_ID, ?GROUP, [?TOPIC],
                                       _Config = [], ?MODULE, {self(), 1}),
   ?assert_receive({assignments_revoked, 1}, ok),
   GroupCoordinatorPid ! continue,
   GenerationId1 = ?assert_receive({assignments_received, 1, GId1, _}, GId1),
-
   brod_group_coordinator:update_topics(GroupCoordinatorPid, [?TOPIC1]),
   ?assert_receive({assignments_revoked, 1}, ok),
   GroupCoordinatorPid ! continue,
-  GenerationId2 = ?assert_receive({assignments_received, 1, GId2, _}, GId2),
-  ?assert(GenerationId2 > GenerationId1).
+  {GenerationId2, TopicAssignments} = 
+    ?assert_receive({assignments_received, 1, GId2, TA}, {GId2, TA}),
+  ?assert(GenerationId2 > GenerationId1),
+  ?assert(lists:all(
+            fun(#brod_received_assignment{topic=Topic}) ->
+              Topic == ?TOPIC1
+            end, TopicAssignments)).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
