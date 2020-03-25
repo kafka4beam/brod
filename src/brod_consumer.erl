@@ -271,8 +271,9 @@ init({Bootstrap, Topic, Partition, Config}) ->
   PrefetchBytes = erlang:max(Cfg(prefetch_bytes, ?DEFAULT_PREFETCH_BYTES), 0),
   BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
+  RegisterSelf = Cfg(register_self, false),
   %% If bootstrap is a client pid, register self to the client
-  case is_shared_conn(Bootstrap) of
+  case is_shared_conn(Bootstrap) andalso RegisterSelf of
     true ->
       ok = brod_client:register_consumer(Bootstrap, Topic, Partition);
     false ->
