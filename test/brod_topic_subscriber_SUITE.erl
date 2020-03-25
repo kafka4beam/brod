@@ -260,9 +260,8 @@ t_consumer_crash(Config) when is_list(Config) ->
   {[_, _, O3, _, O5], [1, 2, 3, 4, 5]} = ReceiveFun(5, []),
   ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O3),
   %% do a sync request to the subscriber, so that we know it has
-  %% processed the ack, then kill the brod_consumer process
-  sys:get_state(SubscriberPid),
-  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?topic, Partition),
+  %% processed the ack, then kill the brod_consumer process.
+  [ConsumerPid] = get_consumers(sys:get_state(SubscriberPid)),
   kill_process(ConsumerPid),
   %% ack all previously received messages
   %% so topic subscriber can re-subscribe to the restarted consumer
@@ -277,6 +276,20 @@ t_consumer_crash(Config) when is_list(Config) ->
       ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
   after 0 -> ok
   end.
+
+%% Internal functions:
+
+get_consumers(State) ->
+  %% TODO: This function is fragile, as it peeks into thread's
+  %% internals. Magic number: 5 is position of `consumers' field of
+  %% `#state' record in `brod_topic_subscriber.erl'
+  Consumers = element(5, State),
+  lists:map( fun(I) ->
+                 [consumer, _, Pid|_] = tuple_to_list(I),
+                 true = is_pid(Pid),
+                 Pid
+             end
+           , Consumers).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

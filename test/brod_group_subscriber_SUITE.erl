@@ -87,7 +87,6 @@ end_per_suite(_Config) -> ok.
 groups() ->
   [ {brod_group_subscriber_v2,
      [ t_async_acks
-     , t_consumer_crash
      , t_2_members_subscribe_to_different_topics
      , t_2_members_one_partition
      , t_async_commit
@@ -302,8 +301,7 @@ t_consumer_crash(Config) when is_list(Config) ->
        %% that we know it has processed the ack, then kill the
        %% brod_consumer process
        ok = Behavior:ack(SubscriberPid, Topic, Partition, O3),
-       sys:get_state(SubscriberPid),
-       {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, Topic, Partition),
+       [ConsumerPid] = get_consumers(sys:get_state(SubscriberPid)),
        kill_process(ConsumerPid),
        %% send more messages (but they should not be received until
        %% re-subscribe)
@@ -596,6 +594,18 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
 
 stop_subscriber(Config, Pid) ->
   (?config(behavior)):stop(Pid).
+
+get_consumers(State) ->
+  %% TODO: This function is fragile, as it peeks into thread's
+  %% internals. Magic number: 8 is position of `consumers' field of
+  %% `#state' record in `brod_group_subscriber.erl'.
+  Consumers = element(8, State),
+  lists:map( fun(I) ->
+                 [consumer, _, Pid|_] = tuple_to_list(I),
+                 true = is_pid(Pid),
+                 Pid
+             end
+           , Consumers).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
