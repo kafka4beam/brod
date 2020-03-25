@@ -301,13 +301,14 @@ get_committed_offsets(Pid, TopicPartitions) ->
 %%%_* gen_server callbacks =====================================================
 
 init({Client, GroupId, Topics, GroupConfig,
-      ConsumerConfig, MessageType, CbModule, CbInitArg}) ->
+      ConsumerConfig0, MessageType, CbModule, CbInitArg}) ->
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_group_id(GroupId),
   ok = brod_utils:assert_topics(Topics),
   {ok, CbState} = CbModule:init(GroupId, CbInitArg),
   {ok, Pid} = brod_group_coordinator:start_link(Client, GroupId, Topics,
                                                 GroupConfig, ?MODULE, self()),
+  ConsumerConfig = [{register_self, false} | ConsumerConfig0],
   State = #state{ client          = Client
                 , client_mref     = erlang:monitor(process, Client)
                 , groupId         = GroupId
@@ -576,14 +577,15 @@ consume_ack(Pid, Offset) ->
 do_commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
-subscribe_partitions(#state{ client    = Client
-                           , consumers = Consumers0
+subscribe_partitions(#state{ client          = Client
+                           , consumers       = Consumers0
+                           , consumer_config = ConsumerConfig
                            } = State) ->
   Consumers =
-    lists:map(fun(C) -> subscribe_partition(Client, C) end, Consumers0),
+    [subscribe_partition(Client, C, ConsumerConfig) || C <- Consumers0],
   {ok, State#state{consumers = Consumers}}.
 
-subscribe_partition(Client, Consumer) ->
+subscribe_partition(Client, Consumer, ConsumerConfig) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid
            , begin_offset    = BeginOffset0
@@ -611,9 +613,15 @@ subscribe_partition(Client, Consumer) ->
           true  -> []; %% fetch from 'begin_offset' in consumer config
           false -> [{begin_offset, BeginOffset}]
         end,
-      case brod:subscribe(Client, self(), Topic, Partition, Options) of
+      ClientPid = if is_atom(Client) -> whereis(Client);
+                     is_pid(Client)  -> Client
+                  end,
+      case brod_consumer:start_link(ClientPid, Topic, Partition,
+                                    ConsumerConfig) of
         {ok, ConsumerPid} ->
           Mref = erlang:monitor(process, ConsumerPid),
+          unlink(ConsumerPid),
+          ok = brod_consumer:subscribe(ConsumerPid, self(), Options),
           Consumer#consumer{ consumer_pid  = ConsumerPid
                            , consumer_mref = Mref
                            };
