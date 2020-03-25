@@ -10,7 +10,6 @@
 -define(MSG(Ref, Pid, Topic, Partition, Offset, Value),
         {Ref, Pid, Topic, Partition, Offset, Value}).
 
--define(CLIENT_ID, ?MODULE).
 -define(TOPIC1, <<"brod-group-subscriber-1">>).
 -define(TOPIC2, <<"brod-group-subscriber-2">>).
 -define(TOPIC3, <<"brod-group-subscriber-3">>).
