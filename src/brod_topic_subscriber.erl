@@ -94,13 +94,14 @@
 -type consumer() :: #consumer{}.
 
 -record(state,
-        { client         :: brod:client()
-        , client_mref    :: reference()
-        , topic          :: brod:topic()
-        , consumers = [] :: [consumer()]
-        , cb_fun         :: cb_fun()
-        , cb_state       :: cb_state()
-        , message_type   :: message | message_set
+        { client          :: brod:client()
+        , client_mref     :: reference()
+        , topic           :: brod:topic()
+        , consumers = []  :: [consumer()]
+        , cb_fun          :: cb_fun()
+        , cb_state        :: cb_state()
+        , message_type    :: message | message_set
+        , consumer_config :: list()
         }).
 
 -type state() :: #state{}.
@@ -108,7 +109,7 @@
 %% delay 2 seconds retry the failed subscription to partiton consumer process
 -define(RESUBSCRIBE_DELAY, 2000).
 
--define(LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
+-define(LO_CMD_START_CONSUMER(CommittedOffsets, Partitions),
         {'$start_consumer', ConsumerConfig, CommittedOffsets, Partitions}).
 -define(LO_CMD_SUBSCRIBE_PARTITIONS, '$subscribe_partitions').
 
@@ -185,18 +186,20 @@ init({Client, Topic, Partitions, ConsumerConfig,
           end,
   init({Client, Topic, Partitions, ConsumerConfig,
         CommittedOffsets, MessageType, CbFun, CbState});
-init({Client, Topic, Partitions, ConsumerConfig,
+init({Client, Topic, Partitions, ConsumerConfig0,
       CommittedOffsets, MessageType, CbFun, CbState}) ->
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
-  self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
+  ConsumerConfig = [{register_self, false} | ConsumerConfig0],
+  self() ! ?LO_CMD_START_CONSUMER(CommittedOffsets, Partitions),
   State =
-    #state{ client       = Client
-          , client_mref  = erlang:monitor(process, Client)
-          , topic        = Topic
-          , cb_fun       = CbFun
-          , cb_state     = CbState
-          , message_type = MessageType
+    #state{ client          = Client
+          , client_mref     = erlang:monitor(process, Client)
+          , topic           = Topic
+          , cb_fun          = CbFun
+          , cb_state        = CbState
+          , message_type    = MessageType
+          , consumer_config = ConsumerConfig
           },
   {ok, State}.
 
@@ -204,12 +207,10 @@ init({Client, Topic, Partitions, ConsumerConfig,
 handle_info({_ConsumerPid, #kafka_message_set{} = MsgSet}, State0) ->
   State = handle_consumer_delivery(MsgSet, State0),
   {noreply, State};
-handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
-                                   Partitions0),
+handle_info(?LO_CMD_START_CONSUMER(CommittedOffsets, Partitions0),
              #state{ client = Client
                    , topic  = Topic
                    } = State) ->
-  ok = brod:start_consumer(Client, Topic, ConsumerConfig),
   {ok, PartitionsCount} = brod:get_partitions_count(Client, Topic),
   AllPartitions = lists:seq(0, PartitionsCount - 1),
   Partitions =
@@ -310,15 +311,17 @@ update_last_offset(Partition, Messages,
   Consumer = C#consumer{last_offset = LastOffset},
   State#state{consumers = put_consumer(Consumer, Consumers)}.
 
-subscribe_partitions(#state{ client    = Client
-                           , topic     = Topic
-                           , consumers = Consumers0
+subscribe_partitions(#state{ client          = Client
+                           , topic           = Topic
+                           , consumers       = Consumers0
+                           , consumer_config = ConsumerConfig
                            } = State) ->
   Consumers =
-    lists:map(fun(C) -> subscribe_partition(Client, Topic, C) end, Consumers0),
+    lists:map( fun(C) -> subscribe_partition(Client, Topic, ConsumerConfig, C) end
+             , Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
-subscribe_partition(Client, Topic, Consumer) ->
+subscribe_partition(Client, Topic, ConsumerConfig, Consumer) ->
   #consumer{ partition    = Partition
            , consumer_pid = Pid
            , acked_offset = AckedOffset
@@ -345,9 +348,15 @@ subscribe_partition(Client, Topic, Consumer) ->
             StartOffset >= 0 orelse erlang:error({invalid_offset, AckedOffset}),
             [{begin_offset, StartOffset}]
         end,
-      case brod:subscribe(Client, self(), Topic, Partition, Options) of
+      ClientPid = if is_atom(Client) -> whereis(Client);
+                     is_pid(Client)  -> Client
+                  end,
+      case brod_consumer:start_link(ClientPid, Topic, Partition,
+                                    ConsumerConfig) of
         {ok, ConsumerPid} ->
           Mref = erlang:monitor(process, ConsumerPid),
+          unlink(ConsumerPid),
+          ok = brod_consumer:subscribe(ConsumerPid, self(), Options),
           Consumer#consumer{ consumer_pid  = ConsumerPid
                            , consumer_mref = Mref
                            };
