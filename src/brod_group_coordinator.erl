@@ -289,9 +289,9 @@ commit_offsets(CoordinatorPid, Offsets0) ->
 
 %% @doc Update the list of topics the brod_group_coordinator follow which
 %% triggers a join group rebalance
--spec update_topics(pid(), [brod:topic()]) -> ok
+-spec update_topics(pid(), [brod:topic()]) -> ok.
 update_topics(CoordinatorPid, Topics) ->
-  gen_server:cast(CoordinatorPid,{update_topics, Topics}),
+  gen_server:cast(CoordinatorPid, {update_topics, Topics}),
   ok.
 
 %%%_* gen_server callbacks =====================================================
@@ -331,11 +331,6 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , protocol_name                  = ProtocolName
           },
   {ok, State}.
-
-handle_cast({update_topics, Topics}, State) ->
-  NewState0 = State#state{ topics = Topics},
-  {ok, NewState1} = stabilize(NewState0, 0, topics),
-  {noreply, NewState1}.
 
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
@@ -415,6 +410,10 @@ handle_call({commit_offsets, ExtraOffsets}, From, State) ->
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
+handle_cast({update_topics, Topics}, State) ->
+  NewState0 = State#state{ topics = Topics},
+  {ok, NewState1} = stabilize(NewState0, 0, topics),
+  {noreply, NewState1};
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
