@@ -5,6 +5,7 @@
                , is_assign_partitions
                , topic
                , partition
+               , group_id
                }).
 
 -define(MSG(Ref, Pid, Topic, Partition, Offset, Value),

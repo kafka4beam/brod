@@ -31,7 +31,10 @@
         ]).
 
 init(InitInfo, Config) ->
-  #{topic := Topic, partition := Partition} = InitInfo,
+  #{ topic     := Topic
+   , partition := Partition
+   , group_id  := GroupId
+   } = InitInfo,
   IsAsyncAck         = maps:get(async_ack, Config, false),
   IsAsyncCommit      = maps:get(async_commit, Config, false),
   IsAssignPartitions = maps:get(assign_partitions, Config, false),
@@ -43,13 +46,15 @@ init(InitInfo, Config) ->
              , is_assign_partitions = IsAssignPartitions
              , topic                = Topic
              , partition            = Partition
+             , group_id             = GroupId
              }}.
 
 handle_message(Message,
-               #state{ is_async_ack         = IsAsyncAck
-                     , is_async_commit      = IsAsyncCommit
-                     , topic                = Topic
-                     , partition            = Partition
+               #state{ is_async_ack    = IsAsyncAck
+                     , is_async_commit = IsAsyncCommit
+                     , topic           = Topic
+                     , partition       = Partition
+                     , group_id        = GroupId
                      } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
@@ -60,6 +65,7 @@ handle_message(Message,
        , offset    => Offset
        , value     => Value
        , worker    => self()
+       , group_id  => GroupId
        }),
   case {IsAsyncAck, IsAsyncCommit} of
     {true,  _}     -> {ok, State};

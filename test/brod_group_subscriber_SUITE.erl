@@ -50,6 +50,7 @@
         , t_async_commit/1
         , t_consumer_crash/1
         , t_assign_partitions_handles_updating_state/1
+        , t_subscribe_same_partition/1
         ]).
 
 -define(MESSAGE_TIMEOUT, 30000).
@@ -91,6 +92,7 @@ groups() ->
      , t_2_members_one_partition
      , t_async_commit
      , t_assign_partitions_handles_updating_state
+     , t_subscribe_same_partition
      ]}
   ].
 
@@ -126,18 +128,20 @@ common_end_per_testcase(Case, Config) ->
 
 %%%_* Group subscriber callbacks ===============================================
 
-init(_GroupId, Config) ->
+init(GroupId, Config) ->
   IsAsyncAck         = maps:get(async_ack, Config, false),
   IsAsyncCommit      = maps:get(async_commit, Config, false),
   IsAssignPartitions = maps:get(assign_partitions, Config, false),
   {ok, #state{ is_async_ack         = IsAsyncAck
              , is_async_commit      = IsAsyncCommit
              , is_assign_partitions = IsAssignPartitions
+             , group_id             = GroupId
              }}.
 
 handle_message(Topic, Partition, Message,
                #state{ is_async_ack    = IsAsyncAck
                      , is_async_commit = IsAsyncCommit
+                     , group_id        = GroupId
                      } = State) ->
   #kafka_message{ offset = Offset
                 , value  = Value
@@ -148,6 +152,7 @@ handle_message(Topic, Partition, Message,
        , offset    => Offset
        , value     => Value
        , worker    => self()
+       , group_id  => GroupId
        }),
   case {IsAsyncAck, IsAsyncCommit} of
     {true,  _}     -> {ok, State};
@@ -501,6 +506,37 @@ t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
   %% Since we only care about the assign_partitions part, we don't need to
   %% send and receive messages.
   ok = stop_subscriber(Config, SubscriberPid).
+
+%% Check that two group subscrivers can consume from the same
+%% topic-partition.
+t_subscribe_same_partition(Config) when is_list(Config) ->
+  Topic = ?topic,
+  Group1 = <<"subscribe_same_partition_grp1">>,
+  Group2 = <<"subscribe_same_partition_grp2">>,
+  InitArgs = #{},
+  ?check_trace(
+     #{ timeout => 5000 },
+     %% Run stage:
+     begin
+       %% Start two subscribers consuming from the same partition:
+       {ok, _} = start_subscriber( [{group_id, Group1} | Config]
+                                 , [Topic]
+                                 , InitArgs
+                                 ),
+       {ok, _} = start_subscriber( [{group_id, Group2} | Config]
+                                 , [Topic]
+                                 , InitArgs
+                                 ),
+       {LastOffset, L} = produce_payloads(Topic, 0, Config),
+       ?wait_message(_, _, _, LastOffset),
+       L
+     end,
+     fun(L, Trace) ->
+         TraceSub1 = [Msg || Msg = #{group_id := GID} <- Trace, GID == Group1],
+         TraceSub2 = [Msg || Msg = #{group_id := GID} <- Trace, GID == Group2],
+         check_all_messages_were_received_once(TraceSub1, L),
+         check_all_messages_were_received_once(TraceSub2, L)
+     end).
 
 %%%_* Common checks ============================================================
 
