@@ -393,6 +393,20 @@ check_init_terminate(Trace) ->
                    , Trace
                    ).
 
+%% Internal functions:
+
+get_consumers(State) ->
+  %% TODO: This function is fragile, as it peeks into thread's
+  %% internals. Magic number: 5 is position of `consumers' field of
+  %% `#state' record in `brod_topic_subscriber.erl'
+  Consumers = element(5, State),
+  lists:map( fun(I) ->
+                 [consumer, _, Pid|_] = tuple_to_list(I),
+                 true = is_pid(Pid),
+                 Pid
+             end
+           , Consumers).
+
 %%%_* Emacs ====================================================================
 %%% Local Variables:
 %%% allout-layout: t
