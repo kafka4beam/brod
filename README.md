@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/klarna/brod.svg)](https://travis-ci.org/klarna/brod) [![Coverage Status](https://coveralls.io/repos/github/klarna/brod/badge.svg?branch=master)](https://coveralls.io/github/klarna/brod?branch=master)
+[![Build Status](https://travis-ci.org/klarna/brod.svg?branch=master)](https://travis-ci.org/klarna/brod) [![Coverage Status](https://coveralls.io/repos/github/klarna/brod/badge.svg?branch=master)](https://coveralls.io/github/klarna/brod?branch=master)
 
 # Brod - Apache Kafka Client for Erlang/Elixir
 
