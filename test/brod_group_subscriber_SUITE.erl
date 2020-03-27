@@ -17,6 +17,9 @@
 %% @private
 -module(brod_group_subscriber_SUITE).
 
+-include("brod_test_setup.hrl").
+-define(CLIENT_ID, ?MODULE). %% Client thats is being tested
+
 %% Test framework
 -export([ init_per_suite/1
         , end_per_suite/1
@@ -49,43 +52,46 @@
         , t_assign_partitions_handles_updating_state/1
         ]).
 
+-define(MESSAGE_TIMEOUT, 30000).
 
 -include_lib("snabbkaffe/include/ct_boilerplate.hrl").
 -include("brod.hrl").
 -include("brod_group_subscriber_test.hrl").
 
--define(handled_message(Topic, Partition, Value),
+-define(handled_message(Topic, Partition, Value, Offset),
         #{ kind      := group_subscriber_handle_message
          , topic     := Topic
          , partition := Partition
          , value     := Value
+         , offset    := Offset
          }).
 
--define(wait_message(Topic, Partition, Value),
-        ?block_until( ?handled_message(Topic, Partition, Value)
-                    , 5000, infinity
+-define(wait_message(Topic, Partition, Value, Offset),
+        ?block_until( ?handled_message(Topic, Partition, Value, Offset)
+                    , ?MESSAGE_TIMEOUT, infinity
                     )).
 
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 60}}].
 
-init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
-  [ {behavior, brod_group_subscriber}
-  , {max_seqno, 100}
-  | Config].
+init_per_suite(Config0) ->
+  Config = [ {behavior, brod_group_subscriber}
+           , {max_seqno, 100}
+           | Config0],
+  kafka_test_helper:init_per_suite(Config).
 
 end_per_suite(_Config) -> ok.
 
 groups() ->
-  [ {brod_group_subscriber_v2, [ t_async_acks
-                               , t_consumer_crash
-                               , t_2_members_subscribe_to_different_topics
-                               , t_2_members_one_partition
-                               , t_async_commit
-                               , t_assign_partitions_handles_updating_state
-                               ]}
+  [ {brod_group_subscriber_v2,
+     [ t_async_acks
+     , t_consumer_crash
+     , t_2_members_subscribe_to_different_topics
+     , t_2_members_one_partition
+     , t_async_commit
+     , t_assign_partitions_handles_updating_state
+     ]}
   ].
 
 init_per_group(brod_group_subscriber_v2, Config) ->
@@ -97,29 +103,26 @@ init_per_group(_Group, Config) ->
 end_per_group(_Group, _Config) ->
   ok.
 
-common_init_per_testcase(Case, Config) ->
-  ClientId       = ?CLIENT_ID,
-  BootstrapHosts = [{"localhost", 9092}],
+common_init_per_testcase(Case, Config0) ->
+  Config = kafka_test_helper:common_init_per_testcase(?MODULE, Case, Config0),
+  BootstrapHosts = bootstrap_hosts(),
   ClientConfig   = client_config(),
-  ok = brod:start_client(BootstrapHosts, ClientId, ClientConfig),
-  ok = brod:start_producer(ClientId, ?TOPIC1, _ProducerConfig = []),
-  ok = brod:start_producer(ClientId, ?TOPIC2, _ProducerConfig = []),
-  ok = brod:start_producer(ClientId, ?TOPIC3, _ProducerConfig = []),
-  ok = brod:start_producer(ClientId, ?TOPIC4, _ProducerConfig = []),
+  ok = brod:start_client(BootstrapHosts, ?CLIENT_ID, ClientConfig),
   Config.
 
-common_end_per_testcase(Case, Config) when is_list(Config) ->
-  catch meck:unload(),
-  %% Clean up the processes:
-  case get(subscribers) of
-    undefined ->
-      ct:pal("Nothing to clean up.", []),
-      ok;
-    Subscribers ->
-      ct:pal("Cleaning up subscribers: ~p", [Subscribers]),
-      [catch stop_subscriber(Config, Pid) || Pid <- Subscribers]
-  end,
-  ok = brod:stop_client(?CLIENT_ID).
+common_end_per_testcase(Case, Config) ->
+  %% Clean up stuff while trying not to be killed by brod
+  process_flag(trap_exit, true),
+  catch brod:stop_client(?CLIENT_ID),
+  kafka_test_helper:common_end_per_testcase(Case, Config),
+  receive
+    {'EXIT', From, Reason} ->
+      ?log(warning, "Refusing to become collateral damage."
+                    " Offender: ~p Reason: ~p",
+           [From, Reason])
+  after 0 ->
+      ok
+  end.
 
 %%%_* Group subscriber callbacks ===============================================
 
@@ -248,31 +251,25 @@ t_koc_demo_message_set(Config) when is_list(Config) ->
 t_async_acks(Config) when is_list(Config) ->
   Behavior = ?config(behavior),
   InitArgs = #{async_ack => true},
+  Topic = ?topic,
   Partition = 0,
-  SendFun =
-    fun(I) ->
-      ok = brod:produce_sync(?CLIENT_ID, ?TOPIC1, Partition, <<>>, I)
-    end,
-  Timeout = 5000,
-  L = payloads(Config),
   ?check_trace(
-     #{ timeout => Timeout },
+     #{ timeout => 5000 },
      %% Run stage:
      begin
-       {ok, SubscriberPid, _ConsumerPids} =
-         start_subscriber(Config, [?TOPIC1], InitArgs),
        %% Produce some messages into the topic:
-       lists:foreach(SendFun, L),
+       {_, L} = produce_payloads(Topic, Partition, Config),
+       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
        %% And ack/commit them asynchronously:
        [begin
-          {ok, #{offset := Offset}} = ?wait_message(?TOPIC1, Partition, I),
-          ok = Behavior:ack(SubscriberPid, ?TOPIC1, Partition, Offset),
-          ok = Behavior:commit(SubscriberPid, ?TOPIC1, Partition, Offset)
+          {ok, #{offset := Offset}} = ?wait_message(Topic, Partition, I, _),
+          ok = Behavior:ack(SubscriberPid, ?topic, Partition, Offset),
+          ok = Behavior:commit(SubscriberPid, ?topic, Partition, Offset)
         end || I <- L],
-       ok
+       L
      end,
      %% Check stage:
-     fun(_Ret, Trace) ->
+     fun(L, Trace) ->
          check_all_messages_were_received_once(Trace, L)
      end).
 
@@ -281,37 +278,34 @@ t_consumer_crash(Config) when is_list(Config) ->
   %% so we can control where to start fetching messages from
   Behavior = ?config(behavior),
   InitArgs = #{async_ack => true},
+  Topic = ?topic,
   Partition = 0,
   SendFun =
     fun(I) ->
-        {ok, Offset} = brod:produce_sync_offset( ?CLIENT_ID, ?TOPIC1, Partition
-                                               , <<>> , <<I>>
-                                               ),
-        Offset
+        produce({Topic, Partition}, <<I>>)
     end,
   ?check_trace(
      #{ timeout => 5000 },
      %% Run stage:
      begin
-       {ok, SubscriberPid, _ConsumerPids} =
-         start_subscriber( Config, [?TOPIC1], InitArgs),
+       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
        %% send some messages
        [_, _, O3, _, O5] = [SendFun(I) || I <- lists:seq(1, 5)],
        %% Wait until the last one is processed
-       {ok, _} = ?wait_message(?TOPIC1, Partition, <<5>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<5>>, _),
        %% Ack the 3rd one and do a sync request to the subscriber, so
        %% that we know it has processed the ack, then kill the
        %% brod_consumer process
-       ok = Behavior:ack(SubscriberPid, ?TOPIC1, Partition, O3),
+       ok = Behavior:ack(SubscriberPid, Topic, Partition, O3),
        sys:get_state(SubscriberPid),
-       {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?TOPIC1, Partition),
+       {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, Topic, Partition),
        kill_process(ConsumerPid),
        %% send more messages (but they should not be received until
        %% re-subscribe)
        [SendFun(I) || I <- lists:seq(6, 8)],
        %% Ack O5:
        ?tp(ack_o5, #{}),
-       ok = Behavior:ack(SubscriberPid, ?TOPIC1, Partition, O5)
+       ok = Behavior:ack(SubscriberPid, Topic, Partition, O5)
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
@@ -326,7 +320,11 @@ t_consumer_crash(Config) when is_list(Config) ->
                      )
      end).
 
+t_2_members_subscribe_to_different_topics(topics) ->
+  [{?topic(1), 1}, {?topic(2), 1}];
 t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
+  Topic1 = ?topic(1),
+  Topic2 = ?topic(2),
   InitArgs = #{},
   Partitioner = fun(_Topic, PartitionCnt, _Key, _Value) ->
                     {ok, rand_uniform(PartitionCnt)}
@@ -335,22 +333,22 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
     fun(Value) ->
       Topic =
         case rand_uniform(2) of
-          0 -> ?TOPIC2;
-          1 -> ?TOPIC3
+          0 -> Topic1;
+          1 -> Topic2
         end,
-      ok = brod:produce_sync(?CLIENT_ID, Topic, Partitioner, <<>>, Value)
+      ok = brod:produce_sync(?TEST_CLIENT_ID, Topic, Partitioner, <<>>, Value)
     end,
   L = payloads(Config),
+  LastMsg = lists:last(L),
   ?check_trace(
      #{ timeout => 5000 },
      %% Run stage:
      begin
-       {ok, SubscriberPid1, _ConsumerPids1} =
-         start_subscriber(Config, [?TOPIC2], InitArgs),
-       {ok, SubscriberPid2, _ConsumerPids2} =
-         start_subscriber(Config, [?TOPIC3], InitArgs),
+       {ok, SubscriberPid1} = start_subscriber(Config, [Topic1], InitArgs),
+       {ok, SubscriberPid2} = start_subscriber(Config, [Topic2], InitArgs),
        %% Send messages to random partitions:
-       lists:foreach(SendFun, L)
+       lists:foreach(SendFun, L),
+       ?wait_message(_, _, LastMsg, _)
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
@@ -358,36 +356,29 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
          %% Check that all messages belong to the topics we expect:
          ?projection_is_subset( topic
                               , handled_messages(Trace)
-                              , [?TOPIC2, ?TOPIC3]
+                              , [Topic1, Topic2]
                               )
      end).
 
-%% TOPIC4 has only one partition, this case is to test two group members
+%% ?topic has only one partition, this case is to test two group members
 %% working with only one partition, this makes one member idle but should
 %% not crash.
 t_2_members_one_partition(Config) when is_list(Config) ->
-  Topic = ?TOPIC4,
-  MaxSeqNo = 100,
+  Topic = ?topic,
   InitArgs = #{},
-  L = payloads(Config),
-  SendFun =
-    fun(Value) ->
-      ok = brod:produce_sync(?CLIENT_ID, Topic, 0, <<>>, Value)
-    end,
   ?check_trace(
-     #{ timeout => 5000 },
      %% Run stage:
      begin
-       %% Start two subscribers competing for the partition:
-       {ok, SubscriberPid1, _ConsumerPids1} =
-         start_subscriber(Config, [Topic], InitArgs),
-       {ok, SubscriberPid2, _ConsumerPids1} =
-         start_subscriber(Config, [Topic], InitArgs),
        %% Send messages:
-       lists:foreach(SendFun, L)
+       {LastOffset, L} = produce_payloads(Topic, 0, Config),
+       %% Start two subscribers competing for the partition:
+       {ok, SubscriberPid1} = start_subscriber(Config, [Topic], InitArgs),
+       {ok, SubscriberPid2} = start_subscriber(Config, [Topic], InitArgs),
+       ?wait_message(_, _, _, LastOffset),
+       L
      end,
      %% Check stage:
-     fun(_Ret, Trace) ->
+     fun(L, Trace) ->
          check_all_messages_were_received_once(Trace, L),
          %% Check that all messages were received by the same process:
          PidsOfWorkers = ?projection(worker, handled_messages(Trace)),
@@ -397,13 +388,12 @@ t_2_members_one_partition(Config) when is_list(Config) ->
      end).
 
 t_async_commit({init, Config}) ->
-  meck:new(brod_group_coordinator,
-           [passthrough, no_passthrough_cover, no_history]),
   GroupId = list_to_binary("one-time-gid-" ++
                            integer_to_list(rand:uniform(1000000000))),
   [{group_id, GroupId} | Config];
 t_async_commit(Config) when is_list(Config) ->
   Behavior = ?config(behavior),
+  Topic = ?topic,
   Partition = 0,
   InitArgs = #{async_commit => true},
   GroupConfig = [],
@@ -414,9 +404,9 @@ t_async_commit(Config) when is_list(Config) ->
                          , {partition_restart_delay_seconds, 1}
                          , {begin_offset, Offset}
                          ],
-        {ok, SubscriberPid, _ConsumerPids} =
-          start_subscriber(Config, [?TOPIC4], GroupConfig, ConsumerConfig,
-                           InitArgs),
+        {ok, SubscriberPid} = start_subscriber(Config, [Topic],
+                                               GroupConfig, ConsumerConfig,
+                                               InitArgs),
         SubscriberPid
     end,
   EmulateRestart =
@@ -428,7 +418,7 @@ t_async_commit(Config) when is_list(Config) ->
   CommitOffset =
     fun(Pid, Offset) ->
         ct:pal("Committing offset = ~p", [Offset]),
-        ok = Behavior:commit(Pid, ?TOPIC4, 0, Offset)
+        ok = Behavior:commit(Pid, Topic, 0, Offset)
     end,
   Msg = <<"test">>,
   ?check_trace(
@@ -437,20 +427,21 @@ t_async_commit(Config) when is_list(Config) ->
      begin
        %% Produce a message, start group subscriber from offset of
        %% that message and wait for the subscriber to receive it:
-       {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC4,
-                                               Partition, <<>>, Msg),
+       produce({Topic, Partition}, Msg),
+       Offset = produce({Topic, Partition}, Msg),
        ct:pal("Produced at offset = ~p~n", [Offset]),
        Pid1 = StartSubscriber(Offset),
-       {ok, _} = ?wait_message(?TOPIC4, Partition, Msg),
-       %% Slightly commit _previous_ offset to avoid starting
-       %% brod_consumer with `latest' offset and thus losing all data
-       %% during restart:
+       {ok, _} = ?wait_message(Topic, Partition, Msg, _),
+       %% Commit _previous_ offset to avoid starting brod_consumer
+       %% with `latest' offset and thus losing all data during
+       %% restart:
        CommitOffset(Pid1, Offset - 1),
        ct:pal("Pre restart~n", []),
        %% Emulate subscriber restart:
        {Pid2, {ok, _}} =
          ?wait_async_action( EmulateRestart(Pid1)
-                           , ?handled_message(?TOPIC4, Partition, Msg)
+                           , ?handled_message(Topic, Partition, Msg, _)
+                           , 20000
                            ),
        ct:pal("Post restart~n", []),
        %% Commit offset and restart subscriber again:
@@ -495,8 +486,8 @@ t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
   InitArgs = #{ async_ack         => true
               , assign_partitions => true
               },
-  {ok, SubscriberPid, _ConsumerPids} =
-    start_subscriber(Config, [?TOPIC1], GroupConfig, ConsumerConfig, InitArgs),
+  {ok, SubscriberPid} = start_subscriber( Config, [?topic], GroupConfig
+                                        , ConsumerConfig, InitArgs),
   %% Since we only care about the assign_partitions part, we don't need to
   %% send and receive messages.
   ok = stop_subscriber(Config, SubscriberPid).
@@ -515,66 +506,21 @@ check_all_messages_were_received_once(Trace, Values) ->
 handled_messages(Trace) ->
   ?of_kind(group_subscriber_handle_message, Trace).
 
-%% To make test deterministic, we wait until all consumer group
-%% members are ready to receive messages before start sending messages
-%% for tests.
-%%
-%% `brod:subscribe' and `brod:unsubscribe' calls are mocked (with
-%% passthrough). The mocked functions emit a `subscribed_partition'
-%% (when partitions are assigned) or `unsubscribed_partition' (when
-%% assignments revoked) event.
-%%
-%% This function maintains a list of subscription states,
-%% and returns once all topic-partitions reach `subscribed' state.
-wait_for_subscribers([], _) ->
-  #{};
-wait_for_subscribers(Topics, SubPid) ->
-  [A|T] = [ wait_for_subscribers(Topic, SubPid, 10)
-          || Topic <- Topics],
-  lists:foldl(fun maps:merge/2, A, T).
-
-wait_for_subscribers(Topic, SubPid, TimeoutSecs) ->
-  Timeout = TimeoutSecs * 1000,
-  {ok, NumPartitions} = brod_client:get_partitions_count(?CLIENT_ID, Topic),
-  %% Wait for start of brod_subscribers:
-  Events =
-    [?block_until( #{ kind      := subscribed_partition
-                    , topic     := Topic
-                    , partition := Partition
-                    }
-                 , Timeout
-                 , Timeout
-                 )
-     || Partition <- lists:seq(0, NumPartitions - 1)],
-  %% Create a map of consumer pids:
-  maps:from_list([ {{Topic, Partition}, Pid}
-                 || #{ partition := Partition
-                     , consumer_pid := Pid
-                     } <- Events
-                 ]).
-
 rand_uniform(Max) ->
   {_, _, Micro} = os:timestamp(),
   Micro rem Max.
 
-client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
-
-payloads(Config) ->
-  [<<I>> || I <- lists:seq(1, ?config(max_seqno))].
-
 start_subscriber(Config, Topics, InitArgs) ->
   %% use consumer managed offset commit behaviour by default, so we
   %% can control where to start fetching messages from
-  DefaultGroupConfig = [{offset_commit_policy, consumer_managed}],
+  DefaultGroupConfig = [ {offset_commit_policy, consumer_managed}
+                       ],
   MaxSeqNo = ?config(max_seqno),
   DefaultConsumerConfig = [ {prefetch_count, MaxSeqNo}
                           , {sleep_timeout, 0}
                           , {max_wait_time, 100}
                           , {partition_restart_delay_seconds, 1}
+                          , {begin_offset, 0}
                           ],
   GroupConfig = proplists:get_value( group_subscriber_config
                                    , Config
@@ -587,16 +533,8 @@ start_subscriber(Config, Topics, InitArgs) ->
   start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs).
 
 start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
-  case get(subscribers) of
-    Subscribers when is_list(Subscribers) ->
-      ok;
-    undefined ->
-      %% D'oh! Why couldn't they make meck idempotent?
-      meck_subscribe_unsubscribe(),
-      Subscribers = []
-  end,
   GroupId = case ?config(group_id) of
-              undefined -> ?GROUP_ID;
+              undefined -> ?group_id;
               A         -> A
             end,
   {ok, SubscriberPid} =
@@ -617,34 +555,8 @@ start_subscriber(Config, Topics, GroupConfig, ConsumerConfig, InitArgs) ->
                                          GroupConfig, ConsumerConfig,
                                          ?MODULE, InitArgs)
     end,
-  put(subscribers, [SubscriberPid | Subscribers]),
-  Consumers = wait_for_subscribers(Topics, SubscriberPid),
-  {ok, SubscriberPid, Consumers}.
-
-meck_subscribe_unsubscribe() ->
-  meck:new(brod, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(brod, subscribe,
-              fun(Client, Pid, Topic, Partition, Opts) ->
-                  {ok, ConsumerPid} = meck:passthrough([Client, Pid, Topic,
-                                                        Partition, Opts]),
-                  ?tp(subscribed_partition,
-                      #{ topic          => Topic
-                       , partition      => Partition
-                       , subscriber_pid => Pid
-                       , consumer_pid   => ConsumerPid
-                       }),
-                  {ok, ConsumerPid}
-              end),
-  meck:expect(brod, unsubscribe,
-              fun(ConsumerPid, SubscriberPid) ->
-                  meck:passthrough([ConsumerPid, SubscriberPid]),
-                  ?tp(unsubscribed_partition,
-                      #{ subscriber_pid => SubscriberPid
-                       , consumer_pid   => ConsumerPid
-                       }),
-                  ok
-              end),
-  ok.
+  ?log(notice, "Started subscriber with pid=~p", [SubscriberPid]),
+  {ok, SubscriberPid}.
 
 stop_subscriber(Config, Pid) ->
   (?config(behavior)):stop(Pid).

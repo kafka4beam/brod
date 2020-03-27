@@ -1,12 +1,12 @@
 {"1.1.0",
-[{<<"crc32cer">>,{pkg,<<"crc32cer">>,<<"0.1.3">>},1},
- {<<"kafka_protocol">>,{pkg,<<"kafka_protocol">>,<<"2.3.3">>},0},
- {<<"snappyer">>,{pkg,<<"snappyer">>,<<"1.2.4">>},1},
+[{<<"crc32cer">>,{pkg,<<"crc32cer">>,<<"0.1.4">>},1},
+ {<<"kafka_protocol">>,{pkg,<<"kafka_protocol">>,<<"2.3.6">>},0},
+ {<<"snappyer">>,{pkg,<<"snappyer">>,<<"1.2.5">>},1},
  {<<"supervisor3">>,{pkg,<<"supervisor3">>,<<"1.1.8">>},0}]}.
 [
 {pkg_hash,[
- {<<"crc32cer">>, <<"8984906C4B4FAE6AA292C48F286A1C83B19AD44BD102287ACB94D696015967CE">>},
- {<<"kafka_protocol">>, <<"A43EAF1768A1A0300E81C356F543F9E6C02576C5A6A3301A1E5EEA7EEEDE7435">>},
- {<<"snappyer">>, <<"6D739C534CD2339633127A2B40279BE71F149E5842C5363A4D88E66EFB7C1FEC">>},
+ {<<"crc32cer">>, <<"A656DFF19474D1A1FC5BB0081610AB6B0695B23AFFC47FA90ABEB079A8EF9752">>},
+ {<<"kafka_protocol">>, <<"DF076A8EF49FFFAE3535C805CB00F3A057CE1895E63398BF8A10569EEEAC02F8">>},
+ {<<"snappyer">>, <<"9154B9AC84031F0A799F72A4AA87DF23AB2193B5631475FA2CDC304382D2DF77">>},
  {<<"supervisor3">>, <<"5CF95C95342B589EC8D74689EEA0646C0A3EB92820241E0C2D0CA4C104DF92BC">>}]}
 ].

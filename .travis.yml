@@ -24,10 +24,6 @@ script:
   # check style first
   - elvis rock
 
-  # test compilation with rebar
-  - rebar get-deps
-  - rebar compile
-
   # test with rebar3
   - make clean
   - rebar3 compile
@@ -42,27 +38,19 @@ script:
     if [ $OTP_VSN -eq 22 ]; then
       # run dialyzer only in otp 22
       rebar3 dialyzer
-      # test against kafka 0.9 in otp 22
-      export KAFKA_VERSION="0.9"
+      export KAFKA_VERSION="2.2"
     fi
     if [ $OTP_VSN -eq 21 ]; then
-      # test against kafka 2.2 in otp 21
       export KAFKA_VERSION="2.2"
     fi
     if [ $OTP_VSN -eq 20 ]; then
-      # test against kafka 0.10 in otp 20
-      export KAFKA_VERSION="0.10"
+      export KAFKA_VERSION="0.11"
     fi
     if [ $OTP_VSN -eq 19 ]; then
-      # test against kafka 0.11 in otp 19
-      export KAFKA_VERSION="0.11"
+      export KAFKA_VERSION="0.10"
     fi
     make test-env
     _build/brod_cli/rel/brod/bin/brod meta -b localhost -L
-    make it
-    # final full test against kafka 1.1
-    export KAFKA_VERSION="1.1"
-    make test-env
     make t
     make cover
 
