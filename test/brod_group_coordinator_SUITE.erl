@@ -19,6 +19,7 @@
 -define(CLIENT_ID, ?MODULE).
 -define(OTHER_CLIENT_ID, other_coordinator_id).
 -define(TOPIC, <<"brod-group-coordinator">>).
+-define(TOPIC1, <<"brod-group-coordinator-1">>).
 -define(GROUP, <<"brod-group-coordinator">>).
 -define(PARTITION, 0).
 
@@ -36,7 +37,9 @@
         ]).
 
 %% Test cases
--export([ t_acks_during_revoke/1 ]).
+-export([ t_acks_during_revoke/1
+        , t_update_topics_triggers_rebalance/1
+        ]).
 
 -define(assert_receive(Pattern, Return),
   receive
@@ -130,6 +133,24 @@ t_acks_during_revoke(Config) when is_list(Config) ->
               ),
 
   ok.
+
+t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
+  {ok, GroupCoordinatorPid} =
+    brod_group_coordinator:start_link(?CLIENT_ID, ?GROUP, [?TOPIC],
+                                      _Config = [], ?MODULE, {self(), 1}),
+  ?assert_receive({assignments_revoked, 1}, ok),
+  GroupCoordinatorPid ! continue,
+  GenerationId1 = ?assert_receive({assignments_received, 1, GId1, _}, GId1),
+  brod_group_coordinator:update_topics(GroupCoordinatorPid, [?TOPIC1]),
+  ?assert_receive({assignments_revoked, 1}, ok),
+  GroupCoordinatorPid ! continue,
+  {GenerationId2, TopicAssignments} = 
+    ?assert_receive({assignments_received, 1, GId2, TA}, {GId2, TA}),
+  ?assert(GenerationId2 > GenerationId1),
+  ?assert(lists:all(
+            fun(#brod_received_assignment{topic=Topic}) ->
+              Topic == ?TOPIC1
+            end, TopicAssignments)).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -53,6 +53,7 @@ create_topic "brod-client-SUITE-topic"
 create_topic "brod_consumer_SUITE"
 create_topic "brod_producer_SUITE"            2
 create_topic "brod-group-coordinator"         3 2
+create_topic "brod-group-coordinator-1"       3 2
 create_topic "brod-demo-topic-subscriber"     3 2
 create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
