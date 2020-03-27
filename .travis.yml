@@ -24,10 +24,6 @@ script:
   # check style first
   - elvis rock
 
-  # test compilation with rebar
-  - rebar get-deps
-  - rebar compile
-
   # test with rebar3
   - make clean
   - rebar3 compile
