@@ -196,4 +196,5 @@
   * Bump kafka_protocol dependency to 2.3.3
 * 3.10.0
   * Stop supporting erlang.mk
-  * Update kafka_protocol dependency to 2.3.5
+  * Stop supporting rebar
+  * Update kafka_protocol dependency to 2.3.6

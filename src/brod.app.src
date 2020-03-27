@@ -9,6 +9,6 @@
   {modules,[]},
   {licenses, ["Apache License 2.0"]},
   {links, [{"Github", "https://github.com/klarna/brod"}]},
-  {build_tools, ["rebar", "rebar3"]},
+  {build_tools, ["rebar3"]},
   {files, ["src", "include", "rebar.config", "rebar.config.script",
            "README.md","LICENSE", "NOTICE", "Makefile"]}]}.
