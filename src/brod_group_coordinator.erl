@@ -179,7 +179,7 @@
 %%        partitions.</li>
 %%  </ul></li>
 %%
-%%  <li>`session_timeout_seconds' (optional, default = 10)
+%%  <li>`session_timeout_seconds' (optional, default = 30)
 %%
 %%      Time in seconds for the group coordinator broker to consider a member
 %%      'down' if no heartbeat or any kind of requests received from a broker
@@ -187,7 +187,7 @@
 %%      A group member may also consider the coordinator broker 'down' if no
 %%      heartbeat response response received in the past N seconds.</li>
 %%
-%%  <li>`heartbeat_rate_seconds' (optional, default = 2)
+%%  <li>`heartbeat_rate_seconds' (optional, default = 5)
 %%
 %%      Time in seconds for the member to 'ping' the group coordinator.
 %%      OBS: Care should be taken when picking the number, on one hand, we do
