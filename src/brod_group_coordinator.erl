@@ -612,12 +612,13 @@ join_group(#state{ groupId                 = GroupId
   {ok, State}.
 
 -spec sync_group(state()) -> {ok, state()}.
-sync_group(#state{ groupId       = GroupId
-                 , generationId  = GenerationId
-                 , memberId      = MemberId
-                 , connection    = Connection
-                 , member_pid    = MemberPid
-                 , member_module = MemberModule
+sync_group(#state{ groupId                 = GroupId
+                 , generationId            = GenerationId
+                 , memberId                = MemberId
+                 , connection              = Connection
+                 , member_pid              = MemberPid
+                 , member_module           = MemberModule
+                 , session_timeout_seconds = SessionTimeoutSec
                  } = State) ->
   ReqBody =
     [ {group_id, GroupId}
@@ -625,9 +626,10 @@ sync_group(#state{ groupId       = GroupId
     , {member_id, MemberId}
     , {group_assignment, assign_partitions(State)}
     ],
+  SessionTimeout = timer:seconds(SessionTimeoutSec),
   SyncReq = brod_kafka_request:sync_group(Connection, ReqBody),
   %% send sync group request and wait for response
-  RspBody = send_sync(Connection, SyncReq),
+  RspBody = send_sync(Connection, SyncReq, SessionTimeout),
   %% get my partition assignments
   Assignment = kpro:find(member_assignment, RspBody),
   TopicAssignments = get_topic_assignments(State, Assignment),
