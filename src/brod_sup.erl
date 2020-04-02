@@ -101,7 +101,7 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
+  supervisor:start_link({local, ?SUP}, ?MODULE, clients_sup).
 
 -spec start_client([brod:endpoint()],
                    brod:client_id(),
