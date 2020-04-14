@@ -1140,13 +1140,13 @@ is_default_offset_retention(_) -> false.
 merge_acked_offsets_test() ->
   ?assertEqual([{{<<"topic1">>, 1}, 1}],
                merge_acked_offsets([], [{{<<"topic1">>, 1}, 1}])),
-  ?assertEqual([{{<<"topic1">>, 1}, 1}, {{<<"topic1">>, 2}, 1}],
-               merge_acked_offsets([{{<<"topic1">>, 1}, 1}],
-                                   [{{<<"topic1">>, 2}, 1}])),
-  ?assertEqual([{{<<"topic1">>, 1}, 2}, {{<<"topic1">>, 2}, 1}],
-               merge_acked_offsets([{{<<"topic1">>, 1}, 1},
-                                    {{<<"topic1">>, 2}, 1}],
-                                   [{{<<"topic1">>, 1}, 2}])),
+  ?assertEqual([{{<<"topic2">>, 1}, 1}, {{<<"topic2">>, 2}, 1}],
+               merge_acked_offsets([{{<<"topic2">>, 1}, 1}],
+                                   [{{<<"topic2">>, 2}, 1}])),
+  ?assertEqual([{{<<"topic3">>, 1}, 2}, {{<<"topic3">>, 2}, 1}],
+               merge_acked_offsets([{{<<"topic3">>, 1}, 1},
+                                    {{<<"topic3">>, 2}, 1}],
+                                   [{{<<"topic3">>, 1}, 2}])),
   ok.
 
 is_roundrobin_v1_commit_test() ->
