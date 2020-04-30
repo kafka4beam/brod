@@ -620,6 +620,9 @@ kill_fetcher({Pid, Mref}) ->
       ok
   end.
 
+drop_aborted(#{aborted_transactions := undefined}, Batches) ->
+  %% Microsoft's EventHub sends nil value instead of an empty list for this key.
+  Batches;
 drop_aborted(#{aborted_transactions := AbortedL}, Batches) ->
   %% Drop batches for each abored transaction
   lists:foldl(
