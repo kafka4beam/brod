@@ -143,7 +143,8 @@ get_metadata(Hosts, Topics, ConnCfg) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
-  Opts = #{timeout => proplists:get_value(connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT)},
+  Opts = #{timeout => proplists:get_value(
+                                  connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT)},
   resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
 
 %% @doc Resolve timestamp to real offset.
