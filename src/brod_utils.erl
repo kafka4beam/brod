@@ -73,6 +73,8 @@
 -type offset_time() :: brod:offset_time().
 -type group_id() :: brod:group_id().
 
+-define(DEFAULT_TIMEOUT, timer:seconds(5)).
+
 %%%_* APIs =====================================================================
 
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
@@ -141,8 +143,16 @@ get_metadata(Hosts, Topics, ConnCfg) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
+  Opts = #{timeout => proplists:get_value(connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT)},
+  resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
+
+%% @doc Resolve timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(),
+                     offset_time(), conn_config(), conn_config()) ->
+        {ok, offset()} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts) ->
   with_conn(
-    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition, Opts),
     fun(Pid) -> resolve_offset(Pid, Topic, Partition, Time) end).
 
 %% @doc Resolve timestamp or semantic offset to real offset.
