@@ -92,6 +92,7 @@
         , resolve_offset/3
         , resolve_offset/4
         , resolve_offset/5
+        , resolve_offset/6
         , fetch/4
         , fetch/5
         , fold/8
@@ -850,10 +851,7 @@ resolve_offset(Hosts, Topic, Partition, Time) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
-  Timeout =
-      proplists:get_value(connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT),
-  Opts = #{timeout => Timeout},
-  resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
+ brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
