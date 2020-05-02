@@ -850,8 +850,10 @@ resolve_offset(Hosts, Topic, Partition, Time) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
-  resolve_offset(Hosts, Topic, Partition, Time, ConnCfg,
-                  #{timeout => ?DEFAULT_TIMEOUT}).
+  Timeout =
+      proplists:get_value(connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT),
+  Opts = #{timeout => Timeout},
+  resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),

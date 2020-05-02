@@ -34,6 +34,7 @@
         , t_fold/1
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
+        , t_direct_fetch_with_connect_timeout/1
         , t_consumer_max_bytes_too_small/1
         , t_consumer_connection_restart/1
         , t_consumer_connection_restart_2/1
@@ -356,6 +357,22 @@ t_direct_fetch(Config) when is_list(Config) ->
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
                                      ?OFFSET_LATEST, ?config(client_config)),
+  {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
+                                 Topic, Partition, Offset - 1),
+  {ok, {_, [Msg]}} = brod:fetch(Client, Topic, Partition, Offset - 1),
+  ?assertEqual(Key, Msg#kafka_message.key),
+  ok.
+
+t_direct_fetch_with_connect_timeout(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Key = make_unique_key(),
+  Value = <<>>,
+  ClientConfig = lists:merge(?config(client_config), [{connect_timeout, timer:seconds(45)}]),
+  ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST, ClientConfig),
   {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
                                  Topic, Partition, Offset - 1),
   {ok, {_, [Msg]}} = brod:fetch(Client, Topic, Partition, Offset - 1),
