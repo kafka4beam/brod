@@ -851,7 +851,7 @@ resolve_offset(Hosts, Topic, Partition, Time) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
- brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg).
+  brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
 -spec resolve_offset([endpoint()], topic(), partition(),
