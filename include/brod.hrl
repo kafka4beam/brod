@@ -78,6 +78,8 @@
 
 -define(BROD_FOLD_RET(Acc, NextOffset, Reason), {Acc, NextOffset, Reason}).
 
+-define(DEFAULT_TIMEOUT, timer:seconds(5)).
+
 -endif. % include brod.hrl
 
 %%% Local Variables:

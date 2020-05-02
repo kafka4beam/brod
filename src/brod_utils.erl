@@ -56,6 +56,7 @@
         , request_sync/3
         , resolve_offset/4
         , resolve_offset/5
+        , resolve_offset/6
         ]).
 
 -include("brod_int.hrl").
@@ -72,8 +73,6 @@
 -type endpoint() :: brod:endpoint().
 -type offset_time() :: brod:offset_time().
 -type group_id() :: brod:group_id().
-
--define(DEFAULT_TIMEOUT, timer:seconds(5)).
 
 %%%_* APIs =====================================================================
 

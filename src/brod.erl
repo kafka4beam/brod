@@ -850,7 +850,16 @@ resolve_offset(Hosts, Topic, Partition, Time) ->
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
-  brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg).
+  resolve_offset(Hosts, Topic, Partition, Time, ConnCfg,
+                  #{timeout => ?DEFAULT_TIMEOUT}).
+
+%% @doc Resolve semantic offset or timestamp to real offset.
+-spec resolve_offset([endpoint()], topic(), partition(),
+                     offset_time(), conn_config(),
+                      #{timeout => kpro:int32()}) ->
+        {ok, offset()} | {error, any()}.
+resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts) ->
+  brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
 
 %% @doc Fetch a single message set from the given topic-partition.
 %% The first arg can either be an already established connection to leader,
