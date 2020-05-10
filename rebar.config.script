@@ -13,7 +13,7 @@ Profiles =
                [brod, jsone, docopt]},
               {include_erts, true},
               {overlay, [{copy, "scripts/brod", "bin"},
-                         {copy, "{{lib_dirs}}/crc32cer/priv/crc32cer.so", "bin"},
+                         {copy, "{{lib_dirs}}/crc32cer/priv/crc32cer*.so", "bin"},
                          {copy, "{{lib_dirs}}/snappyer/priv/snappyer.so", "bin"}
                         ]}
              ]}]},
