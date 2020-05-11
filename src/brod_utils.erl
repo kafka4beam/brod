@@ -620,6 +620,8 @@ kill_fetcher({Pid, Mref}) ->
       ok
   end.
 
+drop_aborted(#{aborted_transactions := undefined} = Map, Batches) ->
+  drop_aborted(maps:put(aborted_transactions, [], Map), Batches);
 drop_aborted(#{aborted_transactions := AbortedL}, Batches) ->
   %% Drop batches for each abored transaction
   lists:foldl(
