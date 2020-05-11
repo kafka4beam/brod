@@ -199,3 +199,5 @@
   * Stop supporting rebar
   * Update kafka_protocol dependency to 2.3.6
   * Add new brod_group_coordinator:update_topics API
+* 3.11.0
+  * Improve compatibility with EventHub
