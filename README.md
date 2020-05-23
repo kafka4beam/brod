@@ -189,8 +189,8 @@ All messages are unified into a batch format of below spec:
 ```erlang
 brod:produce_sync(_Client    = brod_client_1,
                   _Topic     = <<"brod-test-topic-1">>,
-                  _Partition = 0
-                  _Key       = <<"some-key">>
+                  _Partition = 0,
+                  _Key       = <<"some-key">>,
                   _Value     = <<"some-value">>).
 ```
 
@@ -200,8 +200,8 @@ Or block calling process until Kafka confirmed the message:
 {ok, CallRef} =
   brod:produce(_Client    = brod_client_1,
                _Topic     = <<"brod-test-topic-1">>,
-               _Partition = 0
-               _Key       = <<"some-key">>
+               _Partition = 0,
+               _Key       = <<"some-key">>,
                _Value     = <<"some-value">>),
 brod:sync_produce_request(CallRef).
 ```
@@ -230,10 +230,10 @@ ok = brod:produce_sync(Client, Topic, PartitionFun, Key, Value).
 ```erlang
 brod:produce(_Client    = brod_client_1,
              _Topic     = <<"brod-test-topic-1">>,
-             _Partition = MyPartitionerFun
-             _Key       = KeyUsedForPartitioning
-             _Value     = [ #{key => "k1" value => "v1", headers = [{"foo", "bar"}]}
-                          , #{key => "k2" value => "v2"}
+             _Partition = MyPartitionerFun,
+             _Key       = KeyUsedForPartitioning,
+             _Value     = [ #{key => "k1", value => "v1", headers => [{"foo", "bar"}]}
+                          , #{key => "k2", value => "v2"}
                           ]).
 ```
 
@@ -284,7 +284,7 @@ In brod, we have so far implemented two different subscribers
 (`brod_topic_subscriber` and `brod_group_subscriber`),
 hopefully covered most of the common use cases.
 
-For maximum flexibility, an applications may implement their own
+For maximum flexibility, applications may implement their own
 per-partition subscriber.
 
 Below diagrams illustrate 3 examples of how subscriber processes may work
@@ -398,7 +398,7 @@ See also: https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authenticat
 
 # Other API to play with/inspect kafka
 
-These functions open a connetion to kafka cluster, send a request,
+These functions open a connection to kafka cluster, send a request,
 await response and then close the connection.
 
 ```erlang
@@ -408,18 +408,19 @@ Partition = 0.
 Timeout = 1000.
 TopicConfigs = [
   #{
-    config_entries => [],
+    config_entries => [ #{ config_name  => <<"cleanup.policy">>
+                         , config_value => "compact"}],
     num_partitions => 1,
     replica_assignment => [],
     replication_factor => 1,
     topic => Topic
   }
-]
+].
 brod:get_metadata(Hosts).
 brod:create_topics(Hosts, TopicConfigs, #{timeout => Timeout}).
 brod:get_metadata(Hosts, [Topic]).
-brod:delete_topics(Hosts, [Topic], Timeout).
 brod:resolve_offset(Hosts, Topic, Partition).
+brod:delete_topics(Hosts, [Topic], Timeout).
 ```
 
 Caution the above delete_topics can fail if you do not have `delete.topic.enable` set to true in your kafka config
@@ -435,7 +436,7 @@ _build/brod_cli/rel/brod/bin/brod -h
 
 Disclaimer: This script is NOT designed for use cases where fault-tolerance is a hard requirement.
 As it may crash when e.g. kafka cluster is temporarily unreachable,
-or (for fetch command) when the parition leader migrates to another broker in the cluster.
+or (for fetch command) when the partition leader migrates to another broker in the cluster.
 
 ## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod`):
 
