@@ -201,3 +201,5 @@
   * Add new brod_group_coordinator:update_topics API
 * 3.11.0
   * Improve compatibility with EventHub
+* 3.12.0
+  * Enable passing custom timeout to resolve_offset
