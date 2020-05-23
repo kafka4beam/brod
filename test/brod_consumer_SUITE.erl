@@ -34,6 +34,7 @@
         , t_fold/1
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
+        , t_resolve_offset/1
         , t_consumer_max_bytes_too_small/1
         , t_consumer_connection_restart/1
         , t_consumer_connection_restart_2/1
@@ -361,6 +362,15 @@ t_direct_fetch(Config) when is_list(Config) ->
   {ok, {_, [Msg]}} = brod:fetch(Client, Topic, Partition, Offset - 1),
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
+
+t_resolve_offset(Config) when is_list(Config) ->
+  % Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST, ?config(client_config),
+                                     #{timeout => timer:seconds(45)}),
+  ?assert(is_integer(Offset)).
 
 t_fold(Config) when is_list(Config) ->
   Client = ?config(client),
