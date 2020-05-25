@@ -19,7 +19,7 @@ clean:
 	@rm -rf ebin deps doc
 	@rm -f pipe.testdata
 
-hex-publish: distclean
+hex-publish: clean
 	@rebar3 hex publish
 	@rebar3 hex docs
 

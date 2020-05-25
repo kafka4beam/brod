@@ -1,3 +1,6 @@
+* 3.12.1
+  * Makefile fix for hex publishing.
+  * Reverse Changelog order.
 * 3.12.0
   * Enable passing custom timeout to resolve_offset
 * 3.11.0
