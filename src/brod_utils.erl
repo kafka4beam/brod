@@ -441,7 +441,7 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
 %% @doc Return message set size in number of bytes.
 %% NOTE: This does not include the overheads of encoding protocol.
 %% such as magic bytes, attributes, and length tags etc.
--spec bytes(bord:batch_input()) -> non_neg_integer().
+-spec bytes(brod:batch_input()) -> non_neg_integer().
 bytes(Msgs) ->
   F = fun(#{key := Key, value := Value} = Msg, Acc) ->
           %% this is message from a magic v2 batch
