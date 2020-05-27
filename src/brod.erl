@@ -784,7 +784,7 @@ start_link_topic_subscriber(Client, Topic, Partitions,
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs).
 
@@ -793,7 +793,7 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 %% See `kpro_schema.erl' for struct details
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}, conn_config()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
 
