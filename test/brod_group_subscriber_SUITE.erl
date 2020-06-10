@@ -59,7 +59,7 @@
 -include("brod_group_subscriber_test.hrl").
 
 -define(handled_message(Topic, Partition, Value, Offset),
-        #{ kind      := group_subscriber_handle_message
+        #{ ?snk_kind := group_subscriber_handle_message
          , topic     := Topic
          , partition := Partition
          , value     := Value
@@ -314,7 +314,9 @@ t_consumer_crash(Config) when is_list(Config) ->
                                               ),
          %% Check that messages 6 to 8 were processed after message 5
          %% was acked:
-         {_BeforeAck, [_|AfterAck]} = ?split_trace_at(#{kind := ack_o5}, Trace),
+         {_BeforeAck, [_|AfterAck]} = ?split_trace_at( #{?snk_kind := ack_o5}
+                                                     , Trace
+                                                     ),
          ?assertEqual( [<<I>> || I <- lists:seq(6, 8)]
                      , ?projection(value, handled_messages(AfterAck))
                      )
@@ -452,9 +454,9 @@ t_async_commit(Config) when is_list(Config) ->
      %% Check stage:
      fun(_Ret, Trace) ->
          {BeforeRestart1, [_|AfterRestart1]} =
-           ?split_trace_at(#{kind := emulate_restart}, Trace),
+           ?split_trace_at(#{?snk_kind := emulate_restart}, Trace),
          {BeforeRestart2, [_|AfterRestart2]} =
-           ?split_trace_at(#{kind := emulate_restart}, AfterRestart1),
+           ?split_trace_at(#{?snk_kind := emulate_restart}, AfterRestart1),
          %% check that the message was processed once before 1st
          %% restart:
          ?assertMatch( [_]

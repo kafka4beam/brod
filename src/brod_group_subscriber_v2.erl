@@ -362,7 +362,7 @@ handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
   case L of
     [] ->
       brod_utils:log(warning, "Received DOWN message from unknown process.~n"
-                              "  pid=~p~n  ref=~p~n  reason=~p",
+                              "  pid = ~p~n  ref = ~p~n  reason = ~p",
                               [Pid, Mref, Reason]),
       {noreply, State};
     [TopicPartition|_] ->
@@ -390,14 +390,15 @@ terminate(_Reason, #state{ workers = Workers
 
 -spec handle_worker_failure(brod:topic_partition(), pid(), term(), state()) ->
                                no_return().
-handle_worker_failure(TopicPartition, Pid, Reason, State) ->
+handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
   #state{ workers     = Workers
         , group_id    = GroupId
         , coordinator = Coordinator
         } = State,
-  brod_utils:log(error, "group_subscriber_v2 ~s worker ~p crashed.~n"
-                        "  pid=~p~n  reason=~p",
-                        [GroupId, TopicPartition, Pid, Reason]),
+  brod_utils:log(error, "group_subscriber_v2 worker crashed.~n"
+                        "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
+                        "  pid = ~p~n  reason = ~p",
+                        [GroupId, Topic, Partition, Pid, Reason]),
   terminate_all_workers(Workers),
   brod_group_coordinator:commit_offsets(Coordinator),
   exit(worker_crash).
