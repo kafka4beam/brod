@@ -242,7 +242,6 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
 %%--------------------------------------------------------------------
 -spec init(subscriber_config()) -> {ok, state()}.
 init(Config) ->
-  process_flag(trap_exit, true),
   #{ client    := Client
    , group_id  := GroupId
    , topics    := Topics
@@ -358,6 +357,17 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
+handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
+  L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
+  case L of
+    [] ->
+      brod_utils:log(warning, "Received DOWN message from unknown process.~n"
+                              "  pid = ~p~n  ref = ~p~n  reason = ~p",
+                              [Pid, Mref, Reason]),
+      {noreply, State};
+    [TopicPartition|_] ->
+      handle_worker_failure(TopicPartition, Pid, Reason, State)
+  end;
 handle_info(_Info, State) ->
   {noreply, State}.
 
@@ -377,6 +387,21 @@ terminate(_Reason, #state{ workers = Workers
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+-spec handle_worker_failure(brod:topic_partition(), pid(), term(), state()) ->
+                               no_return().
+handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
+  #state{ workers     = Workers
+        , group_id    = GroupId
+        , coordinator = Coordinator
+        } = State,
+  brod_utils:log(error, "group_subscriber_v2 worker crashed.~n"
+                        "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
+                        "  pid = ~p~n  reason = ~p",
+                        [GroupId, Topic, Partition, Pid, Reason]),
+  terminate_all_workers(Workers),
+  brod_group_coordinator:commit_offsets(Coordinator),
+  exit(worker_crash).
 
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
@@ -455,14 +480,17 @@ maybe_start_worker( _MemberId
                   ) -> {ok, pid()}.
 start_worker(Client, Topic, MessageType, Partition, ConsumerConfig,
              StartOptions) ->
-  brod_topic_subscriber:start_link( Client
-                                  , Topic
-                                  , [Partition]
-                                  , ConsumerConfig
-                                  , MessageType
-                                  , brod_group_subscriber_worker
-                                  , StartOptions
-                                  ).
+  {ok, Pid} = brod_topic_subscriber:start_link( Client
+                                              , Topic
+                                              , [Partition]
+                                              , ConsumerConfig
+                                              , MessageType
+                                              , brod_group_subscriber_worker
+                                              , StartOptions
+                                              ),
+  monitor(process, Pid),
+  unlink(Pid),
+  {ok, Pid}.
 
 -spec do_ack(brod:topic(), brod:partition(), brod:offset(), state()) ->
                 ok | {error, term()}.

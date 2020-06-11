@@ -1,6 +1,9 @@
-* 3.12.1
-  * Makefile fix for hex publishing.
-  * Reverse Changelog order.
+* 3.13.0
+  * Update supervisor3 dependency to 1.1.11
+  * brod_group_subscriber_v2 behavior handles worker crashes
+  * Makefile fix for hex publishing
+  * Reverse Changelog order
+  * Fix typos and dialyzer warnings
 * 3.12.0
   * Enable passing custom timeout to resolve_offset
 * 3.11.0
