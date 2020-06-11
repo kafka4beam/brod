@@ -193,7 +193,20 @@ cmd(Args) ->
     catch brod:stop_client(brod_cli_client),
     Result
   after
-    _ = brod:stop()
+    _ = brod:stop(),
+    ensure_down(brod_kafka_apis)
+  end.
+
+ensure_down(RegName) -> ensure_down(RegName, 10).
+
+ensure_down(RegName, 0) -> error({wont_die, RegName});
+ensure_down(RegName, N) ->
+  case whereis(RegName) of
+    undefined -> ok;
+    Pid ->
+      exit(Pid, kill),
+      timer:sleep((11 - N) * 10),
+      ensure_down(RegName, N - 1)
   end.
 
 io_loop(Parent, Acc0) ->
