@@ -206,8 +206,8 @@ start_link(Client, GroupId, Topics, GroupConfig,
 %%   implemented for message processing.
 %%
 %% `CbInitArg':
-%%   The term() that is going to be passed to `CbModule:init/1' when
-%%   initializing the subscriber.
+%%   The term() that is going to be passed to `CbModule:init/2' as a
+%%   second argument when initializing the subscriber.
 %% @end
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
                  brod:group_config(), brod:consumer_config(),
