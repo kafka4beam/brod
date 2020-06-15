@@ -1,3 +1,9 @@
+* 3.15.0
+ * Non backward-compatible change: brod_topic_subscriber,
+    brod_group_subscriber and brod_group_subscriber_v2 no longer
+    register consumers by default. Restart of brod application and all
+    brod workers is required due to changes in the internal state
+  * Typespec and documentation fixesg
 * 3.14.0
   NOTE: This release changes internal states of brod worker processes
   in a way that cannot by applied on a running system. brod application
