@@ -784,7 +784,7 @@ start_link_topic_subscriber(Client, Topic, Partitions,
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs).
 
@@ -793,13 +793,13 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 %% See `kpro_schema.erl' for struct details
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}, conn_config()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
 
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout) ->
   brod_utils:delete_topics(Hosts, Topics, Timeout).
 
@@ -807,7 +807,7 @@ delete_topics(Hosts, Topics, Timeout) ->
 %% Return the message body of `delete_topics', response.
 %% See `kpro_schema.erl' for struct details
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, Options) ->
   brod_utils:delete_topics(Hosts, Topics, Timeout, Options).
 
