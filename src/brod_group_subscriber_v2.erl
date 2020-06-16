@@ -96,7 +96,9 @@
                             [brod:topic_partition()]) ->
   [{member_id(), [brod:partition_assignment()]}].
 
--optional_callbacks([assign_partitions/3, get_committed_offset/3]).
+-callback terminate(_State) -> _.
+
+-optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/1]).
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
