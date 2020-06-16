@@ -789,8 +789,9 @@ start_link_topic_subscriber(Client, Topic, Partitions,
                                    CbModule, CbInitArg).
 
 %% @see brod_topic_subscriber:start_link/1
--spec start_link_topic_subscriber(brod_topic_subscriber:topic_subscriber_config()) ->
-          {ok, pid()} | {error, any()}.
+-spec start_link_topic_subscriber(
+        brod_topic_subscriber:topic_subscriber_config()
+       ) -> {ok, pid()} | {error, any()}.
 start_link_topic_subscriber(Config) ->
   brod_topic_subscriber:start_link(Config).
 
