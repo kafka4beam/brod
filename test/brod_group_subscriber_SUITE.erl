@@ -471,7 +471,15 @@ t_async_commit(Config) when is_list(Config) ->
          %% had been committed:
          ?assertMatch( []
                      , ?projection(value, handled_messages(AfterRestart2))
-                     )
+                     ),
+         %% Check that terminate callback was called on each restart
+         %% (for the new behavior):
+         Behavior =:= brod_group_subscriber orelse
+           ?assertMatch( [ #{topic := Topic, partition := Partition}
+                         , #{topic := Topic, partition := Partition}
+                         ]
+                       , ?of_kind(brod_test_group_subscriber_terminate, Trace)
+                       )
      end).
 
 t_assign_partitions_handles_updating_state(Config) when is_list(Config) ->
