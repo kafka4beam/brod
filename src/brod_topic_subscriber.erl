@@ -40,6 +40,8 @@
         , terminate/2
         ]).
 
+-export([init/2, handle_message/3]).
+
 -include("brod_int.hrl").
 
 -type cb_state() :: term().
@@ -49,6 +51,26 @@
                       , cb_state()) -> cb_ret()).
 -type committed_offsets() :: [{brod:partition(), brod:offset()}].
 -type ack_ref()  :: {brod:partition(), brod:offset()}.
+
+-type topic_subscriber_config_fun() ::
+        #{ client            := brod:client()
+         , topic             := brod:topic()
+         , cb_fun            := module()
+         , message_type      => message | message_set
+         , consumer_config   => brod:consumer_config()
+         , partitions        := all | [brod:partition()]
+         , committed_offsets => brod:committed_offsets()
+         }.
+
+-type topic_subscriber_config() ::
+        #{ client            := brod:client()
+         , topic             := brod:topic()
+         , cb_module         := module()
+         , init_data         => term()
+         , message_type      => message | message_set
+         , consumer_config   => brod:consumer_config()
+         , partitions        := all | [brod:partition()]
+         }.
 
 %%%_* behaviour callbacks ======================================================
 
@@ -98,9 +120,15 @@
         , client_mref    :: reference()
         , topic          :: brod:topic()
         , consumers = [] :: [consumer()]
-        , cb_fun         :: cb_fun()
+        , cb_module      :: module()
         , cb_state       :: cb_state()
         , message_type   :: message | message_set
+        }).
+
+-record(cbm_init_data,
+        { committed_offsets :: committed_offsets()
+        , cb_fun            :: cb_fun()
+        , cb_data           :: term()
         }).
 
 -type state() :: #state{}.
@@ -118,28 +146,44 @@
 
 %% @equiv start_link(Client, Topic, Partitions, ConsumerConfig,
 %%           message, CbModule, CbInitArg)
+%%
+%% @deprecated Please use {@link start_link/1} instead
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), module(), term()) ->
         {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
            CbModule, CbInitArg) ->
-  Args = {Client, Topic, Partitions, ConsumerConfig,
-          message, CbModule, CbInitArg},
-  gen_server:start_link(?MODULE, Args, []).
+  Args = #{ client            => Client
+          , topic             => Topic
+          , partitions        => Partitions
+          , consumer_config   => ConsumerConfig
+          , message_type      => message
+          , cb_module         => CbModule
+          , init_data         => CbInitArg
+          },
+  start_link(Args).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages or message sets from the given partition set. Use atom `all'
 %% to subscribe to all partitions. Messages are handled by calling
 %% `CbModule:handle_message'
+%%
+%% @deprecated Please use {@link start_link/1} instead
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), message | message_set,
                  module(), term()) ->
         {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
            MessageType, CbModule, CbInitArg) ->
-  Args = {Client, Topic, Partitions, ConsumerConfig,
-          MessageType, CbModule, CbInitArg},
-  gen_server:start_link(?MODULE, Args, []).
+  Args = #{ client          => Client
+          , topic           => Topic
+          , partitions      => Partitions
+          , consumer_config => ConsumerConfig
+          , message_type    => MessageType
+          , cb_module       => CbModule
+          , init_data       => CbInitArg
+          },
+  start_link(Args).
 
 %% @doc Start (link) a topic subscriber which receives and processes the
 %% messages from the given partition set. Use atom `all' to subscribe to all
@@ -148,16 +192,32 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
 %% NOTE: `CommittedOffsets' are the offsets for the messages that have
 %%       been successfully processed (acknowledged), not the begin-offset
 %%       to start fetching from.
+%%
+%% @deprecated Please use {@link start_link/1} instead
 -spec start_link(brod:client(), brod:topic(), all | [brod:partition()],
                  brod:consumer_config(), committed_offsets(),
                  message | message_set, cb_fun(), cb_state()) ->
         {ok, pid()} | {error, any()}.
 start_link(Client, Topic, Partitions, ConsumerConfig,
            CommittedOffsets, MessageType, CbFun, CbInitialState) ->
-  Args = {Client, Topic, Partitions, ConsumerConfig,
-          CommittedOffsets, MessageType, CbFun, CbInitialState},
-  gen_server:start_link(?MODULE, Args, []).
+  InitData = #cbm_init_data{ committed_offsets = CommittedOffsets
+                           , cb_fun            = CbFun
+                           , cb_data           = CbInitialState
+                           },
+  Args = #{ client            => Client
+          , topic             => Topic
+          , partitions        => Partitions
+          , consumer_config   => ConsumerConfig
+          , message_type      => MessageType
+          , cb_module         => ?MODULE
+          , init_data         => InitData
+          },
+  start_link(Args).
 
+-spec start_link(topic_subscriber_config()) ->
+        {ok, pid()} | {error, _}.
+start_link(Config) ->
+  gen_server:start_link(?MODULE, Config, []).
 
 %% @doc Stop topic subscriber.
 -spec stop(pid()) -> ok.
@@ -174,19 +234,37 @@ stop(Pid) ->
 ack(Pid, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Partition, Offset}).
 
+%%%_* brod_topic_subscriber callbacks ==========================================
+
+%% @private This is needed to implement backward-consistent `cb_fun'
+%% interface.
+init(_Topic, #cbm_init_data{ committed_offsets = CommittedOffsets
+                           , cb_fun            = CbFun
+                           , cb_data           = CbState
+                           }) ->
+  {ok, CommittedOffsets, {CbFun, CbState}}.
+
+handle_message(Partition, Msg, {CbFun, CbState}) ->
+  {CbFun, CbFun(Partition, Msg, CbState)}.
+
 %%%_* gen_server callbacks =====================================================
 
 %% @private
-init({Client, Topic, Partitions, ConsumerConfig,
-      MessageType, CbModule, CbInitArg}) ->
-  {ok, CommittedOffsets, CbState} = CbModule:init(Topic, CbInitArg),
-  CbFun = fun(Partition, Msg, CbStateIn) ->
-                CbModule:handle_message(Partition, Msg, CbStateIn)
-          end,
-  init({Client, Topic, Partitions, ConsumerConfig,
-        CommittedOffsets, MessageType, CbFun, CbState});
-init({Client, Topic, Partitions, ConsumerConfig,
-      CommittedOffsets, MessageType, CbFun, CbState}) ->
+-spec init(topic_subscriber_config()) -> {ok, state()}.
+init(Config) ->
+  Defaults = #{ message_type      => message_set
+              , init_data         => undefined
+              , consumer_config   => []
+              },
+  #{ client            := Client
+   , topic             := Topic
+   , cb_module         := CbModule
+   , init_data         := InitData
+   , message_type      := MessageType
+   , consumer_config   := ConsumerConfig
+   , partitions        := Partitions
+   } = maps:merge(Defaults, Config),
+  {ok, CommittedOffsets, CbState} = CbModule:init(Topic, InitData),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
   self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
@@ -194,7 +272,7 @@ init({Client, Topic, Partitions, ConsumerConfig,
     #state{ client       = Client
           , client_mref  = erlang:monitor(process, Client)
           , topic        = Topic
-          , cb_fun       = CbFun
+          , cb_module    = CbModule
           , cb_state     = CbState
           , message_type = MessageType
           },
@@ -362,9 +440,9 @@ handle_message_set(MessageSet, State) ->
   #kafka_message_set{ partition = Partition
                     , messages  = Messages
                     } = MessageSet,
-  #state{cb_fun = CbFun, cb_state = CbState} = State,
+  #state{cb_module = CbModule, cb_state = CbState} = State,
   {AckNow, NewCbState} =
-    case CbFun(Partition, MessageSet, CbState) of
+    case CbModule:handle_message(Partition, MessageSet, CbState) of
       {ok, NewCbState_} ->
         {false, NewCbState_};
       {ok, ack, NewCbState_} ->
@@ -384,10 +462,10 @@ handle_messages(_Partition, [], State) ->
   State;
 handle_messages(Partition, [Msg | Rest], State) ->
   #kafka_message{offset = Offset} = Msg,
-  #state{cb_fun = CbFun, cb_state = CbState} = State,
+  #state{cb_module = CbModule, cb_state = CbState} = State,
   AckRef = {Partition, Offset},
   {AckNow, NewCbState} =
-    case CbFun(Partition, Msg, CbState) of
+    case CbModule:handle_message(Partition, Msg, CbState) of
       {ok, NewCbState_} ->
         {false, NewCbState_};
       {ok, ack, NewCbState_} ->
