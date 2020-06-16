@@ -103,6 +103,11 @@
                          brod:message() | brod:message_set(),
                          cb_state()) -> cb_ret().
 
+%% This callback is called before stopping the subscriber
+-callback terminate(cb_state()) -> _.
+
+-optional_callbacks([terminate/1]).
+
 %%%_* Types and macros =========================================================
 
 -record(consumer,
@@ -352,6 +357,10 @@ handle_cast({ack, Partition, Offset}, State) ->
   NewState = handle_ack(AckRef, State),
   {noreply, NewState};
 handle_cast(stop, State) ->
+  #state{ cb_state = CbState
+        , cb_module = CbModule
+        } = State,
+  brod_utils:optional_callback(CbModule, terminate, [CbState], ok),
   {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.

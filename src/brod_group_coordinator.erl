@@ -1079,10 +1079,7 @@ make_offset_commit_metadata() ->
 %% should be set in the assign_partitions callback implemenation.
 user_data(Module, Pid) ->
   %% Module is ensured to be loaded already
-  case erlang:function_exported(Module, user_data, 1) of
-    true -> Module:user_data(Pid);
-    false -> <<>>
-  end.
+  brod_utils:optional_callback(Module, user_data, [Pid], <<>>).
 
 %% Make a client ID to be used in the requests sent over the group
 %% coordinator's connection (group coordinator broker on the other end),
