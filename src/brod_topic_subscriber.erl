@@ -25,13 +25,19 @@
 -module(brod_topic_subscriber).
 -behaviour(gen_server).
 
+%% API:
 -export([ ack/3
-        , start_link/6
-        , start_link/7
-        , start_link/8
+        , start_link/1
         , stop/1
         ]).
 
+%% Deprecated APIs kept for backward compatibility:
+-export([ start_link/6
+        , start_link/7
+        , start_link/8
+        ]).
+
+%% gen_server callback
 -export([ code_change/3
         , handle_call/3
         , handle_cast/2
@@ -40,6 +46,7 @@
         , terminate/2
         ]).
 
+%% brod_topic_subscriber callbacks:
 -export([init/2, handle_message/3]).
 
 -include("brod_int.hrl").
@@ -58,7 +65,7 @@
          , cb_fun            := module()
          , message_type      => message | message_set
          , consumer_config   => brod:consumer_config()
-         , partitions        := all | [brod:partition()]
+         , partitions        => all | [brod:partition()]
          , committed_offsets => brod:committed_offsets()
          }.
 
@@ -69,7 +76,7 @@
          , init_data         => term()
          , message_type      => message | message_set
          , consumer_config   => brod:consumer_config()
-         , partitions        := all | [brod:partition()]
+         , partitions        => all | [brod:partition()]
          }.
 
 %%%_* behaviour callbacks ======================================================
@@ -219,6 +226,35 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
           },
   start_link(Args).
 
+%% @doc Start (link) a topic subscriber which receives and processes the
+%% messages from a given partition set.
+%%
+%% Possible `Config' keys:
+%%
+%% <ul><li> `client': Client ID (or pid, but not recommended) of the
+%% brod client. Mandatory</li>
+%%
+%% <li>`topic': Topic to consume from. Mandatory</li>
+%%
+%% <li>`cb_module': Callback module which should have the callback
+%% functions implemented for message processing. Mandatory</li>
+%%
+%% <li>`consumer_config': For partition consumer, {@link
+%% brod_topic_subscriber:start_link/6}. Optional, defaults to `[]'
+%% </li>
+%%
+%% <li>`message_type': The type of message that is going to be handled
+%% by the callback module. Can be either message or message set.
+%% Optional, defaults to `message_set'</li>
+%%
+%% <li>`init_data': The `term()' that is going to be passed to
+%% `CbModule:init/2' when initializing the subscriber. Optional,
+%% defaults to `undefined'</li>
+%%
+%% <li>`partitions': List of partitions to consume from, or atom
+%% `all'. Optional, defaults to `all'.</li>
+%% </ul>
+%% @end
 -spec start_link(topic_subscriber_config()) ->
         {ok, pid()} | {error, _}.
 start_link(Config) ->
@@ -260,6 +296,7 @@ init(Config) ->
   Defaults = #{ message_type      => message_set
               , init_data         => undefined
               , consumer_config   => []
+              , partitions        => all
               },
   #{ client            := Client
    , topic             := Topic
