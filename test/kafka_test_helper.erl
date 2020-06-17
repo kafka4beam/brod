@@ -16,6 +16,7 @@
         , consumer_config/0
         , client_config/0
         , bootstrap_hosts/0
+        , kill_process/1
         ]).
 
 -include("brod_test_macros.hrl").
@@ -179,3 +180,14 @@ consumer_config() ->
 bootstrap_hosts() ->
   [ {"localhost", 9092}
   ].
+
+kill_process(Pid) ->
+  Mon = monitor(process, Pid),
+  ?tp(kill_consumer, #{pid => Pid}),
+  exit(Pid, kill),
+  receive
+    {'DOWN', Mon, process, Pid, killed} ->
+      ok
+  after 1000 ->
+      ct:fail("timed out waiting for the process to die")
+  end.

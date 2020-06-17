@@ -285,8 +285,15 @@ init(_Topic, #cbm_init_data{ committed_offsets = CommittedOffsets
                            }) ->
   {ok, CommittedOffsets, {CbFun, CbState}}.
 
-handle_message(Partition, Msg, {CbFun, CbState}) ->
-  {CbFun, CbFun(Partition, Msg, CbState)}.
+handle_message(Partition, Msg, {CbFun, CbState0}) ->
+  case CbFun(Partition, Msg, CbState0) of
+    {ok, ack, CbState} ->
+      {ok, ack, {CbFun, CbState}};
+    {ok, CbState} ->
+      {ok, {CbFun, CbState}};
+    Err ->
+      Err
+  end.
 
 %%%_* gen_server callbacks =====================================================
 
