@@ -159,30 +159,21 @@ t_async_acks(Config) when is_list(Config) ->
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
                    ],
-  InitArgs = {_IsAsyncAck = true, _CommittedOffsets = []},
   ?check_trace(
      %% Run stage:
      begin
-      {ok, SubscriberPid} =
+       O0 = produce({?topic, 0}, <<0>>),
+       InitArgs = {true, [{0, O0}]},
+       {ok, SubscriberPid} =
          brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                           ?MODULE, InitArgs),
-       produce({?topic, 0}, <<0>>),
-       %% wait at most 2 seconds to receive the first message
-       %% it may or may not receive the first message (0) depending on when
-       %% the consumers starts polling --- before or after the first message
-       %% is produced:
-       Head = case wait_message(<<0>>, 2000) of
-                {ok, _} -> [<<0>>];
-                _       -> [] % We didn't receive the probe message, but that's
-                              % ok
-              end,
        %% Send messages:
        Messages = [<<I>> || I <- lists:seq(1, MaxSeqNo)],
        [produce({?topic, 0}, I) || I <- Messages],
        %% Ack messages:
        wait_and_ack(SubscriberPid, Messages),
        ok = brod_topic_subscriber:stop(SubscriberPid),
-       Head ++ Messages
+       Messages
      end,
      %% Check stage:
      fun(Expected, Trace) ->
@@ -207,7 +198,8 @@ t_begin_offset(Config) when is_list(Config) ->
        _Offset0 = SendFun(1),
        Offset1 = SendFun(2),
        Offset2 = SendFun(3),
-       %% Start as if committed Offset1, expect it to start fetching from Offset2
+       %% Start as if committed Offset1, expect it to start fetching from
+       %% Offset2
        InitArgs = {_IsAsyncAck = true,
                    _ConsumerOffsets = [{0, Offset1}]},
        {ok, SubscriberPid} =
@@ -231,7 +223,6 @@ t_consumer_crash(Config) when is_list(Config) ->
                    , {max_wait_time, 1000}
                    , {partition_restart_delay_seconds, 1}
                    ],
-  InitArgs = {_IsAsyncAck = true, _CommittedOffsets = []},
   Partition = 0,
   SendFun =
     fun(I) ->
@@ -240,10 +231,11 @@ t_consumer_crash(Config) when is_list(Config) ->
   ?check_trace(
      %% Run stage:
      begin
+       O0 = SendFun(0),
+       InitArgs = {true, [{0, O0}]},
        {ok, SubscriberPid} =
          brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                           ?MODULE, InitArgs),
-       SendFun(0),
        %% send some messages, ack some of them:
        [SendFun(I) || I <- lists:seq(1, 5)],
        {ok, #{offset := O3}} = wait_message(<<3>>),
@@ -265,7 +257,7 @@ t_consumer_crash(Config) when is_list(Config) ->
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
-         Expected = [<<I>> || I <- lists:seq(0, 8)],
+         Expected = [<<I>> || I <- lists:seq(1, 8)],
          check_received_messages(Expected, Trace),
          check_state_continuity(Trace),
          check_init_terminate(Trace)
@@ -360,8 +352,12 @@ check_state_continuity(Trace) ->
 
 %% Check that for any `init' there is a `terminate':
 check_init_terminate(Trace) ->
-  ?strict_causality( #{worker_id := _ID, ?snk_kind := topic_subscriber_init}
-                   , #{worker_id := _ID, ?snk_kind := topic_subscriber_terminate}
+  ?strict_causality( #{ worker_id := _ID
+                      , ?snk_kind := topic_subscriber_init
+                      }
+                   , #{ worker_id := _ID
+                      , ?snk_kind := topic_subscriber_terminate
+                      }
                    , Trace
                    ).
 
