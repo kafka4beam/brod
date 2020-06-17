@@ -28,6 +28,7 @@
 
 %% brod subscriber callbacks
 -export([ init/2
+        , terminate/1
         , handle_message/3
         ]).
 
@@ -105,6 +106,12 @@ handle_message(Partition, Message, #state{ is_async_ack = IsAsyncAck
     false -> {ok, ack, State}
   end.
 
+terminate(#state{worker_id = Ref, counter = Counter}) ->
+  ?tp(topic_subscriber_terminate,
+      #{ worker_id => Ref
+       , state     => Counter
+       }).
+
 %%%_* Test functions ===========================================================
 
 t_demo(Config) when is_list(Config) ->
@@ -164,22 +171,24 @@ t_async_acks(Config) when is_list(Config) ->
        %% it may or may not receive the first message (0) depending on when
        %% the consumers starts polling --- before or after the first message
        %% is produced:
-       _ = wait_message(<<0>>, 2000),
+       Head = case wait_message(<<0>>, 2000) of
+                {ok, _} -> [<<0>>];
+                _       -> [] % We didn't receive the probe message, but that's
+                              % ok
+              end,
        %% Send messages:
        Messages = [<<I>> || I <- lists:seq(1, MaxSeqNo)],
        [produce({?topic, 0}, I) || I <- Messages],
        %% Ack messages:
        wait_and_ack(SubscriberPid, Messages),
        ok = brod_topic_subscriber:stop(SubscriberPid),
-       Messages
+       Head ++ Messages
      end,
      %% Check stage:
      fun(Expected, Trace) ->
-         Received = ?projection(value, ?of_kind( topic_subscriber_seen_message
-                                               , Trace
-                                               )) -- [<<0>>],
-         %% Check that all messages have been received once:
-         ?assertEqual(Expected, Received)
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
      end).
 
 t_begin_offset(Config) when is_list(Config) ->
@@ -212,7 +221,8 @@ t_begin_offset(Config) when is_list(Config) ->
      %% Check stage:
      fun(Expected, Trace) ->
          check_received_messages(Expected, Trace),
-         check_state_continuity(Trace)
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
      end).
 
 t_consumer_crash(Config) when is_list(Config) ->
@@ -257,7 +267,8 @@ t_consumer_crash(Config) when is_list(Config) ->
      fun(_Ret, Trace) ->
          Expected = [<<I>> || I <- lists:seq(0, 8)],
          check_received_messages(Expected, Trace),
-         check_state_continuity(Trace)
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
      end).
 
 %% Test the old way of consuming messages via callback fun:
@@ -346,6 +357,13 @@ check_state_continuity(Trace) ->
                                 } <- Trace]),
   [check_state_continuity(I, Trace) || I <- Workers],
   true.
+
+%% Check that for any `init' there is a `terminate':
+check_init_terminate(Trace) ->
+  ?strict_causality( #{worker_id := _ID, ?snk_kind := topic_subscriber_init}
+                   , #{worker_id := _ID, ?snk_kind := topic_subscriber_terminate}
+                   , Trace
+                   ).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
