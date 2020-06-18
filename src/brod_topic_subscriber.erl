@@ -46,9 +46,6 @@
         , terminate/2
         ]).
 
-%% brod_topic_subscriber callbacks:
--export([init/2, handle_message/3]).
-
 -include("brod_int.hrl").
 
 -type cb_state() :: term().
@@ -58,6 +55,11 @@
                       , cb_state()) -> cb_ret()).
 -type committed_offsets() :: [{brod:partition(), brod:offset()}].
 -type ack_ref()  :: {brod:partition(), brod:offset()}.
+
+-export_type([ cb_ret/0
+             , cb_fun/0
+             , committed_offsets/0
+             ]).
 
 -type topic_subscriber_config_fun() ::
         #{ client            := brod:client()
@@ -111,9 +113,9 @@
                          cb_state()) -> cb_ret().
 
 %% This callback is called before stopping the subscriber
--callback terminate(cb_state()) -> _.
+-callback terminate(_Reason, cb_state()) -> _.
 
--optional_callbacks([terminate/1]).
+-optional_callbacks([terminate/2]).
 
 %%%_* Types and macros =========================================================
 
@@ -135,12 +137,6 @@
         , cb_module      :: module()
         , cb_state       :: cb_state()
         , message_type   :: message | message_set
-        }).
-
--record(cbm_init_data,
-        { committed_offsets :: committed_offsets()
-        , cb_fun            :: cb_fun()
-        , cb_data           :: term()
         }).
 
 -type state() :: #state{}.
@@ -221,7 +217,7 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
           , partitions        => Partitions
           , consumer_config   => ConsumerConfig
           , message_type      => MessageType
-          , cb_module         => ?MODULE
+          , cb_module         => brod_topic_subscriber_cb_fun
           , init_data         => InitData
           },
   start_link(Args).
@@ -274,26 +270,6 @@ stop(Pid) ->
 -spec ack(pid(), brod:partition(), brod:offset()) -> ok.
 ack(Pid, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Partition, Offset}).
-
-%%%_* brod_topic_subscriber callbacks ==========================================
-
-%% @private This is needed to implement backward-consistent `cb_fun'
-%% interface.
-init(_Topic, #cbm_init_data{ committed_offsets = CommittedOffsets
-                           , cb_fun            = CbFun
-                           , cb_data           = CbState
-                           }) ->
-  {ok, CommittedOffsets, {CbFun, CbState}}.
-
-handle_message(Partition, Msg, {CbFun, CbState0}) ->
-  case CbFun(Partition, Msg, CbState0) of
-    {ok, ack, CbState} ->
-      {ok, ack, {CbFun, CbState}};
-    {ok, CbState} ->
-      {ok, {CbFun, CbState}};
-    Err ->
-      Err
-  end.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -401,10 +377,6 @@ handle_cast({ack, Partition, Offset}, State) ->
   NewState = handle_ack(AckRef, State),
   {noreply, NewState};
 handle_cast(stop, State) ->
-  #state{ cb_state = CbState
-        , cb_module = CbModule
-        } = State,
-  brod_utils:optional_callback(CbModule, terminate, [CbState], ok),
   {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
@@ -414,9 +386,9 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 %% @private
-terminate(_Reason, #state{}) ->
+terminate(Reason, #state{cb_module = CbModule, cb_state = CbState}) ->
+  brod_utils:optional_callback(CbModule, terminate, [Reason, CbState], ok),
   ok.
-
 
 %%%_* Internal Functions =======================================================
 

@@ -1,5 +1,9 @@
 * 3.14.0
-  * Introduced a new optional terminate/1 callback to
+  NOTE: This release changes internal states of brod worker processes
+  in a way that cannot by applied on a running system. brod application
+  and all brod workers should be shot down for the time of the upgrade.
+
+  * Introduced a new optional terminate/2 callback to
     brod_topic_subscriber and brod_group_subscriber_v2 behaviors
 
   * Introduced new API functions for starting topic subscribers:

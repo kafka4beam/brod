@@ -28,7 +28,7 @@
 
 %% brod subscriber callbacks
 -export([ init/2
-        , terminate/1
+        , terminate/2
         , handle_message/3
         ]).
 
@@ -37,6 +37,7 @@
         , t_demo/1
         , t_demo_message_set/1
         , t_consumer_crash/1
+        , t_callback_crash/1
         , t_begin_offset/1
         , t_cb_fun/1
         ]).
@@ -106,10 +107,11 @@ handle_message(Partition, Message, #state{ is_async_ack = IsAsyncAck
     false -> {ok, ack, State}
   end.
 
-terminate(#state{worker_id = Ref, counter = Counter}) ->
+terminate(Reason, #state{worker_id = Ref, counter = Counter}) ->
   ?tp(topic_subscriber_terminate,
       #{ worker_id => Ref
        , state     => Counter
+       , reason    => Reason
        }).
 
 %%%_* Test functions ===========================================================
@@ -263,6 +265,40 @@ t_consumer_crash(Config) when is_list(Config) ->
          check_init_terminate(Trace)
      end).
 
+t_callback_crash(Config) when is_list(Config) ->
+  %% Test that terminate callback is called after handle_message callback
+  %% throws an exception:
+  ?check_trace(
+     %% Run stage:
+     begin
+       O0 = produce({?topic, 0}, <<0>>),
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(
+           #{ client        => ?CLIENT_ID
+            , topic         => ?topic
+            , message_type  => message
+            , init_data     => {false, [{0, O0}]}
+            , cb_module     => ?MODULE
+            }),
+       MRef = monitor(process, SubscriberPid),
+       unlink(SubscriberPid),
+       ?inject_crash( #{value := <<2>>, kind := topic_subscriber_seen_message}
+                    , snabbkaffe_nemesis:always_crash()
+                    ),
+       %% Send messages:
+       Messages = [<<I>> || I <- lists:seq(1, 3)],
+       [produce({?topic, 0}, I) || I <- Messages],
+       receive
+         {'DOWN', MRef, process, SubscriberPid, _} -> ok
+       after
+         10000 -> error(would_not_die)
+       end
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         check_init_terminate(Trace)
+     end).
+
 %% Test the old way of consuming messages via callback fun:
 t_cb_fun(Config) when is_list(Config) ->
   N = 10,
@@ -352,12 +388,8 @@ check_state_continuity(Trace) ->
 
 %% Check that for any `init' there is a `terminate':
 check_init_terminate(Trace) ->
-  ?strict_causality( #{ worker_id := _ID
-                      , ?snk_kind := topic_subscriber_init
-                      }
-                   , #{ worker_id := _ID
-                      , ?snk_kind := topic_subscriber_terminate
-                      }
+  ?strict_causality( #{worker_id := _ID, ?snk_kind := topic_subscriber_init}
+                   , #{worker_id := _ID, ?snk_kind := topic_subscriber_terminate}
                    , Trace
                    ).
 

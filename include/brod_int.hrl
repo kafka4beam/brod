@@ -35,6 +35,12 @@
                 , node_id :: integer()
                 }).
 
+-record(cbm_init_data,
+        { committed_offsets :: brod_topic_subscriber:committed_offsets()
+        , cb_fun            :: brod_topic_subscriber:cb_fun()
+        , cb_data           :: term()
+        }).
+
 -type sasl_opt() :: {plain, User :: string() | binary(),
                             Pass :: string() | binary() |
                                     fun(() -> string() | binary())}

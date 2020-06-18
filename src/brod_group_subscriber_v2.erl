@@ -96,7 +96,7 @@
                             [brod:topic_partition()]) ->
   [{member_id(), [brod:partition_assignment()]}].
 
--callback terminate(_State) -> _.
+-callback terminate(_Reason, _State) -> _.
 
 -optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/1]).
 

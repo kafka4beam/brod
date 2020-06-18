@@ -22,7 +22,7 @@
 -include("brod_int.hrl").
 
 %% brod_topic_subscriber callbacks
--export([init/2, handle_message/3, terminate/1]).
+-export([init/2, handle_message/3, terminate/2]).
 
 -type start_options() ::
         #{ group_id     := brod:group_id()
@@ -98,8 +98,8 @@ handle_message(_Partition, Msg, State) ->
       {ok, NewState}
   end.
 
-terminate(#state{cb_module = CbModule, cb_state = State}) ->
-  brod_utils:optional_callback(CbModule, terminate, [State], ok).
+terminate(Reason, #state{cb_module = CbModule, cb_state = State}) ->
+  brod_utils:optional_callback(CbModule, terminate, [Reason, State], ok).
 
 %%%===================================================================
 %%% Internal functions
