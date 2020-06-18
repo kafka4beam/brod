@@ -282,7 +282,7 @@ t_callback_crash(Config) when is_list(Config) ->
             }),
        MRef = monitor(process, SubscriberPid),
        unlink(SubscriberPid),
-       ?inject_crash( #{value := <<2>>, kind := topic_subscriber_seen_message}
+       ?inject_crash( #{value := <<2>>, ?snk_kind := topic_subscriber_seen_message}
                     , snabbkaffe_nemesis:always_crash()
                     ),
        %% Send messages:

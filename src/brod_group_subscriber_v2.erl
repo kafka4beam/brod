@@ -98,7 +98,7 @@
 
 -callback terminate(_Reason, _State) -> _.
 
--optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/1]).
+-optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/2]).
 
 -define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
 
