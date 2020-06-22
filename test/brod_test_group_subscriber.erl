@@ -27,7 +27,7 @@
         , get_committed_offset/3
         , handle_message/2
         , assign_partitions/3
-        , terminate/1
+        , terminate/2
         ]).
 
 init(InitInfo, Config) ->
@@ -76,10 +76,11 @@ assign_partitions(_CbConfig, Members, TopicPartitions) ->
                            || {Topic, PartitionsN} <- TopicPartitions],
   [{element(1, hd(Members)), PartitionsAssignments}].
 
-terminate(#state{ topic = Topic
-                , partition = Partition
-                }) ->
+terminate(Reason, #state{ topic = Topic
+                        , partition = Partition
+                        }) ->
   ?tp(brod_test_group_subscriber_terminate,
-      #{ topic => Topic
+      #{ topic     => Topic
        , partition => Partition
+       , readon    => Reason
        }).
