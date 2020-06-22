@@ -51,6 +51,7 @@
         , make_fetch_fun/4
         , make_part_fun/1
         , os_time_utc_str/0
+        , optional_callback/4
         , parse_rsp/1
         , request_sync/2
         , request_sync/3
@@ -192,6 +193,17 @@ os_time_utc_str() ->
   S = io_lib:format("~4.4.0w-~2.2.0w-~2.2.0w:~2.2.0w:~2.2.0w:~2.2.0w.~6.6.0w",
                     [Y, M, D, H, Min, Sec, Micro]),
   lists:flatten(S).
+
+%% @doc Execute a callback from a module, if present.
+-spec optional_callback(module(), atom(), list(), Ret) -> Ret.
+optional_callback(Module, Function, Args, Default) ->
+  Arity = length(Args),
+  case erlang:function_exported(Module, Function, Arity) of
+    true ->
+      apply(Module, Function, Args);
+    false ->
+      Default
+  end.
 
 %% @doc Milliseconds since beginning of the epoch (midnight Jan 1, 1970 (UTC)).
 -spec epoch_ms() -> kpro:msg_ts().

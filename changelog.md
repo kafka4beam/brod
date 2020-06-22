@@ -1,3 +1,21 @@
+* 3.14.0
+  NOTE: This release changes internal states of brod worker processes
+  in a way that cannot by applied on a running system. brod application
+  and all brod workers should be shot down for the time of the upgrade.
+
+  * Introduced a new optional terminate/2 callback to
+    brod_topic_subscriber and brod_group_subscriber_v2 behaviors
+
+  * Introduced new API functions for starting topic subscribers:
+    brod_topic_subscriber:start_link/1 and brod:start_link_topic_subscriber/1
+    Old APIs
+      * brod:start_link_topic_subscriber/5,
+      * brod:start_link_topic_subscriber/6
+      * brod:start_link_topic_subscriber/7
+      * brod_topic_subscriber:start_link/6
+      * brod_topic_subscriber:start_link/7
+      * brod_topic_subscriber:start_link/8
+    are deprecated and will be removed in the next major release
 * 3.13.0
   * Update supervisor3 dependency to 1.1.11
   * brod_group_subscriber_v2 behavior handles worker crashes

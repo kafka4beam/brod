@@ -28,6 +28,7 @@
 
 %% brod subscriber callbacks
 -export([ init/2
+        , terminate/2
         , handle_message/3
         ]).
 
@@ -36,7 +37,9 @@
         , t_demo/1
         , t_demo_message_set/1
         , t_consumer_crash/1
+        , t_callback_crash/1
         , t_begin_offset/1
+        , t_cb_fun/1
         ]).
 
 -include("brod_test_setup.hrl").
@@ -66,33 +69,50 @@ common_end_per_testcase(Case, Config) ->
 
 %%%_* Topic subscriber callbacks ===============================================
 
--record(state, { ct_case_ref
-               , ct_case_pid
-               , is_async_ack
-               }).
+-record(state,
+        { is_async_ack :: boolean()
+        , counter      :: integer()
+        , worker_id    :: reference()
+        }).
 
-init(Topic, {CaseRef, CasePid, IsAsyncAck}) ->
-  init(Topic, {CaseRef, CasePid, IsAsyncAck, _CommittedOffsets = []});
-init(_Topic, {CaseRef, CasePid, IsAsyncAck, CommittedOffsets}) ->
-  State = #state{ ct_case_ref  = CaseRef
-                , ct_case_pid  = CasePid
-                , is_async_ack = IsAsyncAck
+init(_Topic, {IsAsyncAck, CommittedOffsets}) ->
+  Ref = make_ref(),
+  ?tp(topic_subscriber_init,
+      #{ worker_id => Ref
+       , state     => 0
+       }),
+  State = #state{ is_async_ack = IsAsyncAck
+                , counter      = 1
+                , worker_id    = Ref
                 },
   {ok, CommittedOffsets, State}.
 
-handle_message(Partition, Message, #state{ ct_case_ref  = Ref
-                                         , ct_case_pid  = Pid
-                                         , is_async_ack = IsAsyncAck
-                                         } = State) ->
+handle_message(Partition, Message, #state{ is_async_ack = IsAsyncAck
+                                         , counter      = Counter
+                                         , worker_id    = Ref
+                                         } = State0) ->
   #kafka_message{ offset = Offset
                 , value  = Value
                 } = Message,
-  %% forward the message to ct case for verification.
-  Pid ! {Ref, Partition, Offset, Value},
+  ?tp(topic_subscriber_seen_message,
+     #{ partition => Partition
+      , offset    => Offset
+      , value     => Value
+      , state     => Counter
+      , worker_id => Ref
+      }),
+  State = State0#state{counter = Counter + 1},
   case IsAsyncAck of
     true  -> {ok, State};
     false -> {ok, ack, State}
   end.
+
+terminate(Reason, #state{worker_id = Ref, counter = Counter}) ->
+  ?tp(topic_subscriber_terminate,
+      #{ worker_id => Ref
+       , state     => Counter
+       , reason    => Reason
+       }).
 
 %%%_* Test functions ===========================================================
 
@@ -141,45 +161,28 @@ t_async_acks(Config) when is_list(Config) ->
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
                    ],
-  CaseRef = t_async_acks,
-  CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
-  Partition = 0,
-  {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
-                                     ?MODULE, InitArgs),
-  SendFun =
-    fun(I) ->
-      Value = integer_to_binary(I),
-      produce({?topic, Partition}, Value)
-    end,
-  RecvFun =
-    fun F(Timeout, Acc) ->
-      receive
-        {CaseRef, Partition, Offset, Value} ->
-          ok = brod_topic_subscriber:ack(SubscriberPid, Partition, Offset),
-          I = binary_to_integer(Value),
-          F(0, [I | Acc]);
-        Msg ->
-          erlang:error({unexpected_msg, Msg})
-      after Timeout ->
-        Acc
-      end
-    end,
-  SendFun(0),
-  %% wait at most 2 seconds to receive the first message
-  %% it may or may not receive the first message (0) depending on when
-  %% the consumers starts polling --- before or after the first message
-  %% is produced.
-  _ = RecvFun(2000, []),
-  L = lists:seq(1, MaxSeqNo),
-  ok = lists:foreach(SendFun, L),
-  %% worst case scenario, the receive loop will cost (100 * 5 + 5 * 1000) ms
-  Timeouts = lists:duplicate(MaxSeqNo, 5) ++ lists:duplicate(5, 1000),
-  ReceivedL = lists:foldl(RecvFun, [], Timeouts ++ [1,2,3,4,5]),
-  ?assertEqual(L, lists:reverse(ReceivedL)),
-  ok = brod_topic_subscriber:stop(SubscriberPid),
-  ok.
+  ?check_trace(
+     %% Run stage:
+     begin
+       O0 = produce({?topic, 0}, <<0>>),
+       InitArgs = {true, [{0, O0}]},
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
+                                          ?MODULE, InitArgs),
+       %% Send messages:
+       Messages = [<<I>> || I <- lists:seq(1, MaxSeqNo)],
+       [produce({?topic, 0}, I) || I <- Messages],
+       %% Ack messages:
+       wait_and_ack(SubscriberPid, Messages),
+       ok = brod_topic_subscriber:stop(SubscriberPid),
+       Messages
+     end,
+     %% Check stage:
+     fun(Expected, Trace) ->
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
+     end).
 
 t_begin_offset(Config) when is_list(Config) ->
   ConsumerConfig = [ {prefetch_count, 100}
@@ -187,39 +190,34 @@ t_begin_offset(Config) when is_list(Config) ->
                    , {sleep_timeout, 0}
                    , {max_wait_time, 1000}
                    ],
-  CaseRef = t_begin_offset,
-  CasePid = self(),
-  Partition = 0,
   SendFun =
     fun(I) ->
-      Value = integer_to_binary(I),
-      produce({?topic, Partition}, Value)
+      produce({?topic, 0}, <<I>>)
     end,
-  RecvFun =
-    fun F(Pid, Timeout, Acc) ->
-      receive
-        {CaseRef, Partition, Offset, Value} ->
-          ok = brod_topic_subscriber:ack(Pid, Partition, Offset),
-          I = binary_to_integer(Value),
-          F(Pid, 0, [{Offset, I} | Acc]);
-        Msg ->
-          erlang:error({unexpected_msg, Msg})
-      after Timeout ->
-        Acc
-      end
-    end,
-  _Offset0 = SendFun(111),
-  Offset1 = SendFun(222),
-  Offset2 = SendFun(333),
-  %% Start as if committed Offset1, expect it to start fetching from Offset2
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true,
-              _ConsumerOffsets = [{0, Offset1}]},
-  {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
-                                     ?MODULE, InitArgs),
-  ?assertEqual([{Offset2, 333}], RecvFun(SubscriberPid, 5000, [])),
-  ok = brod_topic_subscriber:stop(SubscriberPid),
-  ok.
+  ?check_trace(
+     %% Run stage:
+     begin
+       _Offset0 = SendFun(1),
+       Offset1 = SendFun(2),
+       Offset2 = SendFun(3),
+       %% Start as if committed Offset1, expect it to start fetching from
+       %% Offset2
+       InitArgs = {_IsAsyncAck = true,
+                   _ConsumerOffsets = [{0, Offset1}]},
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
+                                          ?MODULE, InitArgs),
+       Expected = [<<3>>],
+       wait_and_ack(SubscriberPid, Expected),
+       ok = brod_topic_subscriber:stop(SubscriberPid),
+       Expected
+     end,
+     %% Check stage:
+     fun(Expected, Trace) ->
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
+     end).
 
 t_consumer_crash(Config) when is_list(Config) ->
   ConsumerConfig = [ {prefetch_count, 10}
@@ -227,60 +225,173 @@ t_consumer_crash(Config) when is_list(Config) ->
                    , {max_wait_time, 1000}
                    , {partition_restart_delay_seconds, 1}
                    ],
-  CaseRef = t_consumer_crash,
-  CasePid = self(),
-  InitArgs = {CaseRef, CasePid, _IsAsyncAck = true},
   Partition = 0,
-  {ok, SubscriberPid} =
-    brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
-                                     ?MODULE, InitArgs),
   SendFun =
     fun(I) ->
         produce({?topic, Partition}, <<I>>)
     end,
-  ReceiveFun =
-    fun F(MaxI, Acc) ->
-        receive
-          {CaseRef, Partition, Offset, <<MaxI>>} ->
-            lists:unzip(lists:reverse([{Offset, MaxI} | Acc]));
-          {CaseRef, Partition, Offset, <<I>>} when I < MaxI ->
-            F(MaxI, [{Offset, I} | Acc]);
-          Msg ->
-            ct:fail("Unexpected msg: ~p", [Msg])
-        after 5000 ->
-            lists:unzip(lists:reverse(Acc))
-        end
-    end,
-  SendFun(0),
-  %% the first message may or may not be received depending on when
-  %% the consumer starts polling
-  ReceiveFun(0, []),
-  %% send and receive some messages, ack some of them
-  [SendFun(I) || I <- lists:seq(1, 5)],
-  {[_, _, O3, _, O5], [1, 2, 3, 4, 5]} = ReceiveFun(5, []),
-  ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O3),
-  %% do a sync request to the subscriber, so that we know it has
-  %% processed the ack, then kill the brod_consumer process
-  sys:get_state(SubscriberPid),
-  {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?topic, Partition),
-  Mon = monitor(process, ConsumerPid),
-  exit(ConsumerPid, kill),
-  receive {'DOWN', Mon, process, ConsumerPid, killed} -> ok
-  after 1000 -> ct:fail("timed out waiting for the consumer process to die")
-  end,
-  %% ack all previously received messages
-  %% so topic subscriber can re-subscribe to the restarted consumer
-  ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O5),
-  %% send and receive some more messages, check each message arrives only once
-  [SendFun(I) || I <- lists:seq(6, 8)],
-  {_, [6, 7, 8]} = ReceiveFun(8, []),
-  %% stop the subscriber and check there are no more late messages delivered
-  ok = brod_topic_subscriber:stop(SubscriberPid),
-  receive
-    {CaseRef, Partition, Offset, Value} ->
-      ct:fail("Unexpected msg: offset ~p, value ~p", [Offset, Value])
-  after 0 -> ok
-  end.
+  ?check_trace(
+     %% Run stage:
+     begin
+       O0 = SendFun(0),
+       InitArgs = {true, [{0, O0}]},
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
+                                          ?MODULE, InitArgs),
+       %% send some messages, ack some of them:
+       [SendFun(I) || I <- lists:seq(1, 5)],
+       {ok, #{offset := O3}} = wait_message(<<3>>),
+       {ok, #{offset := O5}} = wait_message(<<5>>),
+       ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O3),
+       %% do a sync request to the subscriber, so that we know it has
+       %% processed the ack, then kill the brod_consumer process
+       sys:get_state(SubscriberPid),
+       {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?topic, Partition),
+       kafka_test_helper:kill_process(ConsumerPid),
+       %% ack all previously received messages
+       %% so topic subscriber can re-subscribe to the restarted consumer
+       ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O5),
+       %% send more messages and wait until they are processed:
+       [SendFun(I) || I <- lists:seq(6, 8)],
+       {ok, _} = wait_message(<<8>>),
+       %% stop the subscriber:
+       ok = brod_topic_subscriber:stop(SubscriberPid)
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         Expected = [<<I>> || I <- lists:seq(1, 8)],
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
+     end).
+
+t_callback_crash(Config) when is_list(Config) ->
+  %% Test that terminate callback is called after handle_message callback
+  %% throws an exception:
+  ?check_trace(
+     %% Run stage:
+     begin
+       O0 = produce({?topic, 0}, <<0>>),
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(
+           #{ client        => ?CLIENT_ID
+            , topic         => ?topic
+            , message_type  => message
+            , init_data     => {false, [{0, O0}]}
+            , cb_module     => ?MODULE
+            }),
+       MRef = monitor(process, SubscriberPid),
+       unlink(SubscriberPid),
+       ?inject_crash( #{value := <<2>>, ?snk_kind := topic_subscriber_seen_message}
+                    , snabbkaffe_nemesis:always_crash()
+                    ),
+       %% Send messages:
+       Messages = [<<I>> || I <- lists:seq(1, 3)],
+       [produce({?topic, 0}, I) || I <- Messages],
+       receive
+         {'DOWN', MRef, process, SubscriberPid, _} -> ok
+       after
+         10000 -> error(would_not_die)
+       end
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         check_init_terminate(Trace)
+     end).
+
+%% Test the old way of consuming messages via callback fun:
+t_cb_fun(Config) when is_list(Config) ->
+  N = 10,
+  Ref = make_ref(),
+  ConsumerConfig = [ {prefetch_count, 10}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 1000}
+                   , {partition_restart_delay_seconds, 1}
+                   ],
+  CbFun = fun(Partition, Msg, State) ->
+              #kafka_message{ offset = Offset
+                            , value  = Value
+                            } = Msg,
+              ?tp(topic_subscriber_seen_message,
+                  #{ partition => Partition
+                   , offset    => Offset
+                   , value     => Value
+                   , state     => State
+                   , worker_id => Ref
+                   }),
+              {ok, ack, State + 1}
+          end,
+  InitialState = 0,
+  ?check_trace(
+     %% Run stage:
+     begin
+       %% Produce messages:
+       Messages = [<<I>> || I <- lists:seq(0, N)],
+       [_, _, O3|_] = [produce({?topic, 0}, I) || I <- Messages],
+       %% Start subscriber from offset O+1 and wait until it's done:
+       {ok, SubscriberPid} =
+         brod_topic_subscriber:start_link(?CLIENT_ID, ?topic, [0],
+                                          ConsumerConfig, [{0, O3}], message,
+                                          CbFun, InitialState),
+       ?assertMatch({ok, _}, wait_message(<<N>>)),
+       brod_topic_subscriber:stop(SubscriberPid),
+       Messages
+     end,
+     %% Check stage:
+     fun(Messages, Trace) ->
+         %% Drop messages with offsets =< O3:
+         [_, _, _|Expected] = Messages,
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace)
+     end).
+
+%%%_* Internal functions  ======================================================
+
+wait_message(Content) ->
+  wait_message(Content, 30000).
+
+wait_message(Content, Timeout) ->
+  ?block_until(#{ ?snk_kind := topic_subscriber_seen_message
+                , value := Content
+                }, Timeout).
+
+%% Wait for multiple messages and ack them as they are received:
+wait_and_ack(SubscriberPid, Messages) ->
+  [begin
+     {ok, #{offset := Offset}} = wait_message(I),
+     ok = brod_topic_subscriber:ack(SubscriberPid, 0, Offset)
+   end || I <- Messages].
+
+%% Check that messages processed by the tested process are exactly the
+%% same as expected:
+check_received_messages(Expected, Trace) ->
+  Messages = ?of_kind(topic_subscriber_seen_message, Trace),
+  %% Check that all messages have been seen once:
+  ?assertEqual( Expected
+              , ?projection(value, Messages)
+              ).
+
+%% Check that state of callback module is correctly passed around
+%% between the calls:
+check_state_continuity(WorkerId, Trace) ->
+  snabbkaffe:strictly_increasing([S || #{ worker_id := WorkerId
+                                        , state := S
+                                        } <- Trace]).
+
+check_state_continuity(Trace) ->
+  %% Find IDs of all worker processes:
+  Workers = lists:usort([ID || #{ worker_id := ID
+                                , state := _
+                                } <- Trace]),
+  [check_state_continuity(I, Trace) || I <- Workers],
+  true.
+
+%% Check that for any `init' there is a `terminate':
+check_init_terminate(Trace) ->
+  ?strict_causality( #{worker_id := _ID, ?snk_kind := topic_subscriber_init}
+                   , #{worker_id := _ID, ?snk_kind := topic_subscriber_terminate}
+                   , Trace
+                   ).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
