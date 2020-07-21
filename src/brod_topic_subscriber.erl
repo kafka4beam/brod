@@ -130,15 +130,6 @@
 -type consumer() :: #consumer{}.
 
 -record(state,
-<<<<<<< HEAD
-        { client         :: brod:client()
-        , client_mref    :: reference()
-        , topic          :: brod:topic()
-        , consumers = [] :: [consumer()]
-        , cb_module      :: module()
-        , cb_state       :: cb_state()
-        , message_type   :: message | message_set
-=======
         { client          :: brod:client()
         , client_mref     :: reference()
         , topic           :: brod:topic()
@@ -147,7 +138,6 @@
         , cb_state        :: cb_state()
         , message_type    :: message | message_set
         , consumer_config :: list()
->>>>>>> topic_subscriber owns its consumers
         }).
 
 -type state() :: #state{}.
@@ -285,7 +275,6 @@ ack(Pid, Partition, Offset) ->
 %%%_* gen_server callbacks =====================================================
 
 %% @private
-<<<<<<< HEAD
 -spec init(topic_subscriber_config()) -> {ok, state()}.
 init(Config) ->
   Defaults = #{ message_type      => message_set
@@ -302,31 +291,11 @@ init(Config) ->
    , partitions        := Partitions
    } = maps:merge(Defaults, Config),
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, InitData),
-=======
-init({Client, Topic, Partitions, ConsumerConfig,
-      MessageType, CbModule, CbInitArg}) ->
-  {ok, CommittedOffsets, CbState} = CbModule:init(Topic, CbInitArg),
-  CbFun = fun(Partition, Msg, CbStateIn) ->
-                CbModule:handle_message(Partition, Msg, CbStateIn)
-          end,
-  init({Client, Topic, Partitions, ConsumerConfig,
-        CommittedOffsets, MessageType, CbFun, CbState});
-init({Client, Topic, Partitions, ConsumerConfig0,
-      CommittedOffsets, MessageType, CbFun, CbState}) ->
->>>>>>> topic_subscriber owns its consumers
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
   ConsumerConfig = [{register_self, false} | ConsumerConfig0],
   self() ! ?LO_CMD_START_CONSUMER(CommittedOffsets, Partitions),
   State =
-<<<<<<< HEAD
-    #state{ client       = Client
-          , client_mref  = erlang:monitor(process, Client)
-          , topic        = Topic
-          , cb_module    = CbModule
-          , cb_state     = CbState
-          , message_type = MessageType
-=======
     #state{ client          = Client
           , client_mref     = erlang:monitor(process, Client)
           , topic           = Topic
@@ -334,7 +303,6 @@ init({Client, Topic, Partitions, ConsumerConfig0,
           , cb_state        = CbState
           , message_type    = MessageType
           , consumer_config = ConsumerConfig
->>>>>>> topic_subscriber owns its consumers
           },
   {ok, State}.
 
