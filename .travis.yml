@@ -15,9 +15,9 @@ notifications:
   email: false
 
 otp_release:
+  - 23.0.3
   - 22.0.2
   - 21.0
-  - 20.3
   - 19.3
 
 script:
@@ -35,15 +35,15 @@ script:
   - |
     set -e
     OTP_VSN=`erl -noshell -eval 'io:format(erlang:system_info(otp_release)), halt(0)'`
-    if [ $OTP_VSN -eq 22 ]; then
-      # run dialyzer only in otp 22
+    if [ $OTP_VSN -eq 23 ]; then
+      # run dialyzer only in otp 23
       rebar3 dialyzer
       export KAFKA_VERSION="2.2"
     fi
-    if [ $OTP_VSN -eq 21 ]; then
+    if [ $OTP_VSN -eq 22 ]; then
       export KAFKA_VERSION="2.2"
     fi
-    if [ $OTP_VSN -eq 20 ]; then
+    if [ $OTP_VSN -eq 21 ]; then
       export KAFKA_VERSION="0.11"
     fi
     if [ $OTP_VSN -eq 19 ]; then
@@ -51,7 +51,7 @@ script:
     fi
     make test-env
     _build/brod_cli/rel/brod/bin/brod meta -b localhost -L
-    make t
+    make t || make t
     make cover
 
 after_success:
