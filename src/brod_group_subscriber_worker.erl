@@ -41,6 +41,8 @@
         , commit_fun    :: brod_group_subscriber_v2:commit_fun()
         }).
 
+-export_type([start_options/0]).
+
 %%%===================================================================
 %%% brod_topic_subscriber callbacks
 %%%===================================================================
