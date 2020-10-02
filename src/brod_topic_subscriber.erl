@@ -59,17 +59,8 @@
 -export_type([ cb_ret/0
              , cb_fun/0
              , committed_offsets/0
+             , topic_subscriber_config/0
              ]).
-
--type topic_subscriber_config_fun() ::
-        #{ client            := brod:client()
-         , topic             := brod:topic()
-         , cb_fun            := module()
-         , message_type      => message | message_set
-         , consumer_config   => brod:consumer_config()
-         , partitions        => all | [brod:partition()]
-         , committed_offsets => brod:committed_offsets()
-         }.
 
 -type topic_subscriber_config() ::
         #{ client            := brod:client()
