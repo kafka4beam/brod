@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2018, Klarna Bank AB (publ)
+%%%   Copyright (c) 2014-2020, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -146,7 +146,7 @@ get_metadata(Hosts, Topics, ConnCfg) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
   Timeout =
-      proplists:get_value(connect_timeout, ConnCfg, ?DEFAULT_TIMEOUT),
+      proplists:get_value(connect_timeout, ConnCfg, ?BROD_DEFAULT_TIMEOUT),
   Opts = #{timeout => Timeout},
   resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts).
 

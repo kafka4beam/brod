@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2018, Klarna Bank AB (publ)
+%%%   Copyright (c) 2014-2020, Klarna Bank AB (publ)
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -78,7 +78,7 @@
 
 -define(BROD_FOLD_RET(Acc, NextOffset, Reason), {Acc, NextOffset, Reason}).
 
--define(DEFAULT_TIMEOUT, timer:seconds(5)).
+-define(BROD_DEFAULT_TIMEOUT, timer:seconds(5)).
 
 -endif. % include brod.hrl
 

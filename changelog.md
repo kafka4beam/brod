@@ -1,3 +1,4 @@
+  * Rename DEFAULT_TIMEOUT macro in public brod.hrl to BROD_DEFAULT_TIMEOUT.
 * 3.15.0
   * Fix unknown types
   * Build on OTP-23
