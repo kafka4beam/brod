@@ -1,3 +1,7 @@
+  * Rename DEFAULT_TIMEOUT macro in public brod.hrl to BROD_DEFAULT_TIMEOUT.
+* 3.15.0
+  * Fix unknown types
+  * Build on OTP-23
 * 3.14.0
   NOTE: This release changes internal states of brod worker processes
   in a way that cannot by applied on a running system. brod application
