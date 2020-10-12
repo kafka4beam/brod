@@ -1,11 +1,13 @@
 # BrodSample
 
+This is an example of how to use `brod` with Elixir.
+
 ## Kafka
 For this, we assume you have Kafka up and running at `localhost:9092`
 
-I'm using this docker-compose: `https://github.com/obsidiandynamics/kafdrop/blob/master/docker-compose/kafka-kafdrop/docker-compose.yaml` to have Kafdrop running and be able to create topics through a UI on `localhost:9000`
+You can use this docker-compose: `https://github.com/obsidiandynamics/kafdrop/blob/master/docker-compose/kafka-kafdrop/docker-compose.yaml` to have Kafdrop running and be able to create topics through a UI on `localhost:9000`
 
-Using Kafdrop I created a topic called `streaming.events` with 12 partitions
+To follow this you have to create a topic called `streaming.events` with more than 1 partition.
 
 ## Dependency
 First thing you'll need is to add brod to your dependencies
