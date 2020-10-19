@@ -37,9 +37,8 @@ defmodule BrodSample.GroupSubscriber do
     Logger.info("Message #{body}")
     Logger.info("Message #{inspect(state)}")
 
-    # {:ok, :nack, state}
     case body do
-      "tchau" -> :error
+      "error_bodyy" -> :error
       _ -> {:ok, :ack, state}
     end
   end
