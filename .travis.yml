@@ -18,7 +18,6 @@ otp_release:
   - 23.0.3
   - 22.0.2
   - 21.0
-  - 19.3
 
 script:
   # check style first
@@ -45,9 +44,6 @@ script:
     fi
     if [ $OTP_VSN -eq 21 ]; then
       export KAFKA_VERSION="0.11"
-    fi
-    if [ $OTP_VSN -eq 19 ]; then
-      export KAFKA_VERSION="0.10"
     fi
     make test-env
     _build/brod_cli/rel/brod/bin/brod meta -b localhost -L
