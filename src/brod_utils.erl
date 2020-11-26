@@ -75,6 +75,9 @@
 -type offset_time() :: brod:offset_time().
 -type group_id() :: brod:group_id().
 
+%% log/3 is deprecated, use ?BROD_LOG* macros from brod_int.hrl instead.
+-deprecated([{log, 3, eventually}]).
+
 %%%_* APIs =====================================================================
 
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
@@ -211,14 +214,12 @@ epoch_ms() ->
   {Mega, S, Micro} = os:timestamp(),
   (((Mega * 1000000)  + S) * 1000) + Micro div 1000.
 
-%% @doc simple wrapper around error_logger.
-%% NOTE: keep making MFA calls to error_logger to
-%%       1. allow logging libraries such as lager parse_transform
-%%       2. be more xref friendly
+%% @doc Wrapper around logger API.
+%% @deprecated Use ?BROD_LOG* macros from brod_int.hrl instead.
 -spec log(info | warning | error, string(), [any()]) -> ok.
-log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);
-log(warning, Fmt, Args) -> error_logger:warning_msg(Fmt, Args);
-log(error,   Fmt, Args) -> error_logger:error_msg(Fmt, Args).
+log(info,    Fmt, Args) -> ?BROD_LOG_ERROR(Fmt, Args);
+log(warning, Fmt, Args) -> ?BROD_LOG_WARNING(Fmt, Args);
+log(error,   Fmt, Args) -> ?BROD_LOG_ERROR(Fmt, Args).
 
 %% @doc Assert client_id is an atom().
 -spec assert_client(brod:client_id() | pid()) -> ok | no_return().

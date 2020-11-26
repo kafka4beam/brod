@@ -628,10 +628,10 @@ log(#state{ groupId  = GroupId
           , memberId = MemberId
           , generationId = GenerationId
           }, Level, Fmt, Args) ->
-  brod_utils:log(
-    Level,
-    "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
-    [GroupId, MemberId, GenerationId, self() | Args]).
+  ?BROD_LOG(
+     Level,
+     "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
+     [GroupId, MemberId, GenerationId, self() | Args]).
 
 get_consumer(Pid, Consumers) when is_pid(Pid) ->
   lists:keyfind(Pid, #consumer.consumer_pid, Consumers);

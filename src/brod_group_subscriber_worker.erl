@@ -57,10 +57,10 @@ init(_Topic, StartOpts) ->
   InitInfo = maps:with( [topic, partition, group_id, commit_fun]
                       , StartOpts
                       ),
-  brod_utils:log(info, "Starting group_subscriber_worker: ~p~n"
-                       "Offset: ~p~nPid: ~p~n"
-                     , [InitInfo, BeginOffset, self()]
-                     ),
+  ?BROD_LOG_INFO("Starting group_subscriber_worker: ~p~n"
+                 "Offset: ~p~nPid: ~p~n"
+                , [InitInfo, BeginOffset, self()]
+                ),
   {ok, CbState} = CbModule:init(InitInfo, CbConfig),
   State = #state{ start_options = StartOpts
                 , cb_module     = CbModule

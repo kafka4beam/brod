@@ -33,6 +33,8 @@
         , terminate/2
         ]).
 
+-include("brod_int.hrl").
+
 -export_type([ api/0
              , vsn/0
              ]).
@@ -77,14 +79,14 @@ handle_info({'DOWN', _Mref, process, Conn, _Reason}, State) ->
   _ = ets:delete(?ETS, Conn),
   {noreply, State};
 handle_info(Info, State) ->
-  error_logger:error_msg("unknown info ~p", [Info]),
+  ?BROD_LOG_ERROR("unknown info ~p", [Info]),
   {noreply, State}.
 
 handle_cast({monitor_connection, Conn}, State) ->
   erlang:monitor(process, Conn),
   {noreply, State};
 handle_cast(Cast, State) ->
-  error_logger:error_msg("unknown cast ~p", [Cast]),
+  ?BROD_LOG_ERROR("unknown cast ~p", [Cast]),
   {noreply, State}.
 
 handle_call(stop, From, State) ->

@@ -40,6 +40,7 @@
         ]).
 
 -include("brod.hrl").
+-include("brod_int.hrl").
 
 -define(PRODUCE_DELAY_SECONDS, 5).
 
@@ -149,8 +150,8 @@ process_message(Topic, Partition, Dir, GroupId, Message) ->
                 } = Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
-  error_logger:info_msg("~p ~p ~s: offset:~w seqno:~w\n",
-                        [self(), Partition, Now, Offset, Seqno]),
+  ?BROD_LOG_INFO("~p ~p ~s: offset:~w seqno:~w\n",
+                 [self(), Partition, Now, Offset, Seqno]),
   ok = commit_offset(Dir, GroupId, Topic, Partition, Offset).
 
 %% @doc This callback is called whenever there is a new assignment received.
