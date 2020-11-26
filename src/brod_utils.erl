@@ -213,7 +213,7 @@ epoch_ms() ->
 
 %% @doc simple wrapper around error_logger.
 %% NOTE: keep making MFA calls to error_logger to
-%%       1. allow logging libraries such as larger parse_transform
+%%       1. allow logging libraries such as lager parse_transform
 %%       2. be more xref friendly
 -spec log(info | warning | error, string(), [any()]) -> ok.
 log(info,    Fmt, Args) -> error_logger:info_msg(Fmt, Args);

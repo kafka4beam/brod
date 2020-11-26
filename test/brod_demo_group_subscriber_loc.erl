@@ -33,7 +33,7 @@
         , bootstrap/3
         ]).
 
-%% behabviour callbacks
+%% behaviour callbacks
 -export([ init/2
         , handle_message/4
         , get_committed_offsets/3
