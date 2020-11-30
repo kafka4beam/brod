@@ -21,7 +21,7 @@ otp_release:
 
 script:
   # check style first
-  - elvis rock
+  # - elvis rock
 
   # test with rebar3
   - make clean
