@@ -1,3 +1,6 @@
+* TBD
+  * Use GitHub Actions instead of Travis CI
+  * Added Elixir example
   * Rename DEFAULT_TIMEOUT macro in public brod.hrl to BROD_DEFAULT_TIMEOUT.
 * 3.15.0
   * Fix unknown types
