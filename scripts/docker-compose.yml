@@ -22,7 +22,6 @@ services:
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: zookeeper
     command: run zookeeper
-    ipc: container:pause
     network_mode: service:pause
   kafka_1:
     depends_on:
@@ -30,7 +29,6 @@ services:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: 'kafka-1'
-    ipc: container:pause
     network_mode: service:pause
     environment:
       BROKER_ID: 0
@@ -46,7 +44,6 @@ services:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: 'kafka-2'
-    ipc: container:pause
     network_mode: service:pause
     environment:
       BROKER_ID: 1
