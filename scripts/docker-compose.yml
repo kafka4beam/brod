@@ -15,7 +15,6 @@ services:
       - "9193:9193"
       - "9194:9194"
       - "9195:9195"
-    ipc: shareable
     container_name: pause
   zookeeper:
     depends_on:
@@ -23,7 +22,6 @@ services:
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: zookeeper
     command: run zookeeper
-    ipc: container:pause
     network_mode: service:pause
   kafka_1:
     depends_on:
@@ -31,7 +29,6 @@ services:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: 'kafka-1'
-    ipc: container:pause
     network_mode: service:pause
     environment:
       BROKER_ID: 0
@@ -47,7 +44,6 @@ services:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
     container_name: 'kafka-2'
-    ipc: container:pause
     network_mode: service:pause
     environment:
       BROKER_ID: 1
