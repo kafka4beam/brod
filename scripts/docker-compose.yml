@@ -15,6 +15,7 @@ services:
       - "9193:9193"
       - "9194:9194"
       - "9195:9195"
+    ipc: shareable
     container_name: pause
   zookeeper:
     depends_on:
