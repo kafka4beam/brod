@@ -75,10 +75,10 @@
 
 %% Brod logging wrappers around Logger API calls. Insert 'brod' domain
 %% to allow applications to filter Brod logs as they wish.
--define(BROD_LOG_WARNING(Fmt, Args), ?LOG_WARNING(Fmt, Args, #{domain => brod})).
--define(BROD_LOG_ERROR(Fmt, Args),   ?LOG_ERROR(  Fmt, Args, #{domain => brod})).
--define(BROD_LOG_INFO(Fmt, Args),    ?LOG_INFO(   Fmt, Args, #{domain => brod})).
--define(BROD_LOG(Level, Fmt, Args),  ?LOG(Level,  Fmt, Args, #{domain => brod})).
+-define(BROD_LOG_WARNING(Fmt, Args), ?LOG_WARNING(Fmt, Args, #{domain => [brod]})).
+-define(BROD_LOG_ERROR(Fmt, Args),   ?LOG_ERROR(  Fmt, Args, #{domain => [brod]})).
+-define(BROD_LOG_INFO(Fmt, Args),    ?LOG_INFO(   Fmt, Args, #{domain => [brod]})).
+-define(BROD_LOG(Level, Fmt, Args),  ?LOG(Level,  Fmt, Args, #{domain => [brod]})).
 
 -endif. % include brod_int.hrl
 
