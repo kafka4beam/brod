@@ -295,9 +295,9 @@ assign_all_to_self([{MyMemberId, _} | Members], TopicPartitions) ->
   ].
 
 log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
-  brod_utils:log(Level,
-                 "Group member (~s,coor=~p):\n" ++ Fmt,
-                 [GroupId, self() | Args]).
+  ?BROD_LOG(Level,
+            "Group member (~s,coor=~p):\n" ++ Fmt,
+            [GroupId, self() | Args]).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

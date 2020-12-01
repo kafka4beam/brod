@@ -20,6 +20,7 @@
 -behavior(brod_group_subscriber_v2).
 
 -include("brod.hrl").
+-include("brod_int.hrl").
 -include("brod_group_subscriber_test.hrl").
 
 %% brod subscriber callbacks
@@ -35,9 +36,9 @@ init(InitInfo, Config) ->
   IsAsyncAck         = maps:get(async_ack, Config, false),
   IsAsyncCommit      = maps:get(async_commit, Config, false),
   IsAssignPartitions = maps:get(assign_partitions, Config, false),
-  brod_utils:log(info, "Started a test group subscriber.~n"
-                       "Config: ~p~nInitInfo: ~p~n"
-                     , [Config, InitInfo]),
+  ?BROD_LOG_INFO("Started a test group subscriber.~n"
+                 "Config: ~p~nInitInfo: ~p~n"
+                , [Config, InitInfo]),
   {ok, #state{ is_async_ack         = IsAsyncAck
              , is_async_commit      = IsAsyncCommit
              , is_assign_partitions = IsAssignPartitions

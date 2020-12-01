@@ -369,8 +369,9 @@ main(Command, Doc, Args, Stop, LogLevel) ->
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
     true ->
-      _ = error_logger:logfile({open, 'brod.log'}),
-      _ = error_logger:tty(false);
+      logger:add_handler(brod_cli, logger_std_h,
+                         #{config => #{file => "brod.log"}, level => info}),
+      logger:remove_handler(default);
     false ->
       ok
   end,

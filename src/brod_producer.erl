@@ -428,8 +428,8 @@ terminate(Reason, #state{client_pid = ClientPid
 
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
-  brod_utils:log(error, "Produce error ~s-~B Offset: ~B Error: ~p",
-                 [Topic, Partition, Offset, ErrorCode]).
+  ?BROD_LOG_ERROR("Produce error ~s-~B Offset: ~B Error: ~p",
+                  [Topic, Partition, Offset, ErrorCode]).
 
 handle_produce(BufCb, Batch,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
@@ -478,8 +478,8 @@ maybe_reinit_connection(#state{ client_pid      = ClientPid
       ok = maybe_demonitor(OldConnMref),
       %% Make sure the sent but not acked ones are put back to buffer
       Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader_connection),
-      brod_utils:log(warning, "Failed to (re)init connection, reason:\n~p",
-                     [Reason]),
+      ?BROD_LOG_WARNING("Failed to (re)init connection, reason:\n~p",
+                        [Reason]),
       {ok, State#state{ connection = ?undef
                       , conn_mref  = ?undef
                       , buffer     = Buffer

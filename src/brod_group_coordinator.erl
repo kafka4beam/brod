@@ -1053,10 +1053,9 @@ log(#state{ groupId  = GroupId
           , generationId = GenerationId
           , member_pid = MemberPid
           }, Level, Fmt, Args) ->
-  brod_utils:log(
-    Level,
-    "Group member (~s,coor=~p,cb=~p,generation=~p):\n" ++ Fmt,
-    [GroupId, self(), MemberPid, GenerationId | Args]).
+  ?BROD_LOG(Level,
+            "Group member (~s,coor=~p,cb=~p,generation=~p):\n" ++ Fmt,
+            [GroupId, self(), MemberPid, GenerationId | Args]).
 
 %% Make metata to be committed together with offsets.
 -spec make_offset_commit_metadata() -> binary().

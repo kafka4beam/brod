@@ -333,8 +333,8 @@ handle_info({'EXIT', Pid, _Reason}, #state{connection = Pid} = State) ->
   %% standalone connection spawn-linked to self()
   {noreply, handle_conn_down(State)};
 handle_info(Info, State) ->
-  error_logger:warning_msg("~p ~p got unexpected info: ~p",
-                          [?MODULE, self(), Info]),
+  ?BROD_LOG_WARNING("~p ~p got unexpected info: ~p",
+                    [?MODULE, self(), Info]),
   {noreply, State}.
 
 %% @private
@@ -382,8 +382,8 @@ handle_cast({ack, Offset}, #state{pending_acks = PendingAcks} = State0) ->
   State = maybe_send_fetch_request(State1),
   {noreply, State};
 handle_cast(Cast, State) ->
-  error_logger:warning_msg("~p ~p got unexpected cast: ~p",
-                          [?MODULE, self(), Cast]),
+  ?BROD_LOG_WARNING("~p ~p got unexpected cast: ~p",
+                    [?MODULE, self(), Cast]),
   {noreply, State}.
 
 %% @private
@@ -403,8 +403,8 @@ terminate(Reason, #state{ bootstrap = Bootstrap
     false -> ok
   end,
   %% write a log if it's not a normal reason
-  IsNormal orelse error_logger:error_msg("Consumer ~s-~w terminate reason: ~p",
-                                         [Topic, Partition, Reason]),
+  IsNormal orelse ?BROD_LOG_ERROR("Consumer ~s-~w terminate reason: ~p",
+                                  [Topic, Partition, Reason]),
   ok.
 
 %% @private
@@ -579,8 +579,8 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
                          } = State) ->
   case err_op(ErrorCode) of
     reset_connection ->
-      error_logger:info_msg("Fetch error ~s-~p: ~p",
-                            [Topic, Partition, ErrorCode]),
+      ?BROD_LOG_INFO("Fetch error ~s-~p: ~p",
+                     [Topic, Partition, ErrorCode]),
       %% The current connection in use is not connected to the partition leader,
       %% so we dereference and demonitor the connection pid, but leave it alive,
       %% Can not kill it because it might be shared with other partition workers
@@ -596,8 +596,8 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       {noreply, maybe_send_fetch_request(State)};
     stop ->
       ok = cast_to_subscriber(Subscriber, Error),
-      error_logger:error_msg("Consumer ~s-~p shutdown\nReason: ~p",
-                             [Topic, Partition, ErrorCode]),
+      ?BROD_LOG_ERROR("Consumer ~s-~p shutdown\nReason: ~p",
+                      [Topic, Partition, ErrorCode]),
       {stop, normal, State};
     reset_offset ->
       handle_reset_offset(State, Error);
@@ -611,13 +611,13 @@ handle_reset_offset(#state{ subscriber          = Subscriber
                           } = State, Error) ->
   ok = cast_to_subscriber(Subscriber, Error),
   %% Suspend, no more fetch request until the subscriber re-subscribes
-  error_logger:info_msg("~p ~p consumer is suspended, "
-                        "waiting for subscriber ~p to resubscribe with "
-                        "new begin_offset", [?MODULE, self(), Subscriber]),
+  ?BROD_LOG_INFO("~p ~p consumer is suspended, "
+                 "waiting for subscriber ~p to resubscribe with "
+                 "new begin_offset", [?MODULE, self(), Subscriber]),
   {noreply, State#state{is_suspended = true}};
 handle_reset_offset(#state{offset_reset_policy = Policy} = State, _Error) ->
-  error_logger:info_msg("~p ~p offset out of range, applying reset policy ~p",
-                        [?MODULE, self(), Policy]),
+  ?BROD_LOG_INFO("~p ~p offset out of range, applying reset policy ~p",
+                 [?MODULE, self(), Policy]),
   BeginOffset = case Policy of
                   reset_to_earliest -> ?OFFSET_EARLIEST;
                   reset_to_latest   -> ?OFFSET_LATEST

@@ -308,21 +308,21 @@ handle_info(init, State0) ->
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
-  error_logger:error_msg("client ~p producers supervisor down~nReason: ~p",
-                         [ClientId, Pid, Reason]),
+  ?BROD_LOG_ERROR("client ~p producers supervisor down~nReason: ~p",
+                  [ClientId, Pid, Reason]),
   {stop, {producers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , consumers_sup = Pid
                                          } = State) ->
-  error_logger:error_msg("client ~p consumers supervisor down~nReason: ~p",
-                         [ClientId, Pid, Reason]),
+  ?BROD_LOG_ERROR("client ~p consumers supervisor down~nReason: ~p",
+                  [ClientId, Pid, Reason]),
   {stop, {consumers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason}, State) ->
   NewState = handle_connection_down(State, Pid, Reason),
   {noreply, NewState};
 handle_info(Info, State) ->
-  error_logger:warning_msg("~p [~p] ~p got unexpected info: ~p",
-                          [?MODULE, self(), State#state.client_id, Info]),
+  ?BROD_LOG_WARNING("~p [~p] ~p got unexpected info: ~p",
+                    [?MODULE, self(), State#state.client_id, Info]),
   {noreply, State}.
 
 %% @private
@@ -379,8 +379,8 @@ handle_cast({deregister, Key}, #state{workers_tab = Tab} = State) ->
   ets:delete(Tab, Key),
   {noreply, State};
 handle_cast(Cast, State) ->
-  error_logger:warning_msg("~p [~p] ~p got unexpected cast: ~p",
-                          [?MODULE, self(), State#state.client_id, Cast]),
+  ?BROD_LOG_WARNING("~p [~p] ~p got unexpected cast: ~p",
+                    [?MODULE, self(), State#state.client_id, Cast]),
   {noreply, State}.
 
 %% @private
@@ -398,8 +398,8 @@ terminate(Reason, #state{ client_id     = ClientId
     true ->
       ok;
     false ->
-      error_logger:warning_msg("~p [~p] ~p is terminating\nreason: ~p~n",
-                               [?MODULE, self(), ClientId, Reason])
+      ?BROD_LOG_WARNING("~p [~p] ~p is terminating\nreason: ~p~n",
+                        [?MODULE, self(), ClientId, Reason])
   end,
   %% stop producers and consumers first because they are monitoring connections
   shutdown_pid(ProducersSup),
@@ -538,9 +538,9 @@ do_get_metadata(Topic, #state{ client_id     = ClientId
       ok = update_partitions_count_cache(Ets, TopicMetadataArray),
       {{ok, Metadata}, State};
     {error, Reason} ->
-      error_logger:error_msg("~p failed to fetch metadata for topics: ~p\n"
-                             "reason=~p",
-                             [ClientId, Topics, Reason]),
+      ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
+                      "reason=~p",
+                      [ClientId, Topics, Reason]),
       {{error, Reason}, State}
   end.
 
@@ -634,9 +634,9 @@ maybe_connect(#state{client_id = ClientId} = State,
     true ->
       connect(State, Endpoint);
     false ->
-      error_logger:error_msg("~p (re)connect to ~s:~p aborted.\n"
-                             "last failure: ~p",
-                             [ClientId, Host, Port, Reason]),
+      ?BROD_LOG_ERROR("~p (re)connect to ~s:~p aborted.\n"
+                      "last failure: ~p",
+                      [ClientId, Host, Port, Reason]),
      {{error, Reason}, State}
   end.
 
@@ -648,15 +648,15 @@ connect(#state{ client_id = ClientId
   Conn =
     case do_connect(Endpoint, State) of
       {ok, Pid} ->
-        error_logger:info_msg("client ~p connected to ~s:~p~n",
-                              [ClientId, Host, Port]),
+        ?BROD_LOG_INFO("client ~p connected to ~s:~p~n",
+                       [ClientId, Host, Port]),
         #conn{ endpoint = Endpoint
              , pid = Pid
              };
       {error, Reason} ->
-        error_logger:error_msg("client ~p failed to connect to ~s:~p~n"
-                               "reason:~p",
-                               [ClientId, Host, Port, Reason]),
+        ?BROD_LOG_ERROR("client ~p failed to connect to ~s:~p~n"
+                        "reason:~p",
+                        [ClientId, Host, Port, Reason]),
         #conn{ endpoint = Endpoint
              , pid = mark_dead(Reason)
              }
@@ -684,8 +684,8 @@ handle_connection_down(#state{ payload_conns = Conns
                              } = State, Pid, Reason) ->
   case lists:keytake(Pid, #conn.pid, Conns) of
     {value, #conn{endpoint = {Host, Port}} = Conn, Rest} ->
-      error_logger:info_msg("client ~p: payload connection down ~s:~p~n"
-                            "reason:~p", [ClientId, Host, Port, Reason]),
+      ?BROD_LOG_INFO("client ~p: payload connection down ~s:~p~n"
+                     "reason:~p", [ClientId, Host, Port, Reason]),
       NewConn = Conn#conn{pid = mark_dead(Reason)},
       State#state{payload_conns = [NewConn | Rest]};
     false ->

@@ -363,9 +363,9 @@ handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
   L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
   case L of
     [] ->
-      brod_utils:log(warning, "Received DOWN message from unknown process.~n"
-                              "  pid = ~p~n  ref = ~p~n  reason = ~p",
-                              [Pid, Mref, Reason]),
+      ?BROD_LOG_WARNING("Received DOWN message from unknown process.~n"
+                        "  pid = ~p~n  ref = ~p~n  reason = ~p",
+                        [Pid, Mref, Reason]),
       {noreply, State};
     [TopicPartition|_] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State)
@@ -397,10 +397,10 @@ handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
         , group_id    = GroupId
         , coordinator = Coordinator
         } = State,
-  brod_utils:log(error, "group_subscriber_v2 worker crashed.~n"
-                        "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
-                        "  pid = ~p~n  reason = ~p",
-                        [GroupId, Topic, Partition, Pid, Reason]),
+  ?BROD_LOG_ERROR("group_subscriber_v2 worker crashed.~n"
+                  "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
+                  "  pid = ~p~n  reason = ~p",
+                  [GroupId, Topic, Partition, Pid, Reason]),
   terminate_all_workers(Workers),
   brod_group_coordinator:commit_offsets(Coordinator),
   exit(worker_crash).
@@ -408,7 +408,7 @@ handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
   maps:map( fun(_, Worker) ->
-                brod_utils:log(info, "Terminating worker pid=~p", [Worker]),
+                ?BROD_LOG_INFO("Terminating worker pid=~p", [Worker]),
                 terminate_worker(Worker)
             end
           , Workers
