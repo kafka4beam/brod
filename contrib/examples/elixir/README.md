@@ -21,7 +21,8 @@ brod                    Apache Kafka Erlang client library                     3
 ```
 
 Now just add it to your deps on `mix.exs`
-```
+
+```elixir
 defp deps do
     [
       {:brod, "~> 3.10.0"}
@@ -30,10 +31,11 @@ end
 ```
 
 ## Client configuration
+
 We need to setup a client to be used by our consumer and producer, so the first thing we are going to do is to set this up by using configuration
 Let's use our `dev.exs` to set this up by adding the following:
 
-```
+```elixir
 import Config
 
 config :brod,
@@ -46,7 +48,7 @@ config :brod,
 
 Here we are setting a client named `kafka_client`, you can choose whatever name you like for this, we are also configuring the endpoints to our kafka cluster, in production you are ideally setting up multiple endpoints of your broker, something like:
 
-```
+```elixir
 import Config
 
 config :brod,
@@ -65,7 +67,7 @@ To send a message with brod we can use the `produce_sync` function, you can take
 
 Now, lets make a module to allow us publishing to Kafka
 
-```
+```elixir
 defmodule BrodSample.Publisher do
   def publish(topic, partition, partition_key, message) do
     :brod.produce_sync(
@@ -83,8 +85,9 @@ Now, if we try to publish a message now it will return us, `{:error, {:producer_
 
 Luckily we can also use configuration to tell brod to automatically start our producers by changing our config to:
 
-`dev.exs`
-```
+```elixir
+# config/dev.exs
+
 import Config
 
 config :brod,
@@ -138,7 +141,7 @@ This will return a number based on the key argument and not being bigger than th
 
 Taking all of that into our module we have the following
 
-```
+```elixir
 defmodule BrodSample.Publisher do
   def publish(topic, partition_key, message) do
     :brod.produce_sync(
@@ -177,7 +180,7 @@ Optional callback functions: `assign_partitions/3`, `get_committed_offset/3`, `t
 
 So lets start creating a module with the `group_subscriber_v2` behaviour
 
-```
+```elixir
 defmodule BrodSample.GroupSubscriberV2 do
   @behaviour :brod_group_subscriber_v2
 end
@@ -185,7 +188,7 @@ end
 
 Now we need to implement at least the `init/2` and `handle_message/2`, let's start off simple
 
-```
+```elixir
 defmodule BrodSample.GroupSubscriberV2 do
   @behaviour :brod_group_subscriber_v2
   def init(_arg, _arg2) do
@@ -207,7 +210,7 @@ Well, we now need to define all of those and tell brod to use this module as the
 
 This can be done the following way.
 
-```
+```elixir
     group_config = [
       offset_commit_policy: :commit_to_kafka_v2,
       offset_commit_interval_seconds: 5,
