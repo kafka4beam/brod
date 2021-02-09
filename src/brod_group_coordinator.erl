@@ -129,9 +129,6 @@
                                  , brod:offset()}]
           %% The referece of the timer which triggers offset commit
         , offset_commit_timer :: ?undef | reference()
-          %% Set to true to prevent attempts to re-join the group,
-          %% if application is about to terminate.
-        , is_terminating = false :: boolean()
 
           %% configs, see start_link/5 doc for details
         , partition_assignment_strategy  :: partition_assignment_strategy()
@@ -334,9 +331,6 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           },
   {ok, State}.
 
-handle_info(prepare_shutdown, State) ->
-  NewState = State#state{is_terminating = true},
-  {noreply, NewState};
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
@@ -469,66 +463,70 @@ is_already_connected(#state{connection = Conn}, {Host, Port}) ->
   Port0 =:= Port.
 
 -spec stabilize(state(), integer(), any()) -> {ok, state()}.
-stabilize(#state{is_terminating = true} = State0, _, _) ->
-  {ok, State0};
 stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
                 , member_module        = MemberModule
                 , member_pid           = MemberPid
                 , offset_commit_timer  = Timer
                 } = State0, AttemptNo, Reason) ->
-  is_reference(Timer) andalso erlang:cancel_timer(Timer),
-  Reason =/= ?undef andalso
-    log(State0, info, "re-joining group, reason:~p", [Reason]),
+  case ets:whereis(?ERL_SIGNAL_TABLE_NAME) =/= undefined andalso
+       ets:lookup(?ERL_SIGNAL_TABLE_NAME, shutting_down) of
+    [{shutting_down, true}] ->
+      {ok, State0};
+    _ ->
+      is_reference(Timer) andalso erlang:cancel_timer(Timer),
+      Reason =/= ?undef andalso
+        log(State0, info, "re-joining group, reason:~p", [Reason]),
 
-  %% 1. unsubscribe all currently assigned partitions
-  ok = MemberModule:assignments_revoked(MemberPid),
+      %% 1. unsubscribe all currently assigned partitions
+      ok = MemberModule:assignments_revoked(MemberPid),
 
-  %% 2. some brod_group_member implementations may wait for messages
-  %%    to finish processing when assignments_revoked is called.
-  %%    The acknowledments of those messages would then be sitting
-  %%    in our inbox. So we do an explicit pass to collect all pending
-  %%    acks so they are included in the best-effort commit below.
-  State1 = receive_pending_acks(State0),
+      %% 2. some brod_group_member implementations may wait for messages
+      %%    to finish processing when assignments_revoked is called.
+      %%    The acknowledments of those messages would then be sitting
+      %%    in our inbox. So we do an explicit pass to collect all pending
+      %%    acks so they are included in the best-effort commit below.
+      State1 = receive_pending_acks(State0),
 
-  %% 3. try to commit current offsets before re-joinning the group.
-  %%    try only on the first re-join attempt
-  %%    do not try if it was illegal generation exception received
-  %%    because it will fail on the same exception again
-  State2 =
-    case AttemptNo =:= 0 andalso
-         Reason    =/= ?illegal_generation of
-      true ->
-        {ok, #state{} = State2_} = try_commit_offsets(State1),
-        State2_;
-      false ->
-        State1
-    end,
-  State3 = State2#state{is_in_group = false},
+      %% 3. try to commit current offsets before re-joinning the group.
+      %%    try only on the first re-join attempt
+      %%    do not try if it was illegal generation exception received
+      %%    because it will fail on the same exception again
+      State2 =
+        case AttemptNo =:= 0 andalso
+          Reason    =/= ?illegal_generation of
+          true ->
+            {ok, #state{} = State2_} = try_commit_offsets(State1),
+            State2_;
+          false ->
+            State1
+        end,
+      State3 = State2#state{is_in_group = false},
 
-  %$ 4. Clean up state based on the last failure reason
-  State = maybe_reset_member_id(State3, Reason),
+      %$ 4. Clean up state based on the last failure reason
+      State = maybe_reset_member_id(State3, Reason),
 
-  %% 5. ensure we have a connection to the (maybe new) group coordinator
-  F1 = fun discover_coordinator/1,
-  %% 6. join group
-  F2 = fun join_group/1,
-  %% 7. sync assignemnts
-  F3 = fun sync_group/1,
+      %% 5. ensure we have a connection to the (maybe new) group coordinator
+      F1 = fun discover_coordinator/1,
+      %% 6. join group
+      F2 = fun join_group/1,
+      %% 7. sync assignemnts
+      F3 = fun sync_group/1,
 
-  RetryFun =
-    fun(StateIn, NewReason) ->
-      log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
-      _ = case AttemptNo =:= 0 of
-        true ->
-          %% do not delay before the first retry
-          self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
-        false ->
-          erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
-                            ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
-      end,
-      {ok, StateIn}
-    end,
-  do_stabilize([F1, F2, F3], RetryFun, State).
+      RetryFun =
+        fun(StateIn, NewReason) ->
+          log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
+          _ = case AttemptNo =:= 0 of
+                true ->
+                  %% do not delay before the first retry
+                  self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
+                false ->
+                  erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
+                    ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
+              end,
+          {ok, StateIn}
+        end,
+      do_stabilize([F1, F2, F3], RetryFun, State)
+  end.
 
 -spec receive_pending_acks(state()) -> state().
 receive_pending_acks(State) ->

@@ -29,6 +29,7 @@
                                O =:= ?OFFSET_LATEST orelse
                                O =:= -2 orelse
                                O =:= -1)).
+-define(ERL_SIGNAL_TABLE_NAME, erl_signal).
 
 -record(socket, { pid     :: pid()
                 , host    :: string()
