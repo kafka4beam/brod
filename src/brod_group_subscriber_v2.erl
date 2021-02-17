@@ -263,8 +263,8 @@ init(Config) ->
                                                , ?MODULE
                                                , self()
                                                ),
-  unlink(Pid),
   monitor(process, Pid),
+  unlink(Pid),
   State = #state{ config       = Config
                 , message_type = MessageType
                 , client       = Client
@@ -365,7 +365,9 @@ handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
   L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
   case L of
     _ when Pid =:= State#state.coordinator ->
-      ?BROD_LOG_ERROR("Coordinator process died. Shutting down.", []),
+      ?BROD_LOG_ERROR( "Coordinator process (~p) died. Shutting down subscriber for ~p."
+                     , [Pid, State#state.group_id]
+                     ),
       error(coordinator_crash);
     [] ->
       ?BROD_LOG_WARNING("Received DOWN message from unknown process.~n"
