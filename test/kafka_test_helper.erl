@@ -183,7 +183,8 @@ bootstrap_hosts() ->
 
 kill_process(Pid) ->
   Mon = monitor(process, Pid),
-  ?tp(kill_consumer, #{pid => Pid}),
+  ?log(notice, "Killing ~p", [Pid]),
+  ?tp(kill_process, #{pid => Pid}),
   exit(Pid, kill),
   receive
     {'DOWN', Mon, process, Pid, killed} ->
