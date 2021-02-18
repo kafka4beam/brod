@@ -249,6 +249,7 @@ init(Config) ->
    , topics    := Topics
    , cb_module := CbModule
    } = Config,
+  process_flag(trap_exit, true),
   MessageType = maps:get(message_type, Config, message_set),
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
@@ -359,13 +360,15 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
+handle_info({'EXIT', Pid, Reason}, State) ->
   L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
   case L of
+    _ when Pid =:= State#state.coordinator ->
+      error(coordinator_failure);
     [] ->
       ?BROD_LOG_WARNING("Received DOWN message from unknown process.~n"
-                        "  pid = ~p~n  ref = ~p~n  reason = ~p",
-                        [Pid, Mref, Reason]),
+                        "  pid = ~p~n  reason = ~p",
+                        [Pid, Reason]),
       {noreply, State};
     [TopicPartition|_] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State)
@@ -490,8 +493,6 @@ start_worker(Client, Topic, MessageType, Partition, ConsumerConfig,
                                               , brod_group_subscriber_worker
                                               , StartOptions
                                               ),
-  monitor(process, Pid),
-  unlink(Pid),
   {ok, Pid}.
 
 -spec do_ack(brod:topic(), brod:partition(), brod:offset(), state()) ->

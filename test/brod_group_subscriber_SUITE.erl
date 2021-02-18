@@ -322,6 +322,45 @@ t_consumer_crash(Config) when is_list(Config) ->
                      )
      end).
 
+t_coordinator_crash(Config) when is_list(Config) ->
+  case ?config(behavior) of
+    brod_group_subscriber_v2 ->
+      InitArgs = #{async_ack => true},
+      Topic = ?topic,
+      Partition = 0,
+      ?check_trace(
+         #{ timeout => 5000 },
+         %% Run stage:
+         begin
+           {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
+           unlink(SubscriberPid),
+           %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+           produce({Topic, Partition}, <<0>>),
+           {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
+           %% Extract data from the subscriber:
+           {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
+           true = is_pid(Coordinator), % assert
+           Monitors = [monitor(process, Worker) || Worker <- maps:values(Workers)],
+           %% Kill the coordinator process:
+           kafka_test_helper:kill_process(Coordinator),
+           %% Verify that worker processies got terminated as well:
+           [receive
+              {_Tag, MRef, _Type, _Obj, _Info} -> ok
+            after 5000 ->
+                error("Workers didn't die")
+            end
+            || MRef <- Monitors],
+           ok
+         end,
+         %% Check stage:
+         fun(_Ret, Trace) ->
+             ok
+         end);
+    brod_group_subscriber ->
+      %% The old behavior doesn't have separate partition workers, just ignore it.
+      ok
+  end.
+
 t_2_members_subscribe_to_different_topics(topics) ->
   [{?topic(1), 1}, {?topic(2), 1}];
 t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
