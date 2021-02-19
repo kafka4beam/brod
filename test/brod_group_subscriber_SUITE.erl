@@ -50,6 +50,8 @@
         , t_async_commit/1
         , t_consumer_crash/1
         , t_assign_partitions_handles_updating_state/1
+        , v2_coordinator_crash/1
+        , v2_subscriber_shutdown/1
         ]).
 
 -define(MESSAGE_TIMEOUT, 30000).
@@ -91,6 +93,8 @@ groups() ->
      , t_2_members_one_partition
      , t_async_commit
      , t_assign_partitions_handles_updating_state
+     , v2_coordinator_crash
+     , v2_subscriber_shutdown
      ]}
   ].
 
@@ -299,7 +303,7 @@ t_consumer_crash(Config) when is_list(Config) ->
        ok = Behavior:ack(SubscriberPid, Topic, Partition, O3),
        sys:get_state(SubscriberPid),
        {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, Topic, Partition),
-       kafka_test_helper:kill_process(ConsumerPid),
+       kafka_test_helper:kill_process(ConsumerPid, kill),
        %% send more messages (but they should not be received until
        %% re-subscribe)
        [SendFun(I) || I <- lists:seq(6, 8)],
@@ -322,44 +326,74 @@ t_consumer_crash(Config) when is_list(Config) ->
                      )
      end).
 
-t_coordinator_crash(Config) when is_list(Config) ->
-  case ?config(behavior) of
-    brod_group_subscriber_v2 ->
-      InitArgs = #{async_ack => true},
-      Topic = ?topic,
-      Partition = 0,
-      ?check_trace(
-         #{ timeout => 5000 },
-         %% Run stage:
-         begin
-           {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
-           unlink(SubscriberPid),
-           %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
-           produce({Topic, Partition}, <<0>>),
-           {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
-           %% Extract data from the subscriber:
-           {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
-           true = is_pid(Coordinator), % assert
-           Monitors = [monitor(process, Worker) || Worker <- maps:values(Workers)],
-           %% Kill the coordinator process:
-           kafka_test_helper:kill_process(Coordinator),
-           %% Verify that worker processies got terminated as well:
-           [receive
-              {_Tag, MRef, _Type, _Obj, _Info} -> ok
-            after 5000 ->
-                error("Workers didn't die")
-            end
-            || MRef <- Monitors],
-           ok
-         end,
-         %% Check stage:
-         fun(_Ret, Trace) ->
-             ok
-         end);
-    brod_group_subscriber ->
-      %% The old behavior doesn't have separate partition workers, just ignore it.
-      ok
-  end.
+v2_coordinator_crash(Config) when is_list(Config) ->
+  %% Test that crash in group_coordinator leads to shutdown of the
+  %% group subscriber and its workers.
+  InitArgs = #{},
+  Topic = ?topic,
+  Partition = 0,
+  ?check_trace(
+     #{ timeout => 5000 },
+     %% Run stage:
+     begin
+       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
+       unlink(SubscriberPid),
+       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       produce({Topic, Partition}, <<0>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
+       %% Extract data from the subscriber:
+       {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
+       true = is_pid(Coordinator), % assert
+       Monitors = [monitor(process, Worker) || Worker <- [SubscriberPid|maps:values(Workers)]],
+       %% Kill the coordinator process:
+       kafka_test_helper:kill_process(Coordinator, kill),
+       %% Verify that all the worker processes and the group subscriber itself got terminated:
+       [receive
+          {_Tag, MRef, _Type, _Obj, _Info} -> ok
+        after 5000 ->
+            error("Child processes didn't die")
+        end
+        || MRef <- Monitors],
+       ok
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         ok
+     end).
+
+v2_subscriber_shutdown(Config) when is_list(Config) ->
+  %% Test graceful shutdown of the group subscriber:
+  InitArgs = #{async_ack => true},
+  Topic = ?topic,
+  Partition = 0,
+  ?check_trace(
+     #{ timeout => 5000 },
+     %% Run stage:
+     begin
+       {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
+       unlink(SubscriberPid),
+       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       produce({Topic, Partition}, <<0>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
+       %% Extract data from the subscriber:
+       {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
+       true = is_pid(Coordinator), % assert
+       Monitors = [monitor(process, Worker) || Worker <- [Coordinator|maps:values(Workers)]],
+       %% Kill the subscriber process:
+       kafka_test_helper:kill_process(SubscriberPid, shutdown),
+       %% Verify that all the process got shotdown:
+       [receive
+          {_Tag, MRef, _Type, _Obj, _Info} -> ok
+        after 5000 ->
+            error("Child processes didn't die")
+        end
+        || MRef <- Monitors],
+       ok
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         ok
+     end).
 
 t_2_members_subscribe_to_different_topics(topics) ->
   [{?topic(1), 1}, {?topic(2), 1}];

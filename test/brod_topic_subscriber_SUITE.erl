@@ -247,7 +247,7 @@ t_consumer_crash(Config) when is_list(Config) ->
        %% processed the ack, then kill the brod_consumer process
        sys:get_state(SubscriberPid),
        {ok, ConsumerPid} = brod:get_consumer(?CLIENT_ID, ?topic, Partition),
-       kafka_test_helper:kill_process(ConsumerPid),
+       kafka_test_helper:kill_process(ConsumerPid, kill),
        %% ack all previously received messages
        %% so topic subscriber can re-subscribe to the restarted consumer
        ok = brod_topic_subscriber:ack(SubscriberPid, Partition, O5),

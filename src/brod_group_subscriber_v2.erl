@@ -100,8 +100,6 @@
 
 -optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/2]).
 
--define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
-
 -type worker() :: pid().
 
 -type workers() :: #{brod:topic_partition() => worker()}.
@@ -365,13 +363,10 @@ handle_info({'EXIT', Pid, Reason}, State) ->
   case L of
     _ when Pid =:= State#state.coordinator ->
       error(coordinator_failure);
-    [] ->
-      ?BROD_LOG_WARNING("Received DOWN message from unknown process.~n"
-                        "  pid = ~p~n  reason = ~p",
-                        [Pid, Reason]),
-      {noreply, State};
     [TopicPartition|_] ->
-      handle_worker_failure(TopicPartition, Pid, Reason, State)
+      handle_worker_failure(TopicPartition, Pid, Reason, State);
+    _ -> % Other process wants to kill us, supervisor?
+      error(shutting_down)
   end;
 handle_info(_Info, State) ->
   {noreply, State}.
