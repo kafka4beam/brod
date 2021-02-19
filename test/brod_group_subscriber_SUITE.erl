@@ -337,7 +337,6 @@ v2_coordinator_crash(Config) when is_list(Config) ->
      %% Run stage:
      begin
        {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
-       unlink(SubscriberPid),
        %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
        produce({Topic, Partition}, <<0>>),
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
@@ -346,6 +345,7 @@ v2_coordinator_crash(Config) when is_list(Config) ->
        true = is_pid(Coordinator), % assert
        Monitors = [monitor(process, Worker) || Worker <- [SubscriberPid|maps:values(Workers)]],
        %% Kill the coordinator process:
+       unlink(SubscriberPid),
        kafka_test_helper:kill_process(Coordinator, kill),
        %% Verify that all the worker processes and the group subscriber itself got terminated:
        [receive
@@ -371,7 +371,6 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
      %% Run stage:
      begin
        {ok, SubscriberPid} = start_subscriber(Config, [Topic], InitArgs),
-       unlink(SubscriberPid),
        %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
        produce({Topic, Partition}, <<0>>),
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
@@ -380,6 +379,7 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
        true = is_pid(Coordinator), % assert
        Monitors = [monitor(process, Worker) || Worker <- [Coordinator|maps:values(Workers)]],
        %% Kill the subscriber process:
+       unlink(SubscriberPid),
        kafka_test_helper:kill_process(SubscriberPid, shutdown),
        %% Verify that all the process got shotdown:
        [receive

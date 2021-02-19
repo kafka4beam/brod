@@ -173,10 +173,13 @@ start_link(Config) ->
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),
-  ok = gen_server:cast(Pid, stop),
+  unlink(Pid),
+  exit(Pid, shutdown),
   receive
-    {'DOWN', Mref, process, Pid, _Reason} ->
-      ok
+    {'DOWN', Mref, process, Pid, shutdown} ->
+      ok;
+    {'DOWN', Mref, process, Pid, Reason} ->
+      {error, Reason}
   end.
 
 %% @doc Commit offset for a topic-partition, but don't commit it to
@@ -347,8 +350,6 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                      , Assignments
                      ),
   {noreply, State};
-handle_cast(stop, State) ->
-  {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -366,7 +367,7 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     [TopicPartition|_] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State);
     _ -> % Other process wants to kill us, supervisor?
-      error(shutting_down)
+      {stop, shutdown}
   end;
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -379,9 +380,11 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{ workers = Workers
+terminate(_Reason, #state{ workers     = Workers
+                         , coordinator = Coordinator
                          }) ->
   terminate_all_workers(Workers),
+  brod_group_coordinator:stop(Coordinator),
   ok.
 
 %%%===================================================================
