@@ -298,7 +298,7 @@ update_topics(CoordinatorPid, Topics) ->
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),
-  ok = gen_server:cast(Pid, stop),
+  exit(Pid, shutdown),
   receive
     {'DOWN', Mref, process, Pid, _Reason} ->
       ok
@@ -370,6 +370,8 @@ handle_info({'EXIT', Pid, Reason}, #state{member_pid = Pid} = State) ->
     normal        -> {stop, normal, State};
     _             -> {stop, member_down, State}
   end;
+handle_info({'EXIT', Pid, Reason}, State) ->
+  {stop, shutdown, State};
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
                   , session_timeout_seconds = SessionTimeoutSec
@@ -424,8 +426,6 @@ handle_cast({update_topics, Topics}, State) ->
   NewState0 = State#state{ topics = Topics},
   {ok, NewState} = stabilize(NewState0, 0, topics),
   {noreply, NewState};
-handle_cast(stop, #state{} = State) ->
-  {stop, normal};
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 

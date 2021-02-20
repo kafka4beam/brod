@@ -176,10 +176,8 @@ stop(Pid) ->
   unlink(Pid),
   exit(Pid, shutdown),
   receive
-    {'DOWN', Mref, process, Pid, shutdown} ->
-      ok;
-    {'DOWN', Mref, process, Pid, Reason} ->
-      {error, Reason}
+    {'DOWN', Mref, process, Pid, _Reason} ->
+      ok
   end.
 
 %% @doc Commit offset for a topic-partition, but don't commit it to
@@ -384,7 +382,6 @@ terminate(_Reason, #state{ workers     = Workers
                          , coordinator = Coordinator
                          }) ->
   terminate_all_workers(Workers),
-  brod_group_coordinator:stop(Coordinator),
   ok.
 
 %%%===================================================================
