@@ -100,8 +100,6 @@
 
 -optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/2]).
 
--define(DOWN(Reason), {down, brod_utils:os_time_utc_str(), Reason}).
-
 -type worker() :: pid().
 
 -type workers() :: #{brod:topic_partition() => worker()}.
@@ -175,7 +173,8 @@ start_link(Config) ->
 -spec stop(pid()) -> ok.
 stop(Pid) ->
   Mref = erlang:monitor(process, Pid),
-  ok = gen_server:cast(Pid, stop),
+  unlink(Pid),
+  exit(Pid, shutdown),
   receive
     {'DOWN', Mref, process, Pid, _Reason} ->
       ok
@@ -249,6 +248,7 @@ init(Config) ->
    , topics    := Topics
    , cb_module := CbModule
    } = Config,
+  process_flag(trap_exit, true),
   MessageType = maps:get(message_type, Config, message_set),
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
@@ -348,8 +348,6 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                      , Assignments
                      ),
   {noreply, State};
-handle_cast(stop, State) ->
-  {stop, normal, State};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -359,16 +357,15 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'DOWN', Mref, process, Pid, Reason}, State) ->
+handle_info({'EXIT', Pid, Reason}, State) ->
   L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
   case L of
-    [] ->
-      ?BROD_LOG_WARNING("Received DOWN message from unknown process.~n"
-                        "  pid = ~p~n  ref = ~p~n  reason = ~p",
-                        [Pid, Mref, Reason]),
-      {noreply, State};
+    _ when Pid =:= State#state.coordinator ->
+      error(coordinator_failure);
     [TopicPartition|_] ->
-      handle_worker_failure(TopicPartition, Pid, Reason, State)
+      handle_worker_failure(TopicPartition, Pid, Reason, State);
+    _ -> % Other process wants to kill us, supervisor?
+      {stop, shutdown}
   end;
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -381,8 +378,7 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{ workers = Workers
-                         }) ->
+terminate(_Reason, #state{workers = Workers}) ->
   terminate_all_workers(Workers),
   ok.
 
@@ -490,8 +486,6 @@ start_worker(Client, Topic, MessageType, Partition, ConsumerConfig,
                                               , brod_group_subscriber_worker
                                               , StartOptions
                                               ),
-  monitor(process, Pid),
-  unlink(Pid),
   {ok, Pid}.
 
 -spec do_ack(brod:topic(), brod:partition(), brod:offset(), state()) ->

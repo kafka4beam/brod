@@ -23,6 +23,7 @@
         , commit_offsets/2
         , start_link/6
         , update_topics/2
+        , stop/1
         ]).
 
 -export([ code_change/3
@@ -293,6 +294,16 @@ commit_offsets(CoordinatorPid, Offsets0) ->
 update_topics(CoordinatorPid, Topics) ->
   gen_server:cast(CoordinatorPid, {update_topics, Topics}).
 
+%% @doc Stop group coordinator, wait for pid `DOWN' before return.
+-spec stop(pid()) -> ok.
+stop(Pid) ->
+  Mref = erlang:monitor(process, Pid),
+  exit(Pid, shutdown),
+  receive
+    {'DOWN', Mref, process, Pid, _Reason} ->
+      ok
+  end.
+
 %%%_* gen_server callbacks =====================================================
 
 init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
@@ -359,6 +370,8 @@ handle_info({'EXIT', Pid, Reason}, #state{member_pid = Pid} = State) ->
     normal        -> {stop, normal, State};
     _             -> {stop, member_down, State}
   end;
+handle_info({'EXIT', Pid, Reason}, State) ->
+  {stop, shutdown, State};
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
                   , session_timeout_seconds = SessionTimeoutSec
