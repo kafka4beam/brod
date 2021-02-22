@@ -2,8 +2,4 @@ Kafka client library in Erlang
 Copyright 2014-2021 Klarna Bank AB (publ)
 
 This product includes software developed by
-<<<<<<< HEAD
 Klarna Bank AB (publ) (https://www.klarna.com)
-=======
-Klarna AB (https://www.klarna.com)
->>>>>>> Revert klarna NOTICE and README.mod
