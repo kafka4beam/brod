@@ -378,9 +378,7 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{ workers     = Workers
-                         , coordinator = Coordinator
-                         }) ->
+terminate(_Reason, #state{workers = Workers}) ->
   terminate_all_workers(Workers),
   ok.
 
