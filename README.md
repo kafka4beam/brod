@@ -1,4 +1,4 @@
-![brod](https://github.com/kafka4beam/brod/workflows/brod/badge.svg?branch=master)
+[![Build Status](https://travis-ci.org/klarna/brod.svg?branch=master)](https://travis-ci.org/klarna/brod) [![Coverage Status](https://coveralls.io/repos/github/klarna/brod/badge.svg?branch=master)](https://coveralls.io/github/klarna/brod?branch=master)
 
 # Brod - Apache Kafka Client for Erlang/Elixir
 
@@ -394,7 +394,7 @@ To use it - add it as dependency to your top level project that uses brod.
 Then add `{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config.
 Keytab should be the keytab file path, and Principal should be a byte-list or binary string.
 
-See also: https://github.com/kafka4beam/brod/wiki/SASL-gssapi-(kerberos)-authentication
+See also: https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authentication
 
 # Other API to play with/inspect kafka
 
