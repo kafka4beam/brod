@@ -365,7 +365,8 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     [TopicPartition|_] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State);
     _ -> % Other process wants to kill us, supervisor?
-      {stop, shutdown}
+      ?BROD_LOG_INFO("Received EXIT:~p from ~p, shutting down", [Reason, Pid]),
+      {stop, shutdown, State}
   end;
 handle_info(_Info, State) ->
   {noreply, State}.
