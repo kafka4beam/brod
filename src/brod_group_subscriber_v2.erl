@@ -416,6 +416,7 @@ terminate_all_workers(Workers) ->
 terminate_worker(WorkerPid) ->
   case is_process_alive(WorkerPid) of
     true ->
+      unlink(WorkerPid),
       brod_topic_subscriber:stop(WorkerPid);
     false ->
       ok

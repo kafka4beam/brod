@@ -52,6 +52,7 @@
         , t_assign_partitions_handles_updating_state/1
         , v2_coordinator_crash/1
         , v2_subscriber_shutdown/1
+        , v2_subscriber_assignments_revoked/1
         ]).
 
 -define(MESSAGE_TIMEOUT, 30000).
@@ -95,6 +96,7 @@ groups() ->
      , t_assign_partitions_handles_updating_state
      , v2_coordinator_crash
      , v2_subscriber_shutdown
+     , v2_subscriber_assignments_revoked
      ]}
   ].
 
@@ -388,6 +390,43 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
             error("Child processes didn't die")
         end
         || MRef <- Monitors],
+       ok
+     end,
+     %% Check stage:
+     fun(_Ret, Trace) ->
+         ok
+     end).
+
+v2_subscriber_assignments_revoked(Config) when is_list(Config) ->
+  %% Test brod_group_subscriber_v2 behaviour when assignments revoked:
+  InitArgs = #{async_ack => true},
+  Topic = ?topic,
+  Partition = 0,
+  ?check_trace(
+     #{ timeout => 5000 },
+     %% Run stage:
+     begin
+       {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+
+       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       produce({Topic, Partition}, <<0>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
+
+       %% Extract data from the subscriber:
+       {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
+       WorkerMonitors = [monitor(process, Worker) || Worker <- maps:values(Workers)],
+
+       %% revoke assignments
+       ok = brod_group_subscriber_v2:assignments_revoked(SubscriberPid),
+       %% Verify that all the worker processes were terminated
+       [receive
+          {'DOWN', MRef, process, _Pid, _Reason} -> ok
+        after 5000 ->
+            error("expected all workers to be stopped, but at least one process is still running")
+        end
+        || MRef <- WorkerMonitors],
+
+       ?assert(is_process_alive(SubscriberPid)),
        ok
      end,
      %% Check stage:
