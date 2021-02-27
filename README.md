@@ -1,5 +1,8 @@
 ![brod](https://github.com/kafka4beam/brod/workflows/brod/badge.svg?branch=master)
+# NOTICE
 
+This product includes software developed by
+[Klarna Bank AB (publ)](https://www.klarna.com)
 
 # Brod - Apache Kafka Client for Erlang/Elixir
 
