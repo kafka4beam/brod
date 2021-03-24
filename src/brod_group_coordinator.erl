@@ -498,11 +498,13 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
 
   %% 3. try to commit current offsets before re-joinning the group.
   %%    try only on the first re-join attempt
-  %%    do not try if it was illegal generation exception received
-  %%    because it will fail on the same exception again
+  %%    do not try if it was illegal generation or unknown member id
+  %%    exception received because it will fail on the same exception
+  %%    again
   State2 =
     case AttemptNo =:= 0 andalso
-         Reason    =/= ?illegal_generation of
+         Reason    =/= ?illegal_generation andalso
+         Reason    =/= ?unknown_member_id of
       true ->
         {ok, #state{} = State2_} = try_commit_offsets(State1),
         State2_;
