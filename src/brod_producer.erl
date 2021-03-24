@@ -31,6 +31,7 @@
         , handle_info/2
         , init/1
         , terminate/2
+        , format_status/2
         ]).
 
 -export_type([ config/0 ]).
@@ -423,6 +424,15 @@ terminate(Reason, #state{client_pid = ClientPid
       ok
   end,
   ok.
+
+%% @private
+format_status(Opt, [_PDict, State]) ->
+  %% Do not format the buffer attibute when process terminates abnormally and logs an error
+  %% but allow it when is a sys:get_status/1.2
+  case Opt of
+      terminate -> State#state{buffer=opaque_buffer};
+      _ -> [{data, [{"State", State}]}]
+  end.
 
 %%%_* Internal Functions =======================================================
 
