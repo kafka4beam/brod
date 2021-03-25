@@ -31,6 +31,7 @@
         , handle_info/2
         , init/1
         , terminate/2
+        , format_status/2
         ]).
 
 -export_type([ config/0 ]).
@@ -423,6 +424,14 @@ terminate(Reason, #state{client_pid = ClientPid
       ok
   end,
   ok.
+
+%% @private
+format_status(normal, [_PDict, State=#state{}]) ->
+  [{data, [{"State", State}]}];
+format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
+  %% Do not format the buffer attribute when process terminates abnormally and logs an error
+  %% but allow it when is a sys:get_status/1.2
+  State#state{buffer = brod_producer_buffer:empty_buffers(Buffer)}.
 
 %%%_* Internal Functions =======================================================
 
