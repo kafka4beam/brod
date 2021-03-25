@@ -1,4 +1,11 @@
 * TBD
+  *
+* 3.15.1
+  * Producer: Do not format producer buffer in `gen_server` state
+  * Consumer: Do not commit offsets when `unknown_member_id` error is received
+  * Logging: Changed from `error_logger` to `logger` macros
+  * Don't shut down brod_group_subscriber_v2 on previous generation worker termination
+  * Fix brod_group_subscriber_v2 crash on shutdown
   * Use GitHub Actions instead of Travis CI
   * Added Elixir example
   * Rename DEFAULT_TIMEOUT macro in public brod.hrl to BROD_DEFAULT_TIMEOUT.
