@@ -24,7 +24,7 @@
         , nack/3
         , nack_all/2
         , maybe_send/3
-        , create_opaque_buffer/1
+        , empty_buffers/1
         ]).
 
 -export([ is_empty/1
@@ -365,9 +365,9 @@ now_ms() ->
   {M, S, Micro} = os:timestamp(),
   ((M * 1000000) + S) * 1000 + Micro div 1000.
 
--spec create_opaque_buffer(buf()) -> buf().
-create_opaque_buffer(Buffer = #buf{}) ->
-  %% return a buffer without the data in the queues
+-spec empty_buffers(buf()) -> buf().
+empty_buffers(Buffer = #buf{}) ->
+  %% return a buffer without the data in the queues but maintaining the counters
   Buffer#buf{pending=?NEW_QUEUE, buffer=?NEW_QUEUE, onwire=[]}.
 
 %%%_* Emacs ====================================================================

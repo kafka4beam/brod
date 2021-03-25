@@ -426,16 +426,12 @@ terminate(Reason, #state{client_pid = ClientPid
   ok.
 
 %% @private
-format_status(Opt, [_PDict, State=#state{buffer = Buffer}]) ->
-  %% Do not format the buffer attibute when process terminates abnormally and logs an error
+format_status(normal, [_PDict, State=#state{}]) ->
+  [{data, [{"State", State}]}];
+format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
+  %% Do not format the buffer attribute when process terminates abnormally and logs an error
   %% but allow it when is a sys:get_status/1.2
-  case Opt of
-      terminate ->
-        %% Drop the data in the buffers so it doesn't get formatted
-        Opaque = brod_producer_buffer:create_opaque_buffer(Buffer),
-        State#state{buffer = Opaque};
-      _ -> [{data, [{"State", State}]}]
-  end.
+  State#state{buffer = brod_producer_buffer:empty_buffers(Buffer)}.
 
 %%%_* Internal Functions =======================================================
 
