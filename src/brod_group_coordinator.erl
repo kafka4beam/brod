@@ -370,7 +370,7 @@ handle_info({'EXIT', Pid, Reason}, #state{member_pid = Pid} = State) ->
     normal        -> {stop, normal, State};
     _             -> {stop, member_down, State}
   end;
-handle_info({'EXIT', Pid, Reason}, State) ->
+handle_info({'EXIT', _Pid, _Reason}, State) ->
   {stop, shutdown, State};
 handle_info(?LO_CMD_SEND_HB,
             #state{ hb_ref                  = HbRef
