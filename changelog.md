@@ -1,6 +1,6 @@
 * TBD
   *
-* 3.15.1
+* 3.15.2
   * Producer: Do not format producer buffer in `gen_server` state
   * Consumer: Do not commit offsets when `unknown_member_id` error is received
   * Logging: Changed from `error_logger` to `logger` macros
@@ -9,7 +9,7 @@
   * Use GitHub Actions instead of Travis CI
   * Added Elixir example
   * Rename DEFAULT_TIMEOUT macro in public brod.hrl to BROD_DEFAULT_TIMEOUT.
-* 3.15.0
+* 3.15.0 (and 3.15.1, for some reason tagged on the same commit)
   * Fix unknown types
   * Build on OTP-23
 * 3.14.0
