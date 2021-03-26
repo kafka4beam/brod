@@ -393,7 +393,9 @@ fetch_committed_offsets(Client, GroupId, Topics) ->
     {ok, {Endpoint, ConnCfg}} ->
       case kpro:connect(Endpoint, ConnCfg) of
         {ok, Conn} ->
-          do_fetch_committed_offsets(Conn, GroupId, Topics);
+          Rsp = do_fetch_committed_offsets(Conn, GroupId, Topics),
+          kpro:close_connection(Conn),
+          Rsp;
         {error, Reason} ->
           {error, Reason}
       end;
