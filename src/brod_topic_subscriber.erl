@@ -280,6 +280,9 @@ init(Config) ->
    , consumer_config   := ConsumerConfig
    , partitions        := Partitions
    } = maps:merge(Defaults, Config),
+  logger:update_process_metadata(#{ domain => [brod, topic_subscriber]
+                                  , topic  => Topic
+                                  }),
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, InitData),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),

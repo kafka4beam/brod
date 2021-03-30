@@ -270,6 +270,10 @@ stop(Pid) -> ok = gen_server:call(Pid, stop).
 %% @private
 init({ClientPid, Topic, Partition, Config}) ->
   erlang:process_flag(trap_exit, true),
+  logger:update_process_metadata(#{ domain    => [brod, producer]
+                                  , topic     => Topic
+                                  , partition => Partition
+                                  }),
   BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
   OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
   MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
@@ -384,7 +388,10 @@ handle_info({msg, Pid, #kpro_rsp{ api = produce
   {ok, NewState} =
     case ?IS_ERROR(ErrorCode) of
       true ->
-        _ = log_error_code(Topic, Partition, Offset, ErrorCode),
+        ?tp(error, "Produce error",
+            #{ error_code => ErrorCode
+             , offset     => Offset
+             }),
         Error = {produce_response_error, Topic, Partition,
                  Offset, ErrorCode},
         is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
@@ -435,11 +442,6 @@ format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
 
 %%%_* Internal Functions =======================================================
 
--spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
-log_error_code(Topic, Partition, Offset, ErrorCode) ->
-  ?BROD_LOG_ERROR("Produce error ~s-~B Offset: ~B Error: ~p",
-                  [Topic, Partition, Offset, ErrorCode]).
-
 handle_produce(BufCb, Batch,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
   %% pending on retry, add to buffer regardless of connection state
@@ -487,8 +489,8 @@ maybe_reinit_connection(#state{ client_pid      = ClientPid
       ok = maybe_demonitor(OldConnMref),
       %% Make sure the sent but not acked ones are put back to buffer
       Buffer = brod_producer_buffer:nack_all(Buffer0, no_leader_connection),
-      ?BROD_LOG_WARNING("Failed to (re)init connection, reason:\n~p",
-                        [Reason]),
+      ?LOG_WARNING("Failed to (re)init connection, reason:\n~p",
+                   [Reason]),
       {ok, State#state{ connection = ?undef
                       , conn_mref  = ?undef
                       , buffer     = Buffer

@@ -113,9 +113,11 @@ process_message(Dir, Partition, Message) ->
                 , value  = Value
                 } = Message,
   Seqno = binary_to_integer(Value),
-  Now = os_time_utc_str(),
-  ?BROD_LOG_INFO("~p ~p ~s: offset:~w seqno:~w\n",
-                 [self(), Partition, Now, Offset, Seqno]),
+  ?tp(info, demo_process_message,
+      #{ partition => Partition
+       , seqno     => Seqno
+       , offset    => Offset
+       }),
   ok = commit_offset(Dir, Partition, Offset).
 
 -spec read_offsets(string()) -> [{brod:partition(), brod:offset()}].

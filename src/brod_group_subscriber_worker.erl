@@ -53,14 +53,20 @@ init(_Topic, StartOpts) ->
    , partition    := Partition
    , begin_offset := BeginOffset
    , commit_fun   := CommitFun
+   , topic        := Topic
+   , group_id     := GroupId
    } = StartOpts,
+  logger:update_process_metadata(#{ partition => Partition
+                                  , topic     => Topic
+                                  , group_id  => GroupId
+                                  , domain    => [brod, group_subscriber_worker]
+                                  }),
   InitInfo = maps:with( [topic, partition, group_id, commit_fun]
                       , StartOpts
                       ),
-  ?BROD_LOG_INFO("Starting group_subscriber_worker: ~p~n"
-                 "Offset: ~p~nPid: ~p~n"
-                , [InitInfo, BeginOffset, self()]
-                ),
+  ?tp(info, group_subscriber_worker_start,
+      InitInfo #{ offset => BeginOffset
+                }),
   {ok, CbState} = CbModule:init(InitInfo, CbConfig),
   State = #state{ start_options = StartOpts
                 , cb_module     = CbModule

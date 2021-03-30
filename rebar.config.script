@@ -2,7 +2,6 @@ IsRebar3 = erlang:function_exported(rebar3, main, 1),
 DocoptUrl = "https://github.com/zmstone/docopt-erl.git",
 DocOptTag = "0.1.3",
 DocoptDep = {docopt, {git, DocoptUrl, {branch, DocOptTag}}},
-Snabbkaffe = {snabbkaffe, {git, "https://github.com/kafka4beam/snabbkaffe", {tag, "0.6.0"}}},
 Profiles =
   {profiles, [
     {brod_cli, [
@@ -18,7 +17,7 @@ Profiles =
                         ]}
              ]}]},
     {test, [
-      {deps, [meck, proper, jsone, DocoptDep, Snabbkaffe]},
+      {deps, [meck, proper, jsone, bear, DocoptDep]},
       {erl_opts, [{d, build_brod_cli}]}
     ]}
   ]},

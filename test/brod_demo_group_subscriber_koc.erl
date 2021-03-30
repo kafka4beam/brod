@@ -200,8 +200,8 @@ message_handler_loop(Topic, Partition, SubscriberPid) ->
                   } ->
     Seqno = list_to_integer(binary_to_list(Value)),
     Now = os_time_utc_str(),
-    ?BROD_LOG_INFO("~p ~s-~p ~s: offset:~w seqno:~w\n",
-                   [self(), Topic, Partition, Now, Offset, Seqno]),
+    ?LOG_INFO("~p ~s-~p ~s: offset:~w seqno:~w\n",
+              [self(), Topic, Partition, Now, Offset, Seqno]),
     brod_group_subscriber:ack(SubscriberPid, Topic, Partition, Offset),
     ?MODULE:message_handler_loop(Topic, Partition, SubscriberPid)
   after 1000 ->

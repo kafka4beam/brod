@@ -66,7 +66,6 @@ produce({Topic, Partition}, Key, Value, Headers) ->
                                              , headers => Headers
                                              }]
                                          ),
-  ?log(notice, "Produced at ~p ~p, offset: ~p", [Topic, Partition, Offset]),
   Offset.
 
 payloads(Config) ->
@@ -76,7 +75,7 @@ payloads(Config) ->
 %% Produce binaries to the topic and return offset of the last message:
 produce_payloads(Topic, Partition, Config) ->
   Payloads = payloads(Config),
-  ?log(notice, "Producing payloads to ~p", [{Topic, Partition}]),
+  ?LOG(notice, "Producing payloads to ~p", [{Topic, Partition}]),
   L = [produce({Topic, Partition}, I) + 1 || I <- payloads(Config)],
   LastOffset = lists:last(L),
   {LastOffset, Payloads}.
@@ -111,13 +110,13 @@ exec_in_kafka_container(FMT, Args) ->
   CMD0 = lists:flatten(io_lib:format(FMT, Args)),
   CMD = "docker exec kafka-1 bash -c '" ++ CMD0 ++ "'",
   Port = open_port({spawn, CMD}, [exit_status, stderr_to_stdout]),
-  ?log(notice, "Running ~s~nin kafka container", [CMD0]),
+  ?LOG_NOTICE("Running ~s~nin kafka container", [CMD0]),
   collect_port_output(Port, CMD).
 
 collect_port_output(Port, CMD) ->
   receive
     {Port, {data, Str}} ->
-      ?log(notice, "~s", [Str]),
+      ?LOG_NOTICE("~s", [Str]),
       collect_port_output(Port, CMD);
     {Port, {exit_status, ExitStatus}} ->
       ExitStatus
@@ -158,11 +157,10 @@ wait_n_messages(TestGroupId, Expected, NRetries) ->
          begin
            Offsets = get_acked_offsets(TestGroupId),
            NMessages = lists:sum(maps:values(Offsets)),
-           ?log( notice
-               , "Number of messages processed by consumer group: ~p; "
-                 "total: ~p/~p"
-               , [Offsets, NMessages, Expected]
-               ),
+           ?LOG_NOTICE("Number of messages processed by consumer group: ~p; "
+                       "total: ~p/~p"
+                      , [Offsets, NMessages, Expected]
+                      ),
            ?assert(NMessages >= Expected)
          end).
 

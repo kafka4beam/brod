@@ -149,6 +149,10 @@ init({Client, GroupInput}) ->
   ProtocolName = proplists:get_value(protocol, GroupInput),
   Retention = proplists:get_value(retention, GroupInput),
   Offsets = proplists:get_value(offsets, GroupInput),
+  logger:update_process_metadata(#{ group_id => GroupId
+                                  , coor     => self()
+                                  , domain   => [brod, cg_commits]
+                                  }),
   %% use callback_implemented strategy so I know I am elected leader
   %% when `assign_partitions' callback is called.
   Config = [ {partition_assignment_strategy, callback_implemented}
@@ -167,7 +171,7 @@ init({Client, GroupInput}) ->
   {ok, State}.
 
 handle_info(Info, State) ->
-  log(State, info, "Info discarded:~p", [Info]),
+  ?tp(warning, "unknown message", #{info => Info}),
   {noreply, State}.
 
 handle_call(sync, From, State0) ->
@@ -177,7 +181,7 @@ handle_call(sync, From, State0) ->
 handle_call({assign_partitions, Members, TopicPartitions}, _From,
             #state{topic = MyTopic,
                    offsets = Offsets} = State) ->
-  log(State, info, "Assigning all topic partitions to self", []),
+  ?LOG_INFO("Assingning all topic-partitions to self", []),
   MyTP = [{MyTopic, P} || {P, _} <- Offsets],
   %% Assert that my topic partitions are included in
   %% subscriptions collected from ALL members
@@ -188,8 +192,8 @@ handle_call({assign_partitions, Members, TopicPartitions}, _From,
       ok;
     BadPartitions ->
       PartitionNumbers = [P || {_T, P} <- BadPartitions],
-      log(State, error, "Nonexisting partitions in input: ~p",
-          [PartitionNumbers]),
+      ?LOG_ERROR("Nonexisting partitions in input: ~p",
+                 [PartitionNumbers]),
       erlang:exit({non_existing_partitions, PartitionNumbers})
   end,
   %% To keep it simple, assign all my topic-partitions to self
@@ -209,9 +213,6 @@ handle_cast({new_assignments, _MemberId, GenerationId, Assignments},
                   , coordinator = Pid
                   , topic =  MyTopic
                   } = State) ->
-  %% Write a log if I am not a leader,
-  %% hope the desired partitions are all assigned to me
-  IsLeader orelse log(State, info, "Not elected", []),
   Groupped0 =
     brod_utils:group_per_key(
       fun(#brod_received_assignment{ topic        = Topic
@@ -223,11 +224,18 @@ handle_cast({new_assignments, _MemberId, GenerationId, Assignments},
   %% Discard other topics if for whatever reason the group leader assigns
   %% irrelevant topic-partitions to me
   Groupped = lists:filter(fun({Topic, _}) -> Topic =:= MyTopic end, Groupped0),
-  log(State, info, "current offsets:\n~p", [Groupped]),
+  %% Write leader election results to the log,
+  %% hope the desired partitions are all assigned to me
+  ?tp(info, election_result,
+      #{ generation_id   => GenerationId
+       , topic           => MyTopic
+       , elected         => IsLeader
+       , current_offsets => Groupped
+       }),
   %% Assert all desired partitions are in assignment
   case Groupped of
     [] ->
-      log(State, error, "Topic ~s is not received in assignment", [MyTopic]),
+      ?LOG_ERROR("Topic ~s is not received in assignment", [MyTopic]),
       erlang:exit({bad_topic_assignment, Groupped0});
     [{MyTopic, PartitionOffsetList}] ->
       MyPartitions = [P || {P, _O} <- OffsetsToCommit],
@@ -236,10 +244,9 @@ handle_cast({new_assignments, _MemberId, GenerationId, Assignments},
         [] ->
           ok;
         Left ->
-          log(State, error,
-              "Partitions ~p are not received in assignment, "
-              "There is probably another active group member subscribing "
-              "to topic ~s, stop it and retry\n", [MyTopic, Left]),
+          ?LOG_ERROR("Partitions ~p are not received in assignment, "
+                     "There is probably another active group member subscribing "
+                     "to topic ~s, stop it and retry\n", [MyTopic, Left]),
           erlang:exit({unexpected_assignments, Left})
       end
   end,
@@ -255,7 +262,7 @@ handle_cast({new_assignments, _MemberId, GenerationId, Assignments},
   case brod_group_coordinator:commit_offsets(Pid) of
     ok -> ok;
     {error, Reason} ->
-      log(State, error, "Failed to commit, reason:\n~p", [Reason]),
+      ?LOG_ERROR("Failed to commit, reason:\n~p", [Reason]),
       erlang:exit(commit_failed)
   end,
   {noreply, set_done(State)};
@@ -281,7 +288,7 @@ maybe_reply_sync(#state{pending_sync = ?undef} = State) ->
   State;
 maybe_reply_sync(#state{pending_sync = From} = State) ->
   gen_server:reply(From, ok),
-  log(State, info, "done\n", []),
+  ?LOG_INFO("done\n", []),
   State#state{pending_sync = ?undef}.
 
 %% I am the current leader because I am assigning partitions.
@@ -293,11 +300,6 @@ assign_all_to_self([{MyMemberId, _} | Members], TopicPartitions) ->
   [ {MyMemberId, Groupped}
   | [{Id, []} || {Id, _MemberMeta} <- Members]
   ].
-
-log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
-  ?BROD_LOG(Level,
-            "Group member (~s,coor=~p):\n" ++ Fmt,
-            [GroupId, self() | Args]).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

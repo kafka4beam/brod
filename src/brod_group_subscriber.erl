@@ -302,6 +302,9 @@ get_committed_offsets(Pid, TopicPartitions) ->
 
 init({Client, GroupId, Topics, GroupConfig,
       ConsumerConfig, MessageType, CbModule, CbInitArg}) ->
+  logger:update_process_metadata(#{ group_id => GroupId
+                                  , domain   => [brod, group_subscriber_v1]
+                                  }),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_group_id(GroupId),
   ok = brod_utils:assert_topics(Topics),
@@ -353,7 +356,7 @@ handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
   Tref = start_subscribe_timer(?undef, ?RESUBSCRIBE_DELAY),
   {noreply, NewState#state{subscribe_tref = Tref}};
 handle_info(Info, State) ->
-  log(State, info, "discarded message:~p", [Info]),
+  ?tp(info, "unknown message", #{info => Info}),
   {noreply, State}.
 
 handle_call({get_committed_offsets, TopicPartitions}, _From,
@@ -623,15 +626,6 @@ subscribe_partition(Client, Consumer) ->
                            }
       end
   end.
-
-log(#state{ groupId  = GroupId
-          , memberId = MemberId
-          , generationId = GenerationId
-          }, Level, Fmt, Args) ->
-  ?BROD_LOG(
-     Level,
-     "group subscriber (groupId=~s,memberId=~s,generation=~p,pid=~p):\n" ++ Fmt,
-     [GroupId, MemberId, GenerationId, self() | Args]).
 
 get_consumer(Pid, Consumers) when is_pid(Pid) ->
   lists:keyfind(Pid, #consumer.consumer_pid, Consumers);
