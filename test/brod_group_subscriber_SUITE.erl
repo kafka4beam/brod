@@ -368,6 +368,14 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
   InitArgs = #{async_ack => true},
   Topic = ?topic,
   Partition = 0,
+  Tester = self(),
+  Ref = make_ref(),
+  meck:new(brod_group_coordinator, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(brod_group_coordinator, commit_offsets,
+              fun(Pid) ->
+                      Tester ! {commit_offsets, Ref},
+                      meck:passthrough([Pid])
+              end),
   ?check_trace(
      #{ timeout => 5000 },
      %% Run stage:
@@ -390,12 +398,18 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
             error("Child processes didn't die")
         end
         || MRef <- Monitors],
+       receive
+           {commit_offsets, Ref} -> ok
+       after 5000 ->
+           error("timed out waiting for offset flush")
+       end,
        ok
      end,
      %% Check stage:
      fun(_Ret, Trace) ->
          ok
-     end).
+     end),
+  meck:unload(brod_group_coordinator).
 
 v2_subscriber_assignments_revoked(Config) when is_list(Config) ->
   %% Test brod_group_subscriber_v2 behaviour when assignments revoked:

@@ -362,7 +362,8 @@ handle_info({'EXIT', Pid, _Reason}, #state{coordinator = Pid} = State) ->
 handle_info({'EXIT', Pid, Reason}, State) ->
   case [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid] of
     [TopicPartition | _] ->
-      handle_worker_failure(TopicPartition, Pid, Reason, State);
+      ok = handle_worker_failure(TopicPartition, Pid, Reason, State),
+      {stop, shutdown, State};
     _ -> % Other process wants to kill us, supervisor?
       ?BROD_LOG_INFO("Received EXIT:~p from ~p, shutting down", [Reason, Pid]),
       {stop, shutdown, State}
@@ -396,25 +397,20 @@ flush_offset_commits(GroupId, Coordinator) when is_pid(Coordinator) ->
         ok -> ok;
         {error, Reason} ->
             ?BROD_LOG_ERROR("group_subscriber_v2 ~s failed to flush commits "
-                            "before termination", [GroupId, Reason])
+                            "before termination ~p", [GroupId, Reason])
     end;
 flush_offset_commits(_, _) ->
     ok.
 
 -spec handle_worker_failure(brod:topic_partition(), pid(), term(), state()) ->
-                               no_return().
+        ok.
 handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
-  #state{ workers     = Workers
-        , group_id    = GroupId
-        , coordinator = Coordinator
-        } = State,
+  #state{group_id = GroupId} = State,
   ?BROD_LOG_ERROR("group_subscriber_v2 worker crashed.~n"
                   "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
                   "  pid = ~p~n  reason = ~p",
                   [GroupId, Topic, Partition, Pid, Reason]),
-  terminate_all_workers(Workers),
-  brod_group_coordinator:commit_offsets(Coordinator),
-  exit(worker_crash).
+  ok.
 
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
