@@ -308,6 +308,9 @@ stop(Pid) ->
 
 init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   erlang:process_flag(trap_exit, true),
+  logger:update_process_metadata(#{ group_id => GroupId
+                                  , domain   => [brod, group_coordinator]
+                                  }),
   GetCfg = fun(Name, Default) ->
              proplists:get_value(Name, Config, Default)
            end,
@@ -1068,9 +1071,9 @@ log(#state{ groupId  = GroupId
           , generationId = GenerationId
           , member_pid = MemberPid
           }, Level, Fmt, Args) ->
-  ?BROD_LOG(Level,
-            "Group member (~s,coor=~p,cb=~p,generation=~p):\n" ++ Fmt,
-            [GroupId, self(), MemberPid, GenerationId | Args]).
+  ?LOG(Level,
+       "Group member (~s,coor=~p,cb=~p,generation=~p):\n" ++ Fmt,
+       [GroupId, self(), MemberPid, GenerationId | Args]).
 
 %% Make metata to be committed together with offsets.
 -spec make_offset_commit_metadata() -> binary().

@@ -46,7 +46,6 @@
         , is_pid_alive/1
         , list_all_groups/2
         , list_groups/2
-        , log/3
         , make_batch_input/2
         , make_fetch_fun/4
         , make_part_fun/1
@@ -74,9 +73,6 @@
 -type endpoint() :: brod:endpoint().
 -type offset_time() :: brod:offset_time().
 -type group_id() :: brod:group_id().
-
-%% log/3 is deprecated, use ?BROD_LOG* macros from brod_int.hrl instead.
--deprecated([{log, 3, eventually}]).
 
 %%%_* APIs =====================================================================
 
@@ -213,13 +209,6 @@ optional_callback(Module, Function, Args, Default) ->
 epoch_ms() ->
   {Mega, S, Micro} = os:timestamp(),
   (((Mega * 1000000)  + S) * 1000) + Micro div 1000.
-
-%% @doc Wrapper around logger API.
-%% @deprecated Use ?BROD_LOG* macros from brod_int.hrl instead.
--spec log(info | warning | error, string(), [any()]) -> ok.
-log(info,    Fmt, Args) -> ?BROD_LOG_ERROR(Fmt, Args);
-log(warning, Fmt, Args) -> ?BROD_LOG_WARNING(Fmt, Args);
-log(error,   Fmt, Args) -> ?BROD_LOG_ERROR(Fmt, Args).
 
 %% @doc Assert client_id is an atom().
 -spec assert_client(brod:client_id() | pid()) -> ok | no_return().

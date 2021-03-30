@@ -2,9 +2,9 @@
 -define(BROD_TEST_MACROS_HRL, true).
 
 -include_lib("kafka_protocol/include/kpro.hrl").
--include_lib("hut/include/hut.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %%====================================================================
 %% Macros

@@ -123,7 +123,7 @@ common_end_per_testcase(Case, Config) ->
   kafka_test_helper:common_end_per_testcase(Case, Config),
   receive
     {'EXIT', From, Reason} ->
-      ?log(warning, "Refusing to become collateral damage."
+      ?LOG(warning, "Refusing to become collateral damage."
                     " Offender: ~p Reason: ~p",
            [From, Reason])
   after 0 ->
@@ -673,7 +673,7 @@ start_subscriber(GroupId, Config, Topics, GroupConfig, ConsumerConfig, InitArgs)
                                          GroupConfig, ConsumerConfig,
                                          ?MODULE, InitArgs)
     end,
-  ?log(notice, "Started subscriber with pid=~p", [SubscriberPid]),
+  ?LOG(notice, "Started subscriber with pid=~p", [SubscriberPid]),
   {ok, SubscriberPid}.
 
 stop_subscriber(Config, Pid) ->

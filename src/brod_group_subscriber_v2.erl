@@ -249,6 +249,9 @@ init(Config) ->
    , cb_module := CbModule
    } = Config,
   process_flag(trap_exit, true),
+  logger:update_process_metadata(#{ group_id => GroupId
+                                  , domain   => [brod, group_subscriber_v2]
+                                  }),
   MessageType = maps:get(message_type, Config, message_set),
   DefaultGroupConfig = [],
   GroupConfig = maps:get(group_config, Config, DefaultGroupConfig),
@@ -365,7 +368,10 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     [TopicPartition|_] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State);
     _ -> % Other process wants to kill us, supervisor?
-      ?BROD_LOG_INFO("Received EXIT:~p from ~p, shutting down", [Reason, Pid]),
+      ?tp(info, "received EXIT, shutting down",
+          #{ from => Pid
+           , reason => Reason
+           }),
       {stop, shutdown, State}
   end;
 handle_info(_Info, State) ->
@@ -394,19 +400,26 @@ handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
         , group_id    = GroupId
         , coordinator = Coordinator
         } = State,
-  ?BROD_LOG_ERROR("group_subscriber_v2 worker crashed.~n"
-                  "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
-                  "  pid = ~p~n  reason = ~p",
-                  [GroupId, Topic, Partition, Pid, Reason]),
+  ?tp(error, "brod_group_subscriber_v2 worker crashed",
+      #{ group_id  => GroupId
+       , topic     => Topic
+       , partition => Partition
+       , pid       => Pid
+       , reason    => Reason
+       }),
   terminate_all_workers(Workers),
   brod_group_coordinator:commit_offsets(Coordinator),
   exit(worker_crash).
 
 -spec terminate_all_workers(workers()) -> ok.
 terminate_all_workers(Workers) ->
-  maps:map( fun(_, Worker) ->
-                ?BROD_LOG_INFO("Terminating worker pid=~p", [Worker]),
-                terminate_worker(Worker)
+  maps:map( fun({Topic, Partition}, Pid) ->
+                ?tp(info, "Terminating brod_group_subscriber_v2 worker",
+                    #{ pid       => Pid
+                     , topic     => Topic
+                     , partition => Partition
+                     }),
+                terminate_worker(Pid)
             end
           , Workers
           ),

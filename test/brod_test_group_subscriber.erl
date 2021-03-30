@@ -36,9 +36,10 @@ init(InitInfo, Config) ->
   IsAsyncAck         = maps:get(async_ack, Config, false),
   IsAsyncCommit      = maps:get(async_commit, Config, false),
   IsAssignPartitions = maps:get(assign_partitions, Config, false),
-  ?BROD_LOG_INFO("Started a test group subscriber.~n"
-                 "Config: ~p~nInitInfo: ~p~n"
-                , [Config, InitInfo]),
+  ?tp(brod_test_subscriber_start,
+      #{ config    => Config
+       , init_info => InitInfo
+       }),
   {ok, #state{ is_async_ack         = IsAsyncAck
              , is_async_commit      = IsAsyncCommit
              , is_assign_partitions = IsAssignPartitions

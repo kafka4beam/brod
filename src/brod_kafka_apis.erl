@@ -72,6 +72,7 @@ pick_version(Conn, API) ->
 %%%_* gen_server callbacks =====================================================
 
 init([]) ->
+  logger:update_process_metadata(#{domain => [brod, kafka_apis]}),
   ?ETS = ets:new(?ETS, [named_table, public]),
   {ok, #state{}}.
 
@@ -79,14 +80,14 @@ handle_info({'DOWN', _Mref, process, Conn, _Reason}, State) ->
   _ = ets:delete(?ETS, Conn),
   {noreply, State};
 handle_info(Info, State) ->
-  ?BROD_LOG_ERROR("unknown info ~p", [Info]),
+  ?tp(error, "unknown message", #{info => Info}),
   {noreply, State}.
 
 handle_cast({monitor_connection, Conn}, State) ->
   erlang:monitor(process, Conn),
   {noreply, State};
 handle_cast(Cast, State) ->
-  ?BROD_LOG_ERROR("unknown cast ~p", [Cast]),
+  ?tp(error, "unknown message", #{cast => Cast}),
   {noreply, State}.
 
 handle_call(stop, From, State) ->

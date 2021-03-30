@@ -1,6 +1,10 @@
 {"1.2.0",
 [{<<"crc32cer">>,{pkg,<<"crc32cer">>,<<"0.1.4">>},1},
  {<<"kafka_protocol">>,{pkg,<<"kafka_protocol">>,<<"2.3.6">>},0},
+ {<<"snabbkaffe">>,
+  {git,"https://github.com/kafka4beam/snabbkaffe",
+       {ref,"74a0d6cd6bbe32581616aee96e245ff2065f4a48"}},
+  0},
  {<<"snappyer">>,{pkg,<<"snappyer">>,<<"1.2.5">>},1},
  {<<"supervisor3">>,{pkg,<<"supervisor3">>,<<"1.1.11">>},0}]}.
 [

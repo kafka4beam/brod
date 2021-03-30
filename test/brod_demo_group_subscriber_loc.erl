@@ -150,8 +150,8 @@ process_message(Topic, Partition, Dir, GroupId, Message) ->
                 } = Message,
   Seqno = list_to_integer(binary_to_list(Value)),
   Now = os_time_utc_str(),
-  ?BROD_LOG_INFO("~p ~p ~s: offset:~w seqno:~w\n",
-                 [self(), Partition, Now, Offset, Seqno]),
+  ?LOG_INFO("~p ~p ~s: offset:~w seqno:~w\n",
+            [self(), Partition, Now, Offset, Seqno]),
   ok = commit_offset(Dir, GroupId, Topic, Partition, Offset).
 
 %% @doc This callback is called whenever there is a new assignment received.
