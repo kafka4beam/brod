@@ -113,7 +113,7 @@
         { config                  :: subscriber_config()
         , message_type            :: message | message_set
         , group_id                :: brod:group_id()
-        , coordinator             :: pid()
+        , coordinator             :: undefined | pid()
         , generation_id           :: integer() | ?undef
         , workers = #{}           :: workers()
         , committed_offsets = #{} :: committed_offsets()
@@ -357,12 +357,11 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
+handle_info({'EXIT', Pid, _Reason}, #state{coordinator = Pid} = State) ->
+    {stop, {shutdown, coordinator_failure}, State#state{coordinator = undefined}};
 handle_info({'EXIT', Pid, Reason}, State) ->
-  L = [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid],
-  case L of
-    _ when Pid =:= State#state.coordinator ->
-      error(coordinator_failure);
-    [TopicPartition|_] ->
+  case [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid] of
+    [TopicPartition | _] ->
       handle_worker_failure(TopicPartition, Pid, Reason, State);
     _ -> % Other process wants to kill us, supervisor?
       ?BROD_LOG_INFO("Received EXIT:~p from ~p, shutting down", [Reason, Pid]),
@@ -379,13 +378,28 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{workers = Workers}) ->
-  terminate_all_workers(Workers),
-  ok.
+terminate(_Reason, #state{workers = Workers,
+                          coordinator = Coordinator,
+                          group_id = GroupId
+                         }) ->
+  ok = terminate_all_workers(Workers),
+  ok = flush_offset_commits(GroupId, Coordinator).
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% best-effort commits flush, this is a synced call,
+%% worst case scenario, it may timeout after 5 seconds.
+flush_offset_commits(GroupId, Coordinator) when is_pid(Coordinator) ->
+    case brod_group_coordinator:commit_offsets(Coordinator) of
+        ok -> ok;
+        {error, Reason} ->
+            ?BROD_LOG_ERROR("group_subscriber_v2 ~s failed to flush commits "
+                            "before termination", [GroupId, Reason])
+    end;
+flush_offset_commits(_, _) ->
+    ok.
 
 -spec handle_worker_failure(brod:topic_partition(), pid(), term(), state()) ->
                                no_return().
