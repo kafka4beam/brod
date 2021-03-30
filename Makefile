@@ -36,3 +36,6 @@ cover:
 
 coveralls:
 	@rebar3 coveralls send
+
+dialyzer:
+	@rebar3 dialyzer
