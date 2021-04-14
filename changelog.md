@@ -1,5 +1,8 @@
 * TBD
   *
+* 3.15.3
+  * Try to commit acknowledged offsets when brod_group_subscriber_v2 terminates
+  * Fix process leak, close connection after offset is fetched in brod_utils:fetch_committed_offsets/3
 * 3.15.2
   * Producer: Do not format producer buffer in `gen_server` state
   * Consumer: Do not commit offsets when `unknown_member_id` error is received
