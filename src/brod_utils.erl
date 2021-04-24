@@ -93,7 +93,7 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
                     validate_only => boolean()}, conn_config()) ->
         {ok, kpro:struct()} | {error, any()} | ok.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
-  with_conn(kpro:connect_controller(Hosts, ConnCfg),
+  with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg)),
             fun(Pid) ->
                 Request = brod_kafka_request:create_topics(
                   Pid, TopicConfigs, RequestConfigs),
@@ -110,7 +110,7 @@ delete_topics(Hosts, Topics, Timeout) ->
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
-  with_conn(kpro:connect_controller(Hosts, ConnCfg),
+  with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg)),
               fun(Pid) ->
                   Request = brod_kafka_request:delete_topics(
                     Pid, Topics, Timeout),
@@ -160,7 +160,8 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts) ->
   with_conn(
-    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition, Opts),
+    kpro:connect_partition_leader(Hosts, nolink(ConnCfg),
+                                  Topic, Partition, Opts),
     fun(Pid) -> resolve_offset(Pid, Topic, Partition, Time) end).
 
 %% @doc Resolve timestamp or semantic offset to real offset.
@@ -284,7 +285,7 @@ fetch(Hosts, Topic, Partition, Offset, Opts) when is_list(Hosts) ->
   fetch({Hosts, []}, Topic, Partition, Offset, Opts);
 fetch({Hosts, ConnCfg}, Topic, Partition, Offset, Opts) ->
   with_conn(
-    kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+    kpro:connect_partition_leader(Hosts, nolink(ConnCfg), Topic, Partition),
     fun(Conn) -> fetch(Conn, Topic, Partition, Offset, Opts) end);
 fetch(Client, Topic, Partition, Offset, Opts) when is_atom(Client) ->
   case brod_client:get_leader_connection(Client, Topic, Partition) of
@@ -306,7 +307,7 @@ fold(Hosts, Topic, Partition, Offset, Opts,
   fold({Hosts, []}, Topic, Partition, Offset, Opts, Acc, Fun, Limits);
 fold({Hosts, ConnCfg}, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
   case with_conn(
-         kpro:connect_partition_leader(Hosts, ConnCfg, Topic, Partition),
+         kpro:connect_partition_leader(Hosts, nolink(ConnCfg), Topic, Partition),
          fun(Conn) -> fold(Conn, Topic, Partition, Offset, Opts,
                            Acc, Fun, Limits) end) of
     {error, Reason} ->
@@ -377,7 +378,7 @@ init_sasl_opt(Config) ->
 fetch_committed_offsets(BootstrapEndpoints, ConnCfg, GroupId, Topics) ->
   Args = #{type => group, id => GroupId},
   with_conn(
-    kpro:connect_coordinator(BootstrapEndpoints, ConnCfg, Args),
+    kpro:connect_coordinator(BootstrapEndpoints, nolink(ConnCfg), Args),
     fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
 
 %% @doc Fetch commited offsets for the given topics in a consumer group.
@@ -925,6 +926,9 @@ foldl_batch(Fun, Acc, [Msg | Rest]) ->
 is_batch([M | _]) when is_map(M) -> true;
 is_batch([T | _]) when is_tuple(T) -> true;
 is_batch(_) -> false.
+
+nolink(C) when is_list(C) -> [{nolink, true} | C];
+nolink(C) when is_map(C) -> C#{nolink => true}.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

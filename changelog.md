@@ -1,5 +1,8 @@
 * TBD
   *
+* 3.15.4
+  * Avoid start_link for temp connection usages
+    affected APIs: fetch_committed_offsets, fetch, resolve_offset, create_topics, delete_topics
 * 3.15.3
   * Try to commit acknowledged offsets when brod_group_subscriber_v2 terminates
   * Fix process leak, close connection after offset is fetched in brod_utils:fetch_committed_offsets/3
