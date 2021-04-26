@@ -345,7 +345,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {ok, NewState} = schedule_retry(State#state{buffer = Buffer}),
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
-handle_info({produce, CallRef, Batch, AckCb}, #state{} = State) ->
+handle_info({produce, CallRef, Batch, AckCb}, #state{partition = Partition} = State) ->
   #brod_call_ref{caller = Pid} = CallRef,
   BufCb =
     fun(?buffered) when is_pid(Pid) ->
@@ -363,7 +363,7 @@ handle_info({produce, CallRef, Batch, AckCb}, #state{} = State) ->
                                    },
         erlang:send(Pid, Reply);
        ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
-        AckCb(State#state.partition, BaseOffset)
+        AckCb(Partition, BaseOffset)
     end,
   handle_produce(BufCb, Batch, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
