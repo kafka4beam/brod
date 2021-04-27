@@ -1,5 +1,6 @@
 * TBD
-  *
+* 3.15.5
+  * Fix exponential growth of `brod_producer` buffer
 * 3.15.4
   * Avoid start_link for temp connection usages
     affected APIs: fetch_committed_offsets, fetch, resolve_offset, create_topics, delete_topics
