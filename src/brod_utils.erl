@@ -426,7 +426,7 @@ do_fetch_committed_offsets(Conn, GroupId, Topics) when is_pid(Conn) ->
   Req = brod_kafka_request:offset_fetch(Conn, GroupId, Topics),
   case request_sync(Conn, Req) of
     {ok, Msg} ->
-      {ok, kf(responses, Msg)};
+      {ok, maps:get(topics, Msg)};
     {error, Reason} ->
       {error, Reason}
   end.
@@ -784,7 +784,7 @@ parse(list_offsets, _, Msg) ->
     #{offset := _} = M -> M
   end;
 parse(metadata, _, Msg) ->
-  ok = throw_error_code(kpro:find(topic_metadata, Msg)),
+  ok = throw_error_code(kpro:find(topics, Msg)),
   Msg;
 parse(find_coordinator, _, Msg) ->
   ok = throw_error_code([Msg]),

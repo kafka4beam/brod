@@ -76,7 +76,7 @@ handle_message(_Partition, #kafka_message{key = KeyBin, value = ValueBin},
   {Tag, Key, Value} = kpro_consumer_group:decode(KeyBin, ValueBin),
   Kf = fun(K) -> {K, V} = lists:keyfind(K, 1, Key), V end,
   case Tag of
-    offset -> update_ets(Ets, {Kf(group_id), Kf(topic), Kf(partition)}, Value);
+    offset -> update_ets(Ets, {Kf(group_id), Kf(name), Kf(partition_index)}, Value);
     group  -> update_ets(Ets, Kf(group_id), Value)
   end,
   {ok, ack, State}.
@@ -91,4 +91,3 @@ update_ets(Ets, Key, Value)       -> ets:insert(Ets, {Key, Value}).
 %%% allout-layout: t
 %%% erlang-indent-level: 2
 %%% End:
-

@@ -116,8 +116,8 @@ offset_fetch(Connection, GroupId, Topics0) ->
   Topics =
     lists:map(
       fun({Topic, Partitions}) ->
-        [ {topic, Topic}
-        , {partitions, [[{partition, P}] || P <- Partitions]}
+        [ {name, Topic}
+        , {partition_indexes, Partitions}
         ]
       end, Topics0),
   Body = [ {group_id, GroupId}
