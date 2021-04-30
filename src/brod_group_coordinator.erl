@@ -595,23 +595,23 @@ join_group(#state{ groupId                 = GroupId
     , {user_data, user_data(MemberModule, MemberPid)}
     ],
   Protocol =
-    [ {protocol_name, ProtocolName}
-    , {protocol_metadata, Meta}
+    [ {name, ProtocolName}
+    , {metadata, Meta}
     ],
   SessionTimeout = timer:seconds(SessionTimeoutSec),
   Body =
     [ {group_id, GroupId}
-    , {session_timeout, SessionTimeout}
+    , {session_timeout_ms, SessionTimeout}
     , {member_id, MemberId0}
     , {protocol_type, ?PROTOCOL_TYPE}
-    , {group_protocols, [Protocol]}
+    , {protocols, [Protocol]}
     ],
   Req = brod_kafka_request:join_group(Connection, Body),
   %% send join group request and wait for response
   %% as long as the session timeout config
   RspBody = send_sync(Connection, Req, SessionTimeout),
   GenerationId = kpro:find(generation_id, RspBody),
-  LeaderId = kpro:find(leader_id, RspBody),
+  LeaderId = kpro:find(leader, RspBody),
   MemberId = kpro:find(member_id, RspBody),
   Members0 = kpro:find(members, RspBody),
   Members1 = translate_members(Members0),
@@ -638,13 +638,13 @@ sync_group(#state{ groupId       = GroupId
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
-    , {group_assignment, assign_partitions(State)}
+    , {assignments, assign_partitions(State)}
     ],
   SyncReq = brod_kafka_request:sync_group(Connection, ReqBody),
   %% send sync group request and wait for response
   RspBody = send_sync(Connection, SyncReq),
   %% get my partition assignments
-  Assignment = kpro:find(member_assignment, RspBody),
+  Assignment = kpro:find(assignment, RspBody),
   TopicAssignments = get_topic_assignments(State, Assignment),
   ok = MemberModule:assignments_received(MemberPid, MemberId,
                                          GenerationId, TopicAssignments),
@@ -731,16 +731,16 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     brod_utils:group_per_key(
       fun({{Topic, Partition}, Offset}) ->
         PartitionOffset =
-          [ {partition, Partition}
-          , {offset, Offset + 1} %% +1 since roundrobin_v2 protocol
-          , {metadata, Metadata}
+          [ {partition_index, Partition}
+          , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
+          , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}
       end, AckedOffsets),
   TopicOffsets =
     lists:map(
       fun({Topic, PartitionOffsets}) ->
-          [ {topic, Topic}
+          [ {name, Topic}
           , {partitions, PartitionOffsets}
           ]
       end, TopicOffsets0),
@@ -753,12 +753,12 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
-    , {retention_time, Retention}
+    , {retention_time_ms, Retention}
     , {topics, TopicOffsets}
     ],
   Req = brod_kafka_request:offset_commit(Connection, ReqBody),
   RspBody = send_sync(Connection, Req),
-  Topics = kpro:find(responses, RspBody),
+  Topics = kpro:find(topics, RspBody),
   ok = assert_commit_response(Topics),
   NewState = State#state{acked_offsets = []},
   {ok, NewState}.
@@ -778,7 +778,7 @@ assert_commit_response(Topics) ->
 collect_commit_response_error_codes(Topics) ->
   lists:foldl(
     fun(Topic, Acc1) ->
-        Partitions = kpro:find(partition_responses, Topic),
+        Partitions = kpro:find(partitions, Topic),
         lists:foldl(
           fun(Partition, Acc2) ->
               EC = kpro:find(error_code, Partition),
@@ -819,7 +819,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
                       ]
                   end, Topics_),
       [ {member_id, MemberId}
-      , {member_assignment,
+      , {assignment,
          [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
          , {topic_partitions, PartitionAssignments}
          , {user_data, <<>>}
@@ -847,7 +847,7 @@ translate_members(Members) ->
   lists:map(
     fun(Member) ->
         MemberId = kpro:find(member_id, Member),
-        Meta = kpro:find(member_metadata, Member),
+        Meta = kpro:find(metadata, Member),
         Version = kpro:find(version, Meta),
         Topics = kpro:find(topics, Meta),
         UserData = kpro:find(user_data, Meta),
@@ -948,16 +948,16 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
   RspBody = send_sync(Conn, Req),
   %% error_code is introduced in version 2
   ?ESCALATE_EC(kpro:find(error_code, RspBody, ?no_error)),
-  TopicOffsets = kpro:find(responses, RspBody),
+  TopicOffsets = kpro:find(topics, RspBody),
   CommittedOffsets0 =
     lists:map(
       fun(TopicOffset) ->
-        Topic = kpro:find(topic, TopicOffset),
-        PartitionOffsets = kpro:find(partition_responses, TopicOffset),
+        Topic = kpro:find(name, TopicOffset),
+        PartitionOffsets = kpro:find(partitions, TopicOffset),
         lists:foldl(
           fun(PartitionOffset, Acc) ->
-            Partition = kpro:find(partition, PartitionOffset),
-            Offset0 = kpro:find(offset, PartitionOffset),
+            Partition = kpro:find(partition_index, PartitionOffset),
+            Offset0 = kpro:find(committed_offset, PartitionOffset),
             Metadata = kpro:find(metadata, PartitionOffset),
             EC = kpro:find(error_code, PartitionOffset),
             ?ESCALATE_EC(EC),

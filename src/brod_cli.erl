@@ -661,8 +661,8 @@ parse_retention([_|_] = R) ->
   end.
 
 print_commits(Struct) ->
-  Topic = kf(topic, Struct),
-  PartRsps = kf(partition_responses, Struct),
+  Topic = kf(name, Struct),
+  PartRsps = kf(partitions, Struct),
   print([Topic, ":\n"]),
   print([pp_fmt_struct(1, P) || P <- PartRsps]).
 
@@ -856,7 +856,7 @@ parse_size(Size) ->
 
 format_metadata(Metadata, Format, IsList, IsToListUrp) ->
   Brokers = kf(brokers, Metadata),
-  Topics0 = kf(topic_metadata, Metadata),
+  Topics0 = kf(topics, Metadata),
   Cluster = kf(cluster_id, Metadata, ?undef),
   Controller = kf(controller_id, Metadata, ?undef),
   Topics1 = case IsToListUrp of
@@ -971,8 +971,8 @@ format_topics(Topics) ->
   lists:keysort(1, TL).
 
 format_topic(Topic) ->
-  TopicName = kf(topic, Topic),
-  PL = kf(partition_metadata, Topic),
+  TopicName = kf(name, Topic),
+  PL = kf(partitions, Topic),
   {TopicName, format_partitions(PL)}.
 
 format_partitions(Partitions) ->
@@ -981,10 +981,10 @@ format_partitions(Partitions) ->
 
 format_partition(P) ->
   ErrorCode = kf(error_code, P),
-  PartitionNr = kf(partition, P),
-  LeaderNodeId = kf(leader, P),
-  Replicas = kf(replicas, P),
-  Isr = kf(isr, P),
+  PartitionNr = kf(partition_index, P),
+  LeaderNodeId = kf(leader_id, P),
+  Replicas = kf(replica_nodes, P),
+  Isr = kf(isr_nodes, P),
   Data = [ {leader, LeaderNodeId}
          , {status, ErrorCode}
          , {isr, Isr}
