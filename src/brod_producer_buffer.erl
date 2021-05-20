@@ -35,7 +35,7 @@
 -include("brod_int.hrl").
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> {brod:key(), brod:value()}).
+-type data() :: fun(() -> [{brod:key(), brod:value()}]).
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
