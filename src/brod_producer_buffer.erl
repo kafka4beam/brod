@@ -35,7 +35,8 @@
 -include("brod_int.hrl").
 
 %% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> [{brod:key(), brod:value()}]).
+-type batch() :: [{brod:key(), brod:value()}].
+-type data() :: fun(() -> batch()).
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
@@ -52,10 +53,11 @@
 -type req() :: #req{}.
 
 -type vsn() :: brod_kafka_apis:vsn().
--type send_fun() :: fun((pid(), [{brod:key(), brod:value()}], vsn()) ->
-                        ok |
+-type send_fun_res() :: ok |
                         {ok, reference()} |
-                        {error, any()}).
+                        {error, any()}.
+-type send_fun() :: fun((pid(), batch(), vsn()) -> send_fun_res()) |
+                    {fun((any(), pid(), batch(), vsn()) -> send_fun_res()), any()}.
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -define(NEW_QUEUE, queue:new()).
@@ -271,7 +273,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
   Batch = lists:append(lists:map(fun(#req{data = F}) -> F() end, Reqs)),
-  case SendFun(Conn, Batch, Vsn) of
+  case apply_sendfun(SendFun, Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
       ok = lists:foreach(fun eval_acked/1, Reqs),
@@ -294,6 +296,11 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
       {retry, NewBuf}
   end.
+
+apply_sendfun({SendFun, ExtraArg}, Conn, Batch, Vsn) ->
+  SendFun(ExtraArg, Conn, Batch, Vsn);
+apply_sendfun(SendFun, Conn, Batch, Vsn) ->
+  SendFun(Conn, Batch, Vsn).
 
 %% Put the produce requests back to buffer.
 %% raise an 'exit' exception if the first request to send has reached
