@@ -34,9 +34,8 @@
 
 -include("brod_int.hrl").
 
-%% keep data in fun() to avoid huge log dumps in case of crash etc.
 -type batch() :: [{brod:key(), brod:value()}].
--type data() :: fun(() -> batch()).
+-type data() :: fun(() -> batch()) | batch().
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
@@ -111,7 +110,7 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 -spec add(buf(), buf_cb(), brod:batch_input()) -> buf().
 add(#buf{pending = Pending} = Buf, BufCb, Batch) ->
   Req = #req{ buf_cb   = BufCb
-            , data     = fun() -> Batch end
+            , data     = Batch
             , bytes    = data_size(Batch)
             , msg_cnt  = length(Batch)
             , ctime    = now_ms()
@@ -274,7 +273,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
-  Batch = lists:append(lists:map(fun(#req{data = F}) -> F() end, Reqs)),
+  Batch = lists:append(lists:map(fun req_data/1, Reqs)),
   case apply_sendfun(SendFun, Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
@@ -298,6 +297,9 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
       {retry, NewBuf}
   end.
+
+req_data(#req{data = D}) when is_list(D) -> D;
+req_data(#req{data = F}) -> F().
 
 apply_sendfun({SendFun, ExtraArg}, Conn, Batch, Vsn) ->
   SendFun(ExtraArg, Conn, Batch, Vsn);
