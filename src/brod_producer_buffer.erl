@@ -40,7 +40,9 @@
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
--type buf_cb() :: fun((?buffered | {?acked, offset()}) -> ok).
+-type buf_cb_arg() :: ?buffered | {?acked, offset()}.
+-type buf_cb() :: fun((buf_cb_arg()) -> ok) |
+                  {fun((any(), buf_cb_arg()) -> ok), any()}.
 
 -record(req,
         { buf_cb   :: buf_cb()
@@ -346,7 +348,7 @@ maybe_buffer(#buf{} = Buf) ->
 
 -spec eval_buffered(req()) -> ok.
 eval_buffered(#req{buf_cb = BufCb}) ->
-  _ = BufCb(?buffered),
+  _ = apply_bufcb(BufCb, ?buffered),
   ok.
 
 -spec eval_acked(req()) -> ok.
@@ -356,8 +358,13 @@ eval_acked(Req) ->
 
 -spec eval_acked(req(), offset()) -> offset().
 eval_acked(#req{buf_cb = BufCb, msg_cnt = Count}, Offset) ->
-  _ = BufCb({?acked, Offset}),
+  _ = apply_bufcb(BufCb, {?acked, Offset}),
   next_base_offset(Offset, Count).
+
+apply_bufcb({BufCb, ExtraArg}, Arg) ->
+  BufCb(ExtraArg, Arg);
+apply_bufcb(BufCb, Arg) ->
+  BufCb(Arg).
 
 next_base_offset(?BROD_PRODUCE_UNKNOWN_OFFSET, _) ->
   ?BROD_PRODUCE_UNKNOWN_OFFSET;
