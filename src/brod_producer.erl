@@ -36,6 +36,7 @@
 
 -export([ do_send_fun/4
         , do_no_ack/2
+        , do_bufcb/2
         ]).
 
 -export_type([ config/0 ]).
@@ -337,25 +338,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
 handle_info({produce, CallRef, Batch, AckCb}, #state{partition = Partition} = State) ->
-  #brod_call_ref{caller = Pid} = CallRef,
-  BufCb =
-    fun(?buffered) when is_pid(Pid) ->
-        Reply = #brod_produce_reply{ call_ref = CallRef
-                                   , result = ?buffered
-                                   },
-        erlang:send(Pid, Reply);
-       (?buffered) ->
-        %% caller requires no ack
-        ok;
-       ({?acked, BaseOffset}) when AckCb =:= ?undef ->
-        Reply = #brod_produce_reply{ call_ref = CallRef
-                                   , base_offset = BaseOffset
-                                   , result = ?acked
-                                   },
-        erlang:send(Pid, Reply);
-       ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
-        AckCb(Partition, BaseOffset)
-    end,
+  BufCb = make_bufcb(CallRef, AckCb, Partition),
   handle_produce(BufCb, Batch, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
                                 , ref = Ref
@@ -450,6 +433,30 @@ do_no_ack(_Partition, _BaseOffset) -> ok.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
   ?BROD_LOG_ERROR("Produce error ~s-~B Offset: ~B Error: ~p",
                   [Topic, Partition, Offset, ErrorCode]).
+
+make_bufcb(CallRef, AckCb, Partition) ->
+  {fun ?MODULE:do_bufcb/2, _ExtraArg = {CallRef, AckCb, Partition}}.
+
+do_bufcb({CallRef, AckCb, Partition}, Arg) ->
+  #brod_call_ref{caller = Pid} = CallRef,
+  case Arg of
+    ?buffered when is_pid(Pid) ->
+      Reply = #brod_produce_reply{ call_ref = CallRef
+                                 , result = ?buffered
+                                 },
+      erlang:send(Pid, Reply);
+    ?buffered ->
+      %% caller requires no ack
+      ok;
+    {?acked, BaseOffset} when AckCb =:= ?undef ->
+      Reply = #brod_produce_reply{ call_ref = CallRef
+                                 , base_offset = BaseOffset
+                                 , result = ?acked
+                                 },
+      erlang:send(Pid, Reply);
+    {?acked, BaseOffset} when is_function(AckCb, 2) ->
+      AckCb(Partition, BaseOffset)
+  end.
 
 handle_produce(BufCb, Batch,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->
