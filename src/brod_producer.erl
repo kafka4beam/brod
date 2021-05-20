@@ -35,6 +35,7 @@
         ]).
 
 -export([ do_send_fun/4
+        , do_no_ack/2
         ]).
 
 -export_type([ config/0 ]).
@@ -205,7 +206,7 @@ produce(Pid, Key, Value) ->
 -spec produce_no_ack(pid(), brod:key(), brod:value()) -> ok.
 produce_no_ack(Pid, Key, Value) ->
   CallRef = #brod_call_ref{caller = ?undef},
-  AckCb = fun(_, _) -> ok end,
+  AckCb = fun ?MODULE:do_no_ack/2,
   Batch = brod_utils:make_batch_input(Key, Value),
   Pid ! {produce, CallRef, Batch, AckCb},
   ok.
@@ -442,6 +443,8 @@ do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
     {error, Reason} ->
       {error, Reason}
   end.
+
+do_no_ack(_Partition, _BaseOffset) -> ok.
 
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
