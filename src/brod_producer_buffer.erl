@@ -40,10 +40,10 @@
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
--type cb() :: fun((?buffered | {?acked, offset()}) -> ok).
+-type buf_cb() :: fun((?buffered | {?acked, offset()}) -> ok).
 
 -record(req,
-        { cb       :: cb()
+        { buf_cb   :: buf_cb()
         , data     :: data()
         , bytes    :: non_neg_integer()
         , msg_cnt  :: non_neg_integer() %% messages in the set
@@ -106,9 +106,9 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
--spec add(buf(), cb(), brod:batch_input()) -> buf().
-add(#buf{pending = Pending} = Buf, Cb, Batch) ->
-  Req = #req{ cb       = Cb
+-spec add(buf(), buf_cb(), brod:batch_input()) -> buf().
+add(#buf{pending = Pending} = Buf, BufCb, Batch) ->
+  Req = #req{ buf_cb   = BufCb
             , data     = fun() -> Batch end
             , bytes    = data_size(Batch)
             , msg_cnt  = length(Batch)
@@ -345,8 +345,8 @@ maybe_buffer(#buf{} = Buf) ->
   Buf.
 
 -spec eval_buffered(req()) -> ok.
-eval_buffered(#req{cb = CbFun}) ->
-  _ = CbFun(?buffered),
+eval_buffered(#req{buf_cb = BufCb}) ->
+  _ = BufCb(?buffered),
   ok.
 
 -spec eval_acked(req()) -> ok.
@@ -355,8 +355,8 @@ eval_acked(Req) ->
   ok.
 
 -spec eval_acked(req(), offset()) -> offset().
-eval_acked(#req{cb = CbFun, msg_cnt = Count}, Offset) ->
-  _ = CbFun({?acked, Offset}),
+eval_acked(#req{buf_cb = BufCb, msg_cnt = Count}, Offset) ->
+  _ = BufCb({?acked, Offset}),
   next_base_offset(Offset, Count).
 
 next_base_offset(?BROD_PRODUCE_UNKNOWN_OFFSET, _) ->
