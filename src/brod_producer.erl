@@ -34,6 +34,9 @@
         , format_status/2
         ]).
 
+-export([ do_send_fun/4
+        ]).
+
 -export_type([ config/0 ]).
 
 -include("brod_int.hrl").
@@ -280,20 +283,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   Compression = ?config(compression, ?DEFAULT_COMPRESSION),
   MaxLingerMs = ?config(max_linger_ms, ?DEFAULT_MAX_LINGER_MS),
   MaxLingerCount = ?config(max_linger_count, ?DEFAULT_MAX_LINGER_COUNT),
-  SendFun =
-    fun(Conn, BatchInput, Vsn) ->
-        ProduceRequest =
-          brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
-                                     RequiredAcks, AckTimeout, Compression),
-        case send(Conn, ProduceRequest) of
-          ok when ProduceRequest#kpro_req.no_ack ->
-            ok;
-          ok ->
-            {ok, ProduceRequest#kpro_req.ref};
-          {error, Reason} ->
-            {error, Reason}
-        end
-    end,
+  SendFun = make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression),
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
@@ -434,6 +424,24 @@ format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
   State#state{buffer = brod_producer_buffer:empty_buffers(Buffer)}.
 
 %%%_* Internal Functions =======================================================
+
+make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression) ->
+  ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression},
+  {fun ?MODULE:do_send_fun/4, ExtraArg}.
+
+do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
+  {Topic, Partition, RequiredAcks, AckTimeout, Compression} = ExtraArg,
+  ProduceRequest =
+    brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
+                               RequiredAcks, AckTimeout, Compression),
+  case send(Conn, ProduceRequest) of
+    ok when ProduceRequest#kpro_req.no_ack ->
+      ok;
+    ok ->
+      {ok, ProduceRequest#kpro_req.ref};
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
