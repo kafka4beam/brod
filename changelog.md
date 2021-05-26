@@ -1,3 +1,7 @@
+* 3.16.2
+  * Propagate `connect_timeout` config to `kpro` API functions as `timeout` arg
+    affected APIs: connect_group_coordinator, create_topics, delete_topics,
+    resolve_offset, fetch, fold, fetch_committed_offsets
 * 3.16.1
   * Fix `brod` script in `brod-cli` in release.
   * Support `rebalance_timeout` consumer group option
