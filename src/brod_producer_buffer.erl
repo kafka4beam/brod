@@ -166,11 +166,11 @@ nack(#buf{onwire = [{Ref, _Reqs} | _]} = Buf, Ref, Reason) ->
 %% reached maximum retry limit.
 -spec nack_all(buf(), any()) -> buf().
 nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
-  AllOnWireReqs = lists:map(fun({_Ref, Reqs}) -> Reqs end, OnWire),
+  AllOnWireReqs = lists:flatmap(fun({_Ref, Reqs}) -> Reqs end, OnWire),
   NewBuf = Buf#buf{ onwire_count = 0
                   , onwire       = []
                   },
-  rebuffer_or_crash(lists:append(AllOnWireReqs), NewBuf, Reason).
+  rebuffer_or_crash(AllOnWireReqs, NewBuf, Reason).
 
 %% @doc Return true if there is no message pending,
 %% buffered or waiting for ack.
@@ -272,7 +272,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
-  Batch = lists:append(lists:map(fun(#req{data = Data}) -> Data end, Reqs)),
+  Batch = lists:flatmap(fun(#req{data = Data}) -> Data end, Reqs),
   case apply_sendfun(SendFun, Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
