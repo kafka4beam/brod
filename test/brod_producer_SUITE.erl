@@ -352,10 +352,10 @@ t_produce_batch_callback(Config) when is_list(Config) ->
   Batch = [{K1, V1}, #{key => K2, value => V2}, {<<>>, [{K3, V3}]}],
   Self = self(),
   Ref = make_ref(),
-  Cb = fun(_Partition, _Offset) ->
-           Self ! {Ref, kafka_acked}
-       end,
-  ok = brod:produce_cb(Client, ?TOPIC, Partition, undefined, Batch, Cb),
+  AckCb = fun(_Partition, _Offset) ->
+              Self ! {Ref, kafka_acked}
+          end,
+  ok = brod:produce_cb(Client, ?TOPIC, Partition, undefined, Batch, AckCb),
   receive
     {Ref, kafka_acked} ->
       ok
