@@ -35,7 +35,6 @@
 -include("brod_int.hrl").
 
 -type batch() :: [{brod:key(), brod:value()}].
--type data() :: fun(() -> batch()) | batch().
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
@@ -45,7 +44,7 @@
 
 -record(req,
         { buf_cb   :: buf_cb()
-        , data     :: data()
+        , data     :: batch()
         , bytes    :: non_neg_integer()
         , msg_cnt  :: non_neg_integer() %% messages in the set
         , ctime    :: milli_ts() %% time when request was created
@@ -273,7 +272,7 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
-  Batch = lists:append(lists:map(fun req_data/1, Reqs)),
+  Batch = lists:append(lists:map(fun(#req{data = Data}) -> Data end, Reqs)),
   case apply_sendfun(SendFun, Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
@@ -297,9 +296,6 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
       {retry, NewBuf}
   end.
-
-req_data(#req{data = D}) when is_list(D) -> D;
-req_data(#req{data = F}) -> F().
 
 apply_sendfun({SendFun, ExtraArg}, Conn, Batch, Vsn) ->
   SendFun(ExtraArg, Conn, Batch, Vsn);
