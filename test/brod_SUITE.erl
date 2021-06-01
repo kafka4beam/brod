@@ -63,11 +63,11 @@ t_create_topics(Config) when is_list(Config) ->
   Topic = <<"test-create-topic">>,
   TopicConfig = [
     #{
-      config_entries => [],
+      configs => [],
       num_partitions => 1,
-      replica_assignment => [],
+      assignments => [],
       replication_factor => 1,
-      topic => Topic
+      name => Topic
     }
   ],
   ?assertEqual(ok,

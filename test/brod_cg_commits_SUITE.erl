@@ -91,16 +91,16 @@ assert_offsets(ExpectedOffsets, Rsp) ->
 transform_rsp([], Acc) ->
   lists:keysort(1, Acc);
 transform_rsp([Struct | Rest], Acc) ->
-  Topic = kpro:find(topic, Struct),
-  PartitionRsp = kpro:find(partition_responses, Struct),
+  Topic = kpro:find(name, Struct),
+  PartitionRsp = kpro:find(partitions, Struct),
   Partitions = transform_rsp_partitions(PartitionRsp, []),
   transform_rsp(Rest, [{Topic, Partitions} | Acc]).
 
 transform_rsp_partitions([], Acc) ->
   lists:keysort(1, Acc);
 transform_rsp_partitions([Struct | Rest], Acc) ->
-  Partition = kpro:find(partition, Struct),
-  Offset = kpro:find(offset, Struct),
+  Partition = kpro:find(partition_index, Struct),
+  Offset = kpro:find(committed_offset, Struct),
   transform_rsp_partitions(Rest, [{Partition, Offset} | Acc]).
 
 do_commit(Topic, Offsets) ->

@@ -810,9 +810,9 @@ parse(list_groups, _, Msg) ->
   ok = throw_error_code([Msg]),
   kpro:find(groups, Msg);
 parse(create_topics, _, Msg) ->
-  ok = throw_error_code(kpro:find(topic_errors, Msg));
+  ok = throw_error_code(kpro:find(topics, Msg));
 parse(delete_topics, _, Msg) ->
-  ok = throw_error_code(kpro:find(topic_error_codes, Msg));
+  ok = throw_error_code(kpro:find(responses, Msg));
 parse(init_producer_id, _, Msg) ->
   ok = throw_error_code([Msg]),
   Msg;
