@@ -22,7 +22,7 @@ jobs:
             kafka-version: 2.2
           - platform: ubuntu-20.04
             lsb_release: focal
-            otp-version: 21.3.8.17-1
+            otp-version: 24.0.2-1
             kafka-version: 0.11
     runs-on: ${{ matrix.platform }}
     steps:
@@ -51,6 +51,10 @@ jobs:
         DEB_NAME="esl-erlang_${{ matrix.otp-version }}~ubuntu~${{ matrix.lsb_release }}_amd64.deb"
         curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
         sudo dpkg --install $DEB_NAME
+
+    # Inspect rebar3 version
+    - name: Rebar version
+      run: rebar3 --version
 
     # Compile
     - name: Compile
