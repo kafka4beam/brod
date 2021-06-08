@@ -1,4 +1,4 @@
-* TBD
+* 3.15.6
   * Eliminate long-lived anonymous function closures
 * 3.15.5
   * Fix exponential growth of `brod_producer` buffer
