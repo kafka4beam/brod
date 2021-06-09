@@ -34,16 +34,17 @@
 
 -include("brod_int.hrl").
 
-%% keep data in fun() to avoid huge log dumps in case of crash etc.
--type data() :: fun(() -> {brod:key(), brod:value()}).
+-type batch() :: [{brod:key(), brod:value()}].
 -type milli_ts() :: pos_integer().
 -type milli_sec() :: non_neg_integer().
 -type count() :: non_neg_integer().
--type cb() :: fun((?buffered | {?acked, offset()}) -> ok).
+-type buf_cb_arg() :: ?buffered | {?acked, offset()}.
+-type buf_cb() :: fun((buf_cb_arg()) -> ok) |
+                  {fun((any(), buf_cb_arg()) -> ok), any()}.
 
 -record(req,
-        { cb       :: cb()
-        , data     :: data()
+        { buf_cb   :: buf_cb()
+        , data     :: batch()
         , bytes    :: non_neg_integer()
         , msg_cnt  :: non_neg_integer() %% messages in the set
         , ctime    :: milli_ts() %% time when request was created
@@ -52,10 +53,11 @@
 -type req() :: #req{}.
 
 -type vsn() :: brod_kafka_apis:vsn().
--type send_fun() :: fun((pid(), [{brod:key(), brod:value()}], vsn()) ->
-                        ok |
+-type send_fun_res() :: ok |
                         {ok, reference()} |
-                        {error, any()}).
+                        {error, any()}.
+-type send_fun() :: fun((pid(), batch(), vsn()) -> send_fun_res()) |
+                    {fun((any(), pid(), batch(), vsn()) -> send_fun_res()), any()}.
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -define(NEW_QUEUE, queue:new()).
@@ -104,10 +106,10 @@ new(BufferLimit, OnWireLimit, MaxBatchSize, MaxRetry,
 
 %% @doc Buffer a produce request.
 %% Respond to caller immediately if the buffer limit is not yet reached.
--spec add(buf(), cb(), brod:batch_input()) -> buf().
-add(#buf{pending = Pending} = Buf, Cb, Batch) ->
-  Req = #req{ cb       = Cb
-            , data     = fun() -> Batch end
+-spec add(buf(), buf_cb(), brod:batch_input()) -> buf().
+add(#buf{pending = Pending} = Buf, BufCb, Batch) ->
+  Req = #req{ buf_cb   = BufCb
+            , data     = Batch
             , bytes    = data_size(Batch)
             , msg_cnt  = length(Batch)
             , ctime    = now_ms()
@@ -164,11 +166,11 @@ nack(#buf{onwire = [{Ref, _Reqs} | _]} = Buf, Ref, Reason) ->
 %% reached maximum retry limit.
 -spec nack_all(buf(), any()) -> buf().
 nack_all(#buf{onwire = OnWire} = Buf, Reason) ->
-  AllOnWireReqs = lists:map(fun({_Ref, Reqs}) -> Reqs end, OnWire),
+  AllOnWireReqs = lists:flatmap(fun({_Ref, Reqs}) -> Reqs end, OnWire),
   NewBuf = Buf#buf{ onwire_count = 0
                   , onwire       = []
                   },
-  rebuffer_or_crash(lists:append(AllOnWireReqs), NewBuf, Reason).
+  rebuffer_or_crash(AllOnWireReqs, NewBuf, Reason).
 
 %% @doc Return true if there is no message pending,
 %% buffered or waiting for ack.
@@ -270,8 +272,8 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
-  Batch = lists:append(lists:map(fun(#req{data = F}) -> F() end, Reqs)),
-  case SendFun(Conn, Batch, Vsn) of
+  Batch = lists:flatmap(fun(#req{data = Data}) -> Data end, Reqs),
+  case apply_sendfun(SendFun, Conn, Batch, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
       ok = lists:foreach(fun eval_acked/1, Reqs),
@@ -294,6 +296,11 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       NewBuf = rebuffer_or_crash(Reqs, Buf, Reason),
       {retry, NewBuf}
   end.
+
+apply_sendfun({SendFun, ExtraArg}, Conn, Batch, Vsn) ->
+  SendFun(ExtraArg, Conn, Batch, Vsn);
+apply_sendfun(SendFun, Conn, Batch, Vsn) ->
+  SendFun(Conn, Batch, Vsn).
 
 %% Put the produce requests back to buffer.
 %% raise an 'exit' exception if the first request to send has reached
@@ -338,8 +345,8 @@ maybe_buffer(#buf{} = Buf) ->
   Buf.
 
 -spec eval_buffered(req()) -> ok.
-eval_buffered(#req{cb = CbFun}) ->
-  _ = CbFun(?buffered),
+eval_buffered(#req{buf_cb = BufCb}) ->
+  _ = apply_bufcb(BufCb, ?buffered),
   ok.
 
 -spec eval_acked(req()) -> ok.
@@ -348,9 +355,14 @@ eval_acked(Req) ->
   ok.
 
 -spec eval_acked(req(), offset()) -> offset().
-eval_acked(#req{cb = CbFun, msg_cnt = Count}, Offset) ->
-  _ = CbFun({?acked, Offset}),
+eval_acked(#req{buf_cb = BufCb, msg_cnt = Count}, Offset) ->
+  _ = apply_bufcb(BufCb, {?acked, Offset}),
   next_base_offset(Offset, Count).
+
+apply_bufcb({BufCb, ExtraArg}, Arg) ->
+  BufCb(ExtraArg, Arg);
+apply_bufcb(BufCb, Arg) ->
+  BufCb(Arg).
 
 next_base_offset(?BROD_PRODUCE_UNKNOWN_OFFSET, _) ->
   ?BROD_PRODUCE_UNKNOWN_OFFSET;

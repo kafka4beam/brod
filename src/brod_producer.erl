@@ -34,6 +34,11 @@
         , format_status/2
         ]).
 
+-export([ do_send_fun/4
+        , do_no_ack/2
+        , do_bufcb/2
+        ]).
+
 -export_type([ config/0 ]).
 
 -include("brod_int.hrl").
@@ -202,7 +207,7 @@ produce(Pid, Key, Value) ->
 -spec produce_no_ack(pid(), brod:key(), brod:value()) -> ok.
 produce_no_ack(Pid, Key, Value) ->
   CallRef = #brod_call_ref{caller = ?undef},
-  AckCb = fun(_, _) -> ok end,
+  AckCb = fun ?MODULE:do_no_ack/2,
   Batch = brod_utils:make_batch_input(Key, Value),
   Pid ! {produce, CallRef, Batch, AckCb},
   ok.
@@ -280,20 +285,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   Compression = ?config(compression, ?DEFAULT_COMPRESSION),
   MaxLingerMs = ?config(max_linger_ms, ?DEFAULT_MAX_LINGER_MS),
   MaxLingerCount = ?config(max_linger_count, ?DEFAULT_MAX_LINGER_COUNT),
-  SendFun =
-    fun(Conn, BatchInput, Vsn) ->
-        ProduceRequest =
-          brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
-                                     RequiredAcks, AckTimeout, Compression),
-        case send(Conn, ProduceRequest) of
-          ok when ProduceRequest#kpro_req.no_ack ->
-            ok;
-          ok ->
-            {ok, ProduceRequest#kpro_req.ref};
-          {error, Reason} ->
-            {error, Reason}
-        end
-    end,
+  SendFun = make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression),
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
@@ -346,25 +338,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
       {noreply, NewState#state{connection = ?undef, conn_mref = ?undef}}
   end;
 handle_info({produce, CallRef, Batch, AckCb}, #state{partition = Partition} = State) ->
-  #brod_call_ref{caller = Pid} = CallRef,
-  BufCb =
-    fun(?buffered) when is_pid(Pid) ->
-        Reply = #brod_produce_reply{ call_ref = CallRef
-                                   , result = ?buffered
-                                   },
-        erlang:send(Pid, Reply);
-       (?buffered) ->
-        %% caller requires no ack
-        ok;
-       ({?acked, BaseOffset}) when AckCb =:= ?undef ->
-        Reply = #brod_produce_reply{ call_ref = CallRef
-                                   , base_offset = BaseOffset
-                                   , result = ?acked
-                                   },
-        erlang:send(Pid, Reply);
-       ({?acked, BaseOffset}) when is_function(AckCb, 2) ->
-        AckCb(Partition, BaseOffset)
-    end,
+  BufCb = make_bufcb(CallRef, AckCb, Partition),
   handle_produce(BufCb, Batch, State);
 handle_info({msg, Pid, #kpro_rsp{ api = produce
                                 , ref = Ref
@@ -435,10 +409,54 @@ format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
 
 %%%_* Internal Functions =======================================================
 
+make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression) ->
+  ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression},
+  {fun ?MODULE:do_send_fun/4, ExtraArg}.
+
+do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
+  {Topic, Partition, RequiredAcks, AckTimeout, Compression} = ExtraArg,
+  ProduceRequest =
+    brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
+                               RequiredAcks, AckTimeout, Compression),
+  case send(Conn, ProduceRequest) of
+    ok when ProduceRequest#kpro_req.no_ack ->
+      ok;
+    ok ->
+      {ok, ProduceRequest#kpro_req.ref};
+    {error, Reason} ->
+      {error, Reason}
+  end.
+
+do_no_ack(_Partition, _BaseOffset) -> ok.
+
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
 log_error_code(Topic, Partition, Offset, ErrorCode) ->
   ?BROD_LOG_ERROR("Produce error ~s-~B Offset: ~B Error: ~p",
                   [Topic, Partition, Offset, ErrorCode]).
+
+make_bufcb(CallRef, AckCb, Partition) ->
+  {fun ?MODULE:do_bufcb/2, _ExtraArg = {CallRef, AckCb, Partition}}.
+
+do_bufcb({CallRef, AckCb, Partition}, Arg) ->
+  #brod_call_ref{caller = Pid} = CallRef,
+  case Arg of
+    ?buffered when is_pid(Pid) ->
+      Reply = #brod_produce_reply{ call_ref = CallRef
+                                 , result = ?buffered
+                                 },
+      erlang:send(Pid, Reply);
+    ?buffered ->
+      %% caller requires no ack
+      ok;
+    {?acked, BaseOffset} when AckCb =:= ?undef ->
+      Reply = #brod_produce_reply{ call_ref = CallRef
+                                 , base_offset = BaseOffset
+                                 , result = ?acked
+                                 },
+      erlang:send(Pid, Reply);
+    {?acked, BaseOffset} when is_function(AckCb, 2) ->
+      AckCb(Partition, BaseOffset)
+  end.
 
 handle_produce(BufCb, Batch,
                #state{retry_tref = Ref} = State) when is_reference(Ref) ->

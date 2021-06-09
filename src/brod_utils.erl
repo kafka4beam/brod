@@ -412,8 +412,7 @@ get_sasl_opt(Config) ->
       %% Module should implement kpro_auth_backend behaviour
       {callback, Module, Args};
     {Mechanism, File} when is_list(File) orelse is_binary(File) ->
-      {User, Pass} = read_sasl_file(File),
-      {Mechanism, User, Pass};
+      {Mechanism, File};
     Other ->
       Other
   end.
@@ -740,16 +739,6 @@ get_partition_rsp(Struct) ->
 replace_prop(Key, Value, PropL0) ->
   PropL = proplists:delete(Key, PropL0),
   [{Key, Value} | PropL].
-
-%% Read a regular file, assume it has two lines:
-%% First line is the sasl-plain username
-%% Second line is the password
--spec read_sasl_file(file:name_all()) -> {binary(), binary()}.
-read_sasl_file(File) ->
-  {ok, Bin} = file:read_file(File),
-  Lines = binary:split(Bin, <<"\n">>, [global]),
-  [User, Pass] = lists:filter(fun(Line) -> Line =/= <<>> end, Lines),
-  {User, Pass}.
 
 %% A fetched batch may contain offsets earlier than the
 %% requested begin-offset because the batch might be compressed on
