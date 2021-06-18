@@ -523,6 +523,5 @@ brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --prot
 
 ## TODOs
 
-* Integrate with latest `kafka_protocol` for Kafka 2.x+ APIs
 * Support scram-sasl in brod-cli
 * Transactional produce APIs
