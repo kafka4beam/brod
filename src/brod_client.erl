@@ -63,7 +63,7 @@
 -define(CONSUMER_KEY(Topic, Partition),
         {consumer, Topic, Partition}).
 -define(TOPIC_METADATA_KEY(Topic),
-        {topic_metadata, Topic}).
+        {topics, Topic}).
 -define(PRODUCER(Topic, Partition, Pid),
         {?PRODUCER_KEY(Topic, Partition), Pid}).
 -define(CONSUMER(Topic, Partition, Pid),
@@ -534,7 +534,7 @@ do_get_metadata(Topic, #state{ client_id     = ClientId
   Request = brod_kafka_request:metadata(Conn, Topics),
   case request_sync(State, Request) of
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
-      TopicMetadataArray = kf(topic_metadata, Metadata),
+      TopicMetadataArray = kf(topics, Metadata),
       ok = update_partitions_count_cache(Ets, TopicMetadataArray),
       {{ok, Metadata}, State};
     {error, Reason} ->
@@ -717,7 +717,7 @@ is_cooled_down(Ts, #state{config = Config}) ->
 -spec update_partitions_count_cache(ets:tab(), [kpro:struct()]) -> ok.
 update_partitions_count_cache(_Ets, []) -> ok;
 update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
-  Topic = kf(topic, TopicMetadata),
+  Topic = kf(name, TopicMetadata),
   case do_get_partitions_count(TopicMetadata) of
     {ok, Cnt} ->
       ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
@@ -742,7 +742,7 @@ get_partitions_count(Client, Ets, Topic) ->
       %% This call should populate the cache
       case get_metadata(Client, Topic) of
         {ok, Meta} ->
-          [TopicMetadata] = kf(topic_metadata, Meta),
+          [TopicMetadata] = kf(topics, Meta),
           do_get_partitions_count(TopicMetadata);
         {error, Reason} ->
           {error, Reason}
@@ -773,7 +773,7 @@ lookup_partitions_count_cache(Ets, Topic) ->
         {ok, pos_integer()} | {error, any()}.
 do_get_partitions_count(TopicMetadata) ->
   ErrorCode = kf(error_code, TopicMetadata),
-  Partitions = kf(partition_metadata, TopicMetadata),
+  Partitions = kf(partitions, TopicMetadata),
   case ?IS_ERROR(ErrorCode) of
     true  -> {error, ErrorCode};
     false -> {ok, erlang:length(Partitions)}

@@ -1,3 +1,5 @@
+* 3.16.0
+  * Update to kafka-protocol v4.0.1
 * 3.15.6
   * Eliminate long-lived anonymous function closures
 * 3.15.5

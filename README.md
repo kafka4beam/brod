@@ -24,6 +24,8 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Pick latest supported version when sending requests to kafka.
 * Direct APIs for message send/fetch and cluster inspection/management without having to start clients/producers/consumers.
 * A escriptized command-line tool for message send/fetch and cluster inspection/management.
+* Configurable compression library. `snappy` compression is supported by default.
+  For more compression options, see [kafka_protocol/README](https://github.com/kafka4beam/kafka_protocol/blob/master/README.md#compression-support)
 
 # Building and testing
 
@@ -523,6 +525,5 @@ brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --prot
 
 ## TODOs
 
-* Integrate with latest `kafka_protocol` for Kafka 2.x+ APIs
 * Support scram-sasl in brod-cli
 * Transactional produce APIs
