@@ -24,6 +24,8 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 * Pick latest supported version when sending requests to kafka.
 * Direct APIs for message send/fetch and cluster inspection/management without having to start clients/producers/consumers.
 * A escriptized command-line tool for message send/fetch and cluster inspection/management.
+* Configurable compression library. `snappy` compression is supported by default.
+  For more compression options, see [kafka_protocol/README](https://github.com/kafka4beam/kafka_protocol/blob/master/README.md#compression-support)
 
 # Building and testing
 
