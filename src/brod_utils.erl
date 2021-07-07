@@ -426,7 +426,7 @@ do_fetch_committed_offsets(Conn, GroupId, Topics) when is_pid(Conn) ->
   Req = brod_kafka_request:offset_fetch(Conn, GroupId, Topics),
   case request_sync(Conn, Req) of
     {ok, Msg} ->
-      {ok, maps:get(topics, Msg)};
+      {ok, kpro:find(topics, Msg)};
     {error, Reason} ->
       {error, Reason}
   end.
@@ -464,8 +464,8 @@ fetch(Conn, ReqFun, Offset, MaxBytes) ->
         [{endpoint(), [brod:cg()] | {error, any()}}].
 list_all_groups(Endpoints, Options) ->
   {ok, Metadata} = get_metadata(Endpoints, [], Options),
-  Brokers0 = kf(brokers, Metadata),
-  Brokers = [{binary_to_list(kf(host, B)), kf(port, B)} || B <- Brokers0],
+  Brokers0 = kpro:find(brokers, Metadata),
+  Brokers = [{binary_to_list(kpro:find(host, B)), kpro:find(port, B)} || B <- Brokers0],
   lists:foldl(
     fun(Broker, Acc) ->
         case list_groups(Broker, Options) of
@@ -486,8 +486,8 @@ list_groups(Endpoint, ConnCfg) ->
           Groups =
             lists:map(
               fun(Struct) ->
-                  Id = kf(group_id, Struct),
-                  Type = kf(protocol_type, Struct),
+                  Id = kpro:find(group_id, Struct),
+                  Type = kpro:find(protocol_type, Struct),
                   #brod_cg{ id = Id
                           , protocol_type = Type
                           }
@@ -755,9 +755,6 @@ drop_old_messages(BeginOffset, [Message | Rest] = All) ->
 -spec ok_when(boolean(), any()) -> ok | no_return().
 ok_when(true, _) -> ok;
 ok_when(_, Reason) -> erlang:error(Reason).
-
--spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
-kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
 
 with_conn({ok, Pid}, Fun) ->
   try
