@@ -444,7 +444,7 @@ Disclaimer: This script is NOT designed for use cases where fault-tolerance is a
 As it may crash when e.g. kafka cluster is temporarily unreachable,
 or (for fetch command) when the partition leader migrates to another broker in the cluster.
 
-## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod`):
+## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod_cli`):
 
 ### Fetch and print metadata
 ```
