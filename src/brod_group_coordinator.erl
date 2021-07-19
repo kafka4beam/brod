@@ -49,7 +49,7 @@
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 30).
--define(REBALANCE_TIMEOUT_SECONDS, 3).
+-define(REBALANCE_TIMEOUT_SECONDS, 2).
 -define(HEARTBEAT_RATE_SECONDS, 5).
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
@@ -135,6 +135,7 @@
           %% configs, see start_link/5 doc for details
         , partition_assignment_strategy  :: partition_assignment_strategy()
         , session_timeout_seconds        :: pos_integer()
+        , rebalance_timeout_seconds      :: pos_integer()
         , heartbeat_rate_seconds         :: pos_integer()
         , max_rejoin_attempts            :: non_neg_integer()
         , rejoin_delay_seconds           :: non_neg_integer()
@@ -315,6 +316,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   PaStrategy = GetCfg(partition_assignment_strategy,
                       ?PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN),
   SessionTimeoutSec = GetCfg(session_timeout_seconds, ?SESSION_TIMEOUT_SECONDS),
+  RebalanceTimeoutSec = GetCfg(rebalance_timeout_seconds, ?REBALANCE_TIMEOUT_SECONDS),
   HbRateSec = GetCfg(heartbeat_rate_seconds, ?HEARTBEAT_RATE_SECONDS),
   MaxRejoinAttempts = GetCfg(max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS),
   RejoinDelaySeconds = GetCfg(rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS),
@@ -333,6 +335,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , member_module                  = CbModule
           , partition_assignment_strategy  = PaStrategy
           , session_timeout_seconds        = SessionTimeoutSec
+          , rebalance_timeout_seconds      = RebalanceTimeoutSec
           , heartbeat_rate_seconds         = HbRateSec
           , max_rejoin_attempts            = MaxRejoinAttempts
           , rejoin_delay_seconds           = RejoinDelaySeconds
@@ -581,14 +584,15 @@ should_reset_member_id(_) ->
   false.
 
 -spec join_group(state()) -> {ok, state()}.
-join_group(#state{ groupId                 = GroupId
-                 , memberId                = MemberId0
-                 , topics                  = Topics
-                 , connection              = Connection
-                 , session_timeout_seconds = SessionTimeoutSec
-                 , protocol_name           = ProtocolName
-                 , member_module           = MemberModule
-                 , member_pid              = MemberPid
+join_group(#state{ groupId                    = GroupId
+                 , memberId                   = MemberId0
+                 , topics                     = Topics
+                 , connection                 = Connection
+                 , session_timeout_seconds    = SessionTimeoutSec
+                 , rebalance_timeout_seconds  = RebalanceTimeoutSec
+                 , protocol_name              = ProtocolName
+                 , member_module              = MemberModule
+                 , member_pid                 = MemberPid
                  } = State0) ->
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
@@ -600,7 +604,7 @@ join_group(#state{ groupId                 = GroupId
     , {metadata, Meta}
     ],
   SessionTimeout = timer:seconds(SessionTimeoutSec),
-  RebalanceTimeout = timer:seconds(?REBALANCE_TIMEOUT_SECONDS),
+  RebalanceTimeout = timer:seconds(RebalanceTimeoutSec),
   Body =
     [ {group_id, GroupId}
     , {session_timeout_ms, SessionTimeout}
