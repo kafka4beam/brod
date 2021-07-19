@@ -49,6 +49,7 @@
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 30).
+-define(REBALANCE_TIMEOUT_SECONDS, 3).
 -define(HEARTBEAT_RATE_SECONDS, 5).
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
@@ -599,9 +600,11 @@ join_group(#state{ groupId                 = GroupId
     , {metadata, Meta}
     ],
   SessionTimeout = timer:seconds(SessionTimeoutSec),
+  RebalanceTimeout = timer:seconds(?REBALANCE_TIMEOUT_SECONDS),
   Body =
     [ {group_id, GroupId}
     , {session_timeout_ms, SessionTimeout}
+    , {rebalance_timeout_ms, RebalanceTimeout}
     , {member_id, MemberId0}
     , {protocol_type, ?PROTOCOL_TYPE}
     , {protocols, [Protocol]}
