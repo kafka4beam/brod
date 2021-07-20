@@ -49,7 +49,7 @@
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 30).
--define(REBALANCE_TIMEOUT_SECONDS, 2).
+-define(REBALANCE_TIMEOUT_SECONDS, ?SESSION_TIMEOUT_SECONDS).
 -define(HEARTBEAT_RATE_SECONDS, 5).
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
@@ -132,7 +132,7 @@
           %% The referece of the timer which triggers offset commit
         , offset_commit_timer :: ?undef | reference()
 
-          %% configs, see start_link/5 doc for details
+          %% configs, see start_link/6 doc for details
         , partition_assignment_strategy  :: partition_assignment_strategy()
         , session_timeout_seconds        :: pos_integer()
         , rebalance_timeout_seconds      :: pos_integer()
@@ -182,7 +182,7 @@
 %%        partitions.</li>
 %%  </ul></li>
 %%
-%%  <li>`session_timeout_seconds' (optional, default = 10)
+%%  <li>`session_timeout_seconds' (optional, default = 30)
 %%
 %%      Time in seconds for the group coordinator broker to consider a member
 %%      'down' if no heartbeat or any kind of requests received from a broker
@@ -190,7 +190,15 @@
 %%      A group member may also consider the coordinator broker 'down' if no
 %%      heartbeat response response received in the past N seconds.</li>
 %%
-%%  <li>`heartbeat_rate_seconds' (optional, default = 2)
+%%
+%%  <li>`rebalance_timeout_seconds' (optional, default = 30)
+%%
+%%      Time in seconds for each worker to join the group once a rebalance
+%%      has begun. If the timeout is exceeded, then the worker will be
+%%      removed from the group, which will cause offset commit failures.</li>
+%%
+%%
+%%  <li>`heartbeat_rate_seconds' (optional, default = 5)
 %%
 %%      Time in seconds for the member to 'ping' the group coordinator.
 %%      OBS: Care should be taken when picking the number, on one hand, we do
