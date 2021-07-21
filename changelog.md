@@ -1,3 +1,6 @@
+* 3.16.1
+  * Fix `brod` script in `brod-cli` in release.
+  * Support `rebalance_timeout` consumer group option
 * 3.16.0
   * Update to kafka-protocol v4.0.1
 * 3.15.6

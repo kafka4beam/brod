@@ -146,7 +146,7 @@ supported_versions(API) ->
     offset_commit    -> {2, 2};
     offset_fetch     -> {1, 2};
     find_coordinator -> {0, 0};
-    join_group       -> {0, 0};
+    join_group       -> {0, 1};
     heartbeat        -> {0, 0};
     leave_group      -> {0, 0};
     sync_group       -> {0, 0};
