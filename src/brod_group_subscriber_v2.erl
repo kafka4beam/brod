@@ -407,7 +407,7 @@ flush_offset_commits(_, _) ->
 handle_worker_failure({Topic, Partition}, Pid, Reason, State) ->
   #state{group_id = GroupId} = State,
   ?BROD_LOG_ERROR("group_subscriber_v2 worker crashed.~n"
-                  "  group_id = ~s~n  topic = ~s~n  paritition = ~p~n"
+                  "  group_id = ~s~n  topic = ~s~n  partition = ~p~n"
                   "  pid = ~p~n  reason = ~p",
                   [GroupId, Topic, Partition, Pid, Reason]),
   ok.
