@@ -829,16 +829,20 @@ ensure_partition_workers(TopicName, State, F) ->
       end
     end).
 
-%% Catch noproc exit exception when making gen_server:call.
+%% Catches noproc and timeout exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
-             Return  :: ok | {ok, term()} | {error, client_down | term()}.
+             Return  :: ok | {ok, term()} | {error, client_down
+                                             | client_timeout |  term()}.
 safe_gen_call(Server, Call, Timeout) ->
   try
     gen_server:call(Server, Call, Timeout)
-  catch exit : {noproc, _} ->
-    {error, client_down}
+  catch
+    exit : {noproc, _} ->
+      {error, client_down};
+    exit : {timeout, _} ->
+      {error, client_timeout}
   end.
 
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
