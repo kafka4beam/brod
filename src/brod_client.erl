@@ -835,16 +835,13 @@ ensure_partition_workers(TopicName, State, F) ->
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
-             Return  :: ok | {ok, term()} | {error, client_down
-                                             | client_timeout |  term()}.
+             Return  :: ok | {ok, term()} | {error, client_down | term()}.
 safe_gen_call(Server, Call, Timeout) ->
   try
     gen_server:call(Server, Call, Timeout)
   catch
     exit : {noproc, _} ->
       {error, client_down};
-    exit : {timeout, _} ->
-      {error, client_timeout};
     exit : {reason, _} ->
       {error, reason}
   end.
