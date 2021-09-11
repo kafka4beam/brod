@@ -87,12 +87,14 @@
                             | {producer_not_found, topic()}
                             | { producer_not_found
                               , topic()
-                              , partition()}.
+                              , partition()}
+                            | term().
 
 -type get_consumer_error() :: client_down
                             | {consumer_down, noproc}
                             | {consumer_not_found, topic()}
-                            | {consumer_not_found, topic(), partition()}.
+                            | {consumer_not_found, topic(), partition()}
+                            | term().
 
 -type get_worker_error() :: get_producer_error()
                           | get_consumer_error().
@@ -842,7 +844,9 @@ safe_gen_call(Server, Call, Timeout) ->
     exit : {noproc, _} ->
       {error, client_down};
     exit : {timeout, _} ->
-      {error, client_timeout}
+      {error, client_timeout};
+    exit : {reason, _} ->
+      {error, reason}
   end.
 
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
