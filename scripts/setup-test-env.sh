@@ -16,9 +16,9 @@ case $VERSION in
   1.*)
     VERSION="1.1";;
   2.*)
-    VERSION="2.2";;
+    VERSION="2.4";;
   *)
-    VERSION="2.2";;
+    VERSION="2.4";;
 esac
 
 echo "Using KAFKA_VERSION=$VERSION"
