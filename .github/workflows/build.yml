@@ -10,35 +10,31 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - platform: ubuntu-20.04
-            lsb_release: focal
-            otp-version: 23.1-1
-            kafka-version: 2.4
-          - platform: ubuntu-20.04
-            lsb_release: focal
-            otp-version: 22.3.4.8-1
-            kafka-version: 2.2
-          - platform: ubuntu-20.04
-            lsb_release: focal
-            otp-version: 24.0.2-1
-            kafka-version: 0.11
-    runs-on: ${{ matrix.platform }}
+        otp:
+          - '24.1'
+          - '23.3.4.7'
+          - '22.3.4.21'
+        kafka:
+          - '2.4'
+          - '1.1'
+          - '0.11'
+    runs-on: ubuntu-20.04
     steps:
 
     # Setup
     - name: Checkout
       uses: actions/checkout@v2
     - name: Cache Hex packages
-      uses: actions/cache@v1
+      uses: actions/cache@v2
       with:
         path: ~/.cache/rebar3/hex/hexpm/packages
         key: ${{ runner.os }}-hex-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.lock')) }}
         restore-keys: |
           ${{ runner.os }}-hex-
     - name: Cache Dialyzer PLTs
-      uses: actions/cache@v1
+      uses: actions/cache@v2
       with:
         path: ~/.cache/rebar3/rebar3_*_plt
         key: ${{ runner.os }}-dialyzer-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.config')) }}
@@ -46,11 +42,11 @@ jobs:
           ${{ runner.os }}-dialyzer-
 
     # Install Erlang
-    - name: Install Erlang/OTP
-      run: |
-        DEB_NAME="esl-erlang_${{ matrix.otp-version }}~ubuntu~${{ matrix.lsb_release }}_amd64.deb"
-        curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
-        sudo dpkg --install $DEB_NAME
+    - uses: erlef/setup-beam@v1
+      with:
+        version-type: strict
+        otp-version: ${{matrix.otp}}
+        rebar3-version: '3.17.0'
 
     # Inspect rebar3 version
     - name: Rebar version
@@ -65,7 +61,7 @@ jobs:
     # Tests
     - name: Run tests
       run: |
-          export KAFKA_VERSION=${{ matrix.kafka-version }}
+          export KAFKA_VERSION=${{ matrix.kafka }}
           echo "Running Kafka ${KAFKA_VERSION}"
           scripts/setup-test-env.sh && rebar3 do ct,eunit
     - name: Store test logs
