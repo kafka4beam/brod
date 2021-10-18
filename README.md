@@ -29,8 +29,12 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 # Building and testing
 
-    make compile
-    make test-env t # requires docker-compose in place
+NOTE: Min Erlang/OTP version 22
+
+```
+make compile
+make test-env t # requires docker-compose in place
+```
 
 # Working With Kafka 0.9.x or Earlier
 
