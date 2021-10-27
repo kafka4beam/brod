@@ -4,6 +4,13 @@ defmodule BrodSample.GroupSubscriber do
   import Record, only: [defrecord: 2, extract: 2]
   defrecord :kafka_message, extract(:kafka_message, from_lib: "brod/include/brod.hrl")
 
+  def child_spec(arg) do
+    %{
+      id: BrodSample.GroupSubscriber,
+      start: {BrodSample.GroupSubscriber, :start, []}
+    }
+  end
+
   def start() do
     group_config = [
       offset_commit_policy: :commit_to_kafka_v2,
