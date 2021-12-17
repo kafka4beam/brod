@@ -137,7 +137,7 @@ start_link(Bootstrap, Topic, Partition, Config) ->
 %%
 %%  <li>`max_wait_time' (optional, default = 10000 ms)
 %%
-%%     Max number of seconds allowd for the broker to collect
+%%     Max number of seconds allowed for the broker to collect
 %%     `min_bytes' of messages in fetch response</li>
 %%
 %%  <li>`sleep_timeout' (optional, default = 1000 ms)

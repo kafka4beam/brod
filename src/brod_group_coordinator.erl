@@ -209,7 +209,7 @@
 %%
 %%  <li>`max_rejoin_attempts' (optional, default = 5)
 %%
-%%      Maximum number of times allowd for a member to re-join the group.
+%%      Maximum number of times allowed for a member to re-join the group.
 %%      The gen_server will stop if it reached the maximum number of retries.
 %%      OBS: 'let it crash' may not be the optimal strategy here because
 %%           the group member id is kept in the gen_server looping state and
