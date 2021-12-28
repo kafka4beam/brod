@@ -155,7 +155,7 @@ process_message(Topic, Partition, Dir, GroupId, Message) ->
   ok = commit_offset(Dir, GroupId, Topic, Partition, Offset).
 
 %% @doc This callback is called whenever there is a new assignment received.
-%% e.g. when joining the group after restart, or group assigment rebalance
+%% e.g. when joining the group after restart, or group assignment rebalance
 %% was triggered if other members join or leave the group
 %% NOTE: A subscriber may get assigned with a random set of topic-partitions
 %%       (unless some 'sticky' protocol is introduced to group controller),

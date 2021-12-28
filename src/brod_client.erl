@@ -264,7 +264,7 @@ deregister_producer(Client, Topic, Partition) ->
   gen_server:cast(Client, {deregister, Key}).
 
 %% @doc Register self() as a partition consumer. The pid is registered in an ETS
-%% table, then the callers may lookup a consumer pid from the table ane make
+%% table, then the callers may lookup a consumer pid from the table and make
 %% subscribe calls to the process directly.
 -spec register_consumer(client(), topic(), partition()) -> ok.
 register_consumer(Client, Topic, Partition) ->

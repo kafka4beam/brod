@@ -16,8 +16,8 @@ To find the latest version published on hex, run: `mix hex.search brod`
 As of writing this, the output was:
 ```
 ➜  brod_sample git:(master) ✗ mix hex.search brod
-Package                 Description                                            Version  URL                                             
-brod                    Apache Kafka Erlang client library                     3.10.0   https://hex.pm/packages/brod  
+Package                 Description                                            Version  URL
+brod                    Apache Kafka Erlang client library                     3.10.0   https://hex.pm/packages/brod
 ```
 
 Now just add it to your deps on `mix.exs`
@@ -92,7 +92,7 @@ import Config
 
 config :brod,
   clients: [
-    kafka_client: [ 
+    kafka_client: [
       endpoints: [localhost: 9092],
       auto_start_producers: true  # This will auto-start the producers with default configs
     ]
@@ -109,7 +109,7 @@ Erlang/OTP 22 [erts-10.7.1] [source] [64-bit] [smp:12:12] [ds:12:12:10] [async-t
 
 10:58:41.442 [info]  [supervisor: {:local, :brod_sup}, started: [pid: #PID<0.210.0>, id: :kafka_client, mfargs: {:brod_client, :start_link, [[localhost: 9092], :kafka_client, [endpoints: [localhost: 9092], auto_start_producers: true]]}, restart_type: {:permanent, 10}, shutdown: 5000, child_type: :worker]]
 Interactive Elixir (1.10.2) - press Ctrl+C to exit (type h() ENTER for help)
-iex(1)> 
+iex(1)>
 ```
 
 Now, we can use our module, doing
@@ -170,7 +170,7 @@ Now we can see on kafdrop that this message was sent to partition 1 due to its k
 
 Now we need to get those messages and do something with
 
-First what we need is to define a group of subcribers to our topic, brod provides us an implementation called `group_subscriber_v2` which will create a worker for each partition of our topic, this not only allow us to have a better troughput, but in case one of these paritions end up having problems only that worker will be affected.
+First what we need is to define a group of subcribers to our topic, brod provides us an implementation called `group_subscriber_v2` which will create a worker for each partition of our topic, this not only allow us to have a better throughput, but in case one of these partitions end up having problems only that worker will be affected.
 
 Let's take a look at the docs of the `group_subscriber_v2` at https://hexdocs.pm/brod/brod_group_subscriber_v2.html
 The first thing we can see is that it has some required functions and some optional.
@@ -229,10 +229,10 @@ This can be done the following way.
 
     {:ok, pid} = :brod.start_link_group_subscriber_v2(config)
 ```
-Theres a lot of information in here, so let's take a look on the most important ones.
+There's a lot of information in here, so let's take a look on the most important ones.
 
 ### client
-Expects the identifier of your kafka client, remeber that we configure `:kafka_client` on the `dev.exs`, here we are just referencing that client that we already configured.
+Expects the identifier of your kafka client, remember that we configure `:kafka_client` on the `dev.exs`, here we are just referencing that client that we already configured.
 
 ### group_id
 This is the name of the consumer_group that will be used
@@ -251,4 +251,4 @@ After all of that we call `{:ok, pid} = :brod.start_link_group_subscriber_v2(con
 You should now see on your console all the messages you've sent earlier
 
 ## Warning
-If you are not running your application in cluster mode you may go into some issues as the `group_subscriber` on multiple nodes may force each other re-join the group, if you wish to simulate this you can start 
+If you are not running your application in cluster mode you may go into some issues as the `group_subscriber` on multiple nodes may force each other re-join the group, if you wish to simulate this you can start

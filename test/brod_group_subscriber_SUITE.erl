@@ -18,7 +18,7 @@
 -module(brod_group_subscriber_SUITE).
 
 -include("brod_test_setup.hrl").
--define(CLIENT_ID, ?MODULE). %% Client thats is being tested
+-define(CLIENT_ID, ?MODULE). %% Client that's is being tested
 
 %% Test framework
 -export([ init_per_suite/1
@@ -391,7 +391,7 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
        %% Kill the subscriber process:
        unlink(SubscriberPid),
        kafka_test_helper:kill_process(SubscriberPid, shutdown),
-       %% Verify that all the process got shotdown:
+       %% Verify that all the process got shutdown:
        [receive
           {_Tag, MRef, _Type, _Obj, _Info} -> ok
         after 5000 ->
@@ -637,7 +637,7 @@ check_all_messages_were_received_once(Trace, Values) ->
   %% ...and each message was handled only once:
   snabbkaffe:unique(Handled).
 
-%%%_* Help funtions ============================================================
+%%%_* Help functions ============================================================
 
 handled_messages(Trace) ->
   ?of_kind(group_subscriber_handle_message, Trace).

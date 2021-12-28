@@ -133,7 +133,7 @@ t_nack(Config) when is_list(Config) ->
   Ref1 = ReceiveFun(?LINE, [0, 1]), %% max batch size
   _Ref = ReceiveFun(?LINE, [2, 3]), %% max onwire is 2
   Buf5 = NackFun(Buf4, Ref1),       %% re-queue all
-  Buf6 = MaybeSend(Buf5),           %% as if a sheduled retry
+  Buf6 = MaybeSend(Buf5),           %% as if a scheduled retry
   Ref3 = ReceiveFun(?LINE, [0, 1]), %% receive a max batch
   Ref4 = ReceiveFun(?LINE, [2, 3]), %% another max batch (max onwire is 2)
   Buf7 = AckFun(Buf6, Ref3),

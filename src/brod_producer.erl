@@ -467,7 +467,7 @@ handle_produce(BufCb, Batch,
   %% Connection is alive, add to buffer, and try send produce request
   do_handle_produce(BufCb, Batch, State);
 handle_produce(BufCb, Batch, #state{} = State) ->
-  %% this is the first request after fresh start/restart or conection death
+  %% this is the first request after fresh start/restart or connection death
   {ok, NewState} = maybe_reinit_connection(State),
   do_handle_produce(BufCb, Batch, NewState).
 

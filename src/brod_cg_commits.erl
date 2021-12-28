@@ -110,7 +110,7 @@ sync(Pid) ->
 
 %%%_* APIs for group coordinator ===============================================
 
-%% @doc Called by group coordinator when there is new assignemnt received.
+%% @doc Called by group coordinator when there is new assignment received.
 -spec assignments_received(pid(), member_id(), integer(),
                            brod:received_assignments()) -> ok.
 assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->

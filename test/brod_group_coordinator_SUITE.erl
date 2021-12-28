@@ -123,7 +123,7 @@ t_acks_during_revoke(Config) when is_list(Config) ->
   TopicAssignments2 = ?assert_receive({assignments_received, 2, _, TA2}, TA2),
   Assignments = TopicAssignments1 ++ TopicAssignments2,
 
-  %% The assigment needs to start at the chosen offset.
+  %% The assignment needs to start at the chosen offset.
   ?assertMatch( [ok]
               , [ok || #brod_received_assignment{
                          partition=?PARTITION,

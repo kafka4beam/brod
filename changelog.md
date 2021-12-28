@@ -92,7 +92,7 @@
 * 3.7.10
   * Compare begin_offset with last stable offset before advancing to next offset in case empty
     batch is received. Prior to this version, fetch attempts on unstable messages (messages
-    belong to open transactions (transactions which are neigher committed nor aborted),
+    belong to open transactions (transactions which are neither committed nor aborted),
     may result in an empty message set, then `brod_consumer` or `brod_utils:fetch` jumps to
     the next offset (if it is less than high-watermark offset).
 * 3.7.9
@@ -226,8 +226,8 @@
       handle a Kafka `message` or `message_set`.
 * 3.0.0
   * New Features
-    - New API `brod:connect_group_cordinator` to estabilish a sockt towards group coordinator broker.
-    - New API `brod:fetch_committed_offsets` to fetch consumer group commited offsets.
+    - New API `brod:connect_group_cordinator` to establish a sockt towards group coordinator broker.
+    - New API `brod:fetch_committed_offsets` to fetch consumer group committed offsets.
     - New API `brod:list_groups`, `brod:list_all_groups` and `brod:describe_groups/3`.
     - Brod-cli new command `groups` to list / describe consumer groups.
     - Brod-cli new command `commits` to list comsuer group committed offsets.

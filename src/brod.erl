@@ -319,7 +319,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%   <li>`reconnect_cool_down_seconds' (optional, default=1)
 %%
 %%     Delay this configured number of seconds before retrying to
-%%     estabilish a new connection to the kafka partition leader.</li>
+%%     establish a new connection to the kafka partition leader.</li>
 %%
 %%   <li>`allow_topic_auto_creation' (optional, default=true)
 %%
@@ -379,7 +379,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     Must be set to false to work with kafka versions prior to 0.10,
 %%     When set to `true', at connection start, brod will send a query request
 %%     to get the broker supported API version ranges.
-%%     When set to 'false', brod will alway use the lowest supported API version
+%%     When set to 'false', brod will always use the lowest supported API version
 %%     when sending requests to kafka.
 %%     Supported API version ranges can be found in:
 %%     `brod_kafka_apis:supported_versions/1'</li>

@@ -302,7 +302,7 @@ make_stream_reader(KvDeli, MsgDeli, BlkSize, IsEofExit) ->
 
 -spec add_acc(pos_integer(), binary(), [binary()]) -> [binary()].
 add_acc(_DeliSize = 1, Bytes, Acc) ->
-  %% Delimiter is only one byte, in no way coult it be cut in half
+  %% Delimiter is only one byte, in no way could it be cut in half
   [Bytes | Acc];
 add_acc(_DeliSize, Bytes, []) ->
   [Bytes];
