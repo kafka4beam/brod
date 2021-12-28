@@ -336,7 +336,7 @@ fold(Conn, Topic, Partition, Offset, Opts, Acc, Fun, Limits) ->
   do_fold(Spawn, Spawn(Offset), Offset, Acc, Fun, EndOffset, CountLimit).
 
 %% @doc Make a fetch function which should expand `max_bytes' when
-%% it is not big enough to fetch one signle message.
+%% it is not big enough to fetch one single message.
 -spec make_fetch_fun(pid(), topic(), partition(), brod:fetch_opts()) ->
         fetch_fun().
 make_fetch_fun(Conn, Topic, Partition, FetchOpts) ->
@@ -381,10 +381,10 @@ fetch_committed_offsets(BootstrapEndpoints, ConnCfg, GroupId, Topics) ->
     kpro:connect_coordinator(BootstrapEndpoints, nolink(ConnCfg), Args),
     fun(Pid) -> do_fetch_committed_offsets(Pid, GroupId, Topics) end).
 
-%% @doc Fetch commited offsets for the given topics in a consumer group.
+%% @doc Fetch committed offsets for the given topics in a consumer group.
 %% 1. Get broker endpoint by calling
 %%    `brod_client:get_group_coordinator'
-%% 2. Establish a connecton to the discovered endpoint.
+%% 2. Establish a connection to the discovered endpoint.
 %% 3. send `offset_fetch' request and wait for response.
 %% If Topics is an empty list, fetch offsets for all topics in the group
 -spec fetch_committed_offsets(brod:client(), group_id(), [topic()]) ->
@@ -690,7 +690,7 @@ is_control(_) -> false.
 
 %% Make a function to build fetch requests.
 %% The function takes offset and max_bytes as input as these two parameters
-%% are varient when continuously polling a specific topic-partition.
+%% are variant when continuously polling a specific topic-partition.
 -spec make_req_fun(connection(), topic(), partition(),
                    kpro:wait(), kpro:count()) -> req_fun().
 make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes) ->

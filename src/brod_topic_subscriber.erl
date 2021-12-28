@@ -132,7 +132,7 @@
 
 -type state() :: #state{}.
 
-%% delay 2 seconds retry the failed subscription to partiton consumer process
+%% delay 2 seconds retry the failed subscription to partition consumer process
 -define(RESUBSCRIBE_DELAY, 2000).
 
 -define(LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
@@ -257,7 +257,7 @@ stop(Pid) ->
       ok
   end.
 
-%% @doc Acknowledge that message has been sucessfully consumed.
+%% @doc Acknowledge that message has been successfully consumed.
 -spec ack(pid(), brod:partition(), brod:offset()) -> ok.
 ack(Pid, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Partition, Offset}).

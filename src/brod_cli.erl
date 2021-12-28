@@ -54,7 +54,7 @@ commands:
   send:    Produce messages
   pipe:    Pipe file or stdin as messages to kafka
   groups:  List/describe consumer group
-  commits: List/descibe committed offsets
+  commits: List/describe committed offsets
            or force overwrite existing commits
 ").
 
@@ -611,7 +611,7 @@ show_commits(GroupId, Topic) ->
       PerTopicStructs = lists:filter(Pred, PerTopicStructs0),
       lists:foreach(fun print_commits/1, PerTopicStructs);
     {error, Reason} ->
-      throw_bin("Failed to fetch commited offsets ~p\n", [Reason])
+      throw_bin("Failed to fetch committed offsets ~p\n", [Reason])
   end.
 
 reset_commits(ID, Topic, Args) ->
@@ -998,7 +998,7 @@ is_ur_topic(Topic) ->
   Partitions = kf(partition_metadata, Topic),
   %% when there is an error, we do not know if
   %% it is under-replicated or not
-  %% retrun true to alert user
+  %% return true to alert user
   ?IS_ERROR(ErrorCode) orelse lists:any(fun is_ur_partition/1, Partitions).
 
 %% Return true if a partition is under-replicated

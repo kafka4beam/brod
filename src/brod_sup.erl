@@ -70,7 +70,7 @@
 
 -define(SUP, ?MODULE).
 
-%% By deafult, restart client process after a 10-seconds delay
+%% By default, restart client process after a 10-seconds delay
 -define(DEFAULT_CLIENT_RESTART_DELAY, 10).
 
 %%%_* APIs =====================================================================

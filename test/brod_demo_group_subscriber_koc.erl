@@ -33,7 +33,7 @@
         , bootstrap/2
         ]).
 
-%% behabviour callbacks
+%% behaviour callbacks
 -export([ init/2
         , handle_message/4
         ]).
@@ -60,7 +60,7 @@
 %%   - X group subscribers, X is the number of partitions
 %%
 %% * consumed sequence numbers are printed to console
-%% * consumed offsets are commited to kafka (using v2 commit requests)
+%% * consumed offsets are committed to kafka (using v2 commit requests)
 %%
 %% NOTE: Here we spawn two clients in one Erlang node just to demo how
 %% group subscribers work.

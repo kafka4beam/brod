@@ -23,7 +23,7 @@
 -module(brod_demo_topic_subscriber).
 -behaviour(brod_topic_subscriber).
 
-%% behabviour callbacks
+%% behaviour callbacks
 -export([ init/2
         , handle_message/3
         ]).

@@ -26,7 +26,7 @@ hex-publish: clean
 ## tests that require kafka running at localhost
 INTEGRATION_CTS = brod_cg_commits brod_client brod_compression brod_consumer brod_producer brod_group_subscriber brod_topic_subscriber brod
 
-## build escript and a releas, and copy escript to release bin dir
+## build escript and a release, and copy escript to release bin dir
 brod-cli:
 	@rebar3 as brod_cli do compile,escriptize,release
 	@cp _build/brod_cli/bin/brod_cli _build/brod_cli/rel/brod/bin/

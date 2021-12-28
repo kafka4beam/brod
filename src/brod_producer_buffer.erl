@@ -206,7 +206,7 @@ take_reqs(#buf{ buffer = Buffer, pending = Pending} = Buf) ->
 do_take_reqs(#buf{ max_linger_count = MaxLingerCount
                  , buffer_count     = BufferCount
                  } = Buf) when BufferCount >= MaxLingerCount ->
-  %% there is alredy enough messages lingering around
+  %% there is already enough messages lingering around
   take_reqs_loop(Buf, _Acc = [], _AccBytes = 0);
 do_take_reqs(#buf{ max_linger_ms = MaxLingerMs
                  , buffer        = Buffer

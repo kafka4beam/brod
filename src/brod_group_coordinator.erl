@@ -113,7 +113,7 @@
           %% all group members received in the join group response
         , members = [] :: [member()]
           %% Set to false before joining the group
-          %% then set to true when sucessfully joined the group.
+          %% then set to true when successfully joined the group.
           %% This is by far only used to prevent the timer-triggered
           %% loopback command message sending a HeartbeatRequest to
           %% the group coordinator broker.
@@ -129,7 +129,7 @@
           %% 'consumer_managed'
         , acked_offsets = [] :: [{{brod:topic(), brod:partition()}
                                  , brod:offset()}]
-          %% The referece of the timer which triggers offset commit
+          %% The reference of the timer which triggers offset commit
         , offset_commit_timer :: ?undef | reference()
 
           %% configs, see start_link/6 doc for details
@@ -174,7 +174,7 @@
 %%
 %%        Take all topic-offset (sorted `topic_partition()' list),
 %%        assign one to each member in a roundrobin fashion. Only
-%%        partitions in the subscription topic list are assiged.</li>
+%%        partitions in the subscription topic list are assigned.</li>
 %%
 %%      <li>`callback_implemented'
 %%
@@ -230,7 +230,7 @@
 %%            persisting offsets to a local or centralized storage.
 %%            And the callback `get_committed_offsets' should be
 %%            implemented to allow group coordinator to retrieve the
-%%            commited offsets.</li>
+%%            committed offsets.</li>
 %%  </ul></li>
 %%
 %%  <li>`offset_commit_interval_seconds' (optional, default = 5)
@@ -252,7 +252,7 @@
 %%      This is the protocol name used when join a group, if not given,
 %%      by default `partition_assignment_strategy' is used as the protocol name.
 %%      Setting a protocol name allows to interact with consumer group members
-%%      designed in other programing languages. For example, 'range' is the most
+%%      designed in other programming languages. For example, 'range' is the most
 %%      commonly used protocol name for JAVA client. However, brod only supports
 %%      roundrobin protocol out of the box, in order to mimic 'range' protocol
 %%      one will have to do it via `callback_implemented' assignment strategy
@@ -532,7 +532,7 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   F1 = fun discover_coordinator/1,
   %% 6. join group
   F2 = fun join_group/1,
-  %% 7. sync assignemnts
+  %% 7. sync assignments
   F3 = fun sync_group/1,
 
   RetryFun =
@@ -1105,7 +1105,7 @@ make_offset_commit_metadata() ->
 %% callback to member module.
 %% user_data assigned back to members is always an empty binary
 %% if assign_partitions callback is not implemented, otherwise
-%% should be set in the assign_partitions callback implemenation.
+%% should be set in the assign_partitions callback implementation.
 user_data(Module, Pid) ->
   %% Module is ensured to be loaded already
   brod_utils:optional_callback(Module, user_data, [Pid], <<>>).

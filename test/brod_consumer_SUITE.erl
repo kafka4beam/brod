@@ -491,7 +491,7 @@ t_consumer_max_bytes_too_small(Config) ->
        ?assertEqual(Value, ValueReceived)
      end).
 
-%% @doc Consumer shoud auto recover from connection down, subscriber should not
+%% @doc Consumer should auto recover from connection down, subscriber should not
 %% notice a thing except for a few seconds of break in data streaming
 t_consumer_connection_restart(Config) ->
   Client = ?config(client),
@@ -678,7 +678,7 @@ t_subscriber_restart(Config) when is_list(Config) ->
       brod:produce_sync(Client, Topic, Partition, Key, Value)
     end,
   Parent = self(),
-  %% fuction to consume one message then exit(normal)
+  %% function to consume one message then exit(normal)
   SubscriberFun =
     fun() ->
       {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
