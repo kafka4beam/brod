@@ -504,7 +504,7 @@ list_groups(Endpoint, ConnCfg) ->
 describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
   with_conn([CoordinatorEndpoint], ConnCfg,
     fun(Pid) ->
-        Req = kpro:make_request(describe_groups, 0, [{group_ids, IDs}]),
+        Req = kpro:make_request(describe_groups, 0, [{groups, IDs}]),
         request_sync(Pid, Req)
     end).
 
