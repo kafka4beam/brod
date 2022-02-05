@@ -83,18 +83,16 @@
                               | ?CONSUMER_KEY(topic(), partition()).
 
 -type get_producer_error() :: client_down
-                            | {producer_down, noproc}
+                            | {client_down, any()}
+                            | {producer_down, any()}
                             | {producer_not_found, topic()}
-                            | { producer_not_found
-                              , topic()
-                              , partition()}
-                            | term().
+                            | {producer_not_found, topic(), partition()}.
 
 -type get_consumer_error() :: client_down
-                            | {consumer_down, noproc}
+                            | {client_down, any()}
+                            | {consumer_down, any()}
                             | {consumer_not_found, topic()}
-                            | {consumer_not_found, topic(), partition()}
-                            | term().
+                            | {consumer_not_found, topic(), partition()}.
 
 -type get_worker_error() :: get_producer_error()
                           | get_consumer_error().
@@ -831,19 +829,20 @@ ensure_partition_workers(TopicName, State, F) ->
       end
     end).
 
-%% Catches noproc and timeout exit exceptions when making gen_server:call.
+%% Catches exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
-             Return  :: ok | {ok, term()} | {error, client_down | term()}.
+             Return  :: ok | {ok, term()} | {error, Reason},
+             Reason  :: client_down | {client_down, any()} | any().
 safe_gen_call(Server, Call, Timeout) ->
   try
     gen_server:call(Server, Call, Timeout)
   catch
     exit : {noproc, _} ->
       {error, client_down};
-    exit : {reason, _} ->
-      {error, reason}
+    exit : {Reason, _} ->
+      {error, {client_down, Reason}}
   end.
 
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
