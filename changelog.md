@@ -1,7 +1,19 @@
 * 3.16.2
+  * Update kafka_protocol from 4.0.1 to 4.0.3.
+    Prior to this change the actual time spent in establishing a
+    Kafka connection might be longer than desired due to the timeout
+    being used in SSL upgrade (if enabled), then API version query.
+    This has been fixed by turning the given timeout config
+    into a deadline, and the sub-steps will try to meet the deadline.
+    see more details here: https://github.com/kafka4beam/kafka_protocol/pull/9
+  * Catch `timeout` and other `DOWN` reasons when making `gen_server` call to
+   `brod_client`, `brod_consumer` and producer/consumer supervisor,
+    and return as `Reason` in `{error, Reason}`.
+    Previously only `noproc` reaon is caught. (#492)
   * Propagate `connect_timeout` config to `kpro` API functions as `timeout` arg
     affected APIs: connect_group_coordinator, create_topics, delete_topics,
-    resolve_offset, fetch, fold, fetch_committed_offsets
+    resolve_offset, fetch, fold, fetch_committed_offsets (#458)
+  * Fix bad field name in group describe request (#486)
 * 3.16.1
   * Fix `brod` script in `brod-cli` in release.
   * Support `rebalance_timeout` consumer group option
