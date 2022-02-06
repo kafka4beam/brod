@@ -794,16 +794,17 @@ reset_buffer(#state{ pending_acks = #pending_acks{queue = Queue}
              , last_req_ref = ?undef
              }.
 
-%% Catch noproc exit exception when making gen_server:call.
+%% Catch exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
         when Call    :: term(),
              Timeout :: infinity | integer(),
-             Return  :: ok | {ok, term()} | {error, consumer_down | term()}.
+             Return  :: ok | {ok, term()} | {error, any()}.
 safe_gen_call(Server, Call, Timeout) ->
   try
     gen_server:call(Server, Call, Timeout)
-  catch exit : {noproc, _} ->
-    {error, consumer_down}
+  catch
+    exit : {Reason, _} ->
+      {error, Reason}
   end.
 
 %% Init payload connection regardless of subscriber state.

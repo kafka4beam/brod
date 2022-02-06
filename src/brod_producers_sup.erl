@@ -71,7 +71,7 @@ stop_producer(SupPid, TopicName) ->
                        {ok, pid()} | {error, Reason} when
         Reason :: {producer_not_found, brod:topic()}
                 | {producer_not_found, brod:topic(), brod:partition()}
-                | {producer_down, noproc}.
+                | {producer_down, any()}.
 find_producer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
@@ -87,8 +87,8 @@ find_producer(SupPid, Topic, Partition) ->
           [Pid] ->
             {ok, Pid}
         end
-      catch exit : {noproc, _} ->
-        {error, {producer_down, noproc}}
+      catch exit : {Reason, _} ->
+        {error, {producer_down, Reason}}
       end
   end.
 

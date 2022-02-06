@@ -455,7 +455,8 @@ get_partitions_count(Client, Topic) ->
 -spec get_consumer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
-                       | {consumer_down, noproc}
+                       | {client_down, any()}
+                       | {consumer_down, any()}
                        | {consumer_not_found, topic()}
                        | {consumer_not_found, topic(), partition()}.
 get_consumer(Client, Topic, Partition) ->
@@ -465,7 +466,8 @@ get_consumer(Client, Topic, Partition) ->
 -spec get_producer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
           when Reason :: client_down
-                       | {producer_down, noproc}
+                       | {client_down, any()}
+                       | {producer_down, any()}
                        | {producer_not_found, topic()}
                        | {producer_not_found, topic(), partition()}.
 get_producer(Client, Topic, Partition) ->

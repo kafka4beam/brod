@@ -67,7 +67,7 @@ stop_consumer(SupPid, TopicName) ->
                        {ok, pid()} | {error, Reason} when
         Reason :: {consumer_not_found, brod:topic()}
                 | {consumer_not_found, brod:topic(), brod:partition()}
-                | {consumer_down, noproc}.
+                | {consumer_down, any()}.
 find_consumer(SupPid, Topic, Partition) ->
   case supervisor3:find_child(SupPid, Topic) of
     [] ->
@@ -83,8 +83,8 @@ find_consumer(SupPid, Topic, Partition) ->
           [Pid] ->
             {ok, Pid}
         end
-      catch exit : {noproc, _} ->
-        {error, {consumer_down, noproc}}
+      catch exit : {Reason, _} ->
+        {error, {consumer_down, Reason}}
       end
   end.
 
