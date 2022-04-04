@@ -5,7 +5,7 @@
     being used in SSL upgrade (if enabled), then API version query.
     This has been fixed by turning the given timeout config
     into a deadline, and the sub-steps will try to meet the deadline.
-    see more details here: https://github.com/kafka4beam/kafka_protocol/pull/9
+    see more details here: https://github.com/kafka4beam/kafka_protocol/pull/92
   * Catch `timeout` and other `DOWN` reasons when making `gen_server` call to
    `brod_client`, `brod_consumer` and producer/consumer supervisor,
     and return as `Reason` in `{error, Reason}`.
