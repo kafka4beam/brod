@@ -118,13 +118,13 @@
 %% unless prefetch_count and prefetch_bytes are set to 0 in consumer config.
 %%
 -spec handle_message(brod:topic(),
-    brod:partition(),
-    brod:message() | brod:message_set(),
-    cb_state()) -> {ok, cb_state()} |
-{ok, ack, cb_state()} |
-{ok, ack_no_commit, cb_state()}.
-handle_message(Topic, Partition, MessageSet, State) -> {ok, ack, State}.
-
+                     brod:partition(),
+                     brod:message() | brod:message_set(),
+                     cb_state()) -> {ok, cb_state()} |
+                                    {ok, ack, cb_state()} |
+                                    {ok, ack_no_commit, cb_state()}.
+handle_message(_Topic, _Partition, _MessageSet, State) ->
+  {ok, ack, State}.
 
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
