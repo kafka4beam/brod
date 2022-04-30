@@ -3,6 +3,9 @@ all: compile
 compile:
 	@rebar3 compile
 
+lint:
+	@rebar3 lint
+
 test-env:
 	@./scripts/setup-test-env.sh
 

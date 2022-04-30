@@ -54,7 +54,7 @@ jobs:
 
     # Compile
     - name: Compile
-      run: rebar3 do compile,edoc
+      run: rebar3 do compile,lint,edoc
     - name: Make brod_cli script
       run: rebar3 as brod_cli escriptize
 

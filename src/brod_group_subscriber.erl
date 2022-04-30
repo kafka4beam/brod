@@ -98,6 +98,33 @@
                                         {ok, ack, cb_state()} |
                                         {ok, ack_no_commit, cb_state()}.
 
+%% @doc Handle a message. Return one of:
+%%
+%% `{ok, NewCallbackState}':
+%%   The subscriber has received the message for processing async-ly.
+%%   It should call {@link brod_group_subscriber:ack/4} to acknowledge later.
+%%
+%% `{ok, ack, NewCallbackState}':
+%%   The subscriber has completed processing the message.
+%%
+%% `{ok, ack_no_commit, NewCallbackState}':
+%%   The subscriber has completed processing the message, but it
+%%   is not ready to commit offset yet. It should call
+%%   {@link brod_group_subscriber:commit/4} later.
+%%
+%% While this callback function is being evaluated, the fetch-ahead
+%% partition-consumers are fetching more messages behind the scene
+%% unless prefetch_count and prefetch_bytes are set to 0 in consumer config.
+%%
+-spec handle_message(brod:topic(),
+                     brod:partition(),
+                     brod:message() | brod:message_set(),
+                     cb_state()) -> {ok, cb_state()} |
+                                    {ok, ack, cb_state()} |
+                                    {ok, ack_no_commit, cb_state()}.
+handle_message(_Topic, _Partition, _MessageSet, State) ->
+  {ok, ack, State}.
+
 %% This callback is called only when subscriber is to commit offsets locally
 %% instead of kafka.
 %% Return {ok, Offsets, cb_state()} where Offsets can be [],
