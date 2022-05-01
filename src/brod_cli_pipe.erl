@@ -76,6 +76,8 @@
                , retry_delay :: timeout()
                }).
 
+-type state() :: #state{}.
+
 %% @doc Args explained:
 %%
 %% source:   'standard_io' | {file, "path/to/source"}
@@ -217,6 +219,8 @@ handle_eof(#state{io_device = Fd} = State) ->
       {noreply, State}
   end.
 
+-spec delay_continue(state()) ->
+  ok.
 delay_continue(#state{retry_delay = Delay}) ->
   _ = erlang:send_after(Delay, self(), ?CONTINUE_MSG),
   ok.
