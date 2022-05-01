@@ -74,6 +74,8 @@
         , is_done = false    :: boolean()
         }).
 
+-type state() :: #state{}.
+
 %%%_* APIs =====================================================================
 
 %% @doc Force commit offsets.
@@ -294,6 +296,8 @@ assign_all_to_self([{MyMemberId, _} | Members], TopicPartitions) ->
   | [{Id, []} || {Id, _MemberMeta} <- Members]
   ].
 
+-spec log(state(), logger:level(), io:format(), [term()]) ->
+      ok.
 log(#state{groupId  = GroupId}, Level, Fmt, Args) ->
   ?BROD_LOG(Level,
             "Group member (~s,coor=~p):\n" ++ Fmt,

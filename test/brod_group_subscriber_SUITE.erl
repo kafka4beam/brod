@@ -339,7 +339,8 @@ v2_coordinator_crash(Config) when is_list(Config) ->
      %% Run stage:
      begin
        {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
-       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       %% Send a message to the topic and wait until it's received to make sure
+       %% the subscriber is stable:
        produce({Topic, Partition}, <<0>>),
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
        %% Extract data from the subscriber:
@@ -381,7 +382,8 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
      %% Run stage:
      begin
        {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
-       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       %% Send a message to the topic and wait until it's received to make sure
+       %% the subscriber is stable:
        produce({Topic, Partition}, <<0>>),
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
        %% Extract data from the subscriber:
@@ -422,7 +424,8 @@ v2_subscriber_assignments_revoked(Config) when is_list(Config) ->
      begin
        {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
 
-       %% Send a message to the topic and wait until it's received to make sure the subscriber is stable:
+       %% Send a message to the topic and wait until it's received to make sure
+       %% the subscriber is stable:
        produce({Topic, Partition}, <<0>>),
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
 
