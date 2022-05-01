@@ -34,7 +34,7 @@
 %%%
 %%% For group members that commit offsets to Kafka, do:
 %%%
-%%% 1. Call {@link brod_group_coordinator:ack/4}. to acknowledge successful
+%%% 1. Call {@link brod_group_coordinator:ack/5}. to acknowledge successful
 %%%    consumption of the messages. Group coordinator will commit the
 %%%    acknowledged offsets at configured interval.
 %%%

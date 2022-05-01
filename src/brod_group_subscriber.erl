@@ -73,24 +73,24 @@
 %% Initialize the callback module s state.
 -callback init(brod:group_id(), term()) -> {ok, cb_state()}.
 
-%% Handle a message. Return one of:
+%% @doc Handle a message. Return one of:
 %%
-%% {ok, NewCallbackState}:
+%% `{ok, NewCallbackState}':
 %%   The subscriber has received the message for processing async-ly.
-%%   It should call brod_group_subscriber:ack/4 to acknowledge later.
+%%   It should call {@link brod_group_subscriber:ack/4} to acknowledge later.
 %%
-%% {ok, ack, NewCallbackState}
+%% `{ok, ack, NewCallbackState}':
 %%   The subscriber has completed processing the message.
 %%
-%% {ok, ack_no_commit, NewCallbackState}
+%% `{ok, ack_no_commit, NewCallbackState}':
 %%   The subscriber has completed processing the message, but it
 %%   is not ready to commit offset yet. It should call
-%%   brod_group_subscriber:commit/4 later.
+%%   {@link brod_group_subscriber:commit/4} later.
 %%
 %% While this callback function is being evaluated, the fetch-ahead
 %% partition-consumers are fetching more messages behind the scene
 %% unless prefetch_count and prefetch_bytes are set to 0 in consumer config.
-%%
+%% @end
 -callback handle_message(brod:topic(),
                          brod:partition(),
                          brod:message() | brod:message_set(),
