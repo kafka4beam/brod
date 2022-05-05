@@ -103,14 +103,14 @@ create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
             end).
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {error, any()}.
 delete_topics(Hosts, Topics, Timeout) ->
   delete_topics(Hosts, Topics, Timeout, _ConnCfg = []).
 
 %% @doc Try to connect to the controller node using the given
 %% connection options and delete the given topics with a timeout
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
-        {ok, kpro:struct()} | {error, any()}.
+        ok | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, ConnCfg) ->
   KproOpts = kpro_connection_options(ConnCfg),
   with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg), KproOpts),

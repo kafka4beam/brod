@@ -1,3 +1,5 @@
+* 3.16.3
+  * Fix specs for `delete_topics`.
 * 3.16.2
   * Update kafka_protocol from 4.0.1 to 4.0.3.
     Prior to this change the actual time spent in establishing a
