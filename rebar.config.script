@@ -3,6 +3,12 @@ DocoptUrl = "https://github.com/zmstone/docopt-erl.git",
 DocOptTag = "0.1.3",
 DocoptDep = {docopt, {git, DocoptUrl, {branch, DocOptTag}}},
 Snabbkaffe = {snabbkaffe, {git, "https://github.com/kafka4beam/snabbkaffe", {tag, "0.6.0"}}},
+Plugins =
+  case erlang:list_to_integer(erlang:system_info(otp_release)) of
+    Version when Version > 23 ->
+      {project_plugins, [{rebar3_ex_doc, "~> 0.2.9"},{rebar3_hex, "~> 7.0.1"},{rebar3_lint, "~> 1.0.2"}]};
+    _ -> {project_plugins, [{rebar3_lint, "~> 1.0.2"}]}
+  end,
 Profiles =
   {profiles, [
     {brod_cli, [
@@ -24,7 +30,7 @@ Profiles =
   ]},
 CONFIG1 = case IsRebar3 of
   true ->
-    [Profiles | CONFIG];
+    [Plugins | [Profiles | CONFIG]];
   false ->
     URLs = [ {supervisor3, "https://github.com/kafka4beam/supervisor3.git"}
            , {kafka_protocol, "https://github.com/kafka4beam/kafka_protocol.git"}
@@ -38,12 +44,13 @@ CONFIG1 = case IsRebar3 of
             Vsn               -> {Name, ".*", {git, URL, {tag, Vsn}}}
           end
         end, URLs),
-   lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})
+   [Plugins | lists:keyreplace(deps, 1, CONFIG, {deps, Rebar2Deps})]
 end,
 
 case {os:getenv("GITHUB_ACTIONS"), os:getenv("GITHUB_TOKEN")} of
   {"true", Token} when is_list(Token) ->
-    CONFIG2 = [{coveralls_repo_token, Token},
+    CONFIG2 = [Plugins,
+               {coveralls_repo_token, Token},
                {coveralls_coverdata, "_build/test/cover/*.coverdata"},
                {coveralls_service_job_id, os:getenv("GITHUB_RUN_ID")},
                {coveralls_commit_sha, os:getenv("GITHUB_SHA")},

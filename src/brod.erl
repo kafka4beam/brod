@@ -473,7 +473,7 @@ get_consumer(Client, Topic, Partition) ->
 get_producer(Client, Topic, Partition) ->
   brod_client:get_producer(Client, Topic, Partition).
 
-%% @equiv produce(Pid, 0, <<>>, Value)
+%% @equiv produce(Pid, <<>>, Value)
 -spec produce(pid(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Pid, Value) ->
   produce(Pid, _Key = <<>>, Value).
@@ -580,7 +580,7 @@ produce_no_ack(Client, Topic, Partitioner, Key, Value) ->
   end.
 
 %% @doc Same as `produce/5' only the ack is not d
-%% @equiv produce_sync(Pid, 0, <<>>, Value)
+%% @equiv produce_sync(Pid, <<>>, Value)
 -spec produce_sync(pid(), value()) -> ok.
 produce_sync(Pid, Value) ->
   produce_sync(Pid, _Key = <<>>, Value).
