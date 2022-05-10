@@ -6,6 +6,9 @@ on:
   pull_request:
     branches:
       - master
+env:
+  OTP_VERSION: '24.1'
+  REBAR_VERSION: '3.17.0'
 
 jobs:
   lint:
@@ -18,48 +21,46 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           version-type: strict
-          otp-version: '24.1'
-          rebar3-version: '3.17.0'
-      - name: Cache Hex packages
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR_VERSION }}
+      - name: Cache Build
         id: cache-lint-hex
         uses: actions/cache@v3
         with:
-          path: ~/.cache/rebar3/hex/hexpm/packages
-          key: lint-hex-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.lock')) }}
-          restore-keys: lint-hex
-      - name: Lint
-        run: rebar3 lint
+          path: _build
+          key: ${{ runner.os }}-${{ env.OTP_VERSION }}-rebar-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-rebar-
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/rebar3/rebar3_*_plt
+          key: ${{ runner.os }}-dialyzer-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-
+      - name: Lint, Dialyzer & Xref
+        run: rebar3 do compile,lint,dialyzer,xref
   build:
     runs-on: ubuntu-latest
     name: OTP ${{matrix.otp}} / Kafka ${{matrix.kafka}}
     strategy:
       fail-fast: false
       matrix:
-        otp: ['24.1', '23.3.4.7', '22.3.4.21']
-        kafka: ['2.4', '1.1', '0.11']
+        otp: [ '24.1', '23.3.4.7', '22.3.4.21' ]
+        kafka: [ '2.4', '1.1', '0.11' ]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Cache Hex packages
+      - name: Cache Build
         uses: actions/cache@v3
         with:
-          path: ~/.cache/rebar3/hex/hexpm/packages
-          key: ${{ runner.os }}-hex-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.lock')) }}
-          restore-keys: ${{ runner.os }}-hex-
-      - name: Cache Dialyzer PLTs
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/rebar3/rebar3_*_plt
-          key: ${{ runner.os }}-dialyzer-${{ hashFiles(format('{0}{1}', github.workspace, '/rebar.config')) }}
-          restore-keys: ${{ runner.os }}-dialyzer-
+          path: _build
+          key: ${{ runner.os }}-${{ matrix.otp }}-rebar-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.otp }}-rebar-
       - name: Install Erlang
         uses: erlef/setup-beam@v1
         with:
           version-type: strict
           otp-version: ${{matrix.otp}}
-          rebar3-version: '3.17.0'
-      - name: Rebar version
-        run: rebar3 --version
+          rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Compile
         run: rebar3 do compile
       - name: Make brod_cli script
@@ -73,14 +74,12 @@ jobs:
         uses: actions/upload-artifact@v1
         if: always()
         with:
-          name: ct-logs
+          name: ct-logs-otp-${{matrix.otp}}-kafka-${{matrix.kafka}}
           path: _build/test/logs
       - name: Create Cover Reports
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: rebar3 do cover,coveralls send
-      - name: Checks
-        run: rebar3 do dialyzer,xref
   docs:
     needs: build
     runs-on: ubuntu-latest
@@ -92,8 +91,8 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           version-type: strict
-          otp-version: '24.1'
-          rebar3-version: '3.17.0'
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Build Documentation
         run: rebar3 do hex build
       - name: Publish documentation
