@@ -199,7 +199,7 @@ t_begin_offset(Config) when is_list(Config) ->
      begin
        _Offset0 = SendFun(1),
        Offset1 = SendFun(2),
-       Offset2 = SendFun(3),
+       _Offset2 = SendFun(3),
        %% Start as if committed Offset1, expect it to start fetching from
        %% Offset2
        InitArgs = {_IsAsyncAck = true,
@@ -373,10 +373,8 @@ check_received_messages(Expected, Trace) ->
 
 %% Check that state of callback module is correctly passed around
 %% between the calls:
-check_state_continuity(WorkerId, Trace) ->
-  snabbkaffe:strictly_increasing([S || #{ worker_id := WorkerId
-                                        , state := S
-                                        } <- Trace]).
+check_state_continuity(_WorkerId, Trace) ->
+  snabbkaffe:strictly_increasing([S || #{ state := S} <- Trace]).
 
 check_state_continuity(Trace) ->
   %% Find IDs of all worker processes:
