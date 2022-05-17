@@ -40,7 +40,7 @@ common_init_per_testcase(Module, Case, Config) ->
   [prepare_topic(I) || I <- Topics],
   Config.
 
-common_end_per_testcase(Case, Config) ->
+common_end_per_testcase(_Case, _Config) ->
   catch brod:stop_client(?TEST_CLIENT_ID),
   ok.
 

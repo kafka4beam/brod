@@ -360,7 +360,7 @@ v2_coordinator_crash(Config) when is_list(Config) ->
        ok
      end,
      %% Check stage:
-     fun(_Ret, Trace) ->
+     fun(_Ret, _Trace) ->
          ok
      end).
 
@@ -408,7 +408,7 @@ v2_subscriber_shutdown(Config) when is_list(Config) ->
        ok
      end,
      %% Check stage:
-     fun(_Ret, Trace) ->
+     fun(_Ret, _Trace) ->
          ok
      end),
   meck:unload(brod_group_coordinator).
@@ -430,7 +430,7 @@ v2_subscriber_assignments_revoked(Config) when is_list(Config) ->
        {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
 
        %% Extract data from the subscriber:
-       {state, _, _, _, Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
+       {state, _, _, _, _Coordinator, _, Workers, _, _, _, _} = sys:get_state(SubscriberPid),
        WorkerMonitors = [monitor(process, Worker) || Worker <- maps:values(Workers)],
 
        %% revoke assignments
@@ -447,7 +447,7 @@ v2_subscriber_assignments_revoked(Config) when is_list(Config) ->
        ok
      end,
      %% Check stage:
-     fun(_Ret, Trace) ->
+     fun(_Ret, _Trace) ->
          ok
      end).
 
@@ -475,8 +475,8 @@ t_2_members_subscribe_to_different_topics(Config) when is_list(Config) ->
      #{ timeout => 5000 },
      %% Run stage:
      begin
-       {ok, SubscriberPid1} = start_subscriber(?group_id, Config, [Topic1], InitArgs),
-       {ok, SubscriberPid2} = start_subscriber(?group_id, Config, [Topic2], InitArgs),
+       {ok, _SubscriberPid1} = start_subscriber(?group_id, Config, [Topic1], InitArgs),
+       {ok, _SubscriberPid2} = start_subscriber(?group_id, Config, [Topic2], InitArgs),
        %% Send messages to random partitions:
        lists:foreach(SendFun, L),
        ?wait_message(_, _, LastMsg, _)
@@ -503,8 +503,8 @@ t_2_members_one_partition(Config) when is_list(Config) ->
        %% Send messages:
        {LastOffset, L} = produce_payloads(Topic, 0, Config),
        %% Start two subscribers competing for the partition:
-       {ok, SubscriberPid1} = start_subscriber(?group_id, Config, [Topic], InitArgs),
-       {ok, SubscriberPid2} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+       {ok, _SubscriberPid1} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+       {ok, _SubscriberPid2} = start_subscriber(?group_id, Config, [Topic], InitArgs),
        ?wait_message(_, _, _, LastOffset),
        L
      end,
@@ -584,7 +584,7 @@ t_async_commit(Config) when is_list(Config) ->
      fun(_Ret, Trace) ->
          {BeforeRestart1, [_|AfterRestart1]} =
            ?split_trace_at(#{?snk_kind := emulate_restart}, Trace),
-         {BeforeRestart2, [_|AfterRestart2]} =
+         {_BeforeRestart2, [_|AfterRestart2]} =
            ?split_trace_at(#{?snk_kind := emulate_restart}, AfterRestart1),
          %% check that the message was processed once before 1st
          %% restart:
