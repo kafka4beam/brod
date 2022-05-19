@@ -145,8 +145,6 @@ get_producer(Client, Topic, Partition) ->
     {ok, Pid} ->
       {ok, Pid};
     {error, {producer_not_found, Topic}} = Error ->
-      %% try to start a producer for the given topic if
-      %% auto_start_producers option is enabled for the client
       maybe_start_producer(Client, Topic, Partition, Error);
     Error ->
       Error
@@ -420,19 +418,37 @@ shutdown_pid(_) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
   case erlang:process_info(ClientPid, registered_name) of
-    {registered_name, ClientId} when is_atom(ClientId) ->
-      get_partition_worker(ClientId, Key);
+    {registered_name, ClientId} -> get_partition_worker(ClientId, Key);
+
     _ ->
       %% This is a client process started without registered name
       %% have to call the process to get the producer/consumer worker
       %% process registration table.
-      case safe_gen_call(ClientPid, get_workers_table, infinity) of
-        {ok, Ets}       -> lookup_partition_worker(ClientPid, Ets, Key);
-        {error, Reason} -> {error, Reason}
-      end
+      get_partition_worker_with_ets(ClientPid, Key)
   end;
+
 get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
-  lookup_partition_worker(ClientId, ?ETS(ClientId), Key).
+  case lookup_partition_worker(ClientId, ?ETS(ClientId), Key) of
+    {ok, Pid} ->
+      %% This is an attempt to help with a race condition
+      %% between ets lookups and what is being supervised.
+      %% If the worker process is returned form ets,
+      %% but it is not alive then there must be
+      %% an inflight worker deregistration request.
+      case is_process_alive(Pid) of
+        true -> {ok, Pid};
+        false -> get_partition_worker_with_ets(ClientId, Key)
+      end;
+    Other -> Other
+  end.
+
+-spec get_partition_worker_with_ets(client(), partition_worker_key()) ->
+  {ok, pid()} | {error, get_worker_error()}.
+get_partition_worker_with_ets(Client, Key) ->
+  case safe_gen_call(Client, get_workers_table, infinity) of
+    {ok, Ets} -> lookup_partition_worker(Client, Ets, Key);
+    {error, Reason} -> {error, Reason}
+  end.
 
 -spec lookup_partition_worker(client(), ets:tab(), partition_worker_key()) ->
         {ok, pid()} | { error, get_worker_error()}.
@@ -783,6 +799,8 @@ do_get_partitions_count(TopicMetadata) ->
                            partition(), {error, any()}) ->
         ok | {error, any()}.
 maybe_start_producer(Client, Topic, Partition, Error) ->
+  %% try to start a producer for the given topic if
+  %% auto_start_producers option is enabled for the client
   case safe_gen_call(Client, {auto_start_producer, Topic}, infinity) of
     ok ->
       get_partition_worker(Client, ?PRODUCER_KEY(Topic, Partition));

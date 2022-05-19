@@ -399,8 +399,10 @@ retry_writer_loop(Parent, ProduceFun, LastResult) ->
   Result = ProduceFun(),
   %% assert result patterns
   case Result of
-    ok              -> ok;
-    {error, Reason} -> ?assertMatch({producer_down, _}, Reason)
+    ok -> ok;
+    {error, client_down} -> ok;
+    {error, {producer_down, _}} -> ok;
+    {error, Reason} -> error({unexpected_error, Reason})
   end,
   %% tell parent about produce return value changes
   case Result =/= LastResult of
