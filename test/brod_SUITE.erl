@@ -21,6 +21,7 @@
 -export([ init_per_suite/1
         , end_per_suite/1
         , all/0
+        , groups/0
         , suite/0
         ]).
 
@@ -48,19 +49,21 @@ init_per_suite(Config) ->
     _ -> Config
   end.
 
-end_per_suite(_Config) ->
-  ok.
+end_per_suite(_Config) -> ok.
 
-all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
+all() -> [ {group, isolated}
+         , {group, contingent}].
 
+groups() ->
+  [ {isolated, [parallel], [t_delete_topics_not_found]}
+  , {contingent, [sequence], [t_create_topics, t_delete_topics]}].
 %%%_* Test functions ===========================================================
 
 t_create_topics(Config) when is_list(Config) ->
-  Topic = <<"test-create-topic">>,
+  RandomSuffix = re:replace(base64:encode(crypto:strong_rand_bytes(10)),
+    "\\W","",[global,{return,binary}]),
+  Topic =  erlang:iolist_to_binary([<<"test-create-topic-">>, RandomSuffix]),
+  ct:log(info, "Create topic ~s~n", [Topic]),
   TopicConfig = [
     #{
       configs => [],
@@ -72,11 +75,18 @@ t_create_topics(Config) when is_list(Config) ->
   ],
   ?assertEqual(ok,
     brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
-      #{connect_timeout => ?TIMEOUT})).
+      #{connect_timeout => ?TIMEOUT})),
+  {save_config,[{created_topic, Topic} | Config]}.
 
 t_delete_topics(Config) when is_list(Config) ->
-  ?assertEqual(ok, brod:delete_topics(?HOSTS, [?TOPIC], ?TIMEOUT,
-    #{connect_timeout => ?TIMEOUT})).
+  case ?config(saved_config, Config) of
+    {t_create_topics, TestConfig} ->
+      Topic = proplists:get_value(created_topic, TestConfig),
+      ct:log(info, "Delete topic ~s~n", [Topic]),
+      ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,
+        #{connect_timeout => ?TIMEOUT}));
+    _ -> error({test_order_error, "t_delete_topics depends on t_create_topics"})
+  end.
 
 t_delete_topics_not_found(Config) when is_list(Config) ->
   ?assertEqual({error, unknown_topic_or_partition},
