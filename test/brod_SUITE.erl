@@ -26,8 +26,7 @@
         ]).
 
 %% Test cases
--export([ t_create_topics/0
-        , t_create_topics/1
+-export([ t_create_topics/1
         , t_delete_topics/1
         , t_delete_topics_not_found/1
         ]).
