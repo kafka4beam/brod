@@ -26,7 +26,8 @@
         ]).
 
 %% Test cases
--export([ t_create_topics/1
+-export([ t_create_topics/0
+        , t_create_topics/1
         , t_delete_topics/1
         , t_delete_topics_not_found/1
         ]).
@@ -51,12 +52,11 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-all() -> [ {group, isolated}
-         , {group, contingent}].
+all() -> [{group, all_groups}].
 
 groups() ->
-  [ {isolated, [parallel], [t_delete_topics_not_found]}
-  , {contingent, [sequence], [t_create_topics, t_delete_topics]}].
+  [{all_groups, [parallel], [ {isolated, [parallel], [t_delete_topics_not_found]}
+                            , {contingent, [sequence], [t_create_topics, t_delete_topics]}]}].
 %%%_* Test functions ===========================================================
 
 t_create_topics(Config) when is_list(Config) ->
