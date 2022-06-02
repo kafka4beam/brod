@@ -346,7 +346,9 @@ make_fetch_fun(Conn, Topic, Partition, FetchOpts) ->
   WaitTime = maps:get(max_wait_time, FetchOpts, 1000),
   MinBytes = maps:get(min_bytes, FetchOpts, 1),
   MaxBytes = maps:get(max_bytes, FetchOpts, 1 bsl 20),
-  ReqFun = make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes),
+  IsolationLevel = maps:get(isolation_level, FetchOpts, ?kpro_read_committed),
+  ReqFun = make_req_fun(Conn, Topic, Partition, WaitTime,
+                        MinBytes, IsolationLevel),
   fun(Offset) -> ?MODULE:fetch(Conn, ReqFun, Offset, MaxBytes) end.
 
 -spec make_part_fun(brod:partitioner()) -> brod:partition_fun().
@@ -706,11 +708,11 @@ is_control(_) -> false.
 %% The function takes offset and max_bytes as input as these two parameters
 %% are variant when continuously polling a specific topic-partition.
 -spec make_req_fun(connection(), topic(), partition(),
-                   kpro:wait(), kpro:count()) -> req_fun().
-make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes) ->
+                   kpro:wait(), kpro:count(), kpro:isolation_level()) -> req_fun().
+make_req_fun(Conn, Topic, Partition, WaitTime, MinBytes, IsolationLevel) ->
   fun(Offset, MaxBytes) ->
       brod_kafka_request:fetch(Conn, Topic, Partition, Offset,
-                               WaitTime, MinBytes, MaxBytes)
+                               WaitTime, MinBytes, MaxBytes, IsolationLevel)
   end.
 
 %% Parse fetch response into a more user-friendly representation.

@@ -467,10 +467,11 @@ t_consumer_max_bytes_too_small(Config) ->
   MaxBytes2 = 12, %% too small but message size is fetched
   MaxBytes3 = size(Key) + ValueBytes,
   Tester = self(),
-  F = fun(Conn, Topic, Partition1, BeginOffset, MaxWait, MinBytes, MaxBytes) ->
+  F = fun(Conn, Topic, Partition1, BeginOffset, MaxWait,
+          MinBytes, MaxBytes, IsolationLevel) ->
         Tester ! {max_bytes, MaxBytes},
         meck:passthrough([Conn, Topic, Partition1, BeginOffset,
-                          MaxWait, MinBytes, MaxBytes])
+                          MaxWait, MinBytes, MaxBytes, IsolationLevel])
       end,
   %% Expect the fetch_request construction function called twice
   meck:expect(brod_kafka_request, fetch, F),

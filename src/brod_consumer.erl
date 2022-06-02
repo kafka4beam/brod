@@ -68,6 +68,7 @@
                       }).
 
 -type pending_acks() :: #pending_acks{}.
+-type isolation_level() :: kpro:isolation_level().
 
 -record(state, { bootstrap           :: pid() | brod:bootstrap()
                , connection          :: ?undef | pid()
@@ -90,6 +91,7 @@
                , size_stat_window    :: non_neg_integer()
                , prefetch_bytes      :: non_neg_integer()
                , connection_mref     :: ?undef | reference()
+               , isolation_level     :: isolation_level()
                }).
 
 -type state() :: #state{}.
@@ -111,6 +113,7 @@
 -define(SEND_FETCH_REQUEST, send_fetch_request).
 -define(INIT_CONNECTION, init_connection).
 -define(DEFAULT_AVG_WINDOW, 5).
+-define(DEFAULT_ISOLATION_LEVEL, ?kpro_read_committed).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -271,6 +274,8 @@ init({Bootstrap, Topic, Partition, Config}) ->
   PrefetchBytes = erlang:max(Cfg(prefetch_bytes, ?DEFAULT_PREFETCH_BYTES), 0),
   BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
+  IsolationLevel = Cfg(isolation_level, ?DEFAULT_ISOLATION_LEVEL),
+
   %% If bootstrap is a client pid, register self to the client
   case is_shared_conn(Bootstrap) of
     true ->
@@ -296,6 +301,7 @@ init({Bootstrap, Topic, Partition, Config}) ->
              , max_bytes           = MaxBytes
              , size_stat_window    = Cfg(size_stat_window, ?DEFAULT_AVG_WINDOW)
              , connection_mref     = ?undef
+             , isolation_level     = IsolationLevel
              }}.
 
 %% @private
@@ -697,7 +703,8 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                              State#state.begin_offset,
                              State#state.max_wait_time,
                              State#state.min_bytes,
-                             State#state.max_bytes),
+                             State#state.max_bytes,
+                             State#state.isolation_level),
   case kpro:request_async(Connection, Request) of
     ok ->
       State#state{last_req_ref = Request#kpro_req.ref};
