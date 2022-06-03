@@ -186,6 +186,14 @@ start_link(Bootstrap, Topic, Partition, Config) ->
 %%     a relatively small `max_bytes', then let it dynamically adjust
 %%     to a number around `PrefetchCount * AverageSize'</li>
 %%
+%%  <li>`isolation_level': (optional, default = `read_commited')
+%%
+%%     Level to control what transaction records are exposed to the
+%%     consumer. Two values are allowed, `read_uncommitted' to retrieve
+%%     all records, independently on the transaction outcome (if any),
+%%     and `read_committed' to get only the records from committed
+%%     transactions</li>
+%%
 %% </ul>
 %% @end
 -spec start_link(pid() | brod:bootstrap(),
