@@ -2,6 +2,7 @@
   * Fix specs for `delete_topics`.
   * Ensure that partition worker process is alive before returning it.
   * Update kafka_protocol from 4.0.1 to 4.0.3 in rebar.lock file.
+  * Make consumer 'isolation_level' configurable.
 * 3.16.2
   * Update kafka_protocol from 4.0.1 to 4.0.3.
     Prior to this change the actual time spent in establishing a
