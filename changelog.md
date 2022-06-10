@@ -1,3 +1,12 @@
+* 3.16.4
+  * Update kafka_protocol from 4.0.3 to 4.1.0. kafka_protocol 4.1.0 support a
+    different version of the auth plugin interface that also pass the
+    handshake version to the plugin. This is used by the SASL GSSAPI Kerberos
+    plugin brod_gssapi (https://github.com/kafka4beam/brod_gssapi ) so that
+    the correct handshake protocol is used. The change is backwards compatible
+    as the old interface will be used if the plugin module does not have a
+    function with the name and arity that is required by the new interface.
+    See https://github.com/kafka4beam/kafka_protocol/pull/102 for details.
 * 3.16.3
   * Fix specs for `delete_topics`.
   * Ensure that partition worker process is alive before returning it.
