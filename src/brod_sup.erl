@@ -108,6 +108,7 @@ start_link() ->
                    brod:client_config()) -> ok | {error, any()}.
 start_client(Endpoints, ClientId, Config) ->
   ClientSpec = client_spec(Endpoints, ClientId, Config),
+  io:format(user, "start_client ClientId: ~w~n", [ClientId]),
   case supervisor3:start_child(?SUP, ClientSpec) of
     {ok, _Pid} -> ok;
     Error      -> Error
@@ -130,6 +131,9 @@ init(clients_sup) ->
   ClientSpecs =
     lists:map(fun({ClientId, Args}) ->
                 is_atom(ClientId) orelse exit({bad_client_id, ClientId}),
+                brod_telemetry:execute([brod, client, init],
+                  #{system_time => erlang:system_time()},
+                  #{client_id => ClientId, args => Args}),
                 client_spec(ClientId, Args)
               end, Clients),
   %% A client may crash and restart due to network failure
