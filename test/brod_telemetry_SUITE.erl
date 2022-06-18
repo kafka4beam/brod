@@ -55,10 +55,16 @@ t_init_client(Config) when is_list(Config) ->
     fun ?MODULE:handle_event/4,
     #{pid => self()}
   ),
-  application:set_env(brod, clients, [{t_init_client, [{endpoints, [{"localhost", 9092}]}, {auto_start_producers, true}]}]),
+  application:set_env(brod, clients, [{t_init_client,
+    [
+      {endpoints, [{"localhost", 9092}]}
+    , {auto_start_producers, true}]}]),
   {ok, _} = application:ensure_all_started(brod),
   receive
-    {[brod, client, init], #{system_time := _Time}, #{client_id := t_init_client, args := _Args}} -> ok;
+    { [brod, client, init]
+    , #{system_time := _Time}
+    , #{client_id := t_init_client, args := _Args}} -> ok;
+
     Msg -> error({bad_message, t_init_client, Msg})
   end.
 

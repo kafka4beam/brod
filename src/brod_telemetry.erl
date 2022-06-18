@@ -26,8 +26,10 @@
   span(_EventPrefix, _StartMetadata, _SpanFunction) -> ok.
 -else.
   execute(EventName, Measurements) -> telemetry:execute(EventName, Measurements).
-  execute(EventName, Measurements, Metadata) -> telemetry:execute(EventName, Measurements, Metadata).
-  span(EventPrefix, StartMetadata, SpanFunction) -> telemetry:span(EventPrefix, StartMetadata, SpanFunction).
+  execute(EventName, Measurements, Metadata) ->
+    telemetry:execute(EventName, Measurements, Metadata).
+  span(EventPrefix, StartMetadata, SpanFunction) ->
+    telemetry:span(EventPrefix, StartMetadata, SpanFunction).
 -endif.
 
 %%%_* Emacs ====================================================================
