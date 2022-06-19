@@ -35,7 +35,7 @@
 
 %%%_* ct callbacks =============================================================
 
-suite() -> [{timetrap, {minutes, 5}}].
+suite() -> [{timetrap, {minutes, 1}}].
 
 init_per_suite(Config) ->
   {ok, _} = application:ensure_all_started(telemetry),
@@ -55,7 +55,8 @@ t_init_client(Config) when is_list(Config) ->
     fun ?MODULE:handle_event/4,
     #{pid => self()}
   ),
-  application:set_env(brod, clients, [{t_init_client,
+  application:stop(brod),
+  ok = application:set_env(brod, clients, [{t_init_client,
     [
       {endpoints, [{"localhost", 9092}]}
     , {auto_start_producers, true}]}]),
