@@ -41,7 +41,7 @@ defmodule BrodSample.GroupSubscriberV2 do
     
     %{
       id: __MODULE__,
-      start: {brod_group_subscriber_v2, :start_link, [config]},
+      start: {:brod_group_subscriber_v2, :start_link, [config]},
       type: :worker,
       restart: :temporary,
       shutdown: 5000
