@@ -1,3 +1,5 @@
+* 3.16.5
+  * Fix specs for `get_committed_offset`
 * 3.16.4
   * Update kafka_protocol from 4.0.3 to 4.1.0. kafka_protocol 4.1.0 support a
     different version of the auth plugin interface that also pass the
