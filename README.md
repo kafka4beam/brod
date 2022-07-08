@@ -418,8 +418,7 @@ Partition = 0.
 Timeout = 1000.
 TopicConfigs = [
   #{
-    configs => [ #{ name  => <<"cleanup.policy">>
-                         , value => "compact"}],
+    configs => [ #{name  => <<"cleanup.policy">>, value => "compact"}],
     num_partitions => 1,
     assignments => [],
     replication_factor => 1,
