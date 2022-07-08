@@ -54,7 +54,8 @@ When providing `:hash` as the _partition_ when calling `:brod.produce_sync/5` is
 
 ```elixir
 {:ok, count} = :brod.get_partitions_count(:kafka_client, topic)
-:brod.produce_sync(:kafka_client, topic, :erlang.phash2(key, count), key, message)
+partition = rem(:erlang.phash2(key), count)
+:brod.produce_sync(:kafka_client, topic, partition, key, message)
 ```
 
 Internally brod will get the partition count, generate a hash for the key within the range of partitions,
