@@ -418,16 +418,16 @@ Partition = 0.
 Timeout = 1000.
 TopicConfigs = [
   #{
-    config_entries => [ #{ config_name  => <<"cleanup.policy">>
-                         , config_value => "compact"}],
+    configs => [ #{ name  => <<"cleanup.policy">>
+                         , value => "compact"}],
     num_partitions => 1,
-    replica_assignment => [],
+    assignments => [],
     replication_factor => 1,
-    topic => Topic
+    name => Topic
   }
 ].
 brod:get_metadata(Hosts).
-brod:create_topics(Hosts, TopicConfigs, #{timeout => Timeout}).
+brod:create_topics(Hosts, TopicConfigs, #{timeout_ms => Timeout}).
 brod:get_metadata(Hosts, [Topic]).
 brod:resolve_offset(Hosts, Topic, Partition).
 brod:delete_topics(Hosts, [Topic], Timeout).
