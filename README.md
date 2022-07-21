@@ -229,10 +229,7 @@ Topic  = <<"brod-test-topic-1">>,
 ```erlang
 Client = brod_client_1,
 Topic  = <<"brod-test-topic-1">>,
-PartitionFun = fun(_Topic, PartitionsCount, _Key, _Value) ->
-                   {ok, crypto:rand_uniform(0, PartitionsCount)}
-               end,
-ok = brod:produce_sync(Client, Topic, PartitionFun, Key, Value).
+ok = brod:produce_sync(Client, Topic, random, Key, Value).
 ```
 
 ## Produce a Batch
