@@ -2,6 +2,13 @@ defmodule BrodSample.GroupSubscriberV2 do
   @behaviour :brod_group_subscriber_v2
   require Logger
 
+  def child_spec(_arg) do
+    %{
+      id: BrodSample.GroupSubscriberV2,
+      start: {BrodSample.GroupSubscriberV2, :start, []}
+    }
+  end
+
   def start() do
     group_config = [
       offset_commit_policy: :commit_to_kafka_v2,
@@ -26,8 +33,14 @@ defmodule BrodSample.GroupSubscriberV2 do
     {:ok, []}
   end
 
-  def handle_message(message, state) do
-    {_kafka_message_set, _content, partition, _unkow, _set} = message
+  def handle_message(message, _state) do
+    {_kafka_message_set, topic, partition, offset, messages} = message
+
+    Enum.each(messages, fn msg ->
+      Logger.info(
+        "topic: #{topic}, partition: #{partition}, offset: #{offset}, len_messages: #{inspect(msg)}"
+      )
+    end)
 
     case partition do
       # 1 -> {:error}
