@@ -1,17 +1,17 @@
-defmodule BrodSample.TopicManagment do
+defmodule BrodSample.TopicManagement do
   def create(name) do
     topic_config = [
       %{
-        config_entries: [],
+        name: name,
         num_partitions: 6,
-        replica_assignment: [],
         replication_factor: 1,
-        topic: name
+        assignments: [],
+        configs: []
       }
     ]
 
     :brod.create_topics(
-      ["localhost": 9092],
+      [{"localhost", 9092}],
       topic_config,
       %{timeout: 1_000}
     )
@@ -19,7 +19,7 @@ defmodule BrodSample.TopicManagment do
 
   def delete(name) do
     :brod.delete_topics(
-      [localhost: 9092],
+      [{"localhost", 9092}],
       [name],
       10_000
     )
