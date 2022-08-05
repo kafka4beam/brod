@@ -4,7 +4,7 @@ defmodule BrodSample.GroupSubscriber do
   import Record, only: [defrecord: 2, extract: 2]
   defrecord :kafka_message, extract(:kafka_message, from_lib: "brod/include/brod.hrl")
 
-  def child_spec(arg) do
+  def child_spec(_arg) do
     %{
       id: BrodSample.GroupSubscriber,
       start: {BrodSample.GroupSubscriber, :start, []}
@@ -38,7 +38,7 @@ defmodule BrodSample.GroupSubscriber do
   def handle_message(
         _topic,
         _partition,
-        {:kafka_message, _offset, _key, body, _op, _timestamp, []} = message,
+        {:kafka_message, _offset, _key, body, _op, _timestamp, []} = _message,
         state
       ) do
     Logger.info("Message #{body}")
