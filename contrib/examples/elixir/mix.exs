@@ -20,8 +20,8 @@ defmodule BrodSample.MixProject do
 
   defp deps do
     [
-      {:brod, "~> 3.10.0"},
-      {:jason, "~> 1.2.1 "}
+      {:brod, "~> 3.16"},
+      {:jason, "~> 1.3"}
     ]
   end
 end
