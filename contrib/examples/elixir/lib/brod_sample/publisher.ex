@@ -17,8 +17,8 @@ defmodule BrodSample.Publisher do
       :brod.produce(
         :kafka_client,
         topic,
-        n,
-        "oi",
+        :hash,
+        Enum.random(["key-1", "key-2", "key-3"]),
         "Message number #{n}"
       )
     end)
