@@ -29,10 +29,12 @@ defmodule BrodSample.GroupSubscriberV2 do
     :brod.start_link_group_subscriber_v2(config)
   end
 
+  @impl true
   def init(_arg, _arg2) do
     {:ok, []}
   end
 
+  @impl true
   def handle_message(message, _state) do
     {_kafka_message_set, topic, partition, offset, messages} = message
 
