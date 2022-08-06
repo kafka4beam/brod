@@ -2,7 +2,7 @@ defmodule BrodSample.GroupSubscriberV2 do
   @behaviour :brod_group_subscriber_v2
   require Logger
 
-  def child_spec(_arg) do
+  def child_spec(_opts) do
     %{
       id: BrodSample.GroupSubscriberV2,
       start: {BrodSample.GroupSubscriberV2, :start, []}
@@ -19,7 +19,7 @@ defmodule BrodSample.GroupSubscriberV2 do
 
     config = %{
       client: :kafka_client,
-      group_id: "from_zero",
+      group_id: "cg-v2",
       topics: ["sample"],
       cb_module: __MODULE__,
       group_config: group_config,
@@ -40,7 +40,7 @@ defmodule BrodSample.GroupSubscriberV2 do
 
     Enum.each(messages, fn msg ->
       Logger.info(
-        "topic: #{topic}, partition: #{partition}, offset: #{offset}, len_messages: #{inspect(msg)}"
+        "topic: #{topic}, partition: #{partition}, offset: #{offset}, message: #{inspect(msg)}"
       )
     end)
 

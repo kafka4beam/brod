@@ -1,13 +1,14 @@
 defmodule BrodSample.GroupSubscriber do
+  @behaviour :brod_group_subscriber
   require Logger
   require Record
   import Record, only: [defrecord: 2, extract: 2]
   defrecord :kafka_message, extract(:kafka_message, from_lib: "brod/include/brod.hrl")
 
-  def child_spec(_arg) do
+  def child_spec(_opts) do
     %{
-      id: BrodSample.GroupSubscriber,
-      start: {BrodSample.GroupSubscriber, :start, []}
+      id: __MODULE__,
+      start: {__MODULE__, :start, []}
     }
   end
 
@@ -22,7 +23,7 @@ defmodule BrodSample.GroupSubscriber do
     {:ok, _subscriber} =
       :brod.start_link_group_subscriber(
         :kafka_client,
-        "consumer-group-name",
+        "cg-v1",
         ["sample"],
         group_config,
         _consumer_config = [begin_offset: :earliest],
@@ -36,13 +37,14 @@ defmodule BrodSample.GroupSubscriber do
   end
 
   def handle_message(
-        _topic,
-        _partition,
-        {:kafka_message, _offset, _key, body, _op, _timestamp, []} = _message,
+        topic,
+        partition,
+        {:kafka_message, offset, _key, body, _op, _timestamp, []} = message,
         state
       ) do
-    Logger.info("Message #{body}")
-    Logger.info("Message #{inspect(state)}")
+    Logger.info(
+      "topic: #{topic}, partition: #{partition}, offset: #{offset}, message: #{inspect(message)}"
+    )
 
     case body do
       "error_bodyy" -> :error
