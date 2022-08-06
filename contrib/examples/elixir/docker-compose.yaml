@@ -56,3 +56,11 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
+
+  create-topics:
+    image: confluentinc/cp-kafka:5.4.9
+    restart: on-failure
+    command: |
+      kafka-topics --zookeeper zoo:2181 --create --topic sample --partitions 10 --replication-factor 1 --if-not-exists
+    depends_on:
+      - kafka
