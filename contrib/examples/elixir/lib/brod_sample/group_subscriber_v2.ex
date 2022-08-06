@@ -18,7 +18,7 @@ defmodule BrodSample.GroupSubscriberV2 do
     ]
 
     config = %{
-      client: :kafka_client,
+      client: :cg_v2_client,
       group_id: "cg-v2",
       topics: ["sample"],
       cb_module: __MODULE__,
@@ -30,7 +30,7 @@ defmodule BrodSample.GroupSubscriberV2 do
   end
 
   @impl true
-  def init(_arg, _arg2) do
+  def init(_init_info, _cb_config) do
     {:ok, []}
   end
 

@@ -22,7 +22,7 @@ defmodule BrodSample.GroupSubscriber do
 
     {:ok, _subscriber} =
       :brod.start_link_group_subscriber(
-        :kafka_client,
+        :cg_v1_client,
         "cg-v1",
         ["sample"],
         group_config,
