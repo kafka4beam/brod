@@ -188,7 +188,7 @@ The `Value` arg in these APIs can be:
 - `[{K, V} | {T, K, V}]`: A batch, where `V` could be a nested list of such representation.
 - `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`: A batch.
 
-When `Value` is a batch, the `Key` argument is only used as partitioner input.
+When `Value` is a batch, the `Key` argument is only used as partitioner input and all messages are written on the same partition.
 All messages are unified into a batch format of below spec:
 `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`.
 `ts` field is dropped for kafka prior to version `0.10` (produce API version 0, magic version 0)
