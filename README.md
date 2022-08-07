@@ -311,7 +311,7 @@ ack individual offsets).
 ![](https://cloud.githubusercontent.com/assets/164324/19621951/41e1d75e-989e-11e6-9bc2-49fe814d3020.jpg)
 
 A topic subscriber provides the easiest way to receive and process
-messages from ALL partitions of a given topic.  See `brod_demo_cg_collector`
+messages from ALL partitions of a given topic. See `brod_demo_cg_collector`
 and `brod_demo_topic_subscriber` for example.
 
 Users may choose to implement the `brod_topic_subscriber` behaviour callbacks
