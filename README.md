@@ -73,7 +73,7 @@ SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPi
 Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end,
 brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                  _ConsumerConfig=[{begin_offset, FirstOffset}],
-                                 _CommittdOffsets=[], message, SubscriberCallbackFun,
+                                 _CommittedOffsets=[], message, SubscriberCallbackFun,
                                  _CallbackState=self()),
 AckCb = fun(Partition, BaseOffset) -> io:format(user, "\nProduced to partition ~p at base-offset ~p\n", [Partition, BaseOffset]) end,
 ok = brod:produce_cb(client1, Topic, Partition, <<>>, [{<<"key3">>, <<"value3">>}], AckCb).
