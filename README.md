@@ -321,10 +321,11 @@ individual messages processed.
 ## Group subscriber (`brod_group_subscriber`)
 ![](https://cloud.githubusercontent.com/assets/164324/19621956/59d76a9a-989e-11e6-9633-a0bc677e06f3.jpg)
 
-Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks
-are to be implemented to process individual messages. See
-`brod_demo_group_subscriber_koc` and `brod_demo_group_subscriber_loc`
-for example.
+Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks are
+to be implemented to process individual messages. See
+[brod_demo_group_subscriber_koc](test/brod_demo_group_subscriber_koc.erl) and
+[brod_demo_group_subscriber_loc](test/brod_demo_group_subscriber_loc.erl) for
+example.
 
 A group subscriber is started by giving a set of topics, some
 (maybe none, or maybe all) of the partitions in the topic set will be
