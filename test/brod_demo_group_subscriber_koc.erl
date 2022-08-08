@@ -18,7 +18,7 @@
 %%% @doc
 %%% This is a consumer group subscriber example
 %%% This is called 'koc' as in kafka-offset-commit,
-%%% it demos a all-configs-by-default minimal implenemtation of a
+%%% it demos a all-configs-by-default minimal implementation of a
 %%% consumer group subscriber which commits offsets to kafka.
 %%% See bootstrap/0 for more details about all prerequisite.
 %%% @end

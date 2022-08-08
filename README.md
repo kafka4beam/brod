@@ -73,7 +73,7 @@ SubscriberCallbackFun = fun(Partition, Msg, ShellPid = CallbackState) -> ShellPi
 Receive = fun() -> receive Msg -> Msg after 1000 -> timeout end end,
 brod_topic_subscriber:start_link(client1, Topic, Partitions=[Partition],
                                  _ConsumerConfig=[{begin_offset, FirstOffset}],
-                                 _CommittdOffsets=[], message, SubscriberCallbackFun,
+                                 _CommittedOffsets=[], message, SubscriberCallbackFun,
                                  _CallbackState=self()),
 AckCb = fun(Partition, BaseOffset) -> io:format(user, "\nProduced to partition ~p at base-offset ~p\n", [Partition, BaseOffset]) end,
 ok = brod:produce_cb(client1, Topic, Partition, <<>>, [{<<"key3">>, <<"value3">>}], AckCb).
@@ -188,7 +188,7 @@ The `Value` arg in these APIs can be:
 - `[{K, V} | {T, K, V}]`: A batch, where `V` could be a nested list of such representation.
 - `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`: A batch.
 
-When `Value` is a batch, the `Key` argument is only used as partitioner input.
+When `Value` is a batch, the `Key` argument is only used as partitioner input and all messages are written on the same partition.
 All messages are unified into a batch format of below spec:
 `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`.
 `ts` field is dropped for kafka prior to version `0.10` (produce API version 0, magic version 0)
@@ -310,9 +310,10 @@ ack individual offsets).
 ## Topic subscriber (`brod_topic_subscriber`)
 ![](https://cloud.githubusercontent.com/assets/164324/19621951/41e1d75e-989e-11e6-9bc2-49fe814d3020.jpg)
 
-A topic subscriber provides the easiest way to receive and process
-messages from ALL partitions of a given topic.  See `brod_demo_cg_collector`
-and `brod_demo_topic_subscriber` for example.
+A topic subscriber provides the easiest way to receive and process messages from
+ALL partitions of a given topic. See
+[brod_demo_cg_collector](test/brod_demo_cg_collector.erl) and
+[brod_demo_topic_subscriber](test/brod_demo_topic_subscriber.erl) for example.
 
 Users may choose to implement the `brod_topic_subscriber` behaviour callbacks
 in a module, or simply provide an anonymous callback function to have the
@@ -321,10 +322,11 @@ individual messages processed.
 ## Group subscriber (`brod_group_subscriber`)
 ![](https://cloud.githubusercontent.com/assets/164324/19621956/59d76a9a-989e-11e6-9633-a0bc677e06f3.jpg)
 
-Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks
-are to be implemented to process individual messages. See
-`brod_demo_group_subscriber_koc` and `brod_demo_group_subscriber_loc`
-for example.
+Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks are
+to be implemented to process individual messages. See
+[brod_demo_group_subscriber_koc](test/brod_demo_group_subscriber_koc.erl) and
+[brod_demo_group_subscriber_loc](test/brod_demo_group_subscriber_loc.erl) for
+example.
 
 A group subscriber is started by giving a set of topics, some
 (maybe none, or maybe all) of the partitions in the topic set will be
