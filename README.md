@@ -425,7 +425,7 @@ TopicConfigs = [
   }
 ].
 brod:get_metadata(Hosts).
-brod:create_topics(Hosts, TopicConfigs, #{timeout_ms => Timeout}).
+brod:create_topics(Hosts, TopicConfigs, #{timeout => Timeout}).
 brod:get_metadata(Hosts, [Topic]).
 brod:resolve_offset(Hosts, Topic, Partition).
 brod:delete_topics(Hosts, [Topic], Timeout).
