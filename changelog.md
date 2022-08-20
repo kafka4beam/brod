@@ -1,4 +1,5 @@
 * 3.16.4
+  * Allow special begin_offset from consumer managed commits.
   * Fix specs for `brod_group_subscriber_v2.get_committed_offset`
   * Update kafka_protocol from 4.0.3 to 4.1.0. kafka_protocol 4.1.0 support a
     different version of the auth plugin interface that also pass the

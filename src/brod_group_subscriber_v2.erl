@@ -88,7 +88,7 @@
 
 %% Get committed offset (in case it is managed by the subscriber):
 -callback get_committed_offset(_CbConfig, brod:topic(), brod:partition()) ->
-  {ok, brod:offset()} | undefined.
+  {ok, brod:offset() | {begin_offset, brod:offset_time()}} | undefined.
 
 %% Assign partitions (in case `partition_assignment_strategy' is set
 %% for `callback_implemented' in group config).

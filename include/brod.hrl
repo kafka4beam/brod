@@ -60,7 +60,7 @@
 -record(brod_received_assignment,
         { topic        :: brod:topic()
         , partition    :: brod:partition()
-        , begin_offset :: undefined | brod:offset()
+        , begin_offset :: undefined | brod:offset() | {begin_offset, brod:offset_time()}
         }).
 
 -type brod_received_assignments() :: [#brod_received_assignment{}].
