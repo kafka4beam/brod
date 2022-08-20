@@ -39,6 +39,7 @@
         , t_consumer_connection_restart/1
         , t_consumer_connection_restart_2/1
         , t_consumer_resubscribe/1
+        , t_consumer_resubscribe_earliest/1
         , t_subscriber_restart/1
         , t_subscribe_with_unknown_offset/1
         , t_offset_reset_policy/1
@@ -667,6 +668,49 @@ t_consumer_resubscribe(Config) when is_list(Config) ->
   {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition, []),
   %% message 1 should be redelivered
   Offset1 = ReceiveFun(1, ?LINE),
+  ok.
+
+%% @doc brod_consumer should allow re-subscribing with a 'earliest'
+%% offset even though the default begin_offset 'lastest'.
+t_consumer_resubscribe_earliest(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  ProduceFun =
+    fun(I) ->
+      Value = Key = integer_to_binary(I),
+      brod:produce_sync(Client, Topic, Partition, Key, Value)
+    end,
+  ReceiveFun =
+    fun() ->
+      receive
+        {_ConsumerPid, #kafka_message_set{messages = Messages}} ->
+          case hd(Messages) of
+            #kafka_message{ offset = Offset
+                          , key    = SeqNoBin
+                          , value  = SeqNoBin
+                          } ->
+              {Offset, list_to_integer(binary_to_list(SeqNoBin))};
+            #kafka_message{offset = Offset} ->
+              {Offset, false}
+          end
+      after 2000 ->
+        ct:fail("timed out receiving kafka message set", [])
+      end
+    end,
+  {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition,
+                                     [{begin_offset, ?OFFSET_LATEST}]),
+  SeqBase = erlang:monotonic_time(),
+  ok = ProduceFun(SeqBase),
+  ok = ProduceFun(SeqBase + 1),
+  {Offset0, SeqNoRec0} = ReceiveFun(),
+  ?assertEqual(SeqNoRec0, SeqBase),
+  ok = brod:consume_ack(ConsumerPid, Offset0),
+  {ok, ConsumerPid} = brod:subscribe(Client, self(), Topic, Partition,
+                                     [{begin_offset, ?OFFSET_EARLIEST}]),
+  {Offset1, SeqNoRec1} = ReceiveFun(),
+  ?assert(Offset1 =< Offset0),
+  ?assert(SeqNoRec1 =:= false orelse SeqNoRec1 =< SeqNoRec0),
   ok.
 
 t_subscriber_restart(Config) when is_list(Config) ->

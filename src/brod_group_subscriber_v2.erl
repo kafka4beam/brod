@@ -212,9 +212,6 @@ assignments_revoked(Pid) ->
 %%
 %% NOTE: This function is called only when `offset_commit_policy' is set to
 %%       `consumer_managed' in group config.
-%%
-%% NOTE: The committed offsets should be the offsets for successfully processed
-%%       (acknowledged) messages, not the `begin_offset' to start fetching from.
 %% @end
 -spec get_committed_offsets(pid(), [brod:topic_partition()]) ->
         {ok, [{brod:topic_partition(), brod:offset()}]}.
