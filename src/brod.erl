@@ -203,7 +203,7 @@
 -type client_config() :: brod_client:config().
 -type bootstrap() :: [endpoint()] %% default client config
                    | {[endpoint()], client_config()}.
--type offset_time() :: integer()
+-type offset_time() :: offset()
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
 -type message() :: kpro:message().

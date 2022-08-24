@@ -947,7 +947,8 @@ get_topic_assignments(#state{} = State, Assignment) ->
 %% Fetch committed offsets from kafka,
 %% or call the consumer callback to read committed offsets.
 -spec get_committed_offsets(state(), [{brod:topic(), brod:partition()}]) ->
-        [{{brod:topic(), brod:partition()}, brod:offset()}].
+        [{{brod:topic(), brod:partition()},
+          brod:offset() | {begin_offset, brod:offset_time()}}].
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , member_pid           = MemberPid
                             , member_module        = MemberModule
@@ -988,14 +989,20 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
       end, TopicOffsets),
   lists:append(CommittedOffsets0).
 
--spec resolve_begin_offsets([TP], [{TP, brod:offset()}], boolean()) ->
-        brod:received_assignments()
-          when TP :: {brod:topic(), brod:partition()}.
+-spec resolve_begin_offsets(
+        [TP],
+        [{TP, brod:offset() | {begin_offset, brod:offset_time()}}],
+        boolean()) ->
+          brod:received_assignments()
+            when TP :: {brod:topic(), brod:partition()}.
 resolve_begin_offsets([], _CommittedOffsets, _IsConsumerManaged) -> [];
 resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
                       IsConsumerManaged) ->
   BeginOffset =
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
+      {_, {begin_offset, Offset}} ->
+        %% already resolved
+        Offset;
       {_, Offset} when IsConsumerManaged ->
         %% roundrobin_v2 is only for kafka commits
         %% for consumer managed offsets, it's still acked offsets

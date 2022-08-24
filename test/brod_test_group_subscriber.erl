@@ -70,7 +70,7 @@ handle_message(Message,
 
 get_committed_offset(_CbConfig, _Topic, _Partition) ->
   %% always return undefined: always fetch from latest available offset
-  undefined.
+  ?undef.
 
 assign_partitions(_CbConfig, Members, TopicPartitions) ->
   PartitionsAssignments = [{Topic, [PartitionsN]}

@@ -429,16 +429,7 @@ subscribe_partition(Client, Topic, Consumer) ->
       %% we may exceed pre-fetch window size.
       Consumer;
     false ->
-      Options =
-        case AckedOffset =:= ?undef of
-          true ->
-            %% the default or configured 'begin_offset' will be used
-            [];
-          false ->
-            StartOffset = AckedOffset + 1,
-            StartOffset >= 0 orelse erlang:error({invalid_offset, AckedOffset}),
-            [{begin_offset, StartOffset}]
-        end,
+      Options = resolve_begin_offset(AckedOffset),
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
           Mref = erlang:monitor(process, ConsumerPid),
@@ -451,6 +442,17 @@ subscribe_partition(Client, Topic, Consumer) ->
                            }
       end
   end.
+
+resolve_begin_offset(?undef) ->
+  %% the default or configured 'begin_offset' in consumer config will be used
+  [];
+resolve_begin_offset(Offset) when ?IS_SPECIAL_OFFSET(Offset) ->
+  %% special offsets are resolved by brod_consumer
+  [{begin_offset, Offset}];
+resolve_begin_offset(Offset) ->
+  BeginOffset = Offset + 1,
+  BeginOffset >= 0 orelse erlang:error({invalid_offset, Offset}),
+  [{begin_offset, BeginOffset}].
 
 handle_message_set(MessageSet, State) ->
   #kafka_message_set{ partition = Partition

@@ -47,7 +47,7 @@
 %%% brod_topic_subscriber callbacks
 %%%===================================================================
 
-init(_Topic, StartOpts) ->
+init(Topic, StartOpts) ->
   #{ cb_module    := CbModule
    , cb_config    := CbConfig
    , partition    := Partition
@@ -67,18 +67,9 @@ init(_Topic, StartOpts) ->
                 , cb_state      = CbState
                 , commit_fun    = CommitFun
                 },
-  CommittedOffsets = case BeginOffset of
-                       undefined ->
-                         [];
-                       _ when is_integer(BeginOffset) ->
-                         %% Note: brod_topic_subscriber expects
-                         %% _acked_ offset rather than _begin_ offset
-                         %% in `init' callback return. In order to get
-                         %% begin offset it increments the value,
-                         %% which we don't want, hence decrement.
-                         [{Partition, max(0, BeginOffset - 1)}]
-                     end,
+  CommittedOffsets = resolve_committed_offsets(Topic, Partition, BeginOffset),
   {ok, CommittedOffsets, State}.
+
 
 handle_message(_Partition, Msg, State) ->
   #state{ cb_module  = CbModule
@@ -114,3 +105,21 @@ get_last_offset(#kafka_message{offset = Offset}) ->
 get_last_offset(#kafka_message_set{messages = Messages}) ->
   #kafka_message{offset = Offset} = lists:last(Messages),
   Offset.
+
+
+resolve_committed_offsets(_T, _P, ?undef) ->
+  %% the default begin offset in consumer config will be used
+  [];
+resolve_committed_offsets(_T, Partition, Offset) when ?IS_SPECIAL_OFFSET(Offset) ->
+  [{Partition, Offset}];
+resolve_committed_offsets(_T, Partition, Offset) when is_integer(Offset) andalso Offset >= 0 ->
+  %% Note: brod_topic_subscriber expects
+  %% _acked_ offset rather than _begin_ offset
+  %% in `init' callback return. In order to get
+  %% begin offset it increments the value,
+  %% which we don't want, hence decrement.
+  [{Partition, Offset - 1}];
+resolve_committed_offsets(Topic, Partition, Offset) ->
+  ?BROD_LOG_WARNING("Discarded invalid committed offset ~p for: ~s:~p~n",
+                    [Topic, Partition, Offset]),
+  [].
