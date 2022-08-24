@@ -16,7 +16,7 @@ Either the `brod_group_subscriber_v2` or `brod_group_subscriber` behaviours can 
 to consume messages. The key difference is that the v2 subscriber runs a worker for each
 partition in a separate Erlang process, allowing parallel message processing.
 
-Here is an example of callback module that implements the `brod_group_subscriber_v2` behaviour to consume messages.  
+Here is an example of callback module that implements the `brod_group_subscriber_v2` behaviour to consume messages.
 
 ```elixir
 defmodule BrodSample.GroupSubscriberV2 do
@@ -38,7 +38,7 @@ defmodule BrodSample.GroupSubscriberV2 do
         reconnect_cool_down_seconds: 60
       ]
     }
-    
+
     %{
       id: __MODULE__,
       start: {:brod_group_subscriber_v2, :start_link, [config]},
@@ -47,7 +47,7 @@ defmodule BrodSample.GroupSubscriberV2 do
       shutdown: 5000
     }
   end
-  
+
   @impl :brod_group_subscriber_v2
   def init(_group_id, _init_data), do: {:ok, []}
 

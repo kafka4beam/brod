@@ -2,13 +2,13 @@ name: brod
 on:
   push:
     branches:
-      - '*'
+      - "*"
   pull_request:
     branches:
       - master
 env:
-  OTP_VERSION: '24.1'
-  REBAR_VERSION: '3.17.0'
+  OTP_VERSION: "24.1"
+  REBAR_VERSION: "3.17.0"
 
 jobs:
   lint:
@@ -44,8 +44,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: [ '24.1', '23.3.4.7', '22.3.4.21' ]
-        kafka: [ '2.4', '1.1', '0.11' ]
+        otp: ["24.1", "23.3.4.7", "22.3.4.21"]
+        kafka: ["2.4", "1.1", "0.11"]
     steps:
       - name: Checkout
         uses: actions/checkout@v2

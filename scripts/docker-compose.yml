@@ -1,4 +1,4 @@
-version: '2'
+version: "2"
 
 services:
   pause:
@@ -28,7 +28,7 @@ services:
       - pause
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
-    container_name: 'kafka-1'
+    container_name: "kafka-1"
     network_mode: service:pause
     environment:
       BROKER_ID: 0
@@ -43,7 +43,7 @@ services:
       - pause
       - zookeeper
     image: "zmstone/kafka:${KAFKA_VERSION}"
-    container_name: 'kafka-2'
+    container_name: "kafka-2"
     network_mode: service:pause
     environment:
       BROKER_ID: 1
