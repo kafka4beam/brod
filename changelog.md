@@ -1,3 +1,13 @@
+* 3.16.5
+  * Treat `offset = 0` commit record as `earliest`.
+    This is an issue introduced in 3.16.4 which supported subscriber
+    managed offset commits to be represented as `{begin_offset, Offset}`.
+    The issue is: `0` is altered by v2 group worker to `-1`.
+    Handled as offsets greater than 0, v2 group worker assums `brod_topic_subscriber`
+    would apply `+1` to it, however `-1` is actually interpreted as `latest`.
+    [#531](https://github.com/kafka4beam/brod/pull/531) fixes it
+    by replacing `0` with `earliest`.
+
 * 3.16.4
   * Allow special begin_offset from consumer managed commits.
   * Fix specs for `brod_group_subscriber_v2.get_committed_offset`
