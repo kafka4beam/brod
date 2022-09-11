@@ -1002,7 +1002,7 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
       {_, {begin_offset, Offset}} ->
         %% already resolved
-        Offset;
+        resolve_special_offset(Offset);
       {_, Offset} when IsConsumerManaged ->
         %% roundrobin_v2 is only for kafka commits
         %% for consumer managed offsets, it's still acked offsets
@@ -1025,6 +1025,12 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
   [ Assignment
   | resolve_begin_offsets(Rest, CommittedOffsets, IsConsumerManaged)
   ].
+
+%% Nothing is earlier than '0'.
+%% use an atom here to avoid getting turned into '-1' which means 'latest',
+%% or turned into '+1' in e.g. brod_topic_subscriber because it expects acked offsets.
+resolve_special_offset(0) -> ?OFFSET_EARLIEST;
+resolve_special_offset(Other) -> Other.
 
 %% Start a timer to send a loopback command to self() to trigger
 %% a heartbeat request to the group coordinator.
