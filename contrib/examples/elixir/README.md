@@ -3,6 +3,7 @@
 This is an example of how to use `brod` with Elixir.
 
 ## Kafka
+
 For this, we assume you have Kafka up and running at `localhost:9092`
 
 You can use this docker-compose: `https://github.com/obsidiandynamics/kafdrop/blob/master/docker-compose/kafka-kafdrop/docker-compose.yaml` to have Kafdrop running and be able to create topics through a UI on `localhost:9000`
@@ -10,11 +11,13 @@ You can use this docker-compose: `https://github.com/obsidiandynamics/kafdrop/bl
 To follow this you have to create a topic called `streaming.events` with more than 1 partition.
 
 ## Dependency
+
 First thing you'll need is to add brod to your dependencies
 To find the latest version published on hex, run: `mix hex.search brod`
 
 As of writing this, the output was:
-```
+
+```sh
 ➜  brod_sample git:(master) ✗ mix hex.search brod
 Package                 Description                                            Version  URL
 brod                    Apache Kafka Erlang client library                     3.10.0   https://hex.pm/packages/brod
@@ -63,7 +66,7 @@ Now with the `kafka_client` in place we can look at how to publish and consumer 
 
 ## Publisher
 
-To send a message with brod we can use the `produce_sync` function, you can take a better look at the docs and see this and other possibilities at: https://hexdocs.pm/brod/brod.html#produce_sync-5
+To send a message with brod we can use the `produce_sync` function, you can take a better look at the docs and see this and other possibilities at: <https://hexdocs.pm/brod/brod.html#produce_sync-5>
 
 Now, lets make a module to allow us publishing to Kafka
 
@@ -100,9 +103,9 @@ config :brod,
 
 ```
 
-
 Now let's run and give it a try
-```
+
+```sh
 ➜  brod_sample git:(master) ✗ iex -S mix
 Erlang/OTP 22 [erts-10.7.1] [source] [64-bit] [smp:12:12] [ds:12:12:10] [async-threads:1] [hipe]
 
@@ -154,8 +157,10 @@ defmodule BrodSample.Publisher do
   end
 end
 ```
+
 Let's take it for a spin
-```
+
+```elixir
 iex(2)> recompile
 Compiling 1 file (.ex)
 :ok
@@ -172,7 +177,7 @@ Now we need to get those messages and do something with
 
 First what we need is to define a group of subcribers to our topic, brod provides us an implementation called `group_subscriber_v2` which will create a worker for each partition of our topic, this not only allow us to have a better throughput, but in case one of these partitions end up having problems only that worker will be affected.
 
-Let's take a look at the docs of the `group_subscriber_v2` at https://hexdocs.pm/brod/brod_group_subscriber_v2.html
+Let's take a look at the docs of the `group_subscriber_v2` at <https://hexdocs.pm/brod/brod_group_subscriber_v2.html>
 The first thing we can see is that it has some required functions and some optional.
 
 Required callback functions: `init/2`, `handle_message/2`.
@@ -229,21 +234,27 @@ This can be done the following way.
 
     {:ok, pid} = :brod.start_link_group_subscriber_v2(config)
 ```
+
 There's a lot of information in here, so let's take a look on the most important ones.
 
 ### client
+
 Expects the identifier of your kafka client, remember that we configure `:kafka_client` on the `dev.exs`, here we are just referencing that client that we already configured.
 
 ### group_id
+
 This is the name of the consumer_group that will be used
 
 ### cb_module
+
 The module where you defined the `init/2` and `handle_message/2`
 
 ### group_config
+
 The configurations to use for the group coordinator
 
 ### consumer_config
+
 Configurations for the partition consumer, here we only defined the `begin_offset` to `:earliest`, this means that our consumer will start from the earliest message available on the topic, you can also use `:latest` to start with the latests message available (This basically means that your consumer group will only get messages after it comes online)
 
 After all of that we call `{:ok, pid} = :brod.start_link_group_subscriber_v2(config)` and that's it, brod will now start a worker for each partition our topic has and start consuming messages.
@@ -251,4 +262,5 @@ After all of that we call `{:ok, pid} = :brod.start_link_group_subscriber_v2(con
 You should now see on your console all the messages you've sent earlier
 
 ## Warning
+
 If you are not running your application in cluster mode you may go into some issues as the `group_subscriber` on multiple nodes may force each other re-join the group, if you wish to simulate this you can start

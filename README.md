@@ -1,4 +1,3 @@
-![brod](https://github.com/kafka4beam/brod/workflows/brod/badge.svg?branch=master)
 # NOTICE
 
 This product includes software developed by
@@ -6,32 +5,34 @@ This product includes software developed by
 
 # Brod - Apache Kafka Client for Erlang/Elixir
 
+![brod](https://github.com/kafka4beam/brod/workflows/brod/badge.svg?branch=master)
+
 Brod is an Erlang implementation of the Apache Kafka protocol, providing support for both producers and consumers.
 
 Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki/Max_Brod)
 
 # Features
 
-* Supports Apache Kafka v0.8+
-* Robust producer implementation supporting in-flight requests and asynchronous acknowledgements
-* Both consumer and producer handle leader re-election and other cluster disturbances internally
-* Opens max 1 tcp connection to a broker per `brod_client`, one can create more clients if needed
-* Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
-* Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
-* Simple consumer: The poller, has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
-* Group subscriber: Support for consumer groups with options to have Kafka as offset storage or a custom one
-* Topic subscriber: Subscribe on messages from all or selected topic partitions without using consumer groups
-* Pick latest supported version when sending requests to kafka.
-* Direct APIs for message send/fetch and cluster inspection/management without having to start clients/producers/consumers.
-* A escriptized command-line tool for message send/fetch and cluster inspection/management.
-* Configurable compression library. `snappy` compression is supported by default.
+- Supports Apache Kafka v0.8+
+- Robust producer implementation supporting in-flight requests and asynchronous acknowledgements
+- Both consumer and producer handle leader re-election and other cluster disturbances internally
+- Opens max 1 tcp connection to a broker per `brod_client`, one can create more clients if needed
+- Producer: will start to batch automatically when number of unacknowledged (in flight) requests exceeds configurable maximum
+- Producer: will try to re-send buffered messages on common errors like "Not a leader for partition", errors are resolved automatically by refreshing metadata
+- Simple consumer: The poller, has a configurable "prefetch count" - it will continue sending fetch requests as long as total number of unprocessed messages (not message-sets) is less than "prefetch count"
+- Group subscriber: Support for consumer groups with options to have Kafka as offset storage or a custom one
+- Topic subscriber: Subscribe on messages from all or selected topic partitions without using consumer groups
+- Pick latest supported version when sending requests to kafka.
+- Direct APIs for message send/fetch and cluster inspection/management without having to start clients/producers/consumers.
+- A escriptized command-line tool for message send/fetch and cluster inspection/management.
+- Configurable compression library. `snappy` compression is supported by default.
   For more compression options, see [kafka_protocol/README](https://github.com/kafka4beam/kafka_protocol/blob/master/README.md#compression-support)
 
 # Building and testing
 
 NOTE: Min Erlang/OTP version 22
 
-```
+```sh
 make compile
 make test-env t # requires docker-compose in place
 ```
@@ -44,7 +45,7 @@ sending such request to older version brokers will cause connection failure.
 
 e.g. in sys.config:
 
-```
+```erlang
 [{brod,
    [ { clients
      , [ { brod_client_1 %% registered name
@@ -101,7 +102,7 @@ Produced to partition 0 at base-offset 406
 
 Brod supervision (and process link) tree.
 
-![](https://cloud.githubusercontent.com/assets/164324/19621338/0b53ccbe-9890-11e6-9142-432a3a87bcc7.jpg)
+![brod supervision architecture](https://cloud.githubusercontent.com/assets/164324/19621338/0b53ccbe-9890-11e6-9142-432a3a87bcc7.jpg)
 
 # Clients
 
@@ -254,6 +255,7 @@ the caller should expect a message of below pattern for each produce call.
                    , result   = brod_produce_req_acked
                    }
 ```
+
 Add `-include_lib("brod/include/brod.hrl").` to use the record.
 
 In case the `brod:produce` caller is a process like `gen_server` which
@@ -298,7 +300,8 @@ Below diagrams illustrate 3 examples of how subscriber processes may work
 with `brod_consumer`.
 
 ## Partition subscriber
-![](https://cloud.githubusercontent.com/assets/164324/19621677/5e469350-9897-11e6-8c8e-8a6a4f723f73.jpg)
+
+![partition subscriber architecture](https://cloud.githubusercontent.com/assets/164324/19621677/5e469350-9897-11e6-8c8e-8a6a4f723f73.jpg)
 
 This gives the best flexibility as the per-partition subscribers work
 directly with per-partition pollers.
@@ -308,7 +311,8 @@ not individual messages, (however the subscribers are allowed to
 ack individual offsets).
 
 ## Topic subscriber (`brod_topic_subscriber`)
-![](https://cloud.githubusercontent.com/assets/164324/19621951/41e1d75e-989e-11e6-9bc2-49fe814d3020.jpg)
+
+![topic subscribe flow](https://cloud.githubusercontent.com/assets/164324/19621951/41e1d75e-989e-11e6-9bc2-49fe814d3020.jpg)
 
 A topic subscriber provides the easiest way to receive and process messages from
 ALL partitions of a given topic. See
@@ -320,7 +324,8 @@ in a module, or simply provide an anonymous callback function to have the
 individual messages processed.
 
 ## Group subscriber (`brod_group_subscriber`)
-![](https://cloud.githubusercontent.com/assets/164324/19621956/59d76a9a-989e-11e6-9633-a0bc677e06f3.jpg)
+
+![group subscriber flow](https://cloud.githubusercontent.com/assets/164324/19621956/59d76a9a-989e-11e6-9633-a0bc677e06f3.jpg)
 
 Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks are
 to be implemented to process individual messages. See
@@ -398,12 +403,12 @@ auth(Host :: string(), Sock :: gen_tcp:socket() | ssl:sslsocket(),
 ```
 
 If authentication is successful - callback function should return an atom `ok`, otherwise - error tuple with reason description.
-For example, you can use `brod_gssapi` plugin (https://github.com/kafka4beam/brod_gssapi) for SASL GSSAPI authentication.
+For example, you can use [`brod_gssapi` plugin](https://github.com/kafka4beam/brod_gssapi) for SASL GSSAPI authentication.
 To use it - add it as dependency to your top level project that uses brod.
 Then add `{sasl, {callback, brod_gssapi, {gssapi, Keytab, Principal}}}` to client config.
 Keytab should be the keytab file path, and Principal should be a byte-list or binary string.
 
-See also: https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authentication
+See also: <https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authentication>
 
 # Other API to play with/inspect kafka
 
@@ -449,20 +454,21 @@ or (for fetch command) when the partition leader migrates to another broker in t
 ## brod-cli examples (with `alias brod=_build/brod_cli/rel/brod/bin/brod`):
 
 ### Fetch and print metadata
-```
+
+```sh
 brod meta -b localhost
 ```
 
 ### Produce a Message
 
-```
+```sh
 brod send -b localhost -t test-topic -p 0 -k "key" -v "value"
 
 ```
 
 ### Fetch a Message
 
-```
+```sh
 brod fetch -b localhost -t test-topic -p 0 --fmt 'io:format("offset=~p, ts=~p, key=~s, value=~s\n", [Offset, Ts, Key, Value])'
 ```
 
@@ -477,19 +483,20 @@ Bound variables to be used in `--fmt` expression:
 ### Stream Messages to Kafka
 
 Send `README.md` to kafka one line per kafka message
-```
+
+```sh
 brod pipe -b localhost:9092 -t test-topic -p 0 -s @./README.md
 ```
 
 ### Resolve Offset
 
-```
+```sh
 brod offset -b localhost:9092 -t test-topic -p 0
 ```
 
 ### List or Describe Groups
 
-```
+```sh
 # List all groups
 brod groups -b localhost:9092
 
@@ -499,7 +506,7 @@ brod groups -b localhost:9092 --ids group-1,group-2
 
 ### Display Committed Offsets
 
-```
+```sh
 # all topics
 brod commits -b localhost:9092 --id the-group-id --describe
 
@@ -511,7 +518,7 @@ brod commits -b localhost:9092 --id the-group-id --describe --topic topic-name
 
 NOTE: This feature is designed for force overwriting commits, not for regular use of offset commit.
 
-```
+```sh
 # Commit 'latest' offsets of all partitions with 2 days retention
 brod commits -b localhost:9092 --id the-group-id --topic topic-name --offsets latest --retention 2d
 
@@ -527,5 +534,5 @@ brod commits -b localhost:9092 -i the-group-id -t topic-name -o "0:10000" --prot
 
 ## TODOs
 
-* Support scram-sasl in brod-cli
-* Transactional produce APIs
+- Support scram-sasl in brod-cli
+- Transactional produce APIs
