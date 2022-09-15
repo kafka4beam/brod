@@ -181,7 +181,7 @@
 -type topic_config() :: kpro:struct().
 -type partition() :: kpro:partition().
 -type topic_partition() :: {topic(), partition()}.
--type offset() :: kpro:offset().
+-type offset() :: kpro:offset(). %% Physical offset (an integer)
 -type key() :: undefined %% no key, transformed to <<>>
              | binary().
 -type value() :: undefined %% no value, transformed to <<>>
@@ -195,13 +195,13 @@
 -type msg_input() :: kpro:msg_input().
 -type batch_input() :: [msg_input()].
 
--type msg_ts() :: kpro:msg_ts().
+-type msg_ts() :: kpro:msg_ts(). %% Unix time in milliseconds
 -type client_id() :: atom().
 -type client() :: client_id() | pid().
 -type client_config() :: brod_client:config().
 -type bootstrap() :: [endpoint()] %% default client config
                    | {[endpoint()], client_config()}.
--type offset_time() :: offset()
+-type offset_time() :: msg_ts()
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
 -type message() :: kpro:message(). %% A record with offset, key, value, ts_type, ts, and headers.
@@ -246,6 +246,9 @@
 %% The meaning of the options is documented at {@link brod_consumer:start_link/5}.
 -type connection() :: kpro:connection().
 -type conn_config() :: [{atom(), term()}] | kpro:conn_config().
+%% Connection configuration that will be passed to `kpro' calls.
+%%
+%% For more info, see the {@link kpro_connection:config()} type.
 
 %% consumer groups
 -type group_id() :: kpro:group_id().
@@ -960,8 +963,54 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 
 %% @doc Create topic(s) in kafka.
 %%
-%% Return the message body of `create_topics', response.
-%% See `kpro_schema.erl' for struct details.
+%% `TopicConfigs' is a list of topic configurations.
+%% A topic configuration is a map (or tuple list for backward compatibility)
+%% with the following keys (all of them are reuired):
+%%  <ul>
+%%    <li>`name'
+%%
+%%      The topic name.</li>
+%%
+%%    <li>`num_partitions'
+%%
+%%      The number of partitions to create in the topic, or -1 if we are
+%%      either specifying a manual partition assignment or using the default
+%%      partitions.</li>
+%%
+%%    <li>`replication_factor'
+%%
+%%      The number of replicas to create for each partition in the topic,
+%%      or -1 if we are either specifying a manual partition assignment
+%%      or using the default replication factor.</li>
+%%
+%%    <li>`assignments'
+%%
+%%      The manual partition assignment, or the empty list if we let Kafka
+%%      automatically assign them. It is a list of maps (or tuple lists) with the
+%%      following keys: `partition_index' and `broker_ids' (a list of of brokers to
+%%      place the partition on).</li>
+%%
+%%    <li>`configs'
+%%
+%%      The custom topic configurations to set. It is a list of of maps (or
+%%      tuple lists) with keys `name' and `value'. You can find possible
+%%      options in the Kafka documentation.</li>
+%% </ul>
+%%
+%% Example:
+%% ```
+%% > TopicConfigs = [
+%%     #{
+%%       name => <<"my_topic">>,
+%%       num_partitions => 1,
+%%       replication_factor => 1,
+%%       assignments => [],
+%%       configs => [ #{name  => <<"cleanup.policy">>, value => "compact"}]
+%%     }
+%%   ].
+%% > brod:create_topics([{"localhost", 9092}], TopicConfigs, #{timeout => 1000}, []).
+%% ok
+%% '''
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()},
                     conn_config()) ->
         ok | {error, any()}.
@@ -976,52 +1025,87 @@ delete_topics(Hosts, Topics, Timeout) ->
 
 %% @doc Delete topic(s) from kafka.
 %%
-%% Return the message body of `delete_topics', response.
-%% See `kpro_schema.erl' for struct details.
+%% Example:
+%% ```
+%% > brod:delete_topics([{"localhost", 9092}], ["my_topic"], 5000, []).
+%% ok
+%% '''
 -spec delete_topics([endpoint()], [topic()], pos_integer(), conn_config()) ->
         ok | {error, any()}.
 delete_topics(Hosts, Topics, Timeout, Options) ->
   brod_utils:delete_topics(Hosts, Topics, Timeout, Options).
 
-%% @doc Fetch broker metadata.
+%% @doc Fetch broker metadata for all topics.
 %%
-%% Return the message body of `metadata' response.
-%% See `kpro_schema.erl' for details.
+%% See {@link get_metadata/3} for more information.
 -spec get_metadata([endpoint()]) -> {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts) ->
   brod_utils:get_metadata(Hosts).
 
-%% @doc Fetch broker/topic metadata.
+%% @doc Fetch broker metadata for the given topics.
 %%
-%% Return the message body of `metadata' response.
-%% See `kpro_schema.erl' for struct details.
+%% See {@link get_metadata/3} for more information.
 -spec get_metadata([endpoint()], all | [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics) ->
   brod_utils:get_metadata(Hosts, Topics).
 
-%% @doc Fetch broker/topic metadata.
+%% @doc Fetch broker metadata for the given topics using the given connection options.
 %%
-%% Return the message body of `metadata' response.
-%% See `kpro_schema.erl' for struct details.
+%% The response differs in each version of the `Metadata' API call.
+%% The last supported `Metadata' API version is 2, so this will be
+%% probably used (if your Kafka supports it too). See
+%% <a href="https://github.com/kafka4beam/kafka_protocol/blob/master/priv/kafka.bnf">kafka.bnf</a>
+%% (search for `MetadataResponseV2') for response schema with comments.
+%%
+%% Beware that when `auto.create.topics.enable' is set to true in
+%% the broker configuration, fetching metadata with a concrete
+%% topic specified (in the `Topics' parameter) may cause creation of
+%% the topic when it does not exist. If you want a safe `get_metadata'
+%% call, always pass `all' as `Topics' and then filter them.
+%%
+%%
+%% ```
+%% > brod:get_metadata([{"localhost", 9092}], [<<"my_topic">>], []).
+%% {ok,#{brokers =>
+%%           [#{host => <<"localhost">>,node_id => 1,port => 9092,
+%%              rack => <<>>}],
+%%       cluster_id => <<"jTb2faMLRf6p21yD1y3v-A">>,
+%%       controller_id => 1,
+%%       topics =>
+%%           [#{error_code => no_error,is_internal => false,
+%%              name => <<"my_topic">>,
+%%              partitions =>
+%%                  [#{error_code => no_error,
+%%                     isr_nodes => [1],
+%%                     leader_id => 1,partition_index => 1,
+%%                     replica_nodes => [1]},
+%%                   #{error_code => no_error,
+%%                     isr_nodes => [1],
+%%                     leader_id => 1,partition_index => 0,
+%%                     replica_nodes => [1]}]}]}}
+%% '''
 -spec get_metadata([endpoint()], all | [topic()], conn_config()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
 
-%% @equiv resolve_offset(Hosts, Topic, Partition, latest, 1)
+%% @equiv resolve_offset(Hosts, Topic, Partition, latest, [])
 -spec resolve_offset([endpoint()], topic(), partition()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition) ->
   resolve_offset(Hosts, Topic, Partition, ?OFFSET_LATEST).
 
-%% @doc Resolve semantic offset or timestamp to real offset.
+%% @equiv resolve_offset(Hosts, Topic, Partition, Time, [])
 -spec resolve_offset([endpoint()], topic(), partition(), offset_time()) ->
         {ok, offset()} | {error, any()}.
 resolve_offset(Hosts, Topic, Partition, Time) ->
   resolve_offset(Hosts, Topic, Partition, Time, []).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
+%%
+%% The same as {@link resolve_offset/6} but the timeout is
+%% extracted from connection config.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
@@ -1029,6 +1113,38 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
   brod_utils:resolve_offset(Hosts, Topic, Partition, Time, ConnCfg).
 
 %% @doc Resolve semantic offset or timestamp to real offset.
+%%
+%% The function returns the offset of the first message
+%% with the given timestamp, or of the first message after
+%% the given timestamp (in case no message matches the
+%% timestamp exactly), or -1 if the timestamp is newer
+%% than (>) all messages in the topic.
+%%
+%% You can also use two semantic offsets instead of
+%% a timestamp: `earliest' gives you the offset of the
+%% first message in the topic and `latest' gives you
+%% the offset of the last message incremented by 1.
+%%
+%% If the topic is empty, both `earliest' and `latest'
+%% return the same value (which is 0 unless some messages
+%% were deleted from the topic), and any timestamp returns
+%% -1.
+%%
+%% An example for illustration:
+%% ```
+%% Messages:
+%% offset       0   1   2   3
+%% timestamp    10  20  20  30
+%%
+%% Calls:
+%% resolve_offset(Endpoints, Topic, Partition, 5) → 0
+%% resolve_offset(Endpoints, Topic, Partition, 10) → 0
+%% resolve_offset(Endpoints, Topic, Partition, 13) → 1
+%% resolve_offset(Endpoints, Topic, Partition, 20) → 1
+%% resolve_offset(Endpoints, Topic, Partition, 31) → -1
+%% resolve_offset(Endpoints, Topic, Partition, earliest) → 0
+%% resolve_offset(Endpoints, Topic, Partition, latest) → 4
+%% '''
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config(),
                       #{timeout => kpro:int32()}) ->
@@ -1038,8 +1154,10 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, Opts) ->
 
 %% @doc Fetch a single message set from the given topic-partition.
 %%
-%% The first arg can either be an already established connection to leader,
-%% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
+%% Calls {@link fetch/5} with the default options: `max_wait_time' = 1 second,
+%% `min_bytes' = 1 B, and `max_bytes' = 2^20 B (1 MB).
+%%
+%% See {@link fetch/5} for more information.
 -spec fetch(connection() | client_id() | bootstrap(),
             topic(), partition(), integer()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.
@@ -1053,7 +1171,55 @@ fetch(ConnOrBootstrap, Topic, Partition, Offset) ->
 %% @doc Fetch a single message set from the given topic-partition.
 %%
 %% The first arg can either be an already established connection to leader,
-%% or `{Endpoints, ConnConfig}' so to establish a new connection before fetch.
+%% or `{Endpoints, ConnConfig}' (or just `Endpoints') so to establish a new
+%% connection before fetch.
+%%
+%% The fourth argument is the start offset of the query. Messages with offset
+%% greater or equal will be fetched.
+%%
+%% You can also pass options for the fetch query.
+%% See the {@link kpro_req_lib:fetch_opts()} type for their documentation.
+%% Only `max_wait_time', `min_bytes', `max_bytes', and `isolation_level'
+%% options are currently supported. The defaults are the same as documented
+%% in the linked type, except for `min_bytes' which defaults to 1 in `brod'.
+%% Note that `max_bytes' will be rounded up so that full messages are
+%% retrieved. For example, if you specify `max_bytes = 42' and there
+%% are three messages of size 40 bytes, two of them will be fetched.
+%%
+%% On success, the function returns the messages along with the <i>last stable
+%% offset</i> (when using `read_committed' mode, the last committed offset) or the
+%% <i>high watermark offset</i> (offset of the last message that was successfully
+%% copied to all replicas, incremented by 1), whichever is lower. In essence, this
+%% is the offset up to which it was possible to read the messages at the time of
+%% fetching. This is similar to what {@link resolve_offset/6} with `latest'
+%% returns. You can use this information to determine how far from the end of the
+%% topic you currently are. Note that when you use this offset as the start offset
+%% for a subseuqent call, an empty list of messages will be returned (assuming the
+%% topic hasn't changed, e.g. no new message arrived). Only when you use an offset
+%% greater than this one, `{error, offset_out_of_range}' will be returned.
+%%
+%% Note also that Kafka batches messages in a message set only up to the end of
+%% a topic segment in which the first retrieved message is, so there may actually
+%% be more messages behind the last fetched offset even if the fetched size is
+%% significantly less than `max_bytes' provided in `fetch_opts()'.
+%% See <a href="https://github.com/kafka4beam/brod/issues/251">this issue</a>
+%% for more details.
+%%
+%% Example (the topic has only two messages):
+%% ```
+%% > brod:fetch([{"localhost", 9092}], <<"my_topic">>, 0, 0, #{max_bytes => 1024}).
+%% {ok,{2,
+%%      [{kafka_message,0,<<"some_key">>,<<"Hello world!">>,
+%%                      create,1663940976473,[]},
+%%       {kafka_message,1,<<"another_key">>,<<"This is a message with offset 1.">>,
+%%                      create,1663940996335,[]}]}}
+%%
+%% > brod:fetch([{"localhost", 9092}], <<"my_topic">>, 0, 2, #{max_bytes => 1024}).
+%% {ok,{2,[]}}
+%%
+%% > brod:fetch([{"localhost", 9092}], <<"my_topic">>, 0, 3, #{max_bytes => 1024}).
+%% {error,offset_out_of_range}
+%% '''
 -spec fetch(connection() | client_id() | bootstrap(),
             topic(), partition(), offset(), fetch_opts()) ->
               {ok, {HwOffset :: offset(), [message()]}} | {error, any()}.

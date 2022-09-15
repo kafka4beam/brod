@@ -146,6 +146,8 @@ get_metadata(Hosts, Topics, ConnCfg) ->
 %% @doc Resolve timestamp to real offset.
 %% Pass connect_timeout prop as the default timeout
 %% for kpro:connect_partition_leader/5.
+%%
+%% See {@link brod:resolve_offset/5} for documentation.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
@@ -154,6 +156,8 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
   resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, KproOpts).
 
 %% @doc Resolve timestamp to real offset.
+%%
+%% See {@link brod:resolve_offset/5} for documentation.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config(),
                     #{timeout => kpro:int32()}) ->
