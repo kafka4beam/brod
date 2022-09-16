@@ -218,23 +218,25 @@ stop_maybe_kill(Pid, Timeout) ->
       ok
   end.
 
-%% @doc Subscribe or resubscribe on messages from a partition.  Caller
-%% may specify a set of options extending consumer config. It is
-%% possible to update parameters such as `max_bytes' and
+%% @doc Subscribe or resubscribe on messages from a partition.
+%%
+%% Caller may specify a set of options extending consumer config.
+%% It is possible to update parameters such as `max_bytes' and
 %% `max_wait_time', or the starting point (`begin_offset') of the data
 %% stream.
 %%
 %% Possible options:
+%% <ul>
+%%   <li>All consumer configs as documented for {@link start_link/5}</li>
 %%
-%%   All consumer configs as documented for {@link start_link/5}
-%%
-%%   `begin_offset' (optional, default = latest)
+%%   <li>`begin_offset' (optional, default = latest)
 %%
 %%     A subscriber may consume and process messages, then persist the
 %%     associated offset to a persistent storage, then start (or
 %%     restart) from `last_processed_offset + 1' as the `begin_offset'
 %%     to proceed. By default, it starts fetching from the latest
-%%     available offset.
+%%     available offset.</li>
+%% </ul>
 -spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).

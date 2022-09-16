@@ -136,6 +136,7 @@ stop(Client) ->
   end.
 
 %% @doc Get producer of the given topic-partition.
+%%
 %% The producer is started if auto_start_producers is
 %% enabled in client config.
 -spec get_producer(client(), topic(), partition()) ->
@@ -157,6 +158,7 @@ get_consumer(Client, Topic, Partition) ->
   get_partition_worker(Client, ?CONSUMER_KEY(Topic, Partition)).
 
 %% @doc Dynamically start a per-topic producer.
+%%
 %% Return ok if the producer is already started.
 -spec start_producer(client(), topic(), brod:producer_config()) ->
         ok | {error, any()}.
@@ -177,6 +179,7 @@ stop_producer(Client, TopicName) ->
   safe_gen_call(Client, {stop_producer, TopicName}, infinity).
 
 %% @doc Dynamically start a topic consumer.
+%%
 %% Returns ok if the consumer is already started.
 -spec start_consumer(client(), topic(), brod:consumer_config()) ->
                         ok | {error, any()}.
@@ -198,6 +201,7 @@ stop_consumer(Client, TopicName) ->
 
 %% @doc Get the connection to kafka broker which is a leader for given
 %% Topic-Partition.
+%%
 %% Return already established connection towards the leader broker,
 %% Otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
@@ -208,6 +212,7 @@ get_leader_connection(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
 %% @doc Get connection to a kafka broker.
+%%
 %% Return already established connection towards the broker,
 %% otherwise a new one is established and cached in client state.
 %% If the old connection was dead less than a configurable N seconds ago,
@@ -244,8 +249,10 @@ get_partitions_count(Client, Topic) when is_pid(Client) ->
 get_group_coordinator(Client, GroupId) ->
   safe_gen_call(Client, {get_group_coordinator, GroupId}, infinity).
 
-%% @doc Register self() as a partition producer. The pid is registered in an ETS
-%% table, then the callers may lookup a producer pid from the table and make
+%% @doc Register self() as a partition producer.
+%%
+%% The pid is registered in an ETS table, then the callers
+%% may lookup a producer pid from the table and make
 %% produce requests to the producer process directly.
 -spec register_producer(client(), topic(), partition()) -> ok.
 register_producer(Client, Topic, Partition) ->
@@ -253,26 +260,32 @@ register_producer(Client, Topic, Partition) ->
   Key = ?PRODUCER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Producer}).
 
-%% @doc De-register the producer for a partition. The partition producer
-%% entry is deleted from the ETS table to allow cleanup of purposefully
+%% @doc De-register the producer for a partition.
+%%
+%% The partition producer entry is deleted from
+%% the ETS table to allow cleanup of purposefully
 %% stopped producers and allow later restart.
 -spec deregister_producer(client(), topic(), partition()) -> ok.
 deregister_producer(Client, Topic, Partition) ->
   Key = ?PRODUCER_KEY(Topic, Partition),
   gen_server:cast(Client, {deregister, Key}).
 
-%% @doc Register self() as a partition consumer. The pid is registered in an ETS
-%% table, then the callers may lookup a consumer pid from the table and make
-%% subscribe calls to the process directly.
+%% @doc Register self() as a partition consumer.
+%%
+%% The pid is registered in an ETS table, then the callers may
+%% lookup a consumer pid from the table and make subscribe
+%% calls to the process directly.
 -spec register_consumer(client(), topic(), partition()) -> ok.
 register_consumer(Client, Topic, Partition) ->
   Consumer = self(),
   Key = ?CONSUMER_KEY(Topic, Partition),
   gen_server:cast(Client, {register, Key, Consumer}).
 
-%% @doc De-register the consumer for a partition. The partition consumer
-%% entry is deleted from the ETS table to allow cleanup of purposefully
-%% stopped consumers and allow later restart.
+%% @doc De-register the consumer for a partition.
+%%
+%% The partition consumer entry is deleted from the ETS table
+%% to allow cleanup of purposefully %% stopped consumers and
+%% allow later restart.
 -spec deregister_consumer(client(), topic(), partition()) -> ok.
 deregister_consumer(Client, Topic, Partition) ->
   Key = ?CONSUMER_KEY(Topic, Partition),
