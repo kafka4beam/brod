@@ -364,6 +364,9 @@ handle_call(get_consumers_sup_pid, _From, State) ->
 handle_call({get_metadata, Topic}, _From, State) ->
   {Result, NewState} = do_get_metadata(Topic, State),
   {reply, Result, NewState};
+handle_call({get_partitions_count, Topic}, _From, State) ->
+    Response = safe_get_partitions_count(Topic, State, false),
+    {reply, Response, State};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
 handle_call(Call, _From, State) ->
@@ -756,14 +759,28 @@ get_partitions_count(Client, Ets, Topic) ->
       {error, Reason};
     false ->
       %% This call should populate the cache
-      case get_metadata(Client, Topic) of
-        {ok, Meta} ->
-          [TopicMetadata] = kf(topics, Meta),
-          do_get_partitions_count(TopicMetadata);
-        {error, Reason} ->
-          {error, Reason}
-      end
+      safe_gen_call(Client, {get_partitions_count, Topic}, infinity)
   end.
+
+%% Get partition counter from cache.
+%% If cache is not hit, send meta data request to retrieve.
+-spec safe_get_partitions_count(topic(), state(), boolean()) ->
+    {ok, pos_integer()} | {error, any()}.
+safe_get_partitions_count(Topic, State, IsRetry) ->
+    case IsRetry andalso lookup_partitions_count_cache(State#state.workers_tab, Topic) of
+        {ok, Count} ->
+            {ok, Count};
+        {error, Reason} ->
+            {error, Reason};
+        false when IsRetry ->
+            {error, ?unknown_topic_or_partition};
+        false ->
+            %% Try fetch metadata (and populate partition count cache)
+            %% Then try fetch partitions count from cache again.
+            with_ok(get_metadata_safe(Topic, State),
+                fun(_, S) -> safe_get_partitions_count(Topic, S, true) end)
+    end.
+
 
 -spec lookup_partitions_count_cache(ets:tab(), ?undef | topic()) ->
         {ok, pos_integer()} | {error, any()} | false.
