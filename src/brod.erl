@@ -817,8 +817,7 @@ start_link_topic_subscriber(Config) ->
   brod_topic_subscriber:start_link(Config).
 
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}) ->
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()}) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs).
@@ -827,8 +826,8 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 %%
 %% Return the message body of `create_topics', response.
 %% See `kpro_schema.erl' for struct details.
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}, conn_config()) ->
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).

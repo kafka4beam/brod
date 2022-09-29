@@ -82,16 +82,15 @@
 %%%_* APIs =====================================================================
 
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}) ->
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()}) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   create_topics(Hosts, TopicConfigs, RequestConfigs, _ConnCfg = []).
 
 %% @doc Try to connect to the controller node using the given
 %% connection options and create the given topics with configs
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}, conn_config()) ->
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
   KproOpts = kpro_connection_options(ConnCfg),
