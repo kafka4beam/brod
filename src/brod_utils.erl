@@ -84,7 +84,7 @@
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}) ->
-        {ok, kpro:struct()} | {error, any()} | ok.
+        ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   create_topics(Hosts, TopicConfigs, RequestConfigs, _ConnCfg = []).
 
@@ -92,7 +92,7 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
 %% connection options and create the given topics with configs
 -spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
                     validate_only => boolean()}, conn_config()) ->
-        {ok, kpro:struct()} | {error, any()} | ok.
+        ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
   KproOpts = kpro_connection_options(ConnCfg),
   with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg), KproOpts),
