@@ -32,6 +32,8 @@
 %%% <li>Send acknowledged offsets to group coordinator which will be committed
 %%%     to kafka periodically.</li>
 %%% </ol>
+%%%
+%%% Callbacks are documented in the source code of this module.
 %%% @end
 %%%=============================================================================
 

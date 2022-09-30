@@ -133,8 +133,6 @@
              , connection/0
              , conn_config/0
              , consumer_config/0
-             , consumer_option/0
-             , consumer_options/0
              , endpoint/0
              , error_code/0
              , fetch_opts/0
@@ -206,8 +204,12 @@
 -type offset_time() :: offset()
                      | ?OFFSET_EARLIEST
                      | ?OFFSET_LATEST.
--type message() :: kpro:message().
+-type message() :: kpro:message(). %% A record with offset, key, value, ts_type, ts, and headers.
 -type message_set() :: #kafka_message_set{}.
+%% A record with topic, partition, high_wm_offset (max offset of the partition), and messages.
+%%
+%% See <a href="https://github.com/kafka4beam/brod/blob/master/include/brod.hrl#L26">
+%% the definition</a> for more information.
 -type error_code() :: kpro:error_code().
 
 %% producers
@@ -224,17 +226,20 @@
 
 
 %% consumers
--type consumer_option() :: begin_offset
-                         | min_bytes
-                         | max_bytes
-                         | max_wait_time
-                         | sleep_timeout
-                         | prefetch_count
-                         | prefetch_bytes
-                         | offset_reset_policy
-                         | size_stat_window.
--type consumer_options() :: [{consumer_option(), integer()}].
--type consumer_config() :: brod_consumer:config().
+-type consumer_config() :: [ {begin_offset,        offset_time()}
+                           | {min_bytes,           non_neg_integer()}
+                           | {max_bytes,           non_neg_integer()}
+                           | {max_wait_time,       integer()}
+                           | {sleep_timeout,       integer()}
+                           | {prefetch_count,      integer()}
+                           | {prefetch_bytes,      non_neg_integer()}
+                           | {offset_reset_policy, brod_consumer:offset_reset_policy()}
+                           | {size_stat_window,    non_neg_integer()}
+                           | {isolation_level,     brod_consumer:isolation_level()}
+                           ].
+%% Consumer configuration.
+%%
+%% The meaning of the options is documented at {@link brod_consumer:start_link/5}.
 -type connection() :: kpro:connection().
 -type conn_config() :: [{atom(), term()}] | kpro:conn_config().
 
@@ -437,8 +442,15 @@ stop_client(Client) when is_pid(Client) ->
 start_producer(Client, TopicName, ProducerConfig) ->
   brod_client:start_producer(Client, TopicName, ProducerConfig).
 
-%% @doc Dynamically start a topic consumer.
-%% @see brod_consumer:start_link/5. for details about consumer config.
+%% @doc Dynamically start topic consumer(s) and register it in the client.
+%%
+%% A {@link brod_consumer} is started for each partition of the given topic.
+%% Note that you can have only one consumer per client-topic.
+%%
+%% See {@link brod_consumer:start_link/5} for details about consumer config.
+%%
+%% You can read more about consumers in the
+%% <a href="https://hexdocs.pm/brod/readme.html#consumers">overview</a>.
 -spec start_consumer(client(), topic(), consumer_config()) ->
                         ok | {error, any()}.
 start_consumer(Client, TopicName, ConsumerConfig) ->
@@ -674,6 +686,14 @@ sync_produce_request_offset(CallRef, Timeout) ->
 
 %% @doc Subscribe to a data stream from the given topic-partition.
 %%
+%% A client has to be already started (by calling {@link start_client/3},
+%% one client per multiple topics is enough) and a corresponding consumer
+%% for the topic and partition as well (by calling {@link start_consumer/3}),
+%% before calling this function.
+%%
+%% Caller may specify a set of options extending consumer config.
+%% See {@link brod_consumer:subscribe/3} for more info on that.
+%%
 %% If `{error, Reason}' is returned, the caller should perhaps retry later.
 %%
 %% `{ok, ConsumerPid}' is returned on success. The caller may want to
@@ -688,8 +708,18 @@ sync_produce_request_offset(CallRef, Timeout) ->
 %%
 %% In case `#kafka_fetch_error{}' is received the subscriber should
 %% re-subscribe itself to resume the data stream.
+%%
+%% To provide a mechanism to handle backpressure, brod requires all messages
+%% sent to a subscriber to be acked by calling {@link consume_ack/4} after
+%% they are processed. If there are too many not-acked messages received by
+%% the subscriber, the consumer will stop to fetch new ones so the subscriber
+%% won't get overwhelmed.
+%%
+%% Only one process can be subscribed to a consumer. This means that if
+%% you want to read at different places (or at different paces), you have
+%% to create separate consumers (and thus also separate clients).
 -spec subscribe(client(), pid(), topic(), partition(),
-                consumer_options()) -> {ok, pid()} | {error, any()}.
+                consumer_config()) -> {ok, pid()} | {error, any()}.
 subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
   case brod_client:get_consumer(Client, Topic, Partition) of
     {ok, ConsumerPid} ->
@@ -701,7 +731,10 @@ subscribe(Client, SubscriberPid, Topic, Partition, Options) ->
       {error, Reason}
   end.
 
--spec subscribe(pid(), pid(), consumer_options()) -> ok | {error, any()}.
+%% @doc Subscribe to a data stream from the given consumer.
+%%
+%% See {@link subscribe/5} for more information.
+-spec subscribe(pid(), pid(), consumer_config()) -> ok | {error, any()}.
 subscribe(ConsumerPid, SubscriberPid, Options) ->
   brod_consumer:subscribe(ConsumerPid, SubscriberPid, Options).
 
@@ -732,6 +765,31 @@ unsubscribe(ConsumerPid) ->
 unsubscribe(ConsumerPid, SubscriberPid) ->
   brod_consumer:unsubscribe(ConsumerPid, SubscriberPid).
 
+%% @doc Acknowledge that one or more messages have been processed.
+%%
+%% {@link brod_consumer} sends message-sets to the subscriber process, and keep
+%% the messages in a 'pending' queue.
+%% The subscriber may choose to ack any received offset.
+%% Acknowledging a greater offset will automatically acknowledge
+%% the messages before this offset.
+%% For example, if message `[1, 2, 3, 4]' have been sent to (as one or more message-sets)
+%% to the subscriber, the subscriber may acknowledge with offset `3' to indicate that
+%% the first three messages are successfully processed, leaving behind only message `4'
+%% pending.
+%%
+%%
+%% The 'pending' queue has a size limit (see `prefetch_count' consumer config)
+%% which is to provide a mechanism to handle back-pressure.
+%% If there are too many messages pending on ack, the consumer will stop
+%% fetching new ones so the subscriber won't get overwhelmed.
+%%
+%% Note, there is no range check done for the acknowledging offset, meaning if offset `[M, N]'
+%% are pending to be acknowledged, acknowledging with `Offset > N' will cause all offsets to be
+%% removed from the pending queue, and acknowledging with `Offset < M' has no effect.
+%%
+%% Use this function only with plain partition subscribers (i.e., when you
+%% manually call {@link subscribe/5}). Behaviours like
+%% {@link brod_topic_subscriber} have their own way how to ack messages.
 -spec consume_ack(client(), topic(), partition(), offset()) ->
         ok | {error, any()}.
 consume_ack(Client, Topic, Partition, Offset) ->
@@ -741,6 +799,7 @@ consume_ack(Client, Topic, Partition, Offset) ->
   end.
 
 %% @equiv brod_consumer:ack(ConsumerPid, Offset)
+%% @doc See {@link consume_ack/4} for more information.
 -spec consume_ack(pid(), offset()) -> ok | {error, any()}.
 consume_ack(ConsumerPid, Offset) ->
   brod_consumer:ack(ConsumerPid, Offset).

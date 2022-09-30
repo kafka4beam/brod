@@ -320,11 +320,21 @@ with `brod_consumer`.
 ![partition subscriber architecture](https://cloud.githubusercontent.com/assets/164324/19621677/5e469350-9897-11e6-8c8e-8a6a4f723f73.jpg)
 
 This gives the best flexibility as the per-partition subscribers work
-directly with per-partition pollers.
+directly with per-partition pollers (`brod_consumer`s).
 
 The messages are delivered to subscribers in message sets (batches),
 not individual messages, (however the subscribers are allowed to
 ack individual offsets).
+
+Example:
+```erlang
+ok = brod:start_client([{"localhost", 9092}], my_client). % one client per application is enough
+ok = brod:start_consumer(my_client, <<"my_topic">>, []).
+
+% Now in a separate process for each partition of my_topic call:
+{ok, ConsumerPid} = brod:subscribe(my_client, self(), <<"my_topic">>, Partition, []).
+% The process should now receive messages sets as regular messages
+```
 
 ### Topic subscriber (`brod_topic_subscriber`)
 
