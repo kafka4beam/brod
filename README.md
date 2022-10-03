@@ -316,8 +316,8 @@ ack individual offsets).
 
 A topic subscriber provides the easiest way to receive and process messages from
 ALL partitions of a given topic. See
-[brod_demo_cg_collector](test/brod_demo_cg_collector.erl) and
-[brod_demo_topic_subscriber](test/brod_demo_topic_subscriber.erl) for example.
+[brod_demo_cg_collector](https://github.com/kafka4beam/brod/blob/master/test/brod_demo_cg_collector.erl) and
+[brod_demo_topic_subscriber](https://github.com/kafka4beam/brod/blob/master/test/brod_demo_topic_subscriber.erl) for example.
 
 Users may choose to implement the `brod_topic_subscriber` behaviour callbacks
 in a module, or simply provide an anonymous callback function to have the
@@ -329,8 +329,8 @@ individual messages processed.
 
 Similar to topic subscriber, the `brod_group_subscriber` behaviour callbacks are
 to be implemented to process individual messages. See
-[brod_demo_group_subscriber_koc](test/brod_demo_group_subscriber_koc.erl) and
-[brod_demo_group_subscriber_loc](test/brod_demo_group_subscriber_loc.erl) for
+[brod_demo_group_subscriber_koc](https://github.com/kafka4beam/brod/blob/master/test/brod_demo_group_subscriber_koc.erl) and
+[brod_demo_group_subscriber_loc](https://github.com/kafka4beam/brod/blob/master/test/brod_demo_group_subscriber_loc.erl) for
 example.
 
 A group subscriber is started by giving a set of topics, some
