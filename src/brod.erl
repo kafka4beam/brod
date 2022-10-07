@@ -214,13 +214,17 @@
 
 %% producers
 -type produce_reply() :: #brod_produce_reply{}.
+%% A record with call_ref, base_offset, and result.
+%%
+%% See the <a href="https://github.com/kafka4beam/brod/blob/master/include/brod.hrl#L49">
+%% the definition</a> for more information.
 -type producer_config() :: brod_producer:config().
 -type partition_fun() :: fun((topic(), pos_integer(), key(), value()) ->
                                 {ok, partition()}).
 -type partitioner() :: partition_fun() | random | hash.
 -type produce_ack_cb() :: fun((partition(), offset()) -> _).
 -type compression() :: no_compression | gzip | snappy.
--type call_ref() :: #brod_call_ref{}.
+-type call_ref() :: #brod_call_ref{}. %% A record with caller, callee, and ref.
 -type produce_result() :: brod_produce_req_buffered
                         | brod_produce_req_acked.
 
@@ -435,8 +439,29 @@ stop_client(Client) when is_atom(Client) ->
 stop_client(Client) when is_pid(Client) ->
   brod_client:stop(Client).
 
-%% @doc Dynamically start a per-topic producer.
-%% @see brod_producer:start_link/4
+%% @doc Dynamically start a per-topic producer and register it in the client.
+%%
+%% You have to start a producer for each topic you want to produce messages
+%% into, unless you have specified `auto_start_producers = true' when starting
+%% the client (in that case you don't have to call this function at all).
+%%
+%% After starting the producer, you can call {@link produce/5} and friends
+%% for producing messages.
+%%
+%% You can read more about producers in the
+%% <a href="https://hexdocs.pm/brod/readme.html#producers">overview</a>.
+%%
+%% A client has to be already started before making this call (e.g. by calling
+%% {@link start_client/3}).
+%%
+%% See {@link brod_producer:start_link/4} for a list of available configuration
+%% options.
+%%
+%% Example:
+%% ```
+%% > brod:start_producer(my_client, <<"my_topic">>, [{max_retries, 5}]).
+%% ok
+%% '''
 -spec start_producer(client(), topic(), producer_config()) ->
                         ok | {error, any()}.
 start_producer(Client, TopicName, ProducerConfig) ->
@@ -496,10 +521,8 @@ produce(Pid, Value) ->
 
 %% @doc Produce one or more messages.
 %%
-%% Produce one message if `Value' is a binary or an iolist.
-%% Otherwise send a batch, if `Value' is a (nested) key-value list,
-%% or a list of maps. In this case `Key' is discarded (only the
-%% keys in the key-value list are sent to Kafka).
+%% See {@link produce/5} for information about possible shapes
+%% of `Value'.
 %%
 %% The pid should be a partition producer pid, NOT client pid.
 %%
@@ -514,19 +537,55 @@ produce(ProducerPid, Key, Value) ->
 
 %% @doc Produce one or more messages.
 %%
-%% Produce one message if `Value' is a binary or an iolist.
-%% Otherwise send a batch if `Value' is a (nested) key-value list,
-%% or a list of maps. In this case `Key' is used only for partitioning,
-%% or discarded if the 3rd argument is a partition number instead of a
-%% partitioner callback.
+%% `Value' can have many different forms:
+%% <ul>
+%%  <li>`binary()': Single message with key from the `Key' argument</li>
+%%  <li>`{brod:msg_ts(), binary()}': Single message with
+%%       its create-time timestamp and key from `Key'</li>
+%%  <li>`#{ts => brod:msg_ts(), value => binary(), headers => [{_, _}]}':
+%%       Single message; if this map does not have a `key'
+%%       field, `Key' is used instead</li>
+%%  <li>`[{K, V} | {T, K, V}]': A batch, where `V' could be
+%%       a nested list of such representation</li>
+%%  <li>`[#{key => K, value => V, ts => T, headers => [{_, _}]}]':
+%%       A batch</li>
+%% </ul>
+%%
+%% When `Value' is a batch, the `Key' argument is only used
+%% as partitioner input and all messages are written on the
+%% same partition.
+%%
+%% `ts' field is dropped for kafka prior to version `0.10'
+%% (produce API version 0, magic version 0). `headers' field
+%% is dropped for kafka prior to version `0.11' (produce API
+%% version 0-2, magic version 0-1).
+%%
+%% `Partition' may be either a concrete partition (an integer)
+%% or a partitioner (see {@link partitioner()} for more info).
+%%
+%% A producer for the particular topic has to be already started
+%% (by calling {@link start_producer/3}), unless you have specified
+%% `auto_start_producers = true' when starting the client.
 %%
 %% This function first looks up the producer pid, then calls {@link produce/3}
 %% to do the real work.
 %%
-%% The return value is a call reference of type `call_ref()', so the caller
+%% The return value is a call reference of type {@link call_ref()}, so the caller
 %% can used it to expect (match)
 %% a `#brod_produce_reply{result = brod_produce_req_acked}'
-%% message after the produce request has been acked by Kafka.
+%% (see the {@link produce_reply()} type) message after the
+%% produce request has been acked by Kafka.
+%%
+%% Example:
+%% ```
+%% > brod:produce(my_client, <<"my_topic">>, 0, "key", <<"Hello from erlang!">>).
+%% {ok,{brod_call_ref,<0.83.0>,<0.133.0>,#Ref<0.3024768151.2556690436.92841>}}
+%% > flush().
+%% Shell got {brod_produce_reply,
+%%               {brod_call_ref,<0.83.0>,<0.133.0>,
+%%                   #Ref<0.3024768151.2556690436.92841>},
+%%               12,brod_produce_req_acked}
+%% '''
 -spec produce(client(), topic(), partition() | partitioner(),
               key(), value()) -> {ok, call_ref()} | {error, any()}.
 produce(Client, Topic, Partition, Key, Value) when is_integer(Partition) ->
@@ -546,7 +605,7 @@ produce(Client, Topic, Partitioner, Key, Value) ->
 
 %% @doc Same as {@link produce/3}, only the ack is not delivered as a message,
 %% instead, the callback is evaluated by producer worker when ack is received
-%% from kafka.
+%% from kafka (see the {@link produce_ack_cb()} type).
 -spec produce_cb(pid(), key(), value(), produce_ack_cb()) ->
         ok | {error, any()}.
 produce_cb(ProducerPid, Key, Value, AckCb) ->
@@ -554,7 +613,7 @@ produce_cb(ProducerPid, Key, Value, AckCb) ->
 
 %% @doc Same as {@link produce/5} only the ack is not delivered as a message,
 %% instead, the callback is evaluated by producer worker when ack is received
-%% from kafka.
+%% from kafka (see the {@link produce_ack_cb()} type).
 %%
 %% Return the partition to caller as `{ok, Partition}' for caller
 %% to correlate the callback when the 3rd arg is not a partition number.
@@ -610,7 +669,7 @@ produce_no_ack(Client, Topic, Partitioner, Key, Value) ->
   end.
 
 %% @equiv produce_sync(Pid, <<>>, Value)
--spec produce_sync(pid(), value()) -> ok.
+-spec produce_sync(pid(), value()) -> ok | {error, any()}.
 produce_sync(Pid, Value) ->
   produce_sync(Pid, _Key = <<>>, Value).
 
@@ -634,7 +693,7 @@ produce_sync(Pid, Key, Value) ->
 %% @doc Sync version of {@link produce/5}.
 %%
 %% This function will not return until a response is received from kafka,
-%% however if producer is started with required_acks set to 0, this function
+%% however if producer is started with `required_acks' set to 0, this function
 %% will return once the messages are buffered in the producer process.
 -spec produce_sync(client(), topic(), partition() | partitioner(),
                    key(), value()) -> ok | {error, any()}.
@@ -646,7 +705,7 @@ produce_sync(Client, Topic, Partition, Key, Value) ->
 
 %% @doc Version of {@link produce_sync/5} that returns the offset assigned by Kafka.
 %%
-%% If producer is started with required_acks set to 0, the offset will be
+%% If producer is started with `required_acks' set to 0, the offset will be
 %% `?BROD_PRODUCE_UNKNOWN_OFFSET'.
 -spec produce_sync_offset(client(), topic(), partition() | partitioner(),
                           key(), value()) -> {ok, offset()} | {error, any()}.
@@ -658,12 +717,25 @@ produce_sync_offset(Client, Topic, Partition, Key, Value) ->
       {error, Reason}
   end.
 
-%% @doc Block wait for sent produced request to be acked by kafka.
+%% @equiv sync_produce_request(CallRef, infinity)
 -spec sync_produce_request(call_ref()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef) ->
   sync_produce_request(CallRef, infinity).
 
+%% @doc Block wait for sent produced request to be acked by kafka.
+%%
+%% This way, you can turn asynchronous requests, made by {@link produce/5}
+%% and friends, into synchronous ones.
+%%
+%% Example:
+%% ```
+%% {ok, CallRef} = brod:produce(
+%%   brod_client_1, <<"my_topic">>, 0, <<"some-key">>, <<"some-value">>)
+%% ). % returns immediately
+%% % the following call waits and returns after the ack is received or timed out
+%% brod:sync_produce_request(CallRef, 5_000).
+%% '''
 -spec sync_produce_request(call_ref(), timeout()) ->
         ok | {error, Reason :: any()}.
 sync_produce_request(CallRef, Timeout) ->
@@ -672,13 +744,15 @@ sync_produce_request(CallRef, Timeout) ->
     Else -> Else
   end.
 
-%% @doc As {@link sync_produce_request_offset/1}, but also returning assigned offset.
-%% See produce_sync_offset/5.
+%% @equiv sync_produce_request_offset(CallRef, infinity)
 -spec sync_produce_request_offset(call_ref()) ->
         {ok, offset()} | {error, Reason :: any()}.
 sync_produce_request_offset(CallRef) ->
   sync_produce_request_offset(CallRef, infinity).
 
+%% @doc As {@link sync_produce_request/2}, but also returning assigned offset.
+%%
+%% See @{link produce_sync_offset/5}.
 -spec sync_produce_request_offset(call_ref(), timeout()) ->
         {ok, offset()} | {error, Reason :: any()}.
 sync_produce_request_offset(CallRef, Timeout) ->

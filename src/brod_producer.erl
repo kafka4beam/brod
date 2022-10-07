@@ -14,6 +14,11 @@
 %%%   limitations under the License.
 %%%
 
+%% @doc A `brod_producer' is a `gen_server' that is responsible for producing
+%% messages to a given partition of a given topic.
+%%
+%% See the <a href="https://hexdocs.pm/brod/readme.html#producers">overview</a>
+%% for some more information and examples.
 -module(brod_producer).
 -behaviour(gen_server).
 
@@ -100,7 +105,7 @@
 
 %% @doc Start (link) a partition producer.
 %%
-%% Possible configs:
+%% Possible configs (passed as a proplist):
 %% <ul>
 %%   <li>`required_acks' (optional, default = -1):
 %%
@@ -157,7 +162,7 @@
 %%
 %%     Time in milli-seconds to sleep before retry the failed produce request.
 %%   </li>
-%%   <li>`compression' (optional, default = no_compression):
+%%   <li>`compression' (optional, default = `no_compression`):
 %%
 %%     `gzip' or `snappy' to enable compression</li>
 %%   <li>`max_linger_ms' (optional, default = 0):

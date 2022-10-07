@@ -170,14 +170,23 @@ ok = brod:start_client([{"localhost", 9092}], brod_client_1, [{extra_sock_opts, 
 
 ## Producers
 
+A `brod_producer` is a `gen_server` that is responsible for producing messages to a given
+partition of a given topic.
+
+Producers may be started either manually or automatically in the moment you call `brod:produce`
+but did not call `brod:start_producer` beforehand.
+
 ### Auto start producer with default producer config
 
-Put below configs to client config in sys.config or app env:
+Put below configs to client config in `sys.config` or app env if you start client statically:
 
 ```erlang
 {auto_start_producers, true}
 {default_producer_config, []}
 ```
+
+Or pass the `{auto_start_producers, true}` option to `brod:start_client` if you start the client
+dynamically.
 
 ### Start a Producer on Demand
 
@@ -191,10 +200,11 @@ brod:start_producer(_Client         = brod_client_1,
 
 Brod supports below produce APIs:
 
-- `brod:produce`: Async produce with ack message sent back to caller.
-- `brod:produce_cb`: Async produce with a callback evaluated when ack is received.
-- `brod:produce_sync`: Sync produce returns `ok`.
-- `brod:produce_sync_offset`: Sync produce returns `{ok, BaseOffset}`.
+- [`brod:produce`](https://hexdocs.pm/brod/brod.html#produce/5): Async produce with ack message sent back to caller.
+- [`brod:produce_cb`](https://hexdocs.pm/brod/brod.html#produce_cb/6): Async produce with a callback evaluated when ack is received.
+- [`brod:produce_sync`](https://hexdocs.pm/brod/brod.html#produce_sync/5): Sync produce that returns `ok`.
+- [`brod:produce_sync_offset`](https://hexdocs.pm/brod/brod.html#produce_sync_offset/5): Sync produce that returns `{ok, BaseOffset}`.
+- [`brod:produce_no_ack`](https://hexdocs.pm/brod/brod.html#produce_no_ack/5): Async produce without backpressure (use with care!).
 
 The `Value` arg in these APIs can be:
 
@@ -208,8 +218,8 @@ The `Value` arg in these APIs can be:
 When `Value` is a batch, the `Key` argument is only used as partitioner input and all messages are written on the same partition.
 All messages are unified into a batch format of below spec:
 `[#{key => K, value => V, ts => T, headers => [{_, _}]}]`.
-`ts` field is dropped for kafka prior to version `0.10` (produce API version 0, magic version 0)
-`headers` field is dropped for kafka prior to version `0.11` (produce API version 0-2, magic version 0-1)
+`ts` field is dropped for kafka prior to version `0.10` (produce API version 0, magic version 0).
+`headers` field is dropped for kafka prior to version `0.11` (produce API version 0-2, magic version 0-1).
 
 ### Synchronized Produce API
 
