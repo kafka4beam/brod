@@ -294,7 +294,7 @@ start_client(BootstrapEndpoints) ->
 start_client(BootstrapEndpoints, ClientId) ->
   start_client(BootstrapEndpoints, ClientId, []).
 
-%% @doc Start a client.
+%% @doc Start a client ({@link brod_client}).
 %%
 %% `BootstrapEndpoints':
 %%   Kafka cluster endpoints, can be any of the brokers in the cluster,
@@ -392,6 +392,9 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     </a>
 %%   </li>
 %% </ul>
+%%
+%% You can read more about clients in the
+%% <a href="https://hexdocs.pm/brod/readme.html#clients">overview</a>.
 -spec start_client([endpoint()], client_id(), client_config()) ->
                       ok | {error, any()}.
 start_client(BootstrapEndpoints, ClientId, Config) ->

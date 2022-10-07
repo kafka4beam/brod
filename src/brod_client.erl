@@ -14,6 +14,14 @@
 %%%   limitations under the License.
 %%%
 
+%% @doc A `brod_client' in brod is a `gen_server' responsible for establishing
+%% and maintaining tcp sockets connecting to kafka brokers. It also manages
+%% per-topic-partition producer and consumer processes under two-level
+%% supervision trees.
+%%
+%% You can start clients automatically at application startup or on demand.
+%% See the <a href="https://hexdocs.pm/brod/readme.html#clients">overview</a>
+%% for examples.
 -module(brod_client).
 -behaviour(gen_server).
 

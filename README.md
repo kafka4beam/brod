@@ -43,7 +43,7 @@ Make sure `{query_api_versions, false}` exists in client config.
 This is because `ApiVersionRequest` was introduced in kafka 0.10,
 sending such request to older version brokers will cause connection failure.
 
-e.g. in sys.config:
+e.g. in `sys.config`:
 
 ```erlang
 [{brod,
@@ -111,12 +111,15 @@ maintaining tcp sockets connecting to kafka brokers.
 It also manages per-topic-partition producer and consumer processes under
 two-level supervision trees.
 
+To use producers or consumers, you have to start at least one cient that
+will manage them.
+
 ### Start clients by default
 
-You may include client configs in sys.config have them started by default
+You may include client configs in `sys.config` have them started by default
 (by application controller)
 
-Example of configuration (for sys.config):
+Example of configuration (for `sys.config`):
 
 ```erlang
 [{brod,
@@ -132,6 +135,19 @@ Example of configuration (for sys.config):
      %% or if you think it's necessary to start another set of tcp connections
    ]
 }]
+```
+
+Example of configuration in Elixir (for `config/dev.exs` or `config/prod.exs`, etc.):
+
+```elixir
+config :brod,
+  clients: [
+    # :brod_client_1 is the registered name of the client
+    brod_client_1: [
+      endpoints: [{"localhost", 9092}],
+      reconnect_cool_down_seconds: 10
+    ]
+  ]
 ```
 
 ### Start brod client on demand
