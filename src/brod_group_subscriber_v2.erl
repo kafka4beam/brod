@@ -39,6 +39,7 @@
         , assignments_received/4
         , assignments_revoked/1
         , assign_partitions/3
+        , user_data/1
         ]).
 
 %% gen_server callbacks
@@ -98,7 +99,9 @@
 
 -callback terminate(_Reason, _State) -> _.
 
--optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/2]).
+-callback user_data(pid()) -> binary().
+
+-optional_callbacks([assign_partitions/3, get_committed_offset/3, terminate/2, user_data/1]).
 
 -type worker() :: pid().
 
@@ -228,6 +231,10 @@ assign_partitions(Pid, Members, TopicPartitionList) ->
   Call = {assign_partitions, Members, TopicPartitionList},
   gen_server:call(Pid, Call, infinity).
 
+-spec user_data(pid()) -> binary().
+user_data(Pid) ->
+  gen_server:call(Pid, {user_data, Pid}, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -296,6 +303,12 @@ handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
         } = State,
   Reply = CbModule:assign_partitions(CbConfig, Members, TopicPartitionList),
   {reply, Reply, State};
+
+handle_call({user_data, Pid}, _From, State) ->
+  #state{ cb_module = CbModule} = State,
+  Reply = CbModule:user_data(Pid),
+  {reply, Reply, State};
+
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
