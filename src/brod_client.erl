@@ -30,7 +30,9 @@
         , get_group_coordinator/2
         , get_leader_connection/3
         , get_metadata/2
+        , get_metadata_safe/2
         , get_partitions_count/2
+        , get_partitions_count_safe/2
         , get_producer/3
         , register_consumer/3
         , register_producer/3
@@ -47,6 +49,10 @@
 %% Private export
 -export([ find_producer/3
         , find_consumer/3
+        ]).
+
+%% Test export
+-export([ lookup_partitions_count_cache/2
         ]).
 
 -export([ code_change/3
@@ -238,17 +244,35 @@ get_metadata(Client, ?undef) ->
 get_metadata(Client, Topic) ->
   safe_gen_call(Client, {get_metadata, Topic}, infinity).
 
+%% @doc Ensure not topic auto creation even if Kafka has it enabled.
+-spec get_metadata_safe(client(), topic()) ->
+        {ok, kpro:struct()} | {error, any()}.
+get_metadata_safe(Client, Topic) ->
+  safe_gen_call(Client, {get_metadata, {_FetchMetdataForTopic = all, Topic}}, infinity).
+
 %% @doc Get number of partitions for a given topic.
--spec get_partitions_count(client(), topic()) ->
-        {ok, pos_integer()} | {error, any()}.
-get_partitions_count(Client, Topic) when is_atom(Client) ->
+-spec get_partitions_count(client(), topic()) -> {ok, pos_integer()} | {error, any()}.
+get_partitions_count(Client, Topic) ->
+  %% Set default allow_topic_auto_creation to true does not imply the topic is always
+  %% auto-created. Kafka can have auto-creation disabled, in which case this option has no effect.
+  get_partitions_count(Client, Topic, #{allow_topic_auto_creation => true}).
+
+get_partitions_count(Client, Topic, Opts) when is_atom(Client) ->
   %% Ets =:= ClientId
-  get_partitions_count(Client, Client, Topic);
-get_partitions_count(Client, Topic) when is_pid(Client) ->
+  do_get_partitions_count(Client, Client, Topic, Opts);
+get_partitions_count(Client, Topic, Opts) when is_pid(Client) ->
   case safe_gen_call(Client, get_workers_table, infinity) of
-    {ok, Ets}       -> get_partitions_count(Client, Ets, Topic);
+    {ok, Ets}       -> do_get_partitions_count(Client, Ets, Topic, Opts);
     {error, Reason} -> {error, Reason}
   end.
+
+%% @doc Get number of partitions for an existing topic.
+%% Ensured not to auto create a topic even when Kafka is configured
+%% with topic auto creation enabled.
+-spec get_partitions_count_safe(client(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
+get_partitions_count_safe(Client, Topic) ->
+    get_partitions_count(Client, Topic, #{allow_topic_auto_creation => false}).
 
 %% @doc Get broker endpoint and connection config for
 %% connecting a group coordinator.
@@ -531,7 +555,7 @@ validate_topic_existence(Topic, #state{workers_tab = Ets} = State, IsRetry) ->
     false ->
       %% Try fetch metadata (and populate partition count cache)
       %% Then validate topic existence again.
-      with_ok(get_metadata_safe(Topic, State),
+      with_ok(do_get_metadata_safe(Topic, State),
               fun(_, S) -> validate_topic_existence(Topic, S, true) end)
   end.
 
@@ -547,22 +571,28 @@ with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
 %% do not try to fetch metadata per topic name, fetch all topics instead.
 %% As sending metadata request with topic name will cause an auto creation
 %% of the topic if auto.create.topics.enable is enabled in broker config.
--spec get_metadata_safe(topic(), state()) -> {Result, state()}
+-spec do_get_metadata_safe(topic(), state()) -> {Result, state()}
         when Result :: {ok, kpro:struct()} | {error, any()}.
-get_metadata_safe(Topic0, #state{config = Config} = State) ->
+do_get_metadata_safe(Topic0, #state{config = Config} = State) ->
   Topic =
     case config(allow_topic_auto_creation, Config, true) of
       true  -> Topic0;
-      false -> all
+      false -> {all, Topic0}
     end,
   do_get_metadata(Topic, State).
 
--spec do_get_metadata(all | topic(), state()) -> {Result, state()}
+-spec do_get_metadata(all | topic() | {all, topic()}, state()) -> {Result, state()}
         when Result :: {ok, kpro:struct()} | {error, any()}.
-do_get_metadata(Topic, #state{ client_id     = ClientId
-                             , workers_tab   = Ets
-                             } = State0) ->
-  Topics = case Topic of
+do_get_metadata({all, Topic}, State) ->
+    do_get_metadata(all, Topic, State);
+do_get_metadata(Topic, State) when not is_tuple(Topic) ->
+    do_get_metadata(Topic, Topic, State).
+
+do_get_metadata(FetchMetdataFor, Topic,
+                #state{ client_id   = ClientId
+                      , workers_tab = Ets
+                      } = State0) ->
+  Topics = case FetchMetdataFor of
              all -> all; %% in case no topic is given, get all
              _   -> [Topic]
            end,
@@ -573,6 +603,7 @@ do_get_metadata(Topic, #state{ client_id     = ClientId
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
       TopicMetadataArray = kf(topics, Metadata),
       ok = update_partitions_count_cache(Ets, TopicMetadataArray),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray),
       {{ok, Metadata}, State};
     {error, Reason} ->
       ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
@@ -751,11 +782,23 @@ is_cooled_down(Ts, #state{config = Config}) ->
   Diff = timer:now_diff(Now, Ts) div 1000000,
   Diff >= Threshold.
 
+%% call this function after fetched metadata for all topics
+%% to cache the not-found status of a given topic
+maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray) ->
+  case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
+    {error, unknown_topic_or_partition} = Err ->
+      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, os:timestamp()}),
+      ok;
+    _ ->
+      %% do nothing when ok or any other error
+      ok
+  end.
+
 -spec update_partitions_count_cache(ets:tab(), [kpro:struct()]) -> ok.
 update_partitions_count_cache(_Ets, []) -> ok;
 update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
   Topic = kf(name, TopicMetadata),
-  case do_get_partitions_count(TopicMetadata) of
+  case get_partitions_count_in_metadata(TopicMetadata) of
     {ok, Cnt} ->
       ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
     {error, ?unknown_topic_or_partition} = Err ->
@@ -767,23 +810,45 @@ update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
 
 %% Get partition counter from cache.
 %% If cache is not hit, send meta data request to retrieve.
--spec get_partitions_count(client(), ets:tab(), topic()) ->
+-spec do_get_partitions_count(client(), ets:tab(), topic(),
+                              #{allow_topic_auto_creation := boolean()}) ->
         {ok, pos_integer()} | {error, any()}.
-get_partitions_count(Client, Ets, Topic) ->
+do_get_partitions_count(Client, Ets, Topic, #{allow_topic_auto_creation := AllowAutoCreation}) ->
   case lookup_partitions_count_cache(Ets, Topic) of
     {ok, Result} ->
       {ok, Result};
     {error, Reason} ->
       {error, Reason};
     false ->
-      %% This call should populate the cache
-      case get_metadata(Client, Topic) of
-        {ok, Meta} ->
-          [TopicMetadata] = kf(topics, Meta),
-          do_get_partitions_count(TopicMetadata);
-        {error, Reason} ->
-          {error, Reason}
-      end
+      %% The topic's partition count is not cached yet,
+      %% try to call get_metadata or get_metadata_safe to populate the cache
+      MetadataResponse =
+        case AllowAutoCreation of
+          true ->
+            get_metadata(Client, Topic);
+          false ->
+            get_metadata_safe(Client, Topic)
+        end,
+      %% the metadata is returned, no need to look up the cache again
+      %% find the topic's parition count from the metadata directly
+      find_partition_count_in_metadata(MetadataResponse, Topic)
+  end.
+
+find_partition_count_in_metadata({ok, Meta}, Topic) ->
+  TopicMetadataArrary = kf(topics, Meta),
+  find_partition_count_in_topic_metadata_array(TopicMetadataArrary, Topic);
+find_partition_count_in_metadata({error, Reason}, _) ->
+  {error, Reason}.
+
+find_partition_count_in_topic_metadata_array(TopicMetadataArrary, Topic) ->
+  FilterF = fun(#{name := N}) when N =:= Topic -> true;
+               (_) -> false
+            end,
+  case lists:filter(FilterF, TopicMetadataArrary) of
+    [TopicMetadata] ->
+      get_partitions_count_in_metadata(TopicMetadata);
+    [] ->
+      {error, unknown_topic_or_partition}
   end.
 
 -spec lookup_partitions_count_cache(ets:tab(), ?undef | topic()) ->
@@ -806,9 +871,9 @@ lookup_partitions_count_cache(Ets, Topic) ->
       {error, client_down}
   end.
 
--spec do_get_partitions_count(kpro:struct()) ->
+-spec get_partitions_count_in_metadata(kpro:struct()) ->
         {ok, pos_integer()} | {error, any()}.
-do_get_partitions_count(TopicMetadata) ->
+get_partitions_count_in_metadata(TopicMetadata) ->
   ErrorCode = kf(error_code, TopicMetadata),
   Partitions = kf(partitions, TopicMetadata),
   case ?IS_ERROR(ErrorCode) of

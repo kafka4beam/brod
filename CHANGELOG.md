@@ -2,6 +2,9 @@
 
 - 3.16.6
   - Improve the documentation
+  - Add `brod:get_partitions_count_safe/2`.
+    It is ensured not to auto-create topics in Kafka even
+    when Kafka has topic auto-creation configured.
 
 - 3.16.5
   - Treat `offset = 0` commit record as `earliest`.
