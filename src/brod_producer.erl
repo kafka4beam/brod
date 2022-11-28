@@ -14,6 +14,11 @@
 %%%   limitations under the License.
 %%%
 
+%% @doc A `brod_producer' is a `gen_server' that is responsible for producing
+%% messages to a given partition of a given topic.
+%%
+%% See the <a href="https://hexdocs.pm/brod/readme.html#producers">overview</a>
+%% for some more information and examples.
 -module(brod_producer).
 -behaviour(gen_server).
 
@@ -100,7 +105,7 @@
 
 %% @doc Start (link) a partition producer.
 %%
-%% Possible configs:
+%% Possible configs (passed as a proplist):
 %% <ul>
 %%   <li>`required_acks' (optional, default = -1):
 %%
@@ -157,7 +162,7 @@
 %%
 %%     Time in milli-seconds to sleep before retry the failed produce request.
 %%   </li>
-%%   <li>`compression' (optional, default = no_compression):
+%%   <li>`compression' (optional, default = `no_compression`):
 %%
 %%     `gzip' or `snappy' to enable compression</li>
 %%   <li>`max_linger_ms' (optional, default = 0):
@@ -192,7 +197,8 @@
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
-%% @doc Produce a message to partition asynchronizely.
+%% @doc Produce a message to partition asynchronously.
+%%
 %% The call is blocked until the request has been buffered in producer worker
 %% The function returns a call reference of type `call_ref()' to the
 %% caller so the caller can used it to expect (match) a
@@ -239,8 +245,10 @@ produce_cb(Pid, Key, Value, AckCb) ->
   end.
 
 %% @doc Block calling process until it receives an acked reply for the
-%% `CallRef'. The caller pid of this function must be the caller of
-%% `produce/3' in which the call reference was created.
+%% `CallRef'.
+%%
+%% The caller pid of this function must be the caller of
+%% {@link produce/3} in which the call reference was created.
 -spec sync_produce_request(call_ref(), timeout()) ->
         {ok, offset()} | {error, Reason}
           when Reason :: timeout | {producer_down, any()}.
@@ -413,6 +421,7 @@ make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression) ->
   ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression},
   {fun ?MODULE:do_send_fun/4, ExtraArg}.
 
+%% @private
 do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
   {Topic, Partition, RequiredAcks, AckTimeout, Compression} = ExtraArg,
   ProduceRequest =
@@ -427,6 +436,7 @@ do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
       {error, Reason}
   end.
 
+%% @private
 do_no_ack(_Partition, _BaseOffset) -> ok.
 
 -spec log_error_code(topic(), partition(), offset(), brod:error_code()) -> _.
@@ -437,6 +447,7 @@ log_error_code(Topic, Partition, Offset, ErrorCode) ->
 make_bufcb(CallRef, AckCb, Partition) ->
   {fun ?MODULE:do_bufcb/2, _ExtraArg = {CallRef, AckCb, Partition}}.
 
+%% @private
 do_bufcb({CallRef, AckCb, Partition}, Arg) ->
   #brod_call_ref{caller = Pid} = CallRef,
   case Arg of

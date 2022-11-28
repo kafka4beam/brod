@@ -82,17 +82,16 @@
 %%%_* APIs =====================================================================
 
 %% @equiv create_topics(Hosts, TopicsConfigs, RequestConfigs, [])
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}) ->
-        {ok, kpro:struct()} | {error, any()} | ok.
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()}) ->
+        ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs) ->
   create_topics(Hosts, TopicConfigs, RequestConfigs, _ConnCfg = []).
 
 %% @doc Try to connect to the controller node using the given
 %% connection options and create the given topics with configs
--spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32(),
-                    validate_only => boolean()}, conn_config()) ->
-        {ok, kpro:struct()} | {error, any()} | ok.
+-spec create_topics([endpoint()], [topic_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
+        ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
   KproOpts = kpro_connection_options(ConnCfg),
   with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg), KproOpts),
@@ -147,6 +146,8 @@ get_metadata(Hosts, Topics, ConnCfg) ->
 %% @doc Resolve timestamp to real offset.
 %% Pass connect_timeout prop as the default timeout
 %% for kpro:connect_partition_leader/5.
+%%
+%% See {@link brod:resolve_offset/5} for documentation.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config()) ->
         {ok, offset()} | {error, any()}.
@@ -155,6 +156,8 @@ resolve_offset(Hosts, Topic, Partition, Time, ConnCfg) ->
   resolve_offset(Hosts, Topic, Partition, Time, ConnCfg, KproOpts).
 
 %% @doc Resolve timestamp to real offset.
+%%
+%% See {@link brod:resolve_offset/5} for documentation.
 -spec resolve_offset([endpoint()], topic(), partition(),
                      offset_time(), conn_config(),
                     #{timeout => kpro:int32()}) ->

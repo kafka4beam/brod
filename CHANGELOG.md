@@ -1,5 +1,8 @@
 # Changelog
 
+- 3.16.6
+  - Improve the documentation
+
 - 3.16.5
   - Treat `offset = 0` commit record as `earliest`.
     This is an issue introduced in 3.16.4 which supported subscriber

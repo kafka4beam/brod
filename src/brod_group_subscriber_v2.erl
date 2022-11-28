@@ -19,6 +19,8 @@
 %%% `brod_group_subscriber' behavior. Key difference is that each partition
 %%% worker runs in a separate Erlang process, allowing parallel message
 %%% processing.
+%%%
+%%% Callbacks are documented in the source code of this module.
 %%% @end
 %%%=============================================================================
 -module(brod_group_subscriber_v2).

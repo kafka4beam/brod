@@ -13,6 +13,24 @@
 %%%   limitations under the License.
 %%%
 
+%% @doc Kafka consumers work in poll mode. In brod, `brod_consumer' is the poller,
+%% which is constantly asking for more data from the kafka node which is a leader
+%% for the given partition.
+%%
+%% By subscribing to `brod_consumer' a process should receive the polled message
+%% sets (not individual messages) into its mailbox. Shape of the message is
+%% documented at {@link brod:subscribe/5}.
+%%
+%% Messages processed by the subscriber has to be acked by calling
+%% {@link ack/2} (or {@link brod:consume_ack/4}) to notify the consumer
+%% that all messages before the acknowledged offsets are processed,
+%% hence more messages can be fetched and sent to the subscriber and the
+%% subscriber won't be overwhelmed by it.
+%%
+%% Each consumer can have only one subscriber.
+%%
+%% See the <a href="https://hexdocs.pm/brod/readme.html#consumers">overview</a> for
+%% some more information and examples.
 -module(brod_consumer).
 
 -behaviour(gen_server).
@@ -41,7 +59,10 @@
         , code_change/3
         ]).
 
--export_type([config/0]).
+-export_type([ config/0
+             , offset_reset_policy/0
+             , isolation_level/0
+             ]).
 
 -include("brod_int.hrl").
 -include_lib("kafka_protocol/include/kpro_error_codes.hrl").
@@ -51,7 +72,9 @@
 -type offset() :: brod:offset().
 -type offset_time() :: brod:offset_time().
 
--type options() :: brod:consumer_options().
+%% Consumer options.
+%%
+%% Documented at {@link start_link/5}.
 -type offset_reset_policy() :: reset_by_subscriber
                              | reset_to_earliest
                              | reset_to_latest.
@@ -60,7 +83,7 @@
 -define(PENDING(Offset, Bytes), {Offset, Bytes}).
 -type pending() :: ?PENDING(offset(), bytes()).
 -type pending_queue() :: queue:queue(pending()).
--type config() :: proplists:proplist().
+-type config() :: brod:consumer_config().
 
 -record(pending_acks, { count = 0 :: non_neg_integer()
                       , bytes = 0 :: bytes()
@@ -155,13 +178,17 @@ start_link(Bootstrap, Topic, Partition, Config) ->
 %%  <li>`prefetch_bytes' (optional, default = 100KB)
 %%
 %%     The total number of bytes allowed to fetch-ahead.
-%%     brod_consumer is greed, it only stops fetching more messages in
-%%     when number of unacked messages has exceeded prefetch_count AND
-%%     the unacked total volume has exceeded prefetch_bytes</li>
+%%     `brod_consumer' is greed, it only stops fetching more messages in
+%%     when number of unacked messages has exceeded `prefetch_count' AND
+%%     the unacked total volume has exceeded `prefetch_bytes'</li>
 %%
 %%  <li>`begin_offset' (optional, default = latest)
 %%
-%%     The offset from which to begin fetch requests.</li>
+%%     The offset from which to begin fetch requests.
+%%     A subscriber may consume and process messages, then persist the
+%%     associated offset to a persistent storage, then start (or
+%%     restart) from `last_processed_offset + 1' as the `begin_offset'
+%%     to proceed. The offset has to already exist at the time of calling.</li>
 %%
 %%  <li>`offset_reset_policy' (optional, default = reset_by_subscriber)
 %%
@@ -218,24 +245,15 @@ stop_maybe_kill(Pid, Timeout) ->
       ok
   end.
 
-%% @doc Subscribe or resubscribe on messages from a partition.  Caller
-%% may specify a set of options extending consumer config. It is
-%% possible to update parameters such as `max_bytes' and
+%% @doc Subscribe or resubscribe on messages from a partition.
+%%
+%% Caller may specify a set of options extending consumer config.
+%% It is possible to update parameters such as `max_bytes' and
 %% `max_wait_time', or the starting point (`begin_offset') of the data
-%% stream.
+%% stream. Note that you currently cannot update `isolation_level'.
 %%
-%% Possible options:
-%%
-%%   All consumer configs as documented for {@link start_link/5}
-%%
-%%   `begin_offset' (optional, default = latest)
-%%
-%%     A subscriber may consume and process messages, then persist the
-%%     associated offset to a persistent storage, then start (or
-%%     restart) from `last_processed_offset + 1' as the `begin_offset'
-%%     to proceed. By default, it starts fetching from the latest
-%%     available offset.
--spec subscribe(pid(), pid(), options()) -> ok | {error, any()}.
+%% Possible options are documented at {@link start_link/5}.
+-spec subscribe(pid(), pid(), config()) -> ok | {error, any()}.
 subscribe(Pid, SubscriberPid, ConsumerOptions) ->
   safe_gen_call(Pid, {subscribe, SubscriberPid, ConsumerOptions}, infinity).
 
@@ -741,7 +759,7 @@ handle_subscribe_call(Pid, Options,
       {reply, {error, Reason}, State0}
   end.
 
--spec update_options(options(), state()) -> {ok, state()} | {error, any()}.
+-spec update_options(config(), state()) -> {ok, state()} | {error, any()}.
 update_options(Options, #state{begin_offset = OldBeginOffset} = State) ->
   F = fun(Name, Default) -> proplists:get_value(Name, Options, Default) end,
   NewBeginOffset = F(begin_offset, OldBeginOffset),

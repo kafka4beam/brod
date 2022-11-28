@@ -1,5 +1,9 @@
 # Publisher Example
 
+> #### Info {: .info}
+>
+> There is also a more complete example [here](https://github.com/kafka4beam/brod/tree/master/contrib/examples/elixir).
+
 Ensure `:brod` is added to your deps on `mix.exs`
 
 ```elixir
@@ -12,7 +16,9 @@ end
 
 ## Client Configuration
 
-Adding the following configuration (e.g. `config/dev.exs`)
+To use producers, you have to start a client first.
+
+You can do that by adding the following configuration (e.g. into `config/dev.exs`):
 
 ```elixir
 import Config
@@ -34,7 +40,18 @@ config :brod,
   ]
 ```
 
+or by starting it dynamically with this snippet (you can also add SSL/SASL configuration if you want to):
+
+```elixir
+:brod.start_client([localhost: 9092], :kafka_client, auto_start_producers: true)
+```
+
 _Note:_ `kafka_client` can be any valid atom. And `:endpoints` accepts multiple host port tuples (e.g. `endpoints: [{"192.168.0.2", 9092}, {"192.168.0.3", 9092}, ...]`).
+
+If you don't pass the `auto_start_producers: true` option, you also have to manually start producers before calling `:brod.produce_sync/5` (and other produce functions).
+For example like this: `:brod.start_producer(:kafka_client, "my_topic", [])`.
+
+See `:brod.start_client/3` for a list of all available options.
 
 ## Publisher
 
@@ -47,6 +64,9 @@ defmodule BrodExample.Publisher do
   end
 end
 ```
+
+There are also other ways (functions) how to produce messages, you can find them in the [overview](https://hexdocs.pm/brod/readme.html#producers) and in the `brod`
+module documentation.
 
 ### Using partition key
 
