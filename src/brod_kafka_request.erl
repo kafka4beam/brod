@@ -20,6 +20,7 @@
 -export([ create_topics/3
         , delete_topics/3
         , fetch/8
+        , fetch/9
         , list_groups/1
         , list_offsets/4
         , join_group/2
@@ -87,6 +88,20 @@ fetch(Pid, Topic, Partition, Offset,
                       , min_bytes => MinBytes
                       , max_bytes => MaxBytes
                       , isolation_level => IsolationLevel
+                      }).
+
+-spec fetch(conn(), topic(), partition(), offset(),
+            kpro:wait(), kpro:count(), kpro:count(),
+            kpro:isolation_level(), ?undef | binary()) -> kpro:req().
+fetch(Pid, Topic, Partition, Offset,
+      WaitTime, MinBytes, MaxBytes, IsolationLevel, RackId) ->
+  Vsn = pick_version(fetch, Pid),
+  kpro_req_lib:fetch(Vsn, Topic, Partition, Offset,
+                      #{ max_wait_time => WaitTime
+                      , min_bytes => MinBytes
+                      , max_bytes => MaxBytes
+                      , isolation_level => IsolationLevel
+                      , rack_id => RackId
                       }).
 
 %% @doc Make a `list_offsets' request message for offset resolution.
