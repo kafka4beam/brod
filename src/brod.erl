@@ -26,6 +26,7 @@
 
 %% Client API
 -export([ get_partitions_count/2
+        , get_partitions_count_safe/2
         , start_client/1
         , start_client/2
         , start_client/3
@@ -491,10 +492,19 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
 %% is not statically configured for them.
 %% It is up to the callers how they want to distribute their data
 %% (e.g. random, roundrobin or consistent-hashing) to the partitions.
+%% NOTE: The partitions count is cached for 120 seconds.
 -spec get_partitions_count(client(), topic()) ->
         {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Topic) ->
   brod_client:get_partitions_count(Client, Topic).
+
+%% @doc The same as `get_partitions_count(Client, Topic)'
+%% but ensured not to auto-create topics in Kafka even
+%% when Kafka has topic auto-creation configured.
+-spec get_partitions_count_safe(client(), topic()) ->
+        {ok, pos_integer()} | {error, any()}.
+get_partitions_count_safe(Client, Topic) ->
+  brod_client:get_partitions_count_safe(Client, Topic).
 
 -spec get_consumer(client(), topic(), partition()) ->
         {ok, pid()} | {error, Reason}
