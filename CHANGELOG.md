@@ -1,6 +1,6 @@
 # Changelog
 
-- 3.16.4
+- 3.16.6
   - Upgrade `kafka_protocol` from 4.1.0 to 4.1.1 to support defining
     SNI for bootstrap hosts without the need to set the `verify_peer`
     config.
