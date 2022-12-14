@@ -1,5 +1,10 @@
 # Changelog
 
+- 3.16.4
+  - Upgrade `kafka_protocol` from 4.1.0 to 4.1.1 to support defining
+    SNI for bootstrap hosts without the need to set the `verify_peer`
+    config.
+
 - 3.16.5
   - Improve the documentation
   - Add `brod:get_partitions_count_safe/2`.
