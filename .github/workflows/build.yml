@@ -12,7 +12,7 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     name: Lint
     steps:
       - name: Checkout
@@ -39,7 +39,7 @@ jobs:
       - name: Lint, Dialyzer & Xref
         run: rebar3 do compile,lint,dialyzer,xref
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     name: OTP ${{matrix.otp}} / Kafka ${{matrix.kafka}}
     strategy:
       fail-fast: false
@@ -82,7 +82,7 @@ jobs:
         run: rebar3 do cover,coveralls send
   docs:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     name: Publish Documentation
     steps:
       - name: Checkout
