@@ -57,7 +57,11 @@
                         {ok, reference()} |
                         {error, any()}.
 -type send_fun() :: fun((pid(), batch(), vsn()) -> send_fun_res()) |
+                    fun((pid(), batch(), non_neg_integer(), vsn()) -> send_fun_res()) |
+                    {fun((any(), pid(), batch(), non_neg_integer(), vsn()) ->
+                         send_fun_res()), any()} |
                     {fun((any(), pid(), batch(), vsn()) -> send_fun_res()), any()}.
+
 -define(ERR_FUN, fun() -> erlang:error(bad_init) end).
 
 -define(NEW_QUEUE, queue:new()).
@@ -72,6 +76,7 @@
         , send_fun          = ?ERR_FUN   :: send_fun()
         , buffer_count      = 0          :: non_neg_integer()
         , onwire_count      = 0          :: non_neg_integer()
+        , send_count        = 0          :: non_neg_integer()
         , pending           = ?NEW_QUEUE :: queue:queue(req())
         , buffer            = ?NEW_QUEUE :: queue:queue(req())
         , onwire            = []         :: [{reference(), [req()]}]
@@ -270,19 +275,22 @@ take_reqs_loop_2(#buf{ buffer_count   = BufferCount
         when Action :: ok | retry | {delay, milli_sec()}.
 do_send(Reqs, #buf{ onwire_count = OnWireCount
                   , onwire       = OnWire
+                  , send_count   = SendCount
                   , send_fun     = SendFun
                   } = Buf, Conn, Vsn) ->
   Batch = lists:flatmap(fun(#req{data = Data}) -> Data end, Reqs),
-  case apply_sendfun(SendFun, Conn, Batch, Vsn) of
+  case apply_sendfun(SendFun, Conn, Batch, SendCount, Vsn) of
     ok ->
       %% fire and forget, do not add onwire counter
       ok = lists:foreach(fun eval_acked/1, Reqs),
       %% continue to try next batch
-      maybe_send(Buf, Conn, Vsn);
+      maybe_send(Buf#buf{send_count = SendCount + 1},
+                 Conn, Vsn);
     {ok, Ref} ->
       %% Keep onwire message reference to match acks later on
       NewBuf = Buf#buf{ onwire_count = OnWireCount + 1
                       , onwire       = OnWire ++ [{Ref, Reqs}]
+                      , send_count = SendCount + 1
                       },
       %% continue try next batch
       maybe_send(NewBuf, Conn, Vsn);
@@ -297,10 +305,10 @@ do_send(Reqs, #buf{ onwire_count = OnWireCount
       {retry, NewBuf}
   end.
 
-apply_sendfun({SendFun, ExtraArg}, Conn, Batch, Vsn) ->
-  SendFun(ExtraArg, Conn, Batch, Vsn);
-apply_sendfun(SendFun, Conn, Batch, Vsn) ->
-  SendFun(Conn, Batch, Vsn).
+apply_sendfun({SendFun, ExtraArg}, Conn, Batch, SendCount, Vsn) ->
+  SendFun(ExtraArg, Conn, Batch, SendCount, Vsn);
+apply_sendfun(SendFun, Conn, Batch, SendCount, Vsn) ->
+  SendFun(Conn, Batch, SendCount, Vsn).
 
 %% Put the produce requests back to buffer.
 %% raise an 'exit' exception if the first request to send has reached

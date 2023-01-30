@@ -28,6 +28,7 @@
 -export([ get_consumer/3
         , get_connection/3
         , get_group_coordinator/2
+        , get_transactional_coordinator/2
         , get_leader_connection/3
         , get_metadata/2
         , get_metadata_safe/2
@@ -92,6 +93,7 @@
 -type partition() :: brod:partition().
 -type config() :: proplists:proplist().
 -type group_id() :: brod:group_id().
+-type transactional_id() :: brod:transactional_id().
 
 -type partition_worker_key() :: ?PRODUCER_KEY(topic(), partition())
                               | ?CONSUMER_KEY(topic(), partition()).
@@ -281,6 +283,14 @@ get_partitions_count_safe(Client, Topic) ->
 get_group_coordinator(Client, GroupId) ->
   safe_gen_call(Client, {get_group_coordinator, GroupId}, infinity).
 
+%% @doc Get broker endpoint and connection config for
+%% connecting a transactional coordinator.
+-spec get_transactional_coordinator(client(), transactional_id()) ->
+        {ok, {endpoint(), brod:conn_config()}} | {error, any()}.
+get_transactional_coordinator(Client, TransactionId) ->
+  safe_gen_call(Client, {get_transactional_coordinator, TransactionId}, infinity).
+
+
 %% @doc Register self() as a partition producer.
 %%
 %% The pid is registered in an ETS table, then the callers
@@ -383,6 +393,9 @@ handle_call({get_connection, Host, Port}, _From, State) ->
   {reply, Result, NewState};
 handle_call({get_group_coordinator, GroupId}, _From, State) ->
   {Result, NewState} = do_get_group_coordinator(State, GroupId),
+  {reply, Result, NewState};
+handle_call({get_transactional_coordinator, TransactionId}, _From, State) ->
+  {Result, NewState} = do_get_transactional_coordinator(State, TransactionId),
   {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
   {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
@@ -644,6 +657,19 @@ do_get_group_coordinator(State0, GroupId) ->
   MetaConn = get_metadata_connection(State),
   Timeout = timeout(State),
   case kpro:discover_coordinator(MetaConn, group, GroupId, Timeout) of
+    {ok, Endpoint} ->
+      {{ok, {Endpoint, conn_config(State)}}, State};
+    {error, Reason} ->
+      {{error, Reason}, State}
+  end.
+
+-spec do_get_transactional_coordinator(state(), transactional_id()) ->
+        {Result, state()} when Result :: {ok, connection()} | {error, any()}.
+do_get_transactional_coordinator(State0, TransactionId) ->
+  State = ensure_metadata_connection(State0),
+  MetaConn = get_metadata_connection(State),
+  Timeout = timeout(State),
+  case kpro:discover_coordinator(MetaConn, txn, TransactionId, Timeout) of
     {ok, Endpoint} ->
       {{ok, {Endpoint, conn_config(State)}}, State};
     {error, Reason} ->

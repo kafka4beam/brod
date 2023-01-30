@@ -5,6 +5,19 @@ docker ps > /dev/null || {
     exit 1
 }
 
+function docker_compose {
+    if command -v docker-compose ; then
+        docker-compose $@
+    else
+        docker compose version &> /dev/null
+        if [ $? -eq 0 ]; then
+            docker compose $@
+        else
+            exit "couldn't find docker compose, needed for testing"
+        fi
+    fi
+}
+
 VERSION=${KAFKA_VERSION:-1.1}
 if [ -z $VERSION ]; then VERSION=$1; fi
 
@@ -26,8 +39,9 @@ export KAFKA_VERSION=$VERSION
 
 TD="$(cd "$(dirname "$0")" && pwd)"
 
-docker-compose -f $TD/docker-compose.yml down || true
-docker-compose -f $TD/docker-compose.yml up -d
+docker_compose -f $TD/docker-compose.yml down || true
+docker_compose -f $TD/docker-compose.yml up -d
+
 
 n=0
 while [ "$(docker exec kafka-1 bash -c '/opt/kafka/bin/kafka-topics.sh --zookeeper localhost --list')" != '' ]; do
@@ -57,6 +71,11 @@ create_topic "brod-group-coordinator-1"       3 2
 create_topic "brod-demo-topic-subscriber"     3 2
 create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
+create_topic "brod_txn_SUITE_1" 3 2
+create_topic "brod_txn_SUITE_2" 3 2
+create_topic "brod_txn_subscriber_inpuut" 3 2
+create_topic "brod_txn_subscriber_output_1" 3 2
+create_topic "brod_txn_subscriber_output_2" 3 2
 create_topic "brod_compression_SUITE"
 create_topic "lz4-test"
 create_topic "test-topic"

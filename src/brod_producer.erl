@@ -23,6 +23,7 @@
 -behaviour(gen_server).
 
 -export([ start_link/4
+        , start_link/5
         , produce/3
         , produce_cb/4
         , produce_no_ack/3
@@ -39,7 +40,7 @@
         , format_status/2
         ]).
 
--export([ do_send_fun/4
+-export([ do_send_fun/5
         , do_no_ack/2
         , do_bufcb/2
         ]).
@@ -84,6 +85,7 @@
 -type config() :: proplists:proplist().
 -type call_ref() :: brod:call_ref().
 -type conn() :: kpro:connection().
+-type txn_ctx() :: kpro:txn_ctx().
 
 -record(state,
         { client_pid        :: pid()
@@ -197,6 +199,11 @@
 start_link(ClientPid, Topic, Partition, Config) ->
   gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, Config}, []).
 
+
+-spec start_link(pid(), topic(), partition(), txn_ctx(), config()) -> {ok, pid()}.
+start_link(ClientPid, Topic, Partition, TxnCtx, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, Topic, Partition, TxnCtx, Config}, []).
+
 %% @doc Produce a message to partition asynchronously.
 %%
 %% The call is blocked until the request has been buffered in producer worker
@@ -282,6 +289,10 @@ stop(Pid) -> ok = gen_server:call(Pid, stop).
 
 %% @private
 init({ClientPid, Topic, Partition, Config}) ->
+  init({ClientPid, Topic, Partition, false, Config});
+
+%% @private
+init({ClientPid, Topic, Partition, TxnCtx, Config}) ->
   erlang:process_flag(trap_exit, true),
   BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
   OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
@@ -293,7 +304,7 @@ init({ClientPid, Topic, Partition, Config}) ->
   Compression = ?config(compression, ?DEFAULT_COMPRESSION),
   MaxLingerMs = ?config(max_linger_ms, ?DEFAULT_MAX_LINGER_MS),
   MaxLingerCount = ?config(max_linger_count, ?DEFAULT_MAX_LINGER_COUNT),
-  SendFun = make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression),
+  SendFun = make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression, TxnCtx),
   Buffer = brod_producer_buffer:new(BufferLimit, OnWireLimit, MaxBatchSize,
                                     MaxRetries, MaxLingerMs, MaxLingerCount,
                                     SendFun),
@@ -310,9 +321,18 @@ init({ClientPid, Topic, Partition, Config}) ->
                 , connection       = ?undef
                 , produce_req_vsn  = ReqVersion
                 },
-  %% Register self() to client.
-  ok = brod_client:register_producer(ClientPid, Topic, Partition),
+  %% if this producer will be used with a transaction, it shouldn't be used to
+  %% produce normal messages
+  case TxnCtx of
+    false ->
+      %% Register self() to client.
+      ok = brod_client:register_producer(ClientPid, Topic, Partition);
+    _ ->  ok
+  end,
+
   {ok, State}.
+
+
 
 %% @private
 handle_info(?DELAYED_SEND_MSG(MsgRef),
@@ -416,17 +436,26 @@ format_status(terminate, [_PDict, State=#state{buffer = Buffer}]) ->
   State#state{buffer = brod_producer_buffer:empty_buffers(Buffer)}.
 
 %%%_* Internal Functions =======================================================
-
-make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression) ->
+make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression, false) ->
   ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression},
-  {fun ?MODULE:do_send_fun/4, ExtraArg}.
+  {fun ?MODULE:do_send_fun/5, ExtraArg};
+
+make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression, TxnCtx) ->
+  ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression, TxnCtx},
+  {fun ?MODULE:do_send_fun/5, ExtraArg}.
 
 %% @private
-do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
-  {Topic, Partition, RequiredAcks, AckTimeout, Compression} = ExtraArg,
+do_send_fun(ExtraArg, Conn, BatchInput, SendCount, Vsn) ->
   ProduceRequest =
-    brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
-                               RequiredAcks, AckTimeout, Compression),
+  case ExtraArg of
+    {Topic, Partition, RequiredAcks, AckTimeout, Compression} ->
+      brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
+                                 RequiredAcks, AckTimeout, Compression);
+    {Topic, Partition, RequiredAcks, AckTimeout, Compression, TxnCtx} ->
+      brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
+                                 RequiredAcks, AckTimeout, Compression, TxnCtx, SendCount)
+  end,
+
   case send(Conn, ProduceRequest) of
     ok when ProduceRequest#kpro_req.no_ack ->
       ok;
