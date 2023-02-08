@@ -1,15 +1,15 @@
 -module(brod_offset_txn_SUITE).
 
 -export([ init_per_suite/1
-        , end_per_suite/1
-        , init_per_testcase/2
-        , end_per_testcase/2
-        , all/0
-        , suite/0
+          , end_per_suite/1
+          , init_per_testcase/2
+          , end_per_testcase/2
+          , all/0
+          , suite/0
         ]).
 
 -export([ t_simple_test/1
-        , t_no_commit_test/1
+          , t_no_commit_test/1
         ]).
 
 -export([init/2,
@@ -40,146 +40,146 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-  init_per_testcase(Case, Config) ->
-    try ?MODULE:Case({'init', Config})
-    catch error : function_clause ->
-      init_client(Case, Config)
-    end.
+init_per_testcase(Case, Config) ->
+  try ?MODULE:Case({'init', Config})
+  catch error : function_clause ->
+          init_client(Case, Config)
+  end.
 
-  init_client(Case, Config) ->
-    Client = Case,
-    brod:stop_client(Client),
-    ClientConfig = client_config(),
-    ok = brod:start_client(?HOSTS, Client, ClientConfig),
+init_client(Case, Config) ->
+  Client = Case,
+  brod:stop_client(Client),
+  ClientConfig = client_config(),
+  ok = brod:start_client(?HOSTS, Client, ClientConfig),
 
-    [{client, Client},
-     {client_config, ClientConfig} | Config].
+  [ {client, Client}
+  , {client_config, ClientConfig} | Config].
 
-  end_per_testcase(_Case, Config) ->
-    Subscriber = ?config(subscriber),
-    is_pid(Subscriber) andalso unlink(Subscriber),
-    is_pid(Subscriber) andalso exit(Subscriber, kill),
-    Pid = whereis(?config(client)),
-    try
-      Ref = erlang:monitor(process, Pid),
-      brod:stop_client(?config(client)),
-      receive
-        {'DOWN', Ref, process, Pid, _} -> ok
-      end
-    catch _ : _ ->
-      ok
-    end,
-    Config.
-
-  all() -> [F || {F, _A} <- module_info(exports),
-                    case atom_to_list(F) of
-                      "t_" ++ _ -> true;
-                      _         -> false
-                    end].
-
-  client_config() ->
-    case os:getenv("KAFKA_VERSION") of
-      "0.9" ++ _ -> [{query_api_versions, false}];
-      _ -> []
-    end.
-
-  init(GroupId,
-       #{client := Client,
-         observer := OPid}) ->
-    {ok, #{client => Client,
-           observer => OPid,
-           group_id => GroupId}}.
-
-  handle_message(Topic,
-                 Partition,
-                 #kafka_message{offset = Offset,
-                                key = Key,
-                                value = Value},
-                 #{client := Client,
-                   group_id := GroupId,
-                   observer := ObserverPid} =  State) ->
-
-    {ok, Tx} = brod:transaction(Client),
-    {ok, Ref1} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_1, Partition, Key, Value),
-    {ok, Ref2} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_2, Partition, Key, Value),
-    ok = brod:txn_add_offsets(Tx, GroupId, #{{Topic, Partition} => Offset}),
-    {ok, _} = brod:txn_sync_request(Ref1, ?TIMEOUT),
-    {ok, _} = brod:txn_sync_request(Ref2, ?TIMEOUT),
-
-    case Value of
-      <<"no_commit">> ->
-        ok = brod:abort(Tx);
-      _ ->
-        ok = brod:commit(Tx)
-    end,
-
-    ObserverPid ! {offset, Offset},
-
-    {ok, ack_no_commit, State}.
-
-  get_committed_offsets(GroupId, TPs, #{client := Client} = State) ->
-    {ok, Offsets} = brod:fetch_committed_offsets(Client, GroupId),
-    TPOs =
-    lists:filter(fun({TP, _Offset}) ->
-                     lists:member(TP, TPs)
-                 end,
-                 lists:foldl(fun(#{name := Topic,
-                                   partitions := Partitions}, TPOs) ->
-                                 lists:append(TPOs,
-                                              lists:map(fun(#{committed_offset := COffset,
-                                                              partition_index := Partition}) ->
-                                                            {{Topic, Partition}, COffset}
-                                                        end, Partitions))
-                             end, [], Offsets)),
-    {ok,
-     TPOs,
-     State}.
-
-  get_offset() ->
-    timer:sleep(100),
-    case get_committed_offsets(?GROUP_ID,
-                          [{?TOPIC_INPUT, 0}],
-                          #{client => ?CLIENT_ID}) of
-
-      {ok, [{{?TOPIC_INPUT, 0}, Offset}], _} -> Offset;
-      {ok, [], _} -> 0
-    end.
-
-  send_no_commit_message() ->
-    send_message(rand(), <<"no_commit">>).
-
-  send_simple_message() ->
-    send_message(rand(), <<"simple">>).
-
-  send_message(Key, Value) ->
-    brod:start_producer(?CLIENT_ID, ?TOPIC_INPUT, []),
-    {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC_INPUT, 0, Key, Value),
-    Offset.
-
-  start_subscriber() ->
-    GroupConfig = [{offset_commit_policy, consumer_managed}],
-
-    ConsumerConfig = [ {prefetch_count, 3}
-                     , {sleep_timeout, 0}
-                     , {max_wait_time, 100}
-                     , {partition_restart_delay_seconds, 1}
-                     , {begin_offset, 0}
-                     ],
-
-    brod:start_link_group_subscriber(?CLIENT_ID,
-                                     ?GROUP_ID,
-                                     [?TOPIC_INPUT],
-                                     GroupConfig,
-                                     ConsumerConfig,
-                                     message,
-                                     ?MODULE,
-                                     #{client => ?CLIENT_ID,
-                                       observer => self()}).
-
-  wait_to_last() ->
+end_per_testcase(_Case, Config) ->
+  Subscriber = ?config(subscriber),
+  is_pid(Subscriber) andalso unlink(Subscriber),
+  is_pid(Subscriber) andalso exit(Subscriber, kill),
+  Pid = whereis(?config(client)),
+  try
+    Ref = erlang:monitor(process, Pid),
+    brod:stop_client(?config(client)),
     receive
-      _ -> wait_to_last()
-    after ?TIMEOUT -> done
+      {'DOWN', Ref, process, Pid, _} -> ok
+    end
+  catch _ : _ ->
+          ok
+  end,
+  Config.
+
+all() -> [F || {F, _A} <- module_info(exports),
+               case atom_to_list(F) of
+                 "t_" ++ _ -> true;
+                 _         -> false
+               end].
+
+client_config() ->
+  case os:getenv("KAFKA_VERSION") of
+    "0.9" ++ _ -> [{query_api_versions, false}];
+    _ -> []
+  end.
+
+init(GroupId,
+     #{ client := Client
+      , observer := OPid}) ->
+  {ok, #{ client => Client
+        , observer => OPid
+        , group_id => GroupId}}.
+
+handle_message(Topic,
+               Partition,
+               #kafka_message{ offset = Offset
+                             , key = Key
+                             , value = Value},
+               #{ client := Client
+                , group_id := GroupId
+                , observer := ObserverPid} =  State) ->
+
+  {ok, Tx} = brod:transaction(Client),
+  {ok, Ref1} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_1, Partition, Key, Value),
+  {ok, Ref2} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_2, Partition, Key, Value),
+  ok = brod:txn_add_offsets(Tx, GroupId, #{{Topic, Partition} => Offset}),
+  {ok, _} = brod:txn_sync_request(Ref1, ?TIMEOUT),
+  {ok, _} = brod:txn_sync_request(Ref2, ?TIMEOUT),
+
+  case Value of
+    <<"no_commit">> ->
+      ok = brod:abort(Tx);
+    _ ->
+      ok = brod:commit(Tx)
+  end,
+
+  ObserverPid ! {offset, Offset},
+
+  {ok, ack_no_commit, State}.
+
+get_committed_offsets(GroupId, TPs, #{client := Client} = State) ->
+  {ok, Offsets} = brod:fetch_committed_offsets(Client, GroupId),
+  TPOs =
+  lists:filter(fun({TP, _Offset}) ->
+                   lists:member(TP, TPs)
+               end,
+               lists:foldl(fun(#{ name := Topic
+                                , partitions := Partitions}, TPOs) ->
+                               lists:append(TPOs,
+                                            lists:map(fun(#{ committed_offset := COffset
+                                                           , partition_index := Partition}) ->
+                                                          {{Topic, Partition}, COffset}
+                                                      end, Partitions))
+                           end, [], Offsets)),
+  {ok,
+   TPOs,
+   State}.
+
+get_offset() ->
+  timer:sleep(100),
+  case get_committed_offsets(?GROUP_ID,
+                             [{?TOPIC_INPUT, 0}],
+                             #{client => ?CLIENT_ID}) of
+
+    {ok, [{{?TOPIC_INPUT, 0}, Offset}], _} -> Offset;
+    {ok, [], _} -> 0
+  end.
+
+send_no_commit_message() ->
+  send_message(rand(), <<"no_commit">>).
+
+send_simple_message() ->
+  send_message(rand(), <<"simple">>).
+
+send_message(Key, Value) ->
+  brod:start_producer(?CLIENT_ID, ?TOPIC_INPUT, []),
+  {ok, Offset} = brod:produce_sync_offset(?CLIENT_ID, ?TOPIC_INPUT, 0, Key, Value),
+  Offset.
+
+start_subscriber() ->
+  GroupConfig = [{offset_commit_policy, consumer_managed}],
+
+  ConsumerConfig = [ {prefetch_count, 3}
+                   , {sleep_timeout, 0}
+                   , {max_wait_time, 100}
+                   , {partition_restart_delay_seconds, 1}
+                   , {begin_offset, 0}
+                   ],
+
+  brod:start_link_group_subscriber(?CLIENT_ID,
+                                   ?GROUP_ID,
+                                   [?TOPIC_INPUT],
+                                   GroupConfig,
+                                   ConsumerConfig,
+                                   message,
+                                   ?MODULE,
+                                   #{ client => ?CLIENT_ID
+                                    , observer => self()}).
+
+wait_to_last() ->
+  receive
+    _ -> wait_to_last()
+  after ?TIMEOUT -> done
   end.
 
 wait_for_offset(ExpectedOffset) ->
@@ -240,14 +240,11 @@ t_no_commit_test(Config) when is_list(Config) ->
                                      ?TOPIC_OUTPUT_1,
                                      0, OutputOffset1,
                                      #{isolation_level => read_committed}),
-  0 = length(MessagesO1),
+  ?assertMatch(0, length(MessagesO1)),
 
   {ok, {_, MessagesO2}} = brod:fetch(?CLIENT_ID,
                                      ?TOPIC_OUTPUT_2,
                                      0, OutputOffset2,
                                      #{isolation_level => read_committed}),
-  0 = length(MessagesO2),
-
+  ?assertMatch(0, length(MessagesO2)),
   ok.
-
-
