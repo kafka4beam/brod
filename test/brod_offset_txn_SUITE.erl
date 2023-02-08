@@ -1,20 +1,21 @@
 -module(brod_offset_txn_SUITE).
 
 -export([ init_per_suite/1
-          , end_per_suite/1
-          , init_per_testcase/2
-          , end_per_testcase/2
-          , all/0
-          , suite/0
+        , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
+        , all/0
+        , suite/0
         ]).
 
 -export([ t_simple_test/1
-          , t_no_commit_test/1
+        , t_no_commit_test/1
         ]).
 
--export([init/2,
-         handle_message/4,
-         get_committed_offsets/3]).
+-export([ init/2
+        , handle_message/4
+        , get_committed_offsets/3
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
