@@ -61,6 +61,12 @@
                   | brod_group_coordinator:protocol_name().
 -type group_input() :: [{prop_key(), prop_val()}].
 
+-if(?OTP_RELEASE >= 25).
+-type pending_sync() :: ?undef | gen_server:from().
+-else.
+-type pending_sync() :: ?undef | {pid(), reference()}.
+-endif.
+
 -record(state,
         { client             :: brod:client()
         , groupId            :: brod:group_id()
@@ -70,7 +76,7 @@
         , topic              :: ?undef | topic()
         , offsets            :: ?undef | offsets()
         , is_elected = false :: boolean()
-        , pending_sync       :: ?undef | {pid(), reference()}
+        , pending_sync       :: pending_sync()
         , is_done = false    :: boolean()
         }).
 
