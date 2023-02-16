@@ -3,6 +3,8 @@
 - 3.16.8
   - Upgrade `supervisor3` from 1.1.11 to 1.1.12 to log supervisor status
     at `debug` level instead of `notice` level.
+  - Add `brod_group_subscriber_v2:get_workers` function to help
+    monitor and check the health of a consumer group.
 
 - 3.16.7
   - Upgrade `kafka_protocol` from 4.1.1 to 4.1.2 to allow handling
