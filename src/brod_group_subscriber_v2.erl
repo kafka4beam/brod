@@ -34,6 +34,7 @@
         , commit/4
         , start_link/1
         , stop/1
+        , get_workers/1
         ]).
 
 %% brod_group_coordinator callbacks
@@ -193,6 +194,17 @@ ack(Pid, Topic, Partition, Offset) ->
 commit(Pid, Topic, Partition, Offset) ->
   gen_server:cast(Pid, {commit_offset, Topic, Partition, Offset}).
 
+%% @doc Returns a map from Topic-Partitions to worker PIDs for the
+%% given group.  Useful for health checking.  This is a synchronous
+%% call.
+-spec get_workers(pid()) -> workers().
+get_workers(Pid) ->
+  get_workers(Pid, infinity).
+
+-spec get_workers(pid(), timeout()) -> workers().
+get_workers(Pid, Timeout) ->
+  gen_server:call(Pid, get_workers, Timeout).
+
 %%%===================================================================
 %%% group_coordinator callbacks
 %%%===================================================================
@@ -298,6 +310,8 @@ handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
         } = State,
   Reply = CbModule:assign_partitions(CbConfig, Members, TopicPartitionList),
   {reply, Reply, State};
+handle_call(get_workers, _From, State = #state{workers = Workers}) ->
+  {reply, Workers, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
