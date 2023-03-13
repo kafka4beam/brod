@@ -27,7 +27,6 @@
         , offset_commit/2
         , offset_fetch/3
         , produce/7
-        , produce/9
         , sync_group/2
         ]).
 
@@ -37,7 +36,6 @@
 -type vsn() :: brod_kafka_apis:vsn().
 -type topic() :: brod:topic().
 -type topic_config() :: kpro:struct().
--type txn_ctx() :: kpro:txn_ctx().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
 -type conn() :: kpro:connection().
@@ -57,23 +55,6 @@ produce(MaybePid, Topic, Partition, BatchInput,
                         , ack_timeout => AckTimeout
                         , compression => Compression
                         }).
-
-%% @doc see 'produce/7'
--spec produce(conn() | vsn(), topic(), partition(),
-              kpro:batch_input(), integer(), integer(),
-              brod:compression(), txn_ctx(), integer()) -> kpro:req().
-produce(MaybePid, Topic, Partition, BatchInput,
-        RequiredAcks, AckTimeout, Compression,
-        TxnCtx, FirstSequence) ->
-  Vsn = pick_version(produce, MaybePid),
-  kpro_req_lib:produce(Vsn, Topic, Partition, BatchInput,
-                       #{ required_acks => RequiredAcks
-                        , ack_timeout => AckTimeout
-                        , compression => Compression
-                        , txn_ctx => TxnCtx
-                        , first_sequence => FirstSequence
-                        }).
-
 
 %% @doc Make a create_topics request.
 -spec create_topics(vsn() | conn(), [topic_config()], #{timeout => kpro:int32(),

@@ -63,8 +63,7 @@
         , transaction/2
         , transaction/1
         , txn_produce/5
-        , txn_produce_cb/6
-        , txn_sync_request/2
+        , txn_produce/4
         , txn_add_offsets/3
         , commit/1
         , abort/1
@@ -183,6 +182,7 @@
              , value/0
              , transactional_id/0
              , transaction/0
+             , transaction_config/0
              ]).
 
 -include("brod_int.hrl").
@@ -211,6 +211,7 @@
 
 -type transactional_id() :: brod_transaction:transactional_id().
 -type transaction() :: brod_transaction:transaction().
+-type transaction_config() :: brod_transaction:transaction_config().
 
 -type msg_input() :: kpro:msg_input().
 -type batch_input() :: [msg_input()].
@@ -1367,12 +1368,10 @@ main(X) -> brod_cli:main(X).
 -endif.
 
 %% @doc starts a new transaction, TxId will be the id of the transaction
-%% ProducerConfig will be the configuration of the managed producers
-%% @see producer:start_link/4 for documentation about this
 %% @equiv brod_transaction:start_link/3
--spec transaction(client(), transactional_id(), producer_config()) -> {ok, transaction()}.
-transaction(Client, TxnId, ProducerConfig) ->
-  brod_transaction:new(Client, TxnId, ProducerConfig).
+-spec transaction(client(), transactional_id(), transaction_config()) -> {ok, transaction()}.
+transaction(Client, TxnId, Config) ->
+  brod_transaction:new(Client, TxnId, Config).
 
 %% @see brod_transaction:start_link/2
 -spec transaction(client(), transactional_id()) -> {ok, transaction()}.
@@ -1385,27 +1384,20 @@ transaction(Client) ->
   brod_transaction:new(Client, []).
 
 %% @doc produces the message (key and value) to the indicated topic-partition
-%% asynchronously returning a reference to get the result.
+%% synchronously.
 %% @see brod_transaction:produce/5
 -spec txn_produce(transaction(), topic(), partition(), key(), value()) ->
-        {ok, brod:call_ref()} | {error, any()}.
+        {ok, offset()} | {error, any()}.
 txn_produce(Transaction, Topic, Partition, Key, Value) ->
   brod_transaction:produce(Transaction, Topic, Partition, Key, Value).
 
-%% @doc produces the message (key and value) to the indicated topic-partition
-%% asynchronously. On success it will call the function AckCb.
-%% @see brod_transaction:produce_cb/6
--spec txn_produce_cb(transaction(), topic(), partition(), key(), value(),
-                      undef | produce_ack_cb()) -> ok | {ok, call_ref()} | {error, any()}.
-txn_produce_cb(Transaction, Topic, Partition, Key, Value, AckCb) ->
-  brod_transaction:produce_cb(Transaction, Topic, Partition,
-                              Key, Value, AckCb).
-%% @see brod_producer:sync_produce_request/2
--spec txn_sync_request(call_ref(), timeout()) ->
-  {ok, offset()} | {error, Reason}
-    when Reason :: timeout | {producer_down, any()}.
-txn_sync_request(CallRef, Timeout) ->
-  brod_transaction:sync_produce_request(CallRef, Timeout).
+%% @doc produces the batch of messagesmessages to the indicated topic-partition
+%% synchronously.
+%% @see brod_transaction:produce/5
+-spec txn_produce(transaction(), topic(), partition(), batch_input()) ->
+        {ok, offset()} | {error, any()}.
+txn_produce(Transaction, Topic, Partition, Batch) ->
+  brod_transaction:produce(Transaction, Topic, Partition, Batch).
 
 %% @doc adds the offset consumed by a group to the transaction.
 %% @see brod_transaction:add_offsets/3

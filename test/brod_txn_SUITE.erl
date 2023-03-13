@@ -11,10 +11,9 @@
 -export([ t_multiple_writes_transaction/1
         , t_simple_transaction/1
         , t_abort_transaction/1
-        , t_simple_transaction_cb/1
+        , t_batch_transaction/1
         ]).
 
--include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 -include("include/brod.hrl").
@@ -75,10 +74,10 @@ end_per_testcase(_Case, Config) ->
   Config.
 
 all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
+               case atom_to_list(F) of
+                 "t_" ++ _ -> true;
+                 _         -> false
+               end].
 
 client_config() ->
   case os:getenv("KAFKA_VERSION") of
@@ -92,7 +91,7 @@ subscriber_loop(TesterPid) ->
       #kafka_message_set{ messages = Messages
                         , partition = Partition} = KMS,
       lists:foreach(fun(#kafka_message{offset = Offset, key = K, value = V}) ->
-                        TesterPid ! {Partition, Offset, K, V},
+                        TesterPid ! {Partition, K, V},
                         ok = brod:consume_ack(ConsumerPid, Offset)
                     end, Messages),
       subscriber_loop(TesterPid);
@@ -102,7 +101,7 @@ subscriber_loop(TesterPid) ->
 
 receive_messages(none) ->
   receive
-    {_Partition, _Offset, _K, _V} = M -> {unexpected_message, M}
+    {_Partition, _K, _V} = M -> {unexpected_message, M}
   after 1000 -> ok
   end;
 
@@ -111,7 +110,7 @@ receive_messages(ExpectedMessages) ->
     true -> ok;
     _ ->
       receive
-        {_Partition, _Offset, _K, _V} = M ->
+        {_Partition, _K, _V} = M ->
           case sets:is_element(M, ExpectedMessages) of
             false -> {unexpected_message, M};
             true ->
@@ -122,43 +121,6 @@ receive_messages(ExpectedMessages) ->
       end
   end.
 
-receive_messages_only_po(none) ->
-  receive
-    {_Partition, _Offset} = M -> {unexpected_message, M}
-  after 1000 -> ok
-  end;
-
-receive_messages_only_po(ExpectedMessages) ->
-  case sets:is_empty(ExpectedMessages) of
-    true -> ok;
-    _ ->
-      receive
-        {Partition, Offset, _K, _V} ->
-          M = {Partition, Offset},
-          case sets:is_element(M, ExpectedMessages) of
-            false ->
-              {unexpected_messagex, M};
-            true ->
-              receive_messages_only_po(sets:del_element(M, ExpectedMessages))
-          end
-      after 1000 ->
-              {still_waiting_for, ExpectedMessages}
-      end
-  end.
-
-collect_acks(ExpectedNumberOfAcks) ->
-  collect_acks(ExpectedNumberOfAcks, []).
-
-collect_acks(0, Acks) -> sets:from_list(Acks);
-
-collect_acks(MessageCount, Acks) ->
-  receive
-    {kafka_acked, Partition, Offset} ->
-      collect_acks(MessageCount - 1, [{Partition, Offset} | Acks])
-  after 1000 ->
-    {still_waiting_for, MessageCount}
-  end.
-
 rand() -> base64:encode(crypto:strong_rand_bytes(8)).
 
 t_simple_transaction(Config) when is_list(Config) ->
@@ -166,18 +128,44 @@ t_simple_transaction(Config) when is_list(Config) ->
   {ok, Tx} = brod:transaction(?config(client), <<"transaction-id">>, []),
   ?assertMatch(true, is_process_alive(Tx)),
 
-  Refs = lists:map(fun(Topic) ->
+  Results = lists:map(fun(Topic) ->
                        Partition = 0,
                        Key = rand(),
                        Value = rand(),
-                       {ok, Ref} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value, Ref}
+                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                       {Partition, Key, Value}
                    end, ?config(topics)),
 
-  Results = lists:map(fun({Partition, Key, Value, Ref}) ->
-                          {ok, Offset} = brod:txn_sync_request(Ref, ?TIMEOUT),
-                          {Partition, Offset, Key, Value}
-                      end, Refs),
+  ?assertMatch(ok, receive_messages(none)),
+  ?assertMatch(ok, brod:commit(Tx)),
+  ?assertMatch(false, is_process_alive(Tx)),
+  ?assertMatch(ok, receive_messages(sets:from_list(Results))),
+  ?assertMatch(ok, receive_messages(none)),
+  ok.
+
+t_batch_transaction(Config) when is_list(Config) ->
+
+  {ok, Tx} = brod:transaction(?config(client), <<"transaction-id">>, []),
+  ?assertMatch(true, is_process_alive(Tx)),
+
+  Results =
+  lists:flatten(lists:map(fun(Topic) ->
+                Batch = lists:map(
+                          fun(_) ->
+                              #{key => rand()
+                              , value => rand()
+                              , ts => kpro_lib:now_ts()}
+                          end, lists:seq(1, 10)),
+
+                Partition = 0,
+                {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Batch),
+
+                lists:map(fun(#{key := Key
+                              , value := Value}) ->
+                              {Partition, Key, Value}
+                          end, Batch)
+
+            end, ?config(topics))),
 
   ?assertMatch(ok, receive_messages(none)),
   ?assertMatch(ok, brod:commit(Tx)),
@@ -191,18 +179,13 @@ t_abort_transaction(Config) when is_list(Config) ->
   {ok, Tx} = brod:transaction(?config(client), <<"transaction-id">>, []),
   ?assertMatch(true, is_process_alive(Tx)),
 
-  Refs = lists:map(fun(Topic) ->
-                       Partition = 0,
-                       Key = rand(),
-                       Value = rand(),
-                       {ok, Ref} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value, Ref}
-                   end, ?config(topics)),
-
-  _Results = lists:map(fun({Partition, Key, Value, Ref}) ->
-                           {ok, Offset} = brod:txn_sync_request(Ref, ?TIMEOUT),
-                           {Partition, Offset, Key, Value}
-                       end, Refs),
+  _ = lists:map(fun(Topic) ->
+                    Partition = 0,
+                    Key = rand(),
+                    Value = rand(),
+                    {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                    {Partition, Key, Value}
+                end, ?config(topics)),
 
   ?assertMatch(ok, receive_messages(none)),
   ?assertMatch(ok, brod:abort(Tx)),
@@ -219,53 +202,24 @@ t_multiple_writes_transaction(Config) when is_list(Config) ->
                        Partition = 0,
                        Key = rand(),
                        Value = rand(),
-                       {ok, Ref} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value, Ref}
+                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                       {Partition, Key, Value}
                    end, ?config(topics)),
 
   SecondWave = lists:map(fun(Topic) ->
                        Partition = 0,
                        Key = rand(),
                        Value = rand(),
-                       {ok, Ref} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value, Ref}
+                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                       {Partition, Key, Value}
                    end, ?config(topics)),
 
-  Results = lists:map(fun({Partition, Key, Value, Ref}) ->
-                          {ok, Offset} = brod:txn_sync_request(Ref, ?TIMEOUT),
-                          {Partition, Offset, Key, Value}
-                      end, lists:append(FirstWave, SecondWave)),
+  Results = lists:append(FirstWave, SecondWave),
 
   ?assertMatch(ok, receive_messages(none)),
   ?assertMatch(ok, brod:commit(Tx)),
   ?assertMatch(false, is_process_alive(Tx)),
   ?assertMatch(ok, receive_messages(sets:from_list(Results))),
   ?assertMatch(ok, receive_messages(none)),
-  ok.
-
-t_simple_transaction_cb(Config) when is_list(Config) ->
-
-  {ok, Tx} = brod:transaction(?config(client), <<"transaction-id">>, []),
-  ?assertMatch(true, is_process_alive(Tx)),
-
-  Self = self(),
-  AckCBFun = fun(Partition, Offset) ->
-                 Self ! {kafka_acked, Partition, Offset}
-             end,
-
-  lists:foreach(fun(Topic) ->
-                    Partition = 0,
-                    Key = rand(),
-                    Value = rand(),
-                    ok = brod:txn_produce_cb(Tx, Topic, Partition, Key, Value, AckCBFun)
-                end, ?config(topics)),
-
-  Acks = collect_acks(length(?config(topics))),
-  ?assertMatch(1, sets:size(Acks)),
-  ?assertMatch(ok, receive_messages_only_po(none)),
-  ?assertMatch(ok, brod:commit(Tx)),
-  ?assertMatch(false, is_process_alive(Tx)),
-  ?assertMatch(ok, receive_messages_only_po(Acks)),
-  ?assertMatch(ok, receive_messages_only_po(none)),
   ok.
 

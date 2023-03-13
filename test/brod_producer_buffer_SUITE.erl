@@ -76,7 +76,7 @@ t_random_latency_ack(Config) when is_list(Config) ->
 
 t_nack(Config) when is_list(Config) ->
   SendFun =
-    fun(Conn, Batch, _SendCount, _Vsn) ->
+    fun(Conn, Batch, _Vsn) ->
       Ref = make_ref(),
       NumList = lists:map(fun(#{key := Bin, value := Bin}) ->
                             list_to_integer(binary_to_list(Bin))
@@ -142,7 +142,7 @@ t_nack(Config) when is_list(Config) ->
 
 t_send_fun_error(Config) when is_list(Config) ->
   SendFun =
-    fun(_SockPid, _Batch, _SendCount, _Vsn) ->
+    fun(_SockPid, _Batch, _Vsn) ->
       {error, "the reason"}
     end,
   Buf0 = brod_producer_buffer:new(_BufferLimit = 1,
@@ -188,7 +188,7 @@ prop_value_with_processing_latency_list() ->
   proper_types:list({prop_latency_ms(), proper_types:binary()}).
 
 prop_no_ack_run() ->
-  SendFun = fun(_SockPid, _Batch, _SendCount, _Vsn) -> ok end,
+  SendFun = fun(_SockPid, _Batch, _Vsn) -> ok end,
   ?FORALL(
     {BufferLimit, OnWireLimit, MsgSetBytes, ValueList},
     {prop_buffer_limit(), prop_onwire_limit(),
@@ -205,7 +205,7 @@ prop_no_ack_run() ->
 
 prop_random_latency_ack_run() ->
   SendFun0 =
-    fun(FakeKafka, Batch, _SendCount, _Vsn) ->
+    fun(FakeKafka, Batch, _Vsn) ->
       %% use reference as correlation to simplify test
       Ref = make_ref(),
       %% send the message to fake kafka
@@ -230,8 +230,8 @@ prop_random_latency_ack_run() ->
                               delay => Delay}
                         end, KvList),
       FakeKafka = spawn_fake_kafka(),
-      SendFun = fun(_SockPid, BatchX, SendCount, Vsn) ->
-                    SendFun0(FakeKafka, BatchX, SendCount, Vsn)
+      SendFun = fun(_SockPid, BatchX, Vsn) ->
+                    SendFun0(FakeKafka, BatchX, Vsn)
                 end,
       Buf = brod_producer_buffer:new(BufferLimit, OnWireLimit,
                                      MsgSetBytes, _MaxRetries = 0,

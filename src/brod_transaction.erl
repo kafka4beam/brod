@@ -1,5 +1,5 @@
 %%%
-%%%   Copyright (c) 2014-2021 Klarna Bank AB (publ)
+%%%   Copyright (c) 2023 @axs-mvd and contributors
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -23,13 +23,12 @@
 %%  {ok, Tx} = brod_transaction:new(Client, TxId, []),
 %%  lists:foreach(fun(Partition) ->
 %%                    Key = rand(), Value = rand(),
-%%                    {ok, Ref} =
+%%                    {ok, _Offset} =
 %%                    brod_transaction:produce(Tx,
 %%                                             Topic,
 %%                                             Partition,
 %%                                             Key,
 %%                                             Value),
-%%                    {ok, _Offset} = brod_transaction:sync_produce_request(Ref)
 %%                end, Partitions),
 %%  brod_transaction:commit(Tx),
 %%
@@ -44,9 +43,8 @@
 %%                 #{ client := Client
 %%                  , group_id := GroupId} =  State) ->
 %%    {ok, Tx} = brod_transaction:new(Client),
-%%    {ok, Ref1} = brod_transaction:produce(Tx, ?TOPIC_OUTPUT, Partition, Key, Value),
+%%    {ok, _ProducedOffset} = brod_transaction:produce(Tx, ?TOPIC_OUTPUT, Partition, Key, Value),
 %%    ok = brod_transaction:txn_add_offsets(Tx, GroupId, #{{Topic, Partition} => Offset}),
-%%    {ok, _} = brod_transaction:txn_sync_request(Ref1, ?TIMEOUT),
 %%    ok = brod_transaction:commit(Tx)
 %%
 %%    {ok, ack_no_commit, State}.
@@ -65,117 +63,139 @@
 
 % public API
 -export([ produce/5
-        , produce_no_ack/5
-        , produce_cb/6
-        , sync_produce_request/2
+        , produce/4
         , add_offsets/3
         , commit/1
         , abort/1
-        , abort/2
         , stop/1
         , new/2
         , new/3
-        , start_link/2
         , start_link/3]).
 
--export_type([ call_ref/0
+
+-export_type([ batch_input/0
+             , call_ref/0
              , client/0
              , client_id/0
-             , config/0
+             , transaction_config/0
              , group_id/0
              , key/0
              , offset/0
              , offsets_to_commit/0
              , partition/0
-             , produce_ack_cb/0
              , topic/0
              , transaction/0
              , transactional_id/0
              , txn_ctx/0
              , value/0]).
 
+-export[send_req/3].
+
 -type call_ref() :: brod:call_ref().
 -type client() :: client_id() | pid().
 -type client_id() :: atom().
--type config() :: proplists:proplist().
+-type transaction_config() :: [ {timeout,      non_neg_integer()}
+                              | {backoff_step, non_neg_integer()}
+                              | {max_retries,  non_neg_integer()}
+                              ].
 -type group_id() :: kpro:group_id().
 -type key() :: brod:key().
 -type offset() :: kpro:offset().
 -type offsets_to_commit() :: kpro:offsets_to_commit().
 -type partition() :: kpro:partition().
--type produce_ack_cb() :: brod:produce_ack_cb().
 -type topic() :: kpro:topic().
 -type transaction() :: pid().
 -type transactional_id() :: kpro:transactional_id().
 -type txn_ctx() :: kpro:txn_ctx().
 -type value() :: brod:value().
+-type batch_input() :: kpro:batch_input().
 
 
 -record(state,
-        { client_pid       :: client()
-        , context          :: txn_ctx()
-        , producers        :: map()
-        , producers_config :: config()
+        { client_pid      :: client()
+        , context         :: txn_ctx()
+        , timeout         :: pos_integer()
+        , sequences       :: map()
+        , sent_partitions :: map()
+        , max_retries     :: pos_integer()
+        , backoff_step    :: pos_integer()
         }).
 
 -type state() :: #state{}.
 
-init({Client, TxId, Config}) ->
+init({Client, TxId, PropListConfig}) ->
   ClientPid = pid(Client),
   erlang:process_flag(trap_exit, true),
-  {ok, CTX} = make_txn_context(ClientPid, TxId),
+
+  Config =
+  #{ max_retries := MaxRetries
+   , backoff_step := BackOffStep
+   , timeout := Timeout} = maps:merge(#{ max_retries => 5
+                                       , backoff_step => 100
+                                       , timeout => 1000},
+                                      proplists:to_map(PropListConfig)),
+
+  {ok, CTX} = make_txn_context(ClientPid, TxId, Config),
   {ok, #state{ client_pid = ClientPid
              , context = CTX
-             , producers_config = Config
-             , producers = #{}
+             , max_retries = MaxRetries
+             , backoff_step= BackOffStep
+             , timeout = Timeout
+             , sequences = #{}
+             , sent_partitions = #{}
              }}.
 
 %%% @private
 handle_call({add_offsets, ConsumerGroup, Offsets}, _From,
             #state{ client_pid = Client
                   , context = CTX
+                  , max_retries = MaxRetries
+                  , backoff_step = BackOffStep
                   } = State) ->
-  {ok, {{Host, Port}, _}} = brod_client:get_group_coordinator(Client, ConsumerGroup),
-  {ok, Conn} = brod_client:get_connection(Client, Host, Port),
-
-  %% before adding the offset we need to let kafka know we are going to commit
-  %% the offsets.
-  ok = kpro:txn_send_cg(CTX, ConsumerGroup),
-
-  %% actually commit the offset
-  Resp = kpro:txn_offset_commit(Conn, ConsumerGroup, CTX, Offsets),
+  Resp = do_add_offsets(Client, CTX, ConsumerGroup, Offsets,
+                        #{ max_retries => MaxRetries
+                         , backoff_step => BackOffStep}),
   {reply, Resp, State};
 
+%%% @private
+handle_call({produce, Topic, Partition, Key, Value}, _From,
+            #state{} = OldState) ->
+  case do_produce(Topic, Partition, Key, Value, OldState) of
+    {ok, {Offset, State}} -> {reply, {ok, Offset}, State};
+    {error, Reason} -> {reply, {error, Reason}, OldState}
+  end;
 
-%% @private
-handle_call({get_producer, Topic, Partition}, _From, #state{} = OldState) ->
-  State = may_add_producer(Topic, Partition, OldState),
-  {reply, get_producer(Topic, Partition, State), State};
+%%% @private
+handle_call({produce, Topic, Partition, Batch}, _From,
+            #state{} = OldState) ->
+  case do_batch_produce(Topic, Partition, Batch, OldState) of
+    {ok, {Offset, State}} -> {reply, {ok, Offset}, State};
+    {error, Reason} -> {reply, {error, Reason}, OldState}
+  end;
 
 %% @private
 handle_call(commit, _From, #state{context = CTX} = State) ->
-  ok = kpro:txn_commit(CTX),
-  {stop, normal, ok, stop_producers(State)};
+  {stop, normal, kpro:txn_commit(CTX), State};
 
 %% @private
 handle_call(terminate, _From, State) ->
-  {stop, normal, ok, stop_producers(State)};
+  {stop, normal, ok, #state{} = State};
 
 %% @private
 handle_call(abort, _From,
             #state{context = CTX} = State) ->
-  ok = kpro:txn_abort(CTX),
-  {stop, normal, ok, stop_producers(State)};
+  {stop, normal, kpro:txn_abort(CTX), State};
 
 %% @private
 handle_call({abort, Timeout}, _From,
             #state{context = CTX} = State) ->
-  ok = kpro:txn_abort(CTX, #{timeout => Timeout}),
-  {stop, normal, ok, stop_producers(State)};
+  {stop, normal,
+   kpro:txn_abort(CTX, #{timeout => Timeout}),
+   State};
 
 %% @private
 handle_call(stop, _From, #state{} = State) ->
-  {stop, normal, ok, stop_producers(State)};
+  {stop, normal, ok, State};
 
 %% @private
 handle_call(Call, _From, #state{} = State) ->
@@ -186,7 +206,7 @@ handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
 %% @private
-handle_info(_Call, State) ->
+handle_info(_Call, #state{} = State) ->
   {noreply, State}.
 
 %% @private
@@ -195,69 +215,43 @@ code_change(_OldVsn, #state{} = State, _Extra) ->
 
 terminate(_Reason, _State) -> ok.
 
-
 %% @see start_link/2
--spec new(pid(), config()) -> {ok, transaction()}.
-new(ClientPid, ProducerConfig) ->
+-spec new(pid(), transaction_config()) -> {ok, transaction()}.
+new(ClientPid, Config) ->
   gen_server:start_link(?MODULE,
-                        {ClientPid, make_transactional_id(), ProducerConfig},
+                        {ClientPid, make_transactional_id(), Config},
                         []).
 
 %% @see start_link/3
--spec new(pid(), transactional_id(), config()) -> {ok, transaction()}.
-new(ClientPid, TxId, ProducerConfig) ->
+-spec new(pid(), transactional_id(), transaction_config()) -> {ok, transaction()}.
+new(ClientPid, TxId, Config) ->
   gen_server:start_link(?MODULE,
-                        {ClientPid, TxId, ProducerConfig},
-                        []).
-
-%% @see start_link/3
-%% it uses a random id for the transaction
--spec start_link(pid(), config()) -> {ok, pid()}.
-start_link(ClientPid, ProducerConfig) ->
-  gen_server:start_link(?MODULE,
-                        {ClientPid, make_transactional_id(), ProducerConfig},
+                        {ClientPid, TxId, Config},
                         []).
 
 %% @doc starts a new transaction, TxId will be the id of the transaction
-%% ProducerConfig will be the configuration of the managed producers
-%% @see producer:start_link/4 for documentation about this
--spec start_link(pid(), transactional_id(), config()) -> {ok, pid()}.
-start_link(ClientPid, TxId, ProducerConfig) ->
-  gen_server:start_link(?MODULE, {ClientPid, TxId, ProducerConfig}, []).
+%% Config is a proplist, all values are optional:
+%% `timeout':`Connection timeout in millis
+%% `backoff_step': after each retry it will sleep for 2^Attempt * backoff_step
+%%  millis
+%% `max_retries'
+-spec start_link(pid(), transactional_id(), transaction_config()) -> {ok, pid()}.
+start_link(ClientPid, TxId, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, TxId, Config}, []).
 
 %% @doc produces the message (key and value) to the indicated topic-partition
-%% asynchronously returning a reference to get the result.
-%% @see brod_producer:produce/3
+%% synchronously.
 -spec produce(transaction(), topic(), partition(), key(), value()) ->
-  {ok, brod:call_ref()} | {error, any()}.
+  {ok, offset()} | {error, any()}.
 produce(Transaction, Topic, Partition, Key, Value) ->
-  {ok, ProducerPid} = gen_server:call(Transaction, {get_producer, Topic, Partition}),
-  brod_producer:produce(ProducerPid, Key, Value).
+  gen_server:call(Transaction, {produce, Topic, Partition, Key, Value}).
 
-%% @doc produces the message (key and value) to the indicated topic-partition
-%% asynchronously. Without a way to know the result.
-%% @see brod_producer:produce_no_ack/3
--spec produce_no_ack(transaction(), topic(), partition(), key(), value()) ->
-  ok.
-produce_no_ack(Transaction, Topic, Partition, Key, Value) ->
-  {ok, ProducerPid} = gen_server:call(Transaction, {get_producer, Topic, Partition}),
-  brod_producer:produce_no_ack(ProducerPid, Key, Value).
-
-%% @doc produces the message (key and value) to the indicated topic-partition
-%% asynchronously. On success it will call the function AckCb.
-%% @see brod_producer:produce_cb/4
--spec produce_cb(transaction(), topic(), partition(), key(), value(),
-                  undef | produce_ack_cb()) -> ok | {ok, call_ref()} | {error, any()}.
-produce_cb(Transaction, Topic, Partition, Key, Value, AckCb) ->
-  {ok, ProducerPid} = gen_server:call(Transaction, {get_producer, Topic, Partition}),
-  brod_producer:produce_cb(ProducerPid, Key, Value, AckCb).
-
-%% @see brod_producer:sync_produce_request/2
--spec sync_produce_request(call_ref(), timeout()) ->
-  {ok, offset()} | {error, Reason}
-    when Reason :: timeout | {producer_down, any()}.
-sync_produce_request(CallRef, Timeout) ->
-  brod_producer:sync_produce_request(CallRef, Timeout).
+%% @doc synchronously produces the batch of messagesmessages to the indicated
+%% topic-partition
+-spec produce(transaction(), topic(), partition(), batch_input()) ->
+  {ok, offset()} | {error, any()}.
+produce(Transaction, Topic, Partition, Batch) ->
+  gen_server:call(Transaction, {produce, Topic, Partition, Batch}).
 
 %% @doc adds the offset consumed by a group to the transaction.
 -spec add_offsets(transaction(), group_id(), offsets_to_commit()) -> ok | {error, any()}.
@@ -274,12 +268,6 @@ commit(Transaction) ->
 abort(Transaction) ->
   gen_server:call(Transaction, abort).
 
-%% @doc aborts the transaction with a timeout, after this, the gen_server will
-%% stop
--spec abort(transaction(), pos_integer()) -> ok | {error, any()}.
-abort(Transaction, Timeout) ->
-  gen_server:call(Transaction, {abort, Timeout}).
-
 %% @doc stops the transaction.
 -spec stop(transaction()) -> ok | {error, any()}.
 stop(Transaction) ->
@@ -291,50 +279,144 @@ make_transactional_id() ->
                     base64:encode(crypto:strong_rand_bytes(8))]).
 
 %% @private
-make_txn_context(Client, TxId)->
-  {ok, {{Host, Port}, _}} = brod_client:get_transactional_coordinator(Client,
-                                                                      TxId),
-  {ok, Conn} = brod_client:get_connection(Client, Host, Port),
+make_txn_context(Client, TxId, #{ max_retries := MaxRetries
+                                , backoff_step := BackOffStep})->
+  persistent_call(fun() ->
+                    make_txn_context_internal(Client, TxId)
+                  end, MaxRetries, BackOffStep).
 
-  kpro:txn_init_ctx(Conn, TxId).
+make_txn_context_internal(Client, TxId) ->
+  case brod_client:get_transactional_coordinator(Client, TxId) of
+    {ok, {{Host, Port}, _}} ->
+      case brod_client:get_connection(Client, Host, Port) of
+        {ok, Conn} -> kpro:txn_init_ctx(Conn, TxId);
 
-%% @private
--spec may_add_producer(topic(), partition(), state()) -> state().
-may_add_producer(Topic, Partition,
-                 #state{ client_pid = ClientPid
-                       , producers = OldProducers
-                       , context = CTX
-                       , producers_config = ProducersConfig
-                       } = OldState) ->
-  case maps:is_key({Topic, Partition}, OldProducers) of
-    true -> OldState;
-    _ ->
-      {ok, ProducerPid} = brod_producer:start_link(ClientPid,
-                                                   Topic,
-                                                   Partition,
-                                                   CTX,
-                                                   ProducersConfig),
-
-      %% before producing something in a topic partition, we have to
-      %% announce it
-      ok = kpro:txn_send_partitions(CTX, [{Topic, Partition}]),
-
-      OldState#state{producers = OldProducers#{{Topic, Partition} => ProducerPid}}
+        {error, Reason} -> {error, Reason}
+      end;
+    {error, Reason} -> {error, Reason}
   end.
 
--spec get_producer(topic(), partition(), state()) -> {ok, pid()}.
-get_producer(Topic, Partition, #state{producers = Producers}) ->
-  {ok, maps:get({Topic, Partition}, Producers)}.
 
--spec stop_producers(state()) -> state().
-stop_producers(#state{producers = Producers} = OldState) ->
-  lists:foreach(fun brod_producer:stop/1,
-                maps:values(Producers)),
-  OldState.
+%% @private
+do_add_offsets(Client, CTX, ConsumerGroup, Offsets,
+               #{ max_retries := MaxRetries
+                , backoff_step := BackOffStep}) ->
+  persistent_call(fun() ->
+                    do_add_offsets_internal(Client, CTX,
+                                            ConsumerGroup, Offsets)
+                  end,
+                  MaxRetries, BackOffStep).
+
+%% @private
+do_add_offsets_internal(Client, CTX, ConsumerGroup, Offsets) ->
+  case brod_client:get_group_coordinator(Client, ConsumerGroup) of
+    {ok, {{Host, Port}, _}} ->
+      case brod_client:get_connection(Client, Host, Port) of
+        {ok, Conn} -> send_cg_and_offset(Conn, CTX, ConsumerGroup, Offsets);
+        {error, Reason} -> {error, Reason}
+      end;
+      {error, Reason} -> {error, Reason}
+  end.
+
+%% @private
+send_cg_and_offset(GroupCoordConn, CTX, ConsumerGroup, Offsets) ->
+  %% before adding the offset we need to let kafka know we are going to commit
+  %% the offsets.
+  case kpro:txn_send_cg(CTX, ConsumerGroup) of
+    ok -> kpro:txn_offset_commit(GroupCoordConn, ConsumerGroup, CTX, Offsets);
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @private
+-spec do_produce(topic(), partition(), key(), value(), state()) ->
+  {error, string()} | {ok, {offset(), state()}}.
+do_produce(Topic, Partition, Key, Value, State) ->
+  do_batch_produce(Topic, Partition, [#{ key => Key
+                                       , value => Value
+                                       , ts => kpro_lib:now_ts()}], State).
+
+%% @private
+-spec do_batch_produce(topic(), partition(), batch_input(), state()) ->
+  {error, string()} | {ok, {offset(), state()}}.
+do_batch_produce(Topic, Partition, Batch, #state{ max_retries = MaxRetries
+                                                , backoff_step = BackOffStep} = State) ->
+  persistent_call(fun() ->
+                      do_batch_produce_internal(Topic, Partition,
+                                                Batch, State)
+                  end, MaxRetries, BackOffStep).
+
+do_batch_produce_internal(Topic, Partition, Batch,
+                          #state{ client_pid = ClientPid
+                                , timeout = Timeout
+                                , context = CTX
+                                , sequences = Sequences
+                                , sent_partitions = OldSentPartitions
+                                } = State) ->
+
+  case conn_and_vsn(ClientPid, Topic, Partition) of
+    {ok, {Connection, Vsn}} ->
+      FirstSequence = maps:get({Topic, Partition}, Sequences, 0),
+
+      ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition,
+                                        Batch,
+                                        #{ txn_ctx => CTX
+                                         , first_sequence => FirstSequence}),
+
+      SentPartitions =
+      case maps:get({Topic, Partition}, OldSentPartitions, not_found) of
+        not_found ->
+          ok = kpro:txn_send_partitions(CTX, [{Topic, Partition}]),
+          maps:put({Topic, Partition}, true, OldSentPartitions);
+        _ -> OldSentPartitions
+      end,
+
+      case send_req(Connection, ProduceReq, Timeout) of
+        {ok, Offset} ->
+          {ok, {Offset, State#state{ sent_partitions = SentPartitions
+                                   , sequences = maps:put({Topic, Partition},
+                                                         FirstSequence + length(Batch),
+                                                         Sequences)}}};
+        {error, Reason} -> {error, Reason}
+      end;
+    {error, Reason} -> {error, Reason}
+  end.
+
+send_req(Connection, ProduceReq, Timeout) ->
+  case kpro:request_sync(Connection, ProduceReq, Timeout) of
+    {ok, Rsp} -> brod_utils:parse_rsp(Rsp);
+    {error, Reason} -> {error, Reason}
+  end.
+
+conn_and_vsn(ClientPid, Topic, Partition) ->
+  case brod_client:get_leader_connection(ClientPid, Topic, Partition) of
+    {ok, Connection} ->
+      case kpro:get_api_versions(Connection) of
+        {ok, #{ produce := {_, Vsn}
+              , fetch   := {_, _}}} -> {ok, {Connection, Vsn}};
+        {error, Reason} -> {error, Reason}
+      end;
+    {error, Reason} -> {error, Reason}
+  end.
 
 -spec pid(client()) -> pid().
 pid(Client) when is_atom(Client) -> whereis(Client);
 pid(Client) when is_pid(Client) -> Client.
+
+backoff(Attempt, BackOffStep) ->
+  timer:sleep(trunc(math:pow(2, Attempt) * BackOffStep)).
+
+persistent_call(Fun, MaxRetries, BackOffStep) ->
+  persistent_call(Fun, 0, MaxRetries, BackOffStep).
+
+persistent_call(Fun, Attempt, MaxRetries, BackOffStep) ->
+  case Fun() of
+    ok -> ok;
+    {ok, R} -> {ok, R};
+    {error, _} when Attempt + 1 < MaxRetries ->
+      backoff(Attempt, BackOffStep),
+      persistent_call(Fun, Attempt + 1, MaxRetries, BackOffStep);
+    {error, Reason} -> {error, Reason}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

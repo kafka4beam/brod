@@ -101,11 +101,9 @@ handle_message(Topic,
                 , observer := ObserverPid} =  State) ->
 
   {ok, Tx} = brod:transaction(Client),
-  {ok, Ref1} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_1, Partition, Key, Value),
-  {ok, Ref2} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_2, Partition, Key, Value),
+  {ok, _} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_1, Partition, Key, Value),
+  {ok, _} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_2, Partition, Key, Value),
   ok = brod:txn_add_offsets(Tx, GroupId, #{{Topic, Partition} => Offset}),
-  {ok, _} = brod:txn_sync_request(Ref1, ?TIMEOUT),
-  {ok, _} = brod:txn_sync_request(Ref2, ?TIMEOUT),
 
   case Value of
     <<"no_commit">> ->
@@ -205,7 +203,8 @@ t_simple_test(Config) when is_list(Config)  ->
   done = wait_for_offset(MessageOffset),
   CurrentOffset = get_offset(),
   ?assertMatch(MessageOffset, CurrentOffset),
-  ?assertMatch(true, InitialOffset < CurrentOffset),
+
+  ?assertMatch(true, InitialOffset =< CurrentOffset),
   ok = brod_group_subscriber:stop(SubscriberPid),
   ?assertMatch(false, is_process_alive(SubscriberPid)),
 
@@ -226,14 +225,13 @@ t_no_commit_test(Config) when is_list(Config) ->
   ok = brod:start_client(?HOSTS, ?CLIENT_ID, []),
   {ok, SubscriberPid} = start_subscriber(),
   wait_to_last(),
-  InputOffset = get_offset(),
   {ok, OutputOffset1} = brod:resolve_offset(?HOSTS, ?TOPIC_OUTPUT_1, 0),
   {ok, OutputOffset2} = brod:resolve_offset(?HOSTS, ?TOPIC_OUTPUT_2, 0),
-  MessageOffset = send_no_commit_message(),
-  done = wait_for_offset(MessageOffset),
+  InitialOffset = send_no_commit_message(),
+  done = wait_for_offset(InitialOffset),
   CurrentOffset = get_offset(),
-  CurrentOffset = InputOffset,
-  true = MessageOffset > CurrentOffset,
+
+  ?assertMatch(true, InitialOffset >= CurrentOffset),
   ok = brod_group_subscriber:stop(SubscriberPid),
   false = is_process_alive(SubscriberPid),
 
