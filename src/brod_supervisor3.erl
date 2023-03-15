@@ -650,6 +650,8 @@ handle_cast({try_again_restart,Name,Reason}, State) ->
     case lists:keysearch(Name,#child.name,State#state.children) of
         {value, Child = #child{pid=?restarting(_), restart_type=RestartType}} ->
             try_restart(RestartType, Reason, Child, State);
+        {value, Child = #child{pid=?delayed_restart(_), restart_type=RestartType}} ->
+            try_restart(RestartType, Reason, Child, State);
         _ ->
             {noreply,State}
     end.
