@@ -20,7 +20,7 @@
 %%%=============================================================================
 
 -module(brod_producers_sup).
--behaviour(supervisor3).
+-behaviour(brod_supervisor3).
 
 -export([ init/1
         , post_init/1
@@ -35,7 +35,7 @@
 -define(TOPICS_SUP, brod_producers_sup).
 -define(PARTITIONS_SUP, brod_producers_sup2).
 
-%% Minimum delay seconds to work with supervisor3
+%% Minimum delay seconds to work with brod_supervisor3
 -define(MIN_SUPERVISOR3_DELAY_SECS, 1).
 
 %% By default, restart ?PARTITIONS_SUP after a 10-seconds delay
@@ -51,20 +51,20 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link(?MODULE, ?TOPICS_SUP).
+  brod_supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor
 -spec start_producer(pid(), pid(), brod:topic(), brod:producer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_producer(SupPid, ClientPid, TopicName, Config) ->
   Spec = producers_sup_spec(ClientPid, TopicName, Config),
-  supervisor3:start_child(SupPid, Spec).
+  brod_supervisor3:start_child(SupPid, Spec).
 
 %% @doc Dynamically stop a per-topic supervisor
 -spec stop_producer(pid(), brod:topic()) -> ok | {}.
 stop_producer(SupPid, TopicName) ->
-  supervisor3:terminate_child(SupPid, TopicName),
-  supervisor3:delete_child(SupPid, TopicName).
+  brod_supervisor3:terminate_child(SupPid, TopicName),
+  brod_supervisor3:delete_child(SupPid, TopicName).
 
 %% @doc Find a brod_producer process pid running under ?PARTITIONS_SUP.
 -spec find_producer(pid(), brod:topic(), brod:partition()) ->
@@ -73,14 +73,14 @@ stop_producer(SupPid, TopicName) ->
                 | {producer_not_found, brod:topic(), brod:partition()}
                 | {producer_down, any()}.
 find_producer(SupPid, Topic, Partition) ->
-  case supervisor3:find_child(SupPid, Topic) of
+  case brod_supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
       {error, {producer_not_found, Topic}};
     [PartitionsSupPid] ->
       try
-        case supervisor3:find_child(PartitionsSupPid, Partition) of
+        case brod_supervisor3:find_child(PartitionsSupPid, Partition) of
           [] ->
             %% no such partition?
             {error, {producer_not_found, Topic, Partition}};
@@ -92,7 +92,7 @@ find_producer(SupPid, Topic, Partition) ->
       end
   end.
 
-%% @doc supervisor3 callback.
+%% @doc brod_supervisor3 callback.
 init(?TOPICS_SUP) ->
   {ok, {{one_for_one, 0, 1}, []}};
 init({?PARTITIONS_SUP, _ClientPid, _Topic, _Config}) ->
@@ -119,7 +119,7 @@ producers_sup_spec(ClientPid, TopicName, Config0) ->
                     ?DEFAULT_PARTITIONS_SUP_RESTART_DELAY),
   Args = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, Config}],
   { _Id       = TopicName
-  , _Start    = {supervisor3, start_link, Args}
+  , _Start    = {brod_supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
   , _Shutdown = infinity
   , _Type     = supervisor
