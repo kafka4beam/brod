@@ -1,3 +1,4 @@
+%% Copied from https://github.com/klarna/supervisor3
 %% This file is a copy of supervisor.erl from the R16B Erlang/OTP
 %% distribution, with the following modifications:
 %%
@@ -68,7 +69,7 @@
 %%
 %% %CopyrightEnd%
 %%
--module(supervisor3).
+-module(brod_supervisor3).
 
 -behaviour(gen_server).
 
