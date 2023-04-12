@@ -73,7 +73,7 @@ create_topic "brod-demo-group-subscriber-koc" 3 2
 create_topic "brod-demo-group-subscriber-loc" 3 2
 create_topic "brod_txn_SUITE_1" 3 2
 create_topic "brod_txn_SUITE_2" 3 2
-create_topic "brod_txn_subscriber_inpuut" 3 2
+create_topic "brod_txn_subscriber_input" 3 2
 create_topic "brod_txn_subscriber_output_1" 3 2
 create_topic "brod_txn_subscriber_output_2" 3 2
 create_topic "brod_compression_SUITE"

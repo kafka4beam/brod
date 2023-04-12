@@ -25,7 +25,7 @@
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC_OUTPUT_1, <<"brod_txn_subscriber_output_1">>).
 -define(TOPIC_OUTPUT_2, <<"brod_txn_subscriber_output_2">>).
--define(TOPIC_INPUT, <<"brod_txn_subscriber_inpuut">>).
+-define(TOPIC_INPUT, <<"brod_txn_subscriber_input">>).
 -define(CLIENT_ID, client_consumer_group).
 -define(GROUP_ID, <<"group_id_for_testing">>).
 -define(TIMEOUT, 4000).
@@ -100,7 +100,7 @@ handle_message(Topic,
                 , group_id := GroupId
                 , observer := ObserverPid} =  State) ->
 
-  {ok, Tx} = brod:transaction(Client),
+  {ok, Tx} = brod:transaction(Client, <<"some_transaction">>, []),
   {ok, _} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_1, Partition, Key, Value),
   {ok, _} = brod:txn_produce(Tx, ?TOPIC_OUTPUT_2, Partition, Key, Value),
   ok = brod:txn_add_offsets(Tx, GroupId, #{{Topic, Partition} => Offset}),

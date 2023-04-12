@@ -60,8 +60,7 @@
 
 %% Transactions API
 -export([ transaction/3
-        , transaction/2
-        , transaction/1
+        , txn_do/3
         , txn_produce/5
         , txn_produce/4
         , txn_add_offsets/3
@@ -212,6 +211,8 @@
 -type transactional_id() :: brod_transaction:transactional_id().
 -type transaction() :: brod_transaction:transaction().
 -type transaction_config() :: brod_transaction:transaction_config().
+-type txn_function() :: brod_transaction_processor:process_function().
+-type txn_do_options() :: brod_transaction_processor:do_options().
 
 -type msg_input() :: kpro:msg_input().
 -type batch_input() :: [msg_input()].
@@ -1373,15 +1374,13 @@ main(X) -> brod_cli:main(X).
 transaction(Client, TxnId, Config) ->
   brod_transaction:new(Client, TxnId, Config).
 
-%% @see brod_transaction:start_link/2
--spec transaction(client(), transactional_id()) -> {ok, transaction()}.
-transaction(Client, TxnId) ->
-  brod_transaction:new(Client, TxnId, []).
-
-%% @see brod_transaction:start_link/1
--spec transaction(client()) -> {ok, transaction()}.
-transaction(Client) ->
-  brod_transaction:new(Client, []).
+%% @doc executes the function in the context of a fetch-produce cycle
+%% with access to an open transaction.
+%% @see brod_transaction_processor:do/3
+-spec txn_do(txn_function(), client(), txn_do_options()) -> {ok, pid()}
+                                                          | {error, any()}.
+txn_do(ProcessFun, Client, Options) ->
+  brod_transaction_processor:do(ProcessFun, Client, Options).
 
 %% @doc produces the message (key and value) to the indicated topic-partition
 %% synchronously.

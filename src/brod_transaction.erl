@@ -68,7 +68,6 @@
         , commit/1
         , abort/1
         , stop/1
-        , new/2
         , new/3
         , start_link/3]).
 
@@ -215,13 +214,6 @@ code_change(_OldVsn, #state{} = State, _Extra) ->
 
 terminate(_Reason, _State) -> ok.
 
-%% @see start_link/2
--spec new(pid(), transaction_config()) -> {ok, transaction()}.
-new(ClientPid, Config) ->
-  gen_server:start_link(?MODULE,
-                        {ClientPid, make_transactional_id(), Config},
-                        []).
-
 %% @see start_link/3
 -spec new(pid(), transactional_id(), transaction_config()) -> {ok, transaction()}.
 new(ClientPid, TxId, Config) ->
@@ -272,11 +264,6 @@ abort(Transaction) ->
 -spec stop(transaction()) -> ok | {error, any()}.
 stop(Transaction) ->
   gen_server:call(Transaction, terminate).
-
-%% @private
-make_transactional_id() ->
-  iolist_to_binary([atom_to_list(?MODULE), "-txn-",
-                    base64:encode(crypto:strong_rand_bytes(8))]).
 
 %% @private
 make_txn_context(Client, TxId, #{ max_retries := MaxRetries
