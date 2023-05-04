@@ -20,6 +20,7 @@
 %%
 %% Simple produce sample:
 %%
+%%  ```
 %%  {ok, Tx} = brod_transaction:new(Client, TxId, []),
 %%  lists:foreach(fun(Partition) ->
 %%                    Key = rand(), Value = rand(),
@@ -31,6 +32,7 @@
 %%                                             Value),
 %%                end, Partitions),
 %%  brod_transaction:commit(Tx),
+%%  '''
 %%
 %% handle callback of a group suuscriber using offset commit within a
 %% transaction:
