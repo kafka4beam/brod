@@ -167,17 +167,15 @@ handle_message(Topic,
 get_committed_offsets(GroupId, TPs, #{client := Client} = State) ->
   {ok, Offsets} = brod:fetch_committed_offsets(Client, GroupId),
   TPOs =
-  lists:filter(fun({TP, _Offset}) ->
-                   lists:member(TP, TPs)
-               end,
-               lists:foldl(fun(#{ name := Topic
-                                , partitions := Partitions}, TPOs) ->
-                               lists:append(TPOs,
-                                            lists:map(fun(#{ committed_offset := COffset
-                                                           , partition_index := Partition}) ->
-                                                          {{Topic, Partition}, COffset}
-                                                      end, Partitions))
-                           end, [], Offsets)),
+  lists:flatmap( fun(#{name := Topic, partitions := Partitions}) ->
+                     [{{Topic, Partition}, COffset} ||
+                      #{ partition_index := Partition
+                       , committed_offset := COffset
+                       } <- Partitions,
+                       lists:member({Topic, Partition}, TPs)] 
+                 end
+               , Offsets
+               ), 
   {ok, TPOs, State}.
 
 %@@private
