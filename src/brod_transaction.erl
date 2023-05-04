@@ -158,44 +158,30 @@ handle_call({add_offsets, ConsumerGroup, Offsets}, _From,
                         #{ max_retries => MaxRetries
                          , backoff_step => BackOffStep}),
   {reply, Resp, State};
-
-%%% @private
 handle_call({produce, Topic, Partition, Key, Value}, _From,
             #state{} = OldState) ->
   case do_produce(Topic, Partition, Key, Value, OldState) of
     {ok, {Offset, State}} -> {reply, {ok, Offset}, State};
     {error, Reason} -> {reply, {error, Reason}, OldState}
   end;
-
-%%% @private
 handle_call({produce, Topic, Partition, Batch}, _From,
             #state{} = OldState) ->
   case do_batch_produce(Topic, Partition, Batch, OldState) of
     {ok, {Offset, State}} -> {reply, {ok, Offset}, State};
     {error, Reason} -> {reply, {error, Reason}, OldState}
   end;
-
-%% @private
 handle_call(commit, _From, #state{context = CTX} = State) ->
   {stop, normal, kpro:txn_commit(CTX), State};
-
-%% @private
 handle_call(terminate, _From, State) ->
   {stop, normal, ok, #state{} = State};
-
-%% @private
 handle_call(abort, _From,
             #state{context = CTX} = State) ->
   {stop, normal, kpro:txn_abort(CTX), State};
-
-%% @private
 handle_call({abort, Timeout}, _From,
             #state{context = CTX} = State) ->
   {stop, normal,
    kpro:txn_abort(CTX, #{timeout => Timeout}),
    State};
-
-%% @private
 handle_call(stop, _From, #state{} = State) ->
   {stop, normal, ok, State};
 
