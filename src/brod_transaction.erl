@@ -14,7 +14,7 @@
 %%%   limitations under the License.
 %%%
 
-%% @doc A `brod_transaction' is a `gen_server' that orchestate a set of
+%% @doc A `brod_transaction' is a process that orchestates a set of
 %% producers to store messages within a transaction, it also supports
 %% committing offsets in the same transaction.
 %%
