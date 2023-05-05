@@ -13,7 +13,8 @@
         ]).
 
 -export([ init/2
-        , handle_message/4]).
+        , handle_message/4
+        ]).
 
 -include_lib("stdlib/include/assert.hrl").
 
@@ -153,20 +154,24 @@ start_broken_processor(Client) ->
   brod:txn_do(
     fun(Transaction, #kafka_message_set{ topic     = _Topic
                                        , partition = Partition
-                                       , messages  = Messages} = _MessageSet) ->
+                                       , messages  = Messages
+                                       } = _MessageSet) ->
         lists:foreach(fun(#kafka_message{ key = Key
-                                        , value = Value}) ->
+                                        , value = Value
+                                        }) ->
                           brod:txn_produce(Transaction,
                                            ?OUTPUT_TOPIC_1,
                                            Partition,
                                            [#{ key => Key
-                                             , value => Value}]),
+                                             , value => Value
+                                             }]),
 
                           brod:txn_produce(Transaction,
                                            ?OUTPUT_TOPIC_2,
                                            Partition,
                                            [#{ key => Key
-                                             , value => Value}]),
+                                             , value => Value
+                                             }]),
                           %% this should break a few things .)
                           false = is_process_alive(self())
                       end, Messages),
@@ -178,7 +183,8 @@ start_processor(Client) ->
   brod:txn_do(
     fun(Transaction, #kafka_message_set{ topic     = _Topic
                                        , partition = Partition
-                                       , messages  = Messages} = _MessageSet) ->
+                                       , messages  = Messages
+                                       } = _MessageSet) ->
 
         lists:foreach(fun(#kafka_message{ key = Key
                                         , value = Value}) ->
@@ -186,13 +192,15 @@ start_processor(Client) ->
                                            ?OUTPUT_TOPIC_1,
                                            Partition,
                                            [#{ key => Key
-                                             , value => Value}]),
+                                             , value => Value
+                                             }]),
 
                           brod:txn_produce(Transaction,
                                            ?OUTPUT_TOPIC_2,
                                            Partition,
                                            [#{ key => Key
-                                             , value => Value}])
+                                             , value => Value
+                                             }])
                       end, Messages),
         ok
     end, Client, #{ topics => [?INPUT_TOPIC]
@@ -222,13 +230,12 @@ handle_message(Topic,
                Partition,
                #kafka_message_set{ topic     = Topic
                                  , partition = Partition
-                                 , messages  = Messages},
-               #{ observer_pid := ObserverPid} = State) ->
+                                 , messages  = Messages
+                                 },
+               #{observer_pid := ObserverPid} = State) ->
 
   lists:foreach(fun(#kafka_message{key = Key}) ->
                   ObserverPid ! {Topic, Key}
                 end, Messages),
 
   {ok, ack, State}.
-
-

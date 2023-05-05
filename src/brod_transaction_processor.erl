@@ -14,7 +14,7 @@
 %%%   limitations under the License.
 %%%
 
-%% @doc `brod_transaction_processor` allows the execution of a function in the context
+%% @doc `brod_transaction_processor' allows the execution of a function in the context
 %% of a transaction. It abstracts the usage of a group subscriber reading and writing
 %% using a transaction in each fetch cycle.
 %%  For example, the following snippets are equivalent
@@ -55,8 +55,13 @@
         , handle_message/4
         , get_committed_offsets/3]).
 
+% type exports
 -export_type([ do_options/0
              , process_function/0]).
+
+%%==============================================================================
+%% Type declarations
+%%==============================================================================
 
 -type client() :: client_id() | pid().
 -type client_id() :: atom().
@@ -71,7 +76,6 @@
 
 -type process_function() :: fun((transaction(), message_set()) -> ok
                                                                 | {error, any()}).
-
 
 %% @doc executes the ProcessFunction within the context of a transaction.
 %% Options is a map that can include
@@ -135,28 +139,37 @@ do(ProcessFun, Client, Opts) ->
                                    ?MODULE,
                                    InitState).
 
+%%==============================================================================
+%% group subscriber callbacks
+%%==============================================================================
 init(GroupId, #{ client := Client
-               , process_function := ProcessFun} = Opts) ->
+               , process_function := ProcessFun
+               } = Opts) ->
   #{ tx_id := TxId
    , transaction_config := Config} =
   maps:merge(#{ tx_id => make_transactional_id()
-              , transaction_config => []}, Opts),
+              , transaction_config => []
+              }, Opts),
+
   {ok, #{ client => Client
         , transaction_config => Config
         , tx_id => TxId
         , process_function => ProcessFun
-        , group_id => GroupId}}.
+        , group_id => GroupId
+        }}.
 
 handle_message(Topic,
                Partition,
                #kafka_message_set{ topic     = Topic
                                  , partition = Partition
-                                 , messages  = _Messages} = MessageSet,
+                                 , messages  = _Messages
+                                 } = MessageSet,
                #{ process_function := ProcessFun
                 , client := Client
                 , tx_id := TxId
                 , transaction_config := TransactionConfig
-                , group_id := GroupId} = State) ->
+                , group_id := GroupId
+                } = State) ->
 
   {ok, Tx} = brod:transaction(Client, TxId, TransactionConfig),
   ok = ProcessFun(Tx, MessageSet),
@@ -172,13 +185,16 @@ get_committed_offsets(GroupId, TPs, #{client := Client} = State) ->
                       #{ partition_index := Partition
                        , committed_offset := COffset
                        } <- Partitions,
-                       lists:member({Topic, Partition}, TPs)] 
+                      lists:member({Topic, Partition}, TPs)]
                  end
-               , Offsets
-               ), 
+                 , Offsets
+               ),
   {ok, TPOs, State}.
 
-%@@private
+%%==============================================================================
+%% Internal functions
+%%==============================================================================
+
 make_transactional_id() ->
   iolist_to_binary([atom_to_list(?MODULE), "-txn-",
                     base64:encode(crypto:strong_rand_bytes(8))]).
@@ -186,8 +202,13 @@ make_transactional_id() ->
 
 offsets_to_commit(#kafka_message_set{ topic     = Topic
                                     , partition = Partition
-                                    , messages  = Messages}) ->
+                                    , messages  = Messages
+                                    }) ->
   #kafka_message{offset = Offset} = lists:last(Messages),
   #{{Topic, Partition} => Offset}.
 
-
+%%%_* Emacs ====================================================================
+%%% Local Variables:
+%%% allout-layout: t
+%%% erlang-indent-level: 2
+%%% End:

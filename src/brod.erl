@@ -1368,13 +1368,13 @@ fetch_committed_offsets(Client, GroupId) ->
 main(X) -> brod_cli:main(X).
 -endif.
 
-%% @doc starts a new transaction, TxId will be the id of the transaction
+%% @doc Start a new transaction, `TxId' will be the id of the transaction
 %% @equiv brod_transaction:start_link/3
 -spec transaction(client(), transactional_id(), transaction_config()) -> {ok, transaction()}.
 transaction(Client, TxnId, Config) ->
   brod_transaction:new(Client, TxnId, Config).
 
-%% @doc executes the function in the context of a fetch-produce cycle
+%% @doc Execute the function in the context of a fetch-produce cycle
 %% with access to an open transaction.
 %% @see brod_transaction_processor:do/3
 -spec txn_do(txn_function(), client(), txn_do_options()) -> {ok, pid()}
@@ -1382,7 +1382,7 @@ transaction(Client, TxnId, Config) ->
 txn_do(ProcessFun, Client, Options) ->
   brod_transaction_processor:do(ProcessFun, Client, Options).
 
-%% @doc produces the message (key and value) to the indicated topic-partition
+%% @doc Produce the message (key and value) to the indicated topic-partition
 %% synchronously.
 %% @see brod_transaction:produce/5
 -spec txn_produce(transaction(), topic(), partition(), key(), value()) ->
@@ -1390,7 +1390,7 @@ txn_do(ProcessFun, Client, Options) ->
 txn_produce(Transaction, Topic, Partition, Key, Value) ->
   brod_transaction:produce(Transaction, Topic, Partition, Key, Value).
 
-%% @doc produces the batch of messagesmessages to the indicated topic-partition
+%% @doc Produce the batch of messages to the indicated topic-partition
 %% synchronously.
 %% @see brod_transaction:produce/5
 -spec txn_produce(transaction(), topic(), partition(), batch_input()) ->
@@ -1398,20 +1398,20 @@ txn_produce(Transaction, Topic, Partition, Key, Value) ->
 txn_produce(Transaction, Topic, Partition, Batch) ->
   brod_transaction:produce(Transaction, Topic, Partition, Batch).
 
-%% @doc adds the offset consumed by a group to the transaction.
+%% @doc Add the offset consumed by a group to the transaction.
 %% @see brod_transaction:add_offsets/3
 -spec txn_add_offsets(transaction(), group_id(), offsets_to_commit()) ->
         ok | {error, any()}.
 txn_add_offsets(Transaction, ConsumerGroup, Offsets) ->
   brod_transaction:add_offsets(Transaction, ConsumerGroup, Offsets).
 
-%% @doc commits the transaction
+%% @doc Commit the transaction
 %% @see brod_transaction:commit/1
 -spec commit(transaction()) -> ok | {error, any()}.
 commit(Transaction) ->
   brod_transaction:commit(Transaction).
 
-%% @doc aborts the transaction
+%% @doc Abort the transaction
 %% @see brod_transaction:abort/1
 -spec abort(transaction()) -> ok | {error, any()}.
 abort(Transaction) ->

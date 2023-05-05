@@ -129,12 +129,12 @@ t_simple_transaction(Config) when is_list(Config) ->
   ?assertMatch(true, is_process_alive(Tx)),
 
   Results = lists:map(fun(Topic) ->
-                       Partition = 0,
-                       Key = rand(),
-                       Value = rand(),
-                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value}
-                   end, ?config(topics)),
+                          Partition = 0,
+                          Key = rand(),
+                          Value = rand(),
+                          {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                          {Partition, Key, Value}
+                      end, ?config(topics)),
 
   ?assertMatch(ok, receive_messages(none)),
   ?assertMatch(ok, brod:commit(Tx)),
@@ -199,20 +199,20 @@ t_multiple_writes_transaction(Config) when is_list(Config) ->
   ?assertMatch(true, is_process_alive(Tx)),
 
   FirstWave = lists:map(fun(Topic) ->
-                       Partition = 0,
-                       Key = rand(),
-                       Value = rand(),
-                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value}
-                   end, ?config(topics)),
+                            Partition = 0,
+                            Key = rand(),
+                            Value = rand(),
+                            {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                            {Partition, Key, Value}
+                        end, ?config(topics)),
 
   SecondWave = lists:map(fun(Topic) ->
-                       Partition = 0,
-                       Key = rand(),
-                       Value = rand(),
-                       {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
-                       {Partition, Key, Value}
-                   end, ?config(topics)),
+                             Partition = 0,
+                             Key = rand(),
+                             Value = rand(),
+                             {ok, _Offset} = brod:txn_produce(Tx, Topic, Partition, Key, Value),
+                             {Partition, Key, Value}
+                         end, ?config(topics)),
 
   Results = lists:append(FirstWave, SecondWave),
 

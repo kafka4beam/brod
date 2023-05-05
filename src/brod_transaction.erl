@@ -34,9 +34,10 @@
 %%  brod_transaction:commit(Tx),
 %%  '''
 %%
-%% handle callback of a group suuscriber using offset commit within a
+%% handle callback of a group subscriber using offset commit within a
 %% transaction:
 %%
+%%  ```
 %%  handle_message(Topic,
 %%                 Partition,
 %%                 #kafka_message{ offset = Offset
@@ -50,19 +51,11 @@
 %%    ok = brod_transaction:commit(Tx)
 %%
 %%    {ok, ack_no_commit, State}.
+%%  '''
 %%
 
 -module(brod_transaction).
 -behaviour(gen_server).
-
-% gen_server callbacks
--export([ init/1
-        , handle_cast/2
-        , handle_call/3
-        , handle_info/2
-        , terminate/2
-        , code_change/3
-        ]).
 
 % public API
 -export([ produce/5
@@ -72,9 +65,17 @@
         , abort/1
         , stop/1
         , new/3
-        , start_link/3]).
+        , start_link/3
+        ]).
 
+% gen_server callbacks
+-export([ init/1
+        , handle_cast/2
+        , handle_call/3
+        , terminate/2
+        ]).
 
+% type exports
 -export_type([ batch_input/0
              , call_ref/0
              , client/0
@@ -89,9 +90,12 @@
              , transaction/0
              , transactional_id/0
              , txn_ctx/0
-             , value/0]).
+             , value/0
+             ]).
 
--export[send_req/3].
+%%==============================================================================
+%% Type declarations
+%%==============================================================================
 
 -type call_ref() :: brod:call_ref().
 -type client() :: client_id() | pid().
@@ -112,7 +116,6 @@
 -type value() :: brod:value().
 -type batch_input() :: kpro:batch_input().
 
-
 -record(state,
         { client_pid      :: client()
         , context         :: txn_ctx()
@@ -125,6 +128,65 @@
 
 -type state() :: #state{}.
 
+%%==============================================================================
+%% API functions
+%%==============================================================================
+
+%% @see start_link/3
+-spec new(pid(), transactional_id(), transaction_config()) -> {ok, transaction()}.
+new(ClientPid, TxId, Config) ->
+  gen_server:start_link(?MODULE,
+                        {ClientPid, TxId, Config},
+                        []).
+
+%% @doc Start a new transaction, `TxId'will be the id of the transaction
+%% `Config' is a proplist, all values are optional:
+%% `timeout':`Connection timeout in millis
+%% `backoff_step': after each retry it will sleep for 2^Attempt * backoff_step
+%%  millis
+%% `max_retries'
+-spec start_link(pid(), transactional_id(), transaction_config()) -> {ok, pid()}.
+start_link(ClientPid, TxId, Config) ->
+  gen_server:start_link(?MODULE, {ClientPid, TxId, Config}, []).
+
+%% @doc Produce the message (key and value) to the indicated topic-partition
+%% synchronously.
+-spec produce(transaction(), topic(), partition(), key(), value()) ->
+  {ok, offset()} | {error, any()}.
+produce(Transaction, Topic, Partition, Key, Value) ->
+  gen_server:call(Transaction, {produce, Topic, Partition, Key, Value}).
+
+%% @doc Synchronously produce the batch of messages to the indicated
+%% topic-partition
+-spec produce(transaction(), topic(), partition(), batch_input()) ->
+  {ok, offset()} | {error, any()}.
+produce(Transaction, Topic, Partition, Batch) ->
+  gen_server:call(Transaction, {produce, Topic, Partition, Batch}).
+
+%% @doc Add the offset consumed by a group to the transaction.
+-spec add_offsets(transaction(), group_id(), offsets_to_commit()) -> ok | {error, any()}.
+add_offsets(Transaction, ConsumerGroup, Offsets) ->
+  gen_server:call(Transaction, {add_offsets, ConsumerGroup, Offsets}).
+
+%% @doc Commit the transaction, after this, the gen_server will stop
+-spec commit(transaction()) -> ok | {error, any()}.
+commit(Transaction) ->
+  gen_server:call(Transaction, commit).
+
+%% @doc Abort the transaction, after this, the gen_server will stop
+-spec abort(transaction()) -> ok | {error, any()}.
+abort(Transaction) ->
+  gen_server:call(Transaction, abort).
+
+%% @doc Stop the transaction.
+-spec stop(transaction()) -> ok | {error, any()}.
+stop(Transaction) ->
+  gen_server:call(Transaction, terminate).
+
+%%==============================================================================
+%% gen_server callbacks
+%%==============================================================================
+
 init({Client, TxId, PropListConfig}) ->
   ClientPid = pid(Client),
   erlang:process_flag(trap_exit, true),
@@ -134,7 +196,8 @@ init({Client, TxId, PropListConfig}) ->
    , backoff_step := BackOffStep
    , timeout := Timeout} = maps:merge(#{ max_retries => 5
                                        , backoff_step => 100
-                                       , timeout => 1000},
+                                       , timeout => 1000
+                                       },
                                       proplists:to_map(PropListConfig)),
 
   {ok, CTX} = make_txn_context(ClientPid, TxId, Config),
@@ -146,8 +209,6 @@ init({Client, TxId, PropListConfig}) ->
              , sequences = #{}
              , sent_partitions = #{}
              }}.
-
-%%% @private
 handle_call({add_offsets, ConsumerGroup, Offsets}, _From,
             #state{ client_pid = Client
                   , context = CTX
@@ -156,7 +217,8 @@ handle_call({add_offsets, ConsumerGroup, Offsets}, _From,
                   } = State) ->
   Resp = do_add_offsets(Client, CTX, ConsumerGroup, Offsets,
                         #{ max_retries => MaxRetries
-                         , backoff_step => BackOffStep}),
+                         , backoff_step => BackOffStep
+                         }),
   {reply, Resp, State};
 handle_call({produce, Topic, Partition, Key, Value}, _From,
             #state{} = OldState) ->
@@ -184,79 +246,20 @@ handle_call({abort, Timeout}, _From,
    State};
 handle_call(stop, _From, #state{} = State) ->
   {stop, normal, ok, State};
-
-%% @private
 handle_call(Call, _From, #state{} = State) ->
   {reply, {error, {unsupported_call, Call}}, State}.
-
-%% @private
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
+terminate(_Reason, #state{context = CTX}) ->
+  kpro:txn_abort(CTX).
 
-%% @private
-handle_info(_Call, #state{} = State) ->
-  {noreply, State}.
+%%==============================================================================
+%% Internal functions
+%%==============================================================================
 
-%% @private
-code_change(_OldVsn, #state{} = State, _Extra) ->
-  {ok, State}.
-
-terminate(_Reason, _State) -> ok.
-
-%% @see start_link/3
--spec new(pid(), transactional_id(), transaction_config()) -> {ok, transaction()}.
-new(ClientPid, TxId, Config) ->
-  gen_server:start_link(?MODULE,
-                        {ClientPid, TxId, Config},
-                        []).
-
-%% @doc starts a new transaction, TxId will be the id of the transaction
-%% Config is a proplist, all values are optional:
-%% `timeout':`Connection timeout in millis
-%% `backoff_step': after each retry it will sleep for 2^Attempt * backoff_step
-%%  millis
-%% `max_retries'
--spec start_link(pid(), transactional_id(), transaction_config()) -> {ok, pid()}.
-start_link(ClientPid, TxId, Config) ->
-  gen_server:start_link(?MODULE, {ClientPid, TxId, Config}, []).
-
-%% @doc produces the message (key and value) to the indicated topic-partition
-%% synchronously.
--spec produce(transaction(), topic(), partition(), key(), value()) ->
-  {ok, offset()} | {error, any()}.
-produce(Transaction, Topic, Partition, Key, Value) ->
-  gen_server:call(Transaction, {produce, Topic, Partition, Key, Value}).
-
-%% @doc synchronously produces the batch of messagesmessages to the indicated
-%% topic-partition
--spec produce(transaction(), topic(), partition(), batch_input()) ->
-  {ok, offset()} | {error, any()}.
-produce(Transaction, Topic, Partition, Batch) ->
-  gen_server:call(Transaction, {produce, Topic, Partition, Batch}).
-
-%% @doc adds the offset consumed by a group to the transaction.
--spec add_offsets(transaction(), group_id(), offsets_to_commit()) -> ok | {error, any()}.
-add_offsets(Transaction, ConsumerGroup, Offsets) ->
-  gen_server:call(Transaction, {add_offsets, ConsumerGroup, Offsets}).
-
-%% @doc commits the transaction, after this, the gen_server will stop
--spec commit(transaction()) -> ok | {error, any()}.
-commit(Transaction) ->
-  gen_server:call(Transaction, commit).
-
-%% @doc aborts the transaction, after this, the gen_server will stop
--spec abort(transaction()) -> ok | {error, any()}.
-abort(Transaction) ->
-  gen_server:call(Transaction, abort).
-
-%% @doc stops the transaction.
--spec stop(transaction()) -> ok | {error, any()}.
-stop(Transaction) ->
-  gen_server:call(Transaction, terminate).
-
-%% @private
 make_txn_context(Client, TxId, #{ max_retries := MaxRetries
-                                , backoff_step := BackOffStep})->
+                                , backoff_step := BackOffStep
+                                })->
   persistent_call(fun() ->
                     make_txn_context_internal(Client, TxId)
                   end, MaxRetries, BackOffStep).
@@ -272,18 +275,16 @@ make_txn_context_internal(Client, TxId) ->
     {error, Reason} -> {error, Reason}
   end.
 
-
-%% @private
 do_add_offsets(Client, CTX, ConsumerGroup, Offsets,
                #{ max_retries := MaxRetries
-                , backoff_step := BackOffStep}) ->
+                , backoff_step := BackOffStep
+                }) ->
   persistent_call(fun() ->
                     do_add_offsets_internal(Client, CTX,
                                             ConsumerGroup, Offsets)
                   end,
                   MaxRetries, BackOffStep).
 
-%% @private
 do_add_offsets_internal(Client, CTX, ConsumerGroup, Offsets) ->
   case brod_client:get_group_coordinator(Client, ConsumerGroup) of
     {ok, {{Host, Port}, _}} ->
@@ -294,7 +295,6 @@ do_add_offsets_internal(Client, CTX, ConsumerGroup, Offsets) ->
       {error, Reason} -> {error, Reason}
   end.
 
-%% @private
 send_cg_and_offset(GroupCoordConn, CTX, ConsumerGroup, Offsets) ->
   %% before adding the offset we need to let kafka know we are going to commit
   %% the offsets.
@@ -303,19 +303,19 @@ send_cg_and_offset(GroupCoordConn, CTX, ConsumerGroup, Offsets) ->
     {error, Reason} -> {error, Reason}
   end.
 
-%% @private
 -spec do_produce(topic(), partition(), key(), value(), state()) ->
   {error, string()} | {ok, {offset(), state()}}.
 do_produce(Topic, Partition, Key, Value, State) ->
   do_batch_produce(Topic, Partition, [#{ key => Key
                                        , value => Value
-                                       , ts => kpro_lib:now_ts()}], State).
+                                       , ts => kpro_lib:now_ts()
+                                       }], State).
 
-%% @private
 -spec do_batch_produce(topic(), partition(), batch_input(), state()) ->
   {error, string()} | {ok, {offset(), state()}}.
 do_batch_produce(Topic, Partition, Batch, #state{ max_retries = MaxRetries
-                                                , backoff_step = BackOffStep} = State) ->
+                                                , backoff_step = BackOffStep
+                                                } = State) ->
   persistent_call(fun() ->
                       do_batch_produce_internal(Topic, Partition,
                                                 Batch, State)
@@ -336,7 +336,8 @@ do_batch_produce_internal(Topic, Partition, Batch,
       ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition,
                                         Batch,
                                         #{ txn_ctx => CTX
-                                         , first_sequence => FirstSequence}),
+                                         , first_sequence => FirstSequence
+                                         }),
 
       SentPartitions =
       case maps:get({Topic, Partition}, OldSentPartitions, not_found) of
@@ -351,7 +352,8 @@ do_batch_produce_internal(Topic, Partition, Batch,
           {ok, {Offset, State#state{ sent_partitions = SentPartitions
                                    , sequences = maps:put({Topic, Partition},
                                                          FirstSequence + length(Batch),
-                                                         Sequences)}}};
+                                                         Sequences)
+                                   }}};
         {error, Reason} -> {error, Reason}
       end;
     {error, Reason} -> {error, Reason}
@@ -368,7 +370,8 @@ conn_and_vsn(ClientPid, Topic, Partition) ->
     {ok, Connection} ->
       case kpro:get_api_versions(Connection) of
         {ok, #{ produce := {_, Vsn}
-              , fetch   := {_, _}}} -> {ok, {Connection, Vsn}};
+              , fetch   := {_, _}
+              }} -> {ok, {Connection, Vsn}};
         {error, Reason} -> {error, Reason}
       end;
     {error, Reason} -> {error, Reason}
