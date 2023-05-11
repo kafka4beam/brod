@@ -194,11 +194,14 @@ init({Client, TxId, PropListConfig}) ->
   Config =
   #{ max_retries := MaxRetries
    , backoff_step := BackOffStep
-   , timeout := Timeout} = maps:merge(#{ max_retries => 5
-                                       , backoff_step => 100
-                                       , timeout => 1000
-                                       },
-                                      proplists:to_map(PropListConfig)),
+   , timeout := Timeout
+   } = lists:foldl(fun({K, V}, M) ->
+                       M#{K => V}
+                   end,
+                   #{ max_retries => 5
+                    , backoff_step => 100
+                    , timeout => 1000
+                    }, PropListConfig),
 
   {ok, CTX} = make_txn_context(ClientPid, TxId, Config),
   {ok, #state{ client_pid = ClientPid
