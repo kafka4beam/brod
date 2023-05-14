@@ -45,7 +45,7 @@
 %%
 -module(brod_transaction_processor).
 
--include("include/brod.hrl").
+-include("brod.hrl").
 
 %public API
 -export([do/3]).
@@ -87,9 +87,9 @@
 %%
 %% FizzBuzz sample:
 %%
-%% fizz_buzz(N) when (N rem 15) == 0 -> <<"FizzBuzz">>;
-%% fizz_buzz(N) when (N rem 3) == 0 -> <<"Fizz">>;
-%% fizz_buzz(N) when (N rem 5) == 0 -> <<"Buzz">>;
+%% fizz_buzz(N) when (N rem 15) == 0 -> "FizzBuzz"
+%% fizz_buzz(N) when (N rem 3) == 0 -> "Fizz"
+%% fizz_buzz(N) when (N rem 5) == 0 -> "Buzz";
 %% fizz_buzz(N) -> N end.
 %%
 %% brod_transaction_processor:do(
