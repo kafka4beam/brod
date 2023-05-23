@@ -111,7 +111,7 @@ maintaining tcp sockets connecting to kafka brokers.
 It also manages per-topic-partition producer and consumer processes under
 two-level supervision trees.
 
-To use producers or consumers, you have to start at least one cient that
+To use producers or consumers, you have to start at least one client that
 will manage them.
 
 ### Start clients by default
