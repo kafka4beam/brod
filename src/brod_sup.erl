@@ -56,7 +56,7 @@
 %%%=============================================================================
 
 -module(brod_sup).
--behaviour(supervisor3).
+-behaviour(brod_supervisor3).
 
 -export([ init/1
         , post_init/1
@@ -101,28 +101,28 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
+  brod_supervisor3:start_link({local, ?SUP}, ?MODULE, clients_sup).
 
 -spec start_client([brod:endpoint()],
                    brod:client_id(),
                    brod:client_config()) -> ok | {error, any()}.
 start_client(Endpoints, ClientId, Config) ->
   ClientSpec = client_spec(Endpoints, ClientId, Config),
-  case supervisor3:start_child(?SUP, ClientSpec) of
+  case brod_supervisor3:start_child(?SUP, ClientSpec) of
     {ok, _Pid} -> ok;
     Error      -> Error
   end.
 
 -spec stop_client(brod:client_id()) -> ok | {error, any()}.
 stop_client(ClientId) ->
-  _ = supervisor3:terminate_child(?SUP, ClientId),
-  supervisor3:delete_child(?SUP, ClientId).
+  _ = brod_supervisor3:terminate_child(?SUP, ClientId),
+  brod_supervisor3:delete_child(?SUP, ClientId).
 
 -spec find_client(brod:client_id()) -> [pid()].
 find_client(Client) ->
-  supervisor3:find_child(?SUP, Client).
+  brod_supervisor3:find_child(?SUP, Client).
 
-%% @doc supervisor3 callback
+%% @doc brod_supervisor3 callback
 init(clients_sup) ->
   %% start and link it to root supervisor
   {ok, _} = brod_kafka_apis:start_link(),
@@ -139,7 +139,7 @@ init(clients_sup) ->
   %% before supervisor tries to restart it.
   {ok, {{one_for_one, 0, 1}, ClientSpecs}}.
 
-%% @doc supervisor3 callback.
+%% @doc brod_supervisor3 callback.
 post_init(_) ->
   ignore.
 

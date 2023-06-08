@@ -20,7 +20,7 @@
 %%%=============================================================================
 
 -module(brod_consumers_sup).
--behaviour(supervisor3).
+-behaviour(brod_supervisor3).
 
 -export([ init/1
         , post_init/1
@@ -46,21 +46,21 @@
 %% @doc Start a root consumers supervisor.
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  supervisor3:start_link(?MODULE, ?TOPICS_SUP).
+  brod_supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor.
 -spec start_consumer(pid(), pid(), brod:topic(), brod:consumer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_consumer(SupPid, ClientPid, TopicName, Config) ->
   Spec = consumers_sup_spec(ClientPid, TopicName, Config),
-  supervisor3:start_child(SupPid, Spec).
+  brod_supervisor3:start_child(SupPid, Spec).
 
 
 %% @doc Dynamically stop a per-topic supervisor.
 -spec stop_consumer(pid(), brod:topic()) -> ok | {error, any()}.
 stop_consumer(SupPid, TopicName) ->
-  supervisor3:terminate_child(SupPid, TopicName),
-  supervisor3:delete_child(SupPid, TopicName).
+  brod_supervisor3:terminate_child(SupPid, TopicName),
+  brod_supervisor3:delete_child(SupPid, TopicName).
 
 %% @doc Find a brod_consumer process pid running under ?PARTITIONS_SUP
 -spec find_consumer(pid(), brod:topic(), brod:partition()) ->
@@ -69,14 +69,14 @@ stop_consumer(SupPid, TopicName) ->
                 | {consumer_not_found, brod:topic(), brod:partition()}
                 | {consumer_down, any()}.
 find_consumer(SupPid, Topic, Partition) ->
-  case supervisor3:find_child(SupPid, Topic) of
+  case brod_supervisor3:find_child(SupPid, Topic) of
     [] ->
       %% no such topic worker started,
       %% check sys.config or brod:start_link_client args
       {error, {consumer_not_found, Topic}};
     [PartitionsSupPid] ->
       try
-        case supervisor3:find_child(PartitionsSupPid, Partition) of
+        case brod_supervisor3:find_child(PartitionsSupPid, Partition) of
           [] ->
             %% no such partition?
             {error, {consumer_not_found, Topic, Partition}};
@@ -88,7 +88,7 @@ find_consumer(SupPid, Topic, Partition) ->
       end
   end.
 
-%% @doc supervisor3 callback.
+%% @doc brod_supervisor3 callback.
 init(?TOPICS_SUP) ->
   {ok, {{one_for_one, 0, 1}, []}};
 init({?PARTITIONS_SUP, _ClientPid, _Topic, _Config}) ->
@@ -132,7 +132,7 @@ consumers_sup_spec(ClientPid, TopicName, Config0) ->
   Config    = proplists:delete(topic_restart_delay_seconds, Config0),
   Args      = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, Config}],
   { _Id       = TopicName
-  , _Start    = {supervisor3, start_link, Args}
+  , _Start    = {brod_supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}
   , _Shutdown = infinity
   , _Type     = supervisor

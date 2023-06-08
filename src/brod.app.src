@@ -3,7 +3,7 @@
  [{description,"Apache Kafka Erlang client library"},
   {vsn,"git"},
   {registered,[]},
-  {applications,[kernel,stdlib,kafka_protocol,supervisor3,snappyer]},
+  {applications,[kernel,stdlib,kafka_protocol,snappyer]},
   {env,[]},
   {mod, {brod, []}},
   {modules,[]},
