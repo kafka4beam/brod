@@ -1,5 +1,10 @@
 # Changelog
 
+- 3.17.0
+  - Deleted `supervisor3` as dependency, module is now moved to brod.git named `brod_supervisor3`.
+  - Upgrade snappyer version from 1.2.8 to 1.2.9.
+  - In rebar3.config move `coveralls` from `plugins` to `project_plugins`.
+
 - 3.16.8
   - Upgrade `supervisor3` from 1.1.11 to 1.1.12 to log supervisor status
     at `debug` level instead of `notice` level.
