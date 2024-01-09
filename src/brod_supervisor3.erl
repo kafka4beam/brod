@@ -1586,4 +1586,4 @@ extract_child_common(Child) ->
 report_progress(Child, SupName) ->
     Progress = [{supervisor, SupName},
                 {started, extract_child(Child)}],
-    error_logger:info_report(progress, Progress).
+    logger:log(debug, Progress).
