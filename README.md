@@ -428,7 +428,7 @@ Where `Mechanism` is `plain | scram_sha_256 | scram_sha_512`, and `File` is the 
 which contains two lines, first line for username and second line for password
 
 Also, brod has authentication plugins support with `{sasl, {callback, Module, Opts}}` in client config.
-Authentication callback module should implement `brod_auth_backend` behaviour.
+Authentication callback module should implement `kpro_auth_backend` behaviour.
 Auth function spec:
 
 ```erlang
