@@ -1,5 +1,10 @@
 # Changelog
 
+- 3.17.1
+  - Upgrade `kafka_protocol` from 4.1.3 to 4.1.5
+    - Allow space after `,` in comma-separated bootstrapping host:port list
+    - Avoid `badmatch` exception when parsing SASL password file
+
 - 3.17.0
   - Deleted `supervisor3` as dependency, module is now moved to brod.git named `brod_supervisor3`.
   - Upgrade `snappyer` version from 1.2.8 to 1.2.9.
