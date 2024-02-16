@@ -130,7 +130,6 @@
 %% so prefetch-count can dominate fetch-ahead limit
 -define(DEFAULT_PREFETCH_BYTES, 102400). % 100 KB
 -define(DEFAULT_OFFSET_RESET_POLICY, reset_by_subscriber).
--define(ERROR_COOLDOWN, 1000).
 -define(CONNECTION_RETRY_DELAY_MS, 1000).
 
 -define(SEND_FETCH_REQUEST, send_fetch_request).

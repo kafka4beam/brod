@@ -517,7 +517,6 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
         request_sync(Pid, Req)
     end).
 
--define(IS_BYTE(I), (I>=0 andalso I<256)).
 
 %% @doc Return message set size in number of bytes.
 %% NOTE: This does not include the overheads of encoding protocol.
