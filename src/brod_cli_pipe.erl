@@ -56,7 +56,6 @@
 -define(LINE_BREAK, <<"\n">>).
 -define(STDIN, standard_io).
 -define(EOF_RETRY_DELAY_MS, 100).
--define(NOT_APPLICABLE, 'N/A').
 -define(CONTINUE_MSG, continue).
 -define(PARENT_BUSY_MSG_QUEUE_LEN_THRESHOLD, 100).
 

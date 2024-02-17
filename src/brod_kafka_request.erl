@@ -40,7 +40,6 @@
 -type offset() :: brod:offset().
 -type conn() :: kpro:connection().
 
--define(MIN_MAGIC_2_PRODUCE_API_VSN, 3).
 
 %% @doc Make a produce request, If the first arg is a connection pid, call
 %% `brod_kafka_apis:pick_version/2' to resolve version.
