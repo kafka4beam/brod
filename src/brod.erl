@@ -58,6 +58,16 @@
         , sync_produce_request_offset/2
         ]).
 
+%% Transactions API
+-export([ transaction/3
+        , txn_do/3
+        , txn_produce/5
+        , txn_produce/4
+        , txn_add_offsets/3
+        , commit/1
+        , abort/1
+        ]).
+
 %% Simple Consumer API
 -export([ consume_ack/2
         , consume_ack/4
@@ -155,6 +165,7 @@
              , message_set/0
              , offset/0
              , offset_time/0
+             , offsets_to_commit/0
              , partition/0
              , partition_assignment/0
              , partition_fun/0
@@ -168,6 +179,9 @@
              , topic/0
              , topic_partition/0
              , value/0
+             , transactional_id/0
+             , transaction/0
+             , transaction_config/0
              ]).
 
 -include("brod_int.hrl").
@@ -183,6 +197,7 @@
 -type partition() :: kpro:partition().
 -type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset(). %% Physical offset (an integer)
+-type offsets_to_commit() :: kpro:offsets_to_commit().
 -type key() :: undefined %% no key, transformed to <<>>
              | binary().
 -type value() :: undefined %% no value, transformed to <<>>
@@ -192,6 +207,12 @@
                | [?TKV(msg_ts(), key(), value())] %% backward compatible
                | kpro:msg_input() %% one magic v2 message
                | kpro:batch_input(). %% maybe nested batch
+
+-type transactional_id() :: brod_transaction:transactional_id().
+-type transaction() :: brod_transaction:transaction().
+-type transaction_config() :: brod_transaction:transaction_config().
+-type txn_function() :: brod_transaction_processor:process_function().
+-type txn_do_options() :: brod_transaction_processor:do_options().
 
 -type msg_input() :: kpro:msg_input().
 -type batch_input() :: [msg_input()].
@@ -1346,6 +1367,55 @@ fetch_committed_offsets(Client, GroupId) ->
 -ifdef(build_brod_cli).
 main(X) -> brod_cli:main(X).
 -endif.
+
+%% @doc Start a new transaction, `TxId' will be the id of the transaction
+%% @equiv brod_transaction:start_link/3
+-spec transaction(client(), transactional_id(), transaction_config()) -> {ok, transaction()}.
+transaction(Client, TxnId, Config) ->
+  brod_transaction:new(Client, TxnId, Config).
+
+%% @doc Execute the function in the context of a fetch-produce cycle
+%% with access to an open transaction.
+%% @see brod_transaction_processor:do/3
+-spec txn_do(txn_function(), client(), txn_do_options()) -> {ok, pid()}
+                                                          | {error, any()}.
+txn_do(ProcessFun, Client, Options) ->
+  brod_transaction_processor:do(ProcessFun, Client, Options).
+
+%% @doc Produce the message (key and value) to the indicated topic-partition
+%% synchronously.
+%% @see brod_transaction:produce/5
+-spec txn_produce(transaction(), topic(), partition(), key(), value()) ->
+        {ok, offset()} | {error, any()}.
+txn_produce(Transaction, Topic, Partition, Key, Value) ->
+  brod_transaction:produce(Transaction, Topic, Partition, Key, Value).
+
+%% @doc Produce the batch of messages to the indicated topic-partition
+%% synchronously.
+%% @see brod_transaction:produce/5
+-spec txn_produce(transaction(), topic(), partition(), batch_input()) ->
+        {ok, offset()} | {error, any()}.
+txn_produce(Transaction, Topic, Partition, Batch) ->
+  brod_transaction:produce(Transaction, Topic, Partition, Batch).
+
+%% @doc Add the offset consumed by a group to the transaction.
+%% @see brod_transaction:add_offsets/3
+-spec txn_add_offsets(transaction(), group_id(), offsets_to_commit()) ->
+        ok | {error, any()}.
+txn_add_offsets(Transaction, ConsumerGroup, Offsets) ->
+  brod_transaction:add_offsets(Transaction, ConsumerGroup, Offsets).
+
+%% @doc Commit the transaction
+%% @see brod_transaction:commit/1
+-spec commit(transaction()) -> ok | {error, any()}.
+commit(Transaction) ->
+  brod_transaction:commit(Transaction).
+
+%% @doc Abort the transaction
+%% @see brod_transaction:abort/1
+-spec abort(transaction()) -> ok | {error, any()}.
+abort(Transaction) ->
+  brod_transaction:abort(Transaction).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
