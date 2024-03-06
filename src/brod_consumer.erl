@@ -115,6 +115,7 @@
                , prefetch_bytes      :: non_neg_integer()
                , connection_mref     :: ?undef | reference()
                , isolation_level     :: isolation_level()
+               , rack_id             :: ?undef | binary()
                }).
 
 -type state() :: #state{}.
@@ -300,6 +301,7 @@ init({Bootstrap, Topic, Partition, Config}) ->
   BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
   IsolationLevel = Cfg(isolation_level, ?DEFAULT_ISOLATION_LEVEL),
+  RackId = Cfg(rack_id, ?undef),
 
   %% If bootstrap is a client pid, register self to the client
   case is_shared_conn(Bootstrap) of
@@ -327,6 +329,7 @@ init({Bootstrap, Topic, Partition, Config}) ->
              , size_stat_window    = Cfg(size_stat_window, ?DEFAULT_AVG_WINDOW)
              , connection_mref     = ?undef
              , isolation_level     = IsolationLevel
+             , rack_id             = RackId
              }}.
 
 %% @private
@@ -729,7 +732,8 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                              State#state.max_wait_time,
                              State#state.min_bytes,
                              State#state.max_bytes,
-                             State#state.isolation_level),
+                             State#state.isolation_level,
+                             State#state.rack_id),
   case kpro:request_async(Connection, Request) of
     ok ->
       State#state{last_req_ref = Request#kpro_req.ref};
