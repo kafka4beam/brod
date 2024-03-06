@@ -84,7 +84,7 @@
 -callback init(brod_group_subscriber_v2:init_info(), _CbConfig) ->
   {ok, _State}.
 
--callback handle_message(brod:message(), State) ->
+-callback handle_message(brod:message() | brod:message_set(), State) ->
       {ok, commit, State}
     | {ok, ack, State}
     | {ok, State}.
