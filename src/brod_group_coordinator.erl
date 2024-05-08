@@ -526,7 +526,11 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   State3 = State2#state{is_in_group = false},
 
   %$ 4. Clean up state based on the last failure reason
-  State = maybe_reset_member_id(State3, Reason),
+  State4 = maybe_reset_member_id(State3, Reason),
+
+  %% 5. Clean up ongoing heartbeat request ref if connection
+  %%    was closed
+  State = maybe_reset_hb_ref(State4, Reason),
 
   %% 5. ensure we have a connection to the (maybe new) group coordinator
   F1 = fun discover_coordinator/1,
@@ -590,6 +594,15 @@ should_reset_member_id({connection_down, _Reason}) ->
   true;
 should_reset_member_id(_) ->
   false.
+
+%% When connection goes down while waiting for heartbeat
+%% response, the response will never be received.
+%% Reset heartbeat ref to let new heartbeat request to
+%% be sent over new connection.
+maybe_reset_hb_ref(State, {connection_down, _Reason}) ->
+  State#state{hb_ref = ?undef};
+maybe_reset_hb_ref(State, _) ->
+  State.
 
 -spec join_group(state()) -> {ok, state()}.
 join_group(#state{ groupId                    = GroupId
