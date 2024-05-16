@@ -1,5 +1,12 @@
 # Changelog
 
+- 3.18.0
+  - Add transactional APIs. [PR#549](https://github.com/kafka4beam/brod/pull/549)
+  - Fix unnecessary group coordinator restart due to `hb_timeout` exception. [PR#578](https://github.com/kafka4beam/brod/pull/578)
+  - Changed supervisor3 progress log level from `info` to `debug`. [PR#572](https://github.com/kafka4beam/brod/pull/572)
+  - Type spec fix. [PR#571](https://github.com/kafka4beam/brod/pull/571)
+  - Remove unused macro. [PR#575](https://github.com/kafka4beam/brod/pull/575)
+
 - 3.17.1
   - Upgrade `kafka_protocol` from 4.1.3 to 4.1.5
     - Allow space after `,` in comma-separated bootstrapping host:port list
