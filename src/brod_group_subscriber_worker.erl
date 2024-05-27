@@ -22,7 +22,7 @@
 -include("brod_int.hrl").
 
 %% brod_topic_subscriber callbacks
--export([init/2, handle_message/3, terminate/2]).
+-export([init/2, handle_message/3, handle_info/2, terminate/2]).
 
 -type start_options() ::
         #{ group_id     := brod:group_id()
@@ -89,6 +89,15 @@ handle_message(_Partition, Msg, State) ->
     {ok, NewCbState} ->
       NewState = State#state{cb_state = NewCbState},
       {ok, NewState}
+  end.
+
+handle_info(Info, #state{cb_module = CbModule , cb_state = CbState} = State) ->
+  %% Any unhandled messages are forwarded to the callback module to
+  %% support arbitrary message-passing.
+  %% Only the {noreply, State} return value is supported.
+  case brod_utils:optional_callback(CbModule, handle_info, [Info, CbState], {noreply, CbState}) of
+    {noreply, NewCbState} ->
+      {noreply, State#state{cb_state = NewCbState}}
   end.
 
 terminate(Reason, #state{cb_module = CbModule, cb_state = State}) ->
