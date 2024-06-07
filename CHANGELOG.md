@@ -1,5 +1,9 @@
 # Changelog
 
+- 3.19.0
+  - Forward unhandled messages in topic/group consumer processes to handle_info/2 callbacks
+    in order to support arbitrary message passing [PR#580](https://github.com/kafka4beam/brod/pull/580) 
+
 - 3.18.0
   - Add transactional APIs. [PR#549](https://github.com/kafka4beam/brod/pull/549)
   - Fix unnecessary group coordinator restart due to `hb_timeout` exception. [PR#578](https://github.com/kafka4beam/brod/pull/578)
