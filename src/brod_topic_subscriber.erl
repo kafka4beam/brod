@@ -108,7 +108,12 @@
 %% This callback is called before stopping the subscriber
 -callback terminate(_Reason, cb_state()) -> _.
 
--optional_callbacks([terminate/2]).
+%% This callback is called when the subscriber receives a message unrelated to
+%% the subscription.
+%% The callback must return `{noreply, NewCallbackState}'.
+-callback handle_info(_Msg, cb_state()) -> {noreply, cb_state()}.
+
+-optional_callbacks([terminate/2, handle_info/2]).
 
 %%%_* Types and macros =========================================================
 
@@ -357,8 +362,14 @@ handle_info({'DOWN', _Mref, process, Pid, Reason},
       %% not a consumer pid
       {noreply, State}
   end;
-handle_info(_Info, State) ->
-  {noreply, State}.
+handle_info(Info, #state{cb_module = CbModule, cb_state = CbState} = State) ->
+  %% Any unhandled messages are forwarded to the callback module to
+  %% support arbitrary message-passing.
+  %% Only the {noreply, State} return value is supported.
+  case brod_utils:optional_callback(CbModule, handle_info, [Info, CbState], {noreply, CbState}) of
+    {noreply, NewCbState} ->
+      {noreply, State#state{cb_state = NewCbState}}
+  end.
 
 %% @private
 handle_call(Call, _From, State) ->

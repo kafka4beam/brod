@@ -30,6 +30,7 @@
 -export([ init/2
         , terminate/2
         , handle_message/3
+        , handle_info/2
         ]).
 
 %% Test cases
@@ -40,6 +41,7 @@
         , t_callback_crash/1
         , t_begin_offset/1
         , t_cb_fun/1
+        , t_consumer_ack_via_message_passing/1
         ]).
 
 -include("brod_test_setup.hrl").
@@ -106,6 +108,21 @@ handle_message(Partition, Message, #state{ is_async_ack = IsAsyncAck
     true  -> {ok, State};
     false -> {ok, ack, State}
   end.
+
+handle_info({ack_offset, Partition, Offset} = Msg, #state{ counter = Counter
+                                                         , worker_id = Ref
+                                                         } = State0) ->
+  %% Participate in state continuity checks
+  ?tp(topic_subscriber_seen_info, 
+      #{ partition => Partition
+       , offset    => Offset
+       , msg       => Msg
+       , state     => Counter
+       , worker_id => Ref
+       }),
+  State = State0#state{counter = Counter + 1},
+  ok = brod_topic_subscriber:ack(self(), Partition, Offset),
+  {noreply, State}.
 
 terminate(Reason, #state{worker_id = Ref, counter = Counter}) ->
   ?tp(topic_subscriber_terminate,
@@ -176,6 +193,44 @@ t_async_acks(Config) when is_list(Config) ->
        wait_and_ack(SubscriberPid, Messages),
        ok = brod_topic_subscriber:stop(SubscriberPid),
        Messages
+     end,
+     %% Check stage:
+     fun(Expected, Trace) ->
+         check_received_messages(Expected, Trace),
+         check_state_continuity(Trace),
+         check_init_terminate(Trace)
+     end).
+
+t_consumer_ack_via_message_passing(Config) when is_list(Config) ->
+  %% Process messages one by one with no prefetch
+  ConsumerConfig = [ {prefetch_count, 0}
+                   , {prefetch_bytes, 0}
+                   , {sleep_timeout, 0}
+                   , {max_bytes, 0}
+                   ],
+  Partition = 0,
+  SendFun =
+    fun(I) ->
+        produce({?topic, Partition}, <<I>>)
+    end,
+  ?check_trace(
+     %% Run stage:
+     begin
+       O0 = SendFun(0),
+       %% Send two messages
+       Offset0 = SendFun(1),
+       _Offset1 = SendFun(2),
+       InitArgs = {_IsAsyncAck = true,
+                   _ConsumerOffsets = [{0, O0}]},
+       {ok, SubscriberPid} =
+         brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
+                                          ?MODULE, InitArgs),
+      {ok, _} = wait_message(<<1>>),
+      %% ack_offset allows consumer to proceed to message 2
+      SubscriberPid ! {ack_offset, 0, Offset0},
+      {ok, _} = wait_message(<<2>>),
+       ok = brod_topic_subscriber:stop(SubscriberPid),
+       _Expected = [<<1>>, <<2>>]
      end,
      %% Check stage:
      fun(Expected, Trace) ->
