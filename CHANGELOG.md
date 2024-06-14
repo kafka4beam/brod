@@ -1,5 +1,8 @@
 # Changelog
 
+- 3.19.1
+  - Guard against crashes in `brod_client:get_consumer/3` [PR#581](https://github.com/kafka4beam/brod/pull/581)
+
 - 3.19.0
   - Forward unhandled messages in topic/group consumer processes to handle_info/2 callbacks
     in order to support arbitrary message passing [PR#580](https://github.com/kafka4beam/brod/pull/580) 
