@@ -493,7 +493,7 @@ get_partition_worker(ClientId, Key) when is_atom(ClientId) ->
       %% If the worker process is returned form ets,
       %% but it is not alive then there must be
       %% an in-flight worker deregistration request.
-      case is_process_alive(Pid) of
+      case is_pid(Pid) andalso is_process_alive(Pid) of
         true -> {ok, Pid};
         false -> get_partition_worker_with_ets(ClientId, Key)
       end;
