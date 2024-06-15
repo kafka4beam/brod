@@ -60,6 +60,7 @@ For more info see the Erlang Ecosystem Foundation's [server certificate verifica
                      , { depth, 3 }
                      , { customize_hostname_check,
                           [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}
+                     , {version, ['tlsv1.3', 'tlsv1.2']}
                      ]}
             , { sasl, {plain, "GFRW5BSQHKEH0TSG", "GrL3CNTkLhsvtBr8srGn0VilMpgDb4lPD"}}
             ]

@@ -61,6 +61,8 @@ commands:
 %% NOTE: bad indentation at the first line is intended
 -define(COMMAND_COMMON_OPTIONS,
 "  --ssl                  Use TLS, validate server using trusted CAs
+  --ssl-versions=<vsns>  Specify SSL versions. Comma separated versions,
+                         e.g. 1.3,1.2
   --cacertfile=<cacert>  Use TLS, validate server using the given certificate
   --certfile=<certfile>  Client certificate in case client authentication
                          is enabled in brokers
@@ -365,6 +367,7 @@ main(Command, Doc, Args, Stop, LogLevel) ->
       C1 : E1 ?BIND_STACKTRACE(Stack1) ->
         ?GET_STACKTRACE(Stack1),
         verbose("~p:~p\n~p\n", [C1, E1, Stack1]),
+        io:format(user, "~p~n", [{C1, E1, Stack1}]),
         ?STOP(Stop)
     end,
   case LogLevel =:= ?LOG_LEVEL_QUIET of
@@ -1125,20 +1128,25 @@ parse_offset_time(T) -> int(T).
 
 parse_connection_config(Args) ->
   SslBool = parse(Args, "--ssl", fun parse_boolean/1),
+  SslVersions = parse(Args, "--ssl-versions", fun parse_ssl_versions/1),
   CaCertFile = parse(Args, "--cacertfile", fun parse_file/1),
   CertFile = parse(Args, "--certfile", fun parse_file/1),
   KeyFile = parse(Args, "--keyfile", fun parse_file/1),
   FilterPred = fun({_, V}) -> V =/= ?undef end,
   SslOpt =
-    case CaCertFile of
-      ?undef ->
-        SslBool;
-      _ ->
-        Files =
+    case SslBool of
+      true ->
+        Opts =
           [{cacertfile, CaCertFile},
            {certfile, CertFile},
-           {keyfile, KeyFile}],
-        lists:filter(FilterPred, Files)
+           {keyfile, KeyFile},
+           {versions, SslVersions},
+           %% TODO: verify_peer if cacertfile is provided
+           {verify, verify_none}
+          ],
+        lists:filter(FilterPred, Opts);
+      false ->
+        false
     end,
   SaslPlain = parse(Args, "--sasl-plain", fun parse_file/1),
   SaslScram256 = parse(Args, "--scram256", fun parse_file/1),
@@ -1157,11 +1165,30 @@ parse_boolean(true) -> true;
 parse_boolean(false) -> false;
 parse_boolean("true") -> true;
 parse_boolean("false") -> false;
-parse_boolean(?undef) -> ?undef.
+parse_boolean(?undef) -> false.
 
 parse_cg_ids("") -> [];
 parse_cg_ids("all") -> all;
 parse_cg_ids(Str) -> [bin(I) || I <- string:tokens(Str, ",")].
+
+parse_ssl_versions(?undef) ->
+    parse_ssl_versions("");
+parse_ssl_versions(Versions) ->
+    case lists:map(fun parse_ssl_version/1, string:tokens(Versions, ", ")) of
+        [] ->
+            ['tlsv1.2'];
+        Vsns ->
+            Vsns
+    end.
+
+parse_ssl_version("1.2") ->
+    'tlsv1.2';
+parse_ssl_version("1.3") ->
+    'tlsv1.3';
+parse_ssl_version("1.1") ->
+    'tlsv1.1';
+parse_ssl_version(Other) ->
+    error({unsupported_tls_version, Other}).
 
 parse_file(?undef) ->
   ?undef;

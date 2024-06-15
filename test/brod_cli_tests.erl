@@ -37,9 +37,12 @@ meta_test() ->
 
 ssl_test() ->
   run(["meta", "-b", "localhost:9093", "-L",
-       "--cacertfile", "priv/ssl/ca.crt",
-       "--keyfile", "priv/ssl/client.key",
-       "--certfile", "priv/ssl/client.crt"]).
+       "--ssl",
+       "--cacertfile", "test/data/ssl/ca.pem",
+       "--keyfile", "test/data/ssl/client-key.pem",
+       "--certfile", "test/data/ssl/client-crt.pem",
+       "--ssl-versions", "1.2,1.1"
+      ]).
 
 offset_test() ->
   Args = ["offset", "-b", "localhost", "-t", "test-topic", "-p", "0"],
@@ -74,9 +77,10 @@ test_sasl() ->
   Output =
     cmd(["send", "--brokers", "localhost:9194,localhost:9094",
          "-t", "test-topic", "-p", "0",
-         "--cacertfile", "priv/ssl/ca.crt",
-         "--keyfile", "priv/ssl/client.key",
-         "--certfile", "priv/ssl/client.crt",
+         "--ssl",
+         "--cacertfile", "test/data/ssl/ca.pem",
+         "--keyfile", "test/data/ssl/client-key.pem",
+         "--certfile", "test/data/ssl/client-crt.pem",
          "--sasl-plain", "sasl.testdata",
          "-k", K, "-v", V]),
   ?assertEqual(<<"">>, Output),
