@@ -385,11 +385,13 @@ t_magic_version(Config) when is_list(Config) ->
 auth(_Host, _Sock, _Mod, _ClientId, _Timeout, _Opts) -> ok.
 
 ssl_options() ->
-  PrivDir = code:priv_dir(brod),
-  Fname = fun(Name) -> filename:join([PrivDir, ssl, Name]) end,
-  [ {cacertfile, Fname("ca.crt")}
-  , {keyfile,    Fname("client.key")}
-  , {certfile,   Fname("client.crt")}
+  LibDir = code:lib_dir(brod),
+  Fname = fun(Name) -> filename:join([LibDir, test, data, ssl, Name]) end,
+  [ {cacertfile, Fname("ca.pem")}
+  , {keyfile,    Fname("client-key.pem")}
+  , {certfile,   Fname("client-crt.pem")}
+  , {versions,   ['tlsv1.2']}
+  , {verify,     verify_none}
   ].
 
 produce_and_consume_message(Host, Client, ClientConfig) ->
