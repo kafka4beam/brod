@@ -17,6 +17,7 @@
         , client_config/0
         , bootstrap_hosts/0
         , kill_process/2
+        , kafka_version/0
         ]).
 
 -include("brod_test_macros.hrl").
@@ -82,9 +83,30 @@ produce_payloads(Topic, Partition, Config) ->
   {LastOffset, Payloads}.
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _          -> []
+  case kafka_version() of
+    {0, 9} -> [{query_api_versions, false}];
+    _      -> []
+  end.
+
+maybe_zookeeper() ->
+  case kafka_version() of
+    {3, _} ->
+      %% Kafka 2.2 started supporting --bootstap-server, but 2.x still supports --zookeeper
+      %% Starting from 3.0, --zookeeper is no longer supported, must use --bootstrap-server
+      "--bootstrap-server localhost:9092";
+    _ ->
+      "--zookeeper localhost:2181"
+  end.
+
+kafka_version() ->
+  VsnStr = os:getenv("KAFKA_VERSION"),
+  case VsnStr =:= "" orelse VsnStr =:= false of
+    true ->
+      ct:pal("KAFKA_VERSION is not set, defaulting to 3.6", []),
+      {3, 6};
+    false ->
+      [Major, Minor | _] = string:tokens(VsnStr, "."),
+      {list_to_integer(Major), list_to_integer(Minor)}
   end.
 
 prepare_topic(Topic) when is_binary(Topic) ->
@@ -97,12 +119,12 @@ prepare_topic({Topic, NumPartitions, NumReplicas}) ->
   ok = brod:start_producer(?TEST_CLIENT_ID, Topic, _ProducerConfig = []).
 
 delete_topic(Name) ->
-  Delete = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
+  Delete = "/opt/kafka/bin/kafka-topics.sh " ++ maybe_zookeeper() ++
     " --delete --topic ~s",
   exec_in_kafka_container(Delete, [Name]).
 
 create_topic(Name, NumPartitions, NumReplicas) ->
-  Create = "/opt/kafka/bin/kafka-topics.sh --zookeeper localhost "
+  Create = "/opt/kafka/bin/kafka-topics.sh " ++ maybe_zookeeper() ++
     " --create --partitions ~p --replication-factor ~p"
     " --topic ~s --config min.insync.replicas=1",
   exec_in_kafka_container(Create, [NumPartitions, NumReplicas, Name]).

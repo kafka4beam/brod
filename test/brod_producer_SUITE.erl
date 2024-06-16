@@ -452,10 +452,7 @@ t_configure_produce_api_vsn(Config) when is_list(Config) ->
 %%%_* Help functions ===========================================================
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+  kafka_test_helper:client_config().
 
 %% os:timestamp should be unique enough for testing
 make_unique_kv() ->

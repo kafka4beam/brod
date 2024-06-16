@@ -29,8 +29,13 @@
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
-  Config.
+  case kafka_test_helper:kafka_version() of
+    {0, Minor} when Minor < 11 ->
+      {skip, "no_transaction"};
+    _ ->
+      {ok, _} = application:ensure_all_started(brod),
+      Config
+  end.
 
 end_per_suite(_Config) -> ok.
 
@@ -80,10 +85,7 @@ all() -> [F || {F, _A} <- module_info(exports),
                end].
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+  [].
 
 subscriber_loop(TesterPid) ->
   receive

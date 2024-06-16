@@ -201,10 +201,7 @@ start_client(Hosts, ClientId) ->
   brod:start_client(Hosts, ClientId, Config).
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+  kafka_test_helper:client_config().
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

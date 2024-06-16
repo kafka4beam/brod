@@ -73,10 +73,7 @@ common_end_per_testcase(_Case, Config) when is_list(Config) ->
   ok = application:stop(brod).
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+  kafka_test_helper:client_config().
 
 %%%_* Group coordinator callbacks ==============================================
 

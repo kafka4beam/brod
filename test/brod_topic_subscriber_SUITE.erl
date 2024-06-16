@@ -113,7 +113,7 @@ handle_info({ack_offset, Partition, Offset} = Msg, #state{ counter = Counter
                                                          , worker_id = Ref
                                                          } = State0) ->
   %% Participate in state continuity checks
-  ?tp(topic_subscriber_seen_info, 
+  ?tp(topic_subscriber_seen_info,
       #{ partition => Partition
        , offset    => Offset
        , msg       => Msg

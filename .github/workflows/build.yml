@@ -7,8 +7,8 @@ on:
     branches:
       - master
 env:
-  OTP_VERSION: "24.1"
-  REBAR_VERSION: "3.17.0"
+  OTP_VERSION: "26"
+  REBAR_VERSION: "3.20.0"
 
 jobs:
   lint:
@@ -44,8 +44,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ["24.1", "23.3.4.7", "22.3.4.21"]
-        kafka: ["2.4", "1.1", "0.11"]
+        otp: ["26"]
+        kafka: ["0.9", "0.10", "0.11", "2.8", "1.1", "3.6"]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -69,7 +69,8 @@ jobs:
         run: |
           export KAFKA_VERSION=${{ matrix.kafka }}
           echo "Running Kafka ${KAFKA_VERSION}"
-          scripts/setup-test-env.sh && rebar3 do ct,eunit
+          make test-env
+          make t
       - name: Store test logs
         uses: actions/upload-artifact@v1
         if: always()

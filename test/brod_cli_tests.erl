@@ -180,7 +180,13 @@ get_kafka_version() ->
       {list_to_integer(Major), list_to_integer(Minor)}
   end.
 
-run(Args) ->
+run(Args0) ->
+  Args = case kafka_test_helper:kafka_version() of
+           {0, Minor} when Minor < 11 ->
+             Args0 ++ ["--no-api-vsn-query"];
+           _ ->
+             Args0
+         end,
   _ = cmd(Args),
   ok.
 

@@ -1,3 +1,5 @@
+KAFKA_VERSION ?= 3.6
+export KAFKA_VERSION
 all: compile
 
 compile:
@@ -8,6 +10,10 @@ lint:
 
 test-env:
 	@./scripts/setup-test-env.sh
+	@mkdir -p ./test/data/ssl
+	@docker cp kafka-1:/localhost-ca-crt.pem ./test/data/ssl/ca.pem
+	@docker cp kafka-1:/localhost-client-key.pem ./test/data/ssl/client-key.pem
+	@docker cp kafka-1:/localhost-client-crt.pem ./test/data/ssl/client-crt.pem
 
 ut:
 	@rebar3 eunit -v --cover_export_name ut-$(KAFKA_VERSION)

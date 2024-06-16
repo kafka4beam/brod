@@ -35,8 +35,13 @@
 suite() -> [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
-  {ok, _} = application:ensure_all_started(brod),
-  Config.
+  case kafka_test_helper:kafka_version() of
+    {0, Minor} when Minor < 11 ->
+      {skip, "no_transaction"};
+    _ ->
+      {ok, _} = application:ensure_all_started(brod),
+      Config
+  end.
 
 end_per_suite(_Config) -> ok.
 
@@ -65,11 +70,7 @@ all() -> [F || {F, _A} <- module_info(exports),
                  _         -> false
                end].
 
-client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+client_config() -> kafka_test_helper:client_config().
 
 rand() ->
   iolist_to_binary([base64:encode(crypto:strong_rand_bytes(8))]).

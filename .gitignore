@@ -25,3 +25,4 @@ relx
 docker/
 TAGS
 .vscode/
+test/data/ssl/*.pem

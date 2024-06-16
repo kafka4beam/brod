@@ -462,7 +462,7 @@ handle_fetch_response(#kpro_rsp{ref = Ref1},
                             } = State) when Ref1 =/= Ref2 ->
   %% Not expected response, discard
   {noreply, State};
-handle_fetch_response(#kpro_rsp{ref = Ref} = Rsp,
+handle_fetch_response(#kpro_rsp{ref = Ref, vsn = Vsn} = Rsp,
                       #state{ topic = Topic
                             , partition = Partition
                             , last_req_ref = Ref
@@ -472,7 +472,7 @@ handle_fetch_response(#kpro_rsp{ref = Ref} = Rsp,
     {ok, #{ header := Header
           , batches := Batches
           }} ->
-      handle_batches(Header, Batches, State);
+      handle_batches(Header, Batches, State, Vsn);
     {error, ErrorCode} ->
       Error = #kafka_fetch_error{ topic      = Topic
                                 , partition  = Partition
@@ -481,7 +481,7 @@ handle_fetch_response(#kpro_rsp{ref = Ref} = Rsp,
       handle_fetch_error(Error, State)
   end.
 
-handle_batches(?undef, [], #state{} = State0) ->
+handle_batches(?undef, [], #state{} = State0, _Vsn) ->
   %% It is only possible to end up here in a incremental
   %% fetch session, empty fetch response implies no
   %% new messages to fetch, and no changes in partition
@@ -491,25 +491,38 @@ handle_batches(?undef, [], #state{} = State0) ->
   State = maybe_delay_fetch_request(State0),
   {noreply, State};
 handle_batches(_Header, ?incomplete_batch(Size),
-               #state{max_bytes = MaxBytes} = State0) ->
+               #state{max_bytes = MaxBytes} = State0, _Vsn) ->
   %% max_bytes is too small to fetch ONE complete batch
   true = Size > MaxBytes, %% assert
   State1 = State0#state{max_bytes = Size},
   State = maybe_send_fetch_request(State1),
   {noreply, State};
-handle_batches(Header, [], #state{begin_offset = BeginOffset} = State0) ->
+handle_batches(Header, [], #state{begin_offset = BeginOffset} = State0, Vsn) ->
   StableOffset = brod_utils:get_stable_offset(Header),
   State =
     case BeginOffset < StableOffset of
-      true ->
-        %% There are chances that kafka may return empty message set
+      true when Vsn > 0 ->
+        %% There are chances that Kafka may return empty message set
         %% when messages are deleted from a compacted topic.
         %% Since there is no way to know how big the 'hole' is
         %% we can only bump begin_offset with +1 and try again.
+        ?BROD_LOG_WARNING("~s-~p empty_batch_detected_at_offset=~p, "
+                          "fetch_api_vsn=~p, skip_to_offset=~p",
+                          [State0#state.topic,
+                           State0#state.partition,
+                           BeginOffset,
+                           BeginOffset + 1
+                          ]),
         State1 = State0#state{begin_offset = BeginOffset + 1},
         maybe_send_fetch_request(State1);
+      true ->
+        %% Fetch API v0 (Kafka 0.9 and 0.10) seems to have a race condition:
+        %% Kafka returns empty batch even if BeginOffset is lower than high-watermark
+        %% if fetch request is sent in a tight loop
+        %% Retry seems to resolve the issue
+        maybe_delay_fetch_request(State0);
       false ->
-        %% we have either reached the end of a partition
+        %% We have either reached the end of a partition
         %% or trying to read uncommitted messages
         %% try to poll again (maybe after a delay)
         maybe_delay_fetch_request(State0)
@@ -521,7 +534,7 @@ handle_batches(Header, Batches,
                      , begin_offset = BeginOffset
                      , topic        = Topic
                      , partition    = Partition
-                     } = State0) ->
+                     } = State0, _Vsn) ->
   StableOffset = brod_utils:get_stable_offset(Header),
   {NewBeginOffset, Messages} =
     brod_utils:flatten_batches(BeginOffset, Header, Batches),

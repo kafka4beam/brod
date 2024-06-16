@@ -177,10 +177,7 @@ os_time_utc_str() ->
   lists:flatten(S).
 
 client_config() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> [{query_api_versions, false}];
-    _ -> []
-  end.
+  kafka_test_helper:client_config().
 
 commit_dir(Topic) ->
   filename:join(["/tmp", Topic]).
