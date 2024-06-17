@@ -487,9 +487,8 @@ t_consumer_max_bytes_too_small(Config) ->
   brod:unsubscribe(Client, ?TOPIC, Partition),
   Key = make_unique_key(),
   ValueBytes = 2000,
-  MaxBytes1 = 8, %% too small for even the header
-  MaxBytes2 = 12, %% too small but message size is fetched
-  MaxBytes3 = size(Key) + ValueBytes,
+  MaxBytes1 = 12, %% too small for even the header
+  MaxBytes2 = size(Key) + ValueBytes,
   Tester = self(),
   F = fun(Conn, Topic, Partition1, BeginOffset, MaxWait,
           MinBytes, MaxBytes, IsolationLevel) ->
@@ -505,8 +504,7 @@ t_consumer_max_bytes_too_small(Config) ->
     brod:subscribe(Client, self(), ?TOPIC, Partition, Options),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   ok = wait_for_max_bytes_sequence([{'=', MaxBytes1},
-                                    {'=', MaxBytes2},
-                                    {'>', MaxBytes3}],
+                                    {'>', MaxBytes2}],
                                    _TriedCount = 0),
   ?WAIT_ONLY(
      {ConsumerPid, #kafka_message_set{messages = Messages}},

@@ -734,6 +734,8 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                          } = State) ->
   (is_integer(BeginOffset) andalso BeginOffset >= 0) orelse
     erlang:error({bad_begin_offset, BeginOffset}),
+  %% MaxBytes=0 will make no progress when it's Kafka 0.9
+  MaxBytes = max(12, State#state.max_bytes),
   Request =
     brod_kafka_request:fetch(Connection,
                              State#state.topic,
@@ -741,7 +743,7 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                              State#state.begin_offset,
                              State#state.max_wait_time,
                              State#state.min_bytes,
-                             State#state.max_bytes,
+                             MaxBytes,
                              State#state.isolation_level),
   case kpro:request_async(Connection, Request) of
     ok ->
