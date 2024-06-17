@@ -550,6 +550,7 @@ t_async_commit({init, Config}) ->
                            integer_to_list(rand:uniform(1000000000))),
   [{group_id, GroupId} | Config];
 t_async_commit(Config) when is_list(Config) ->
+  GroupId = ?config(group_id),
   Behavior = ?config(behavior),
   Topic = ?topic,
   Partition = 0,
@@ -562,7 +563,7 @@ t_async_commit(Config) when is_list(Config) ->
                          , {partition_restart_delay_seconds, 1}
                          , {begin_offset, Offset}
                          ],
-        {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic],
+        {ok, SubscriberPid} = start_subscriber(GroupId, Config, [Topic],
                                                GroupConfig, ConsumerConfig,
                                                InitArgs),
         SubscriberPid
