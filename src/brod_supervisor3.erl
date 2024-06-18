@@ -82,7 +82,7 @@
 
 %% Internal exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, format_status/2]).
+         terminate/2, code_change/3]).
 -export([try_again_restart/3]).
 
 %%--------------------------------------------------------------------------
@@ -734,12 +734,6 @@ code_change(_, State, _) ->
         Error ->
             Error
     end.
-
-format_status(terminate, [_PDict, State]) ->
-    State;
-format_status(_, [_PDict, State]) ->
-    [{data, [{"State", State}]},
-     {supervisor, [{"Callback", State#state.module}]}].
 
 check_flags({Strategy, MaxIntensity, Period}) ->
     valid_strategy(Strategy),
