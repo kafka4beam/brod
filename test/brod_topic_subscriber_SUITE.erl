@@ -113,7 +113,7 @@ handle_info({ack_offset, Partition, Offset} = Msg, #state{ counter = Counter
                                                          , worker_id = Ref
                                                          } = State0) ->
   %% Participate in state continuity checks
-  ?tp(topic_subscriber_seen_info, 
+  ?tp(topic_subscriber_seen_info,
       #{ partition => Partition
        , offset    => Offset
        , msg       => Msg
@@ -211,7 +211,7 @@ t_consumer_ack_via_message_passing(Config) when is_list(Config) ->
   Partition = 0,
   SendFun =
     fun(I) ->
-        produce({?topic, Partition}, <<I>>)
+        produce({?topic, Partition}, integer_to_binary(I))
     end,
   ?check_trace(
      %% Run stage:
@@ -225,12 +225,12 @@ t_consumer_ack_via_message_passing(Config) when is_list(Config) ->
        {ok, SubscriberPid} =
          brod:start_link_topic_subscriber(?CLIENT_ID, ?topic, ConsumerConfig,
                                           ?MODULE, InitArgs),
-      {ok, _} = wait_message(<<1>>),
+      {ok, _} = wait_message(<<"1">>),
       %% ack_offset allows consumer to proceed to message 2
       SubscriberPid ! {ack_offset, 0, Offset0},
-      {ok, _} = wait_message(<<2>>),
+      {ok, _} = wait_message(<<"2">>),
        ok = brod_topic_subscriber:stop(SubscriberPid),
-       _Expected = [<<1>>, <<2>>]
+       _Expected = [<<"1">>, <<"2">>]
      end,
      %% Check stage:
      fun(Expected, Trace) ->

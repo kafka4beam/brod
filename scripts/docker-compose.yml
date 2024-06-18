@@ -2,14 +2,14 @@ version: "2"
 
 services:
   zookeeper:
-    image: "zmstone/kafka:${KAFKA_VERSION}"
+    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: zookeeper
     command: run zookeeper
     network_mode: host
   kafka_1:
     depends_on:
       - zookeeper
-    image: "zmstone/kafka:${KAFKA_VERSION}"
+    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: "kafka-1"
     network_mode: host
     environment:
@@ -23,7 +23,7 @@ services:
   kafka_2:
     depends_on:
       - zookeeper
-    image: "zmstone/kafka:${KAFKA_VERSION}"
+    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: "kafka-2"
     network_mode: host
     environment:

@@ -453,12 +453,25 @@ fetch(Conn, ReqFun, Offset, MaxBytes) ->
       fetch(Conn, ReqFun, Offset, Size);
     {ok, #{header := Header, batches := Batches}} ->
       StableOffset = get_stable_offset(Header),
-      {NewBeginOffset, Msgs} = flatten_batches(Offset, Header, Batches),
+      {NewBeginOffset0, Msgs} = flatten_batches(Offset, Header, Batches),
       case Offset < StableOffset andalso Msgs =:= [] of
         true ->
-          %% Not reached the latest stable offset yet,
-          %% but received an empty batch-set (all messages are dropped).
-          %% try again with new begin-offset
+          NewBeginOffset =
+            case NewBeginOffset0 > Offset of
+              true ->
+                %% Not reached the latest stable offset yet,
+                %% but resulted in an empty batch-set,
+                %% i.e. all messages are dropped due to they are before
+                %% the last fetch Offset.
+                %% try again with new begin-offset.
+                NewBeginOffset0;
+              false when NewBeginOffset0 =:= Offset ->
+                %% There are chances that Kafka may return empty message set
+                %% when messages are deleted from a compacted topic.
+                %% Since there is no way to know how big the 'hole' is
+                %% we can only bump begin_offset with +1 and try again.
+                NewBeginOffset0 + 1
+            end,
           fetch(Conn, ReqFun, NewBeginOffset, MaxBytes);
         false ->
           {ok, {StableOffset, Msgs}}

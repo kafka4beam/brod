@@ -76,6 +76,17 @@
             end
         end()).
 
+-define(RETRY(EXPR, Timeout),
+        retry(
+          fun() ->
+              case EXPR of
+                {ok, R} ->
+                  {ok, R};
+                {error, _} ->
+                  false
+              end
+          end, Timeout)).
+
 %%%_* ct callbacks =============================================================
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -104,11 +115,7 @@ init_per_testcase(Case, Config0) ->
     end,
   ClientConfig1 = proplists:get_value(client_config, Config, []),
   brod:stop_client(Client),
-  ClientConfig =
-    case os:getenv("KAFKA_VERSION") of
-      "0.9" ++ _ -> [{query_api_versions, false}];
-      _ -> []
-    end ++ ClientConfig0 ++ ClientConfig1,
+  ClientConfig = kafka_test_helper:client_config() ++ ClientConfig0 ++ ClientConfig1,
   ok = brod:start_client(?HOSTS, Client, ClientConfig),
   ok = brod:start_producer(Client, Topic, ProducerConfig),
   try ?MODULE:Case(standalone_consumer) of
@@ -140,12 +147,21 @@ end_per_testcase(Case, Config) ->
     ok
   end.
 
-all() -> [F || {F, _A} <- module_info(exports),
+all() ->
+  Cases = [F || {F, _A} <- module_info(exports),
                   case atom_to_list(F) of
                     "t_" ++ _ -> true;
                     _         -> false
-                  end].
-
+                  end],
+  Filter = fun(Case) ->
+               try
+                 ?MODULE:Case(kafka_version_match)
+               catch
+                 _:_ ->
+                   true
+               end
+           end,
+  lists:filter(Filter, Cases).
 
 %%%_* Test functions ===========================================================
 
@@ -153,14 +169,11 @@ all() -> [F || {F, _A} <- module_info(exports),
 %% messages fetched back should only contain the committed message
 %% i.e. aborted messages (testing with isolation_level=read_committed)
 %% should be dropped, control messages (transaction abort) should be dropped
+t_drop_aborted(kafka_version_match) ->
+  has_txn();
 t_drop_aborted(Config) when is_list(Config) ->
-  case has_txn() of
-    true ->
-      test_drop_aborted(Config, true),
-      test_drop_aborted(Config, false);
-    false ->
-      ok
-  end.
+  test_drop_aborted(Config, true),
+  test_drop_aborted(Config, false).
 
 %% When QueryApiVsn is set to false,
 %% brod will use lowest supported API version.
@@ -173,7 +186,7 @@ test_drop_aborted(Config, QueryApiVsn) ->
     fun(CommitOrAbort) ->
         TxnId = make_transactional_id(),
         {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
-        {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId),
+        {ok, TxnCtx} = ?RETRY(kpro:txn_init_ctx(Conn, TxnId), 10),
         ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
         Key = bin([atom_to_list(CommitOrAbort), "-", make_unique_key()]),
         Vsn = 3, %% lowest API version which supports transactional produce
@@ -217,11 +230,10 @@ test_drop_aborted(Config, QueryApiVsn) ->
                    ], Msgs)
   end.
 
+t_wait_for_unstable_offsets(kafka_version_match) ->
+  has_txn();
 t_wait_for_unstable_offsets(Config) when is_list(Config) ->
-  case has_txn() of
-    true -> t_wait_for_unstable_offsets({run, Config});
-    false -> ok
-  end;
+  t_wait_for_unstable_offsets({run, Config});
 t_wait_for_unstable_offsets({run, Config}) ->
   Client = ?config(client),
   Topic = ?TOPIC,
@@ -230,7 +242,7 @@ t_wait_for_unstable_offsets({run, Config}) ->
   {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
   %% ensure we have enough time to test before expire
   TxnOpts = #{txn_timeout => timer:seconds(30)},
-  {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId, TxnOpts),
+  {ok, TxnCtx} = ?RETRY(kpro:txn_init_ctx(Conn, TxnId, TxnOpts), 10),
   ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
   %% Send one message in this transaction, return the offset in kafka
   ProduceFun =
@@ -278,13 +290,10 @@ t_wait_for_unstable_offsets({run, Config}) ->
 %% Produce large(-ish) transactional batches, then abort them all
 %% try fetch from offsets in the middle of large batches,
 %% expect no delivery of any aborted batches.
+t_fetch_aborted_from_the_middle(kafka_version_match) ->
+  has_txn();
 t_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
-  case has_txn() of
-    true ->
-      test_fetch_aborted_from_the_middle(Config);
-    false ->
-      ok
-  end.
+  test_fetch_aborted_from_the_middle(Config).
 
 test_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
   Client = ?config(client),
@@ -292,7 +301,7 @@ test_fetch_aborted_from_the_middle(Config) when is_list(Config) ->
   Partition = 0,
   TxnId = make_transactional_id(),
   {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
-  {ok, TxnCtx} = kpro:txn_init_ctx(Conn, TxnId),
+  {ok, TxnCtx} = ?RETRY(kpro:txn_init_ctx(Conn, TxnId), 10),
   ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
   %% make a large-ish message
   MkMsg = fun(Key) ->
@@ -413,6 +422,12 @@ t_fold(Config) when is_list(Config) ->
               0, ErrorFoldF, #{})),
   ok.
 
+%% This test case does not work with Kafka 0.9, not sure aobut 0.10 and 0.11
+%% since all 0.x versions are old enough, we only try to verify this against
+%% 1.x or newer
+t_direct_fetch_with_small_max_bytes(kafka_version_match) ->
+  {Major, _Minor} = kafka_test_helper:kafka_version(),
+  Major > 1;
 t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
   Client = ?config(client),
   Topic = ?TOPIC,
@@ -428,6 +443,11 @@ t_direct_fetch_with_small_max_bytes(Config) when is_list(Config) ->
   ?assertEqual(Key, Msg#kafka_message.key),
   ok.
 
+%% Starting from version 3, Kafka no longer returns incomplete batch
+%% for Fetch request v0, cannot test max_bytes expansion anymore.
+t_direct_fetch_expand_max_bytes(kafka_version_match) ->
+  {Major, _Minor} = kafka_test_helper:kafka_version(),
+  Major < 3;
 t_direct_fetch_expand_max_bytes({init, Config}) when is_list(Config) ->
   %% kafka returns empty message set when it's 0.9
   %% or when fetch request sent was version 0
@@ -441,7 +461,7 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
   Value = crypto:strong_rand_bytes(100),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
-                                     ?OFFSET_LATEST, ?config(client_config)),
+                                    ?OFFSET_LATEST, ?config(client_config)),
   {ok, {_, [Msg]}} = brod:fetch({?HOSTS, ?config(client_config)},
                                 Topic, Partition, Offset - 1,
                                 #{max_bytes => 13}),
@@ -450,6 +470,9 @@ t_direct_fetch_expand_max_bytes(Config) when is_list(Config) ->
 
 %% @doc Consumer should be smart enough to try greater max_bytes
 %% when it's not great enough to fetch one single message
+t_consumer_max_bytes_too_small(kafka_version_match) ->
+  {Major, _Minor} = kafka_test_helper:kafka_version(),
+  Major < 3;
 t_consumer_max_bytes_too_small({init, Config}) ->
   meck:new(brod_kafka_request, [passthrough, no_passthrough_cover, no_history]),
   %% kafka returns empty message set when it's 0.9
@@ -464,9 +487,8 @@ t_consumer_max_bytes_too_small(Config) ->
   brod:unsubscribe(Client, ?TOPIC, Partition),
   Key = make_unique_key(),
   ValueBytes = 2000,
-  MaxBytes1 = 8, %% too small for even the header
-  MaxBytes2 = 12, %% too small but message size is fetched
-  MaxBytes3 = size(Key) + ValueBytes,
+  MaxBytes1 = 12, %% too small for even the header
+  MaxBytes2 = size(Key) + ValueBytes,
   Tester = self(),
   F = fun(Conn, Topic, Partition1, BeginOffset, MaxWait,
           MinBytes, MaxBytes, IsolationLevel) ->
@@ -482,8 +504,7 @@ t_consumer_max_bytes_too_small(Config) ->
     brod:subscribe(Client, self(), ?TOPIC, Partition, Options),
   ok = brod:produce_sync(Client, ?TOPIC, Partition, Key, Value),
   ok = wait_for_max_bytes_sequence([{'=', MaxBytes1},
-                                    {'=', MaxBytes2},
-                                    {'>', MaxBytes3}],
+                                    {'>', MaxBytes2}],
                                    _TriedCount = 0),
   ?WAIT_ONLY(
      {ConsumerPid, #kafka_message_set{messages = Messages}},
@@ -843,7 +864,9 @@ wait_for_max_bytes_sequence([{Compare, MaxBytes} | Rest] = Waiting, Cnt) ->
           wait_for_max_bytes_sequence(Waiting, Cnt + 1);
         _ ->
           ct:fail("unexpected ~p, expecting ~p", [Bytes, {Compare, MaxBytes}])
-      end
+      end;
+    Other ->
+      error(Other)
   after
     3000 ->
       ct:fail("timeout", [])
@@ -875,13 +898,6 @@ connect_txn_coordinator(TxnId, Config, RetriesLeft, _LastError) ->
       connect_txn_coordinator(TxnId, Config, RetriesLeft - 1, Reason)
   end.
 
-has_txn() ->
-  case os:getenv("KAFKA_VERSION") of
-    "0.9" ++ _ -> false;
-    "0.10" ++ _ -> false;
-    _ -> true
-  end.
-
 consumer_config() -> [{max_wait_time, 1000}, {sleep_timeout, 10}].
 
 retry(_F, 0) -> error(timeout);
@@ -900,6 +916,14 @@ wait_for_consumer_connection(Consumer, OldConn) ->
           Pid =/= undefined andalso Pid =/= OldConn andalso Pid
       end,
   retry(F, 5).
+
+has_txn() ->
+  case kafka_test_helper:kafka_version() of
+    {0, Minor} when Minor < 11 ->
+      false;
+    _ ->
+      true
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
