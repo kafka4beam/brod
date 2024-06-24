@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ["26"]
+        otp: ["26", "27"]
         kafka: ["0.9", "0.10", "0.11", "2.8", "1.1", "3.6"]
     steps:
       - name: Checkout
