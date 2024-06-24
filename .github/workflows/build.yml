@@ -8,7 +8,7 @@ on:
       - master
 env:
   OTP_VERSION: "26"
-  REBAR_VERSION: "3.20.0"
+  REBAR_VERSION: "3.23.0"
 
 jobs:
   lint:
