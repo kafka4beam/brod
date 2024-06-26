@@ -117,15 +117,14 @@ will manage them.
 ### Compression
 
 Brod does not dependent on any compression/decompression implementation by default.
-To enable them, you must add the compression application as dependency.
+To enable them, you must add the compression application as dependency in your project's rebar.config.
 
 For example:
 
 ```erlang
-% rebar.config
 {deps, [
-    {snappyer, "1.2.8"}
-].
+    {snappyer, "1.2.9"}
+]}.
 ```
 
 ### Start clients by default
