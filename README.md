@@ -25,7 +25,7 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 - Pick latest supported version when sending requests to kafka.
 - Direct APIs for message send/fetch and cluster inspection/management without having to start clients/producers/consumers.
 - A escriptized command-line tool for message send/fetch and cluster inspection/management.
-- Configurable compression library. `snappy` compression is supported by default.
+- Configurable compression library. No compression is supported by default for both producers and consumers.
   For more compression options, see [kafka_protocol/README](https://github.com/kafka4beam/kafka_protocol/blob/master/README.md#compression-support)
 
 ## Building and testing
@@ -113,6 +113,19 @@ two-level supervision trees.
 
 To use producers or consumers, you have to start at least one client that
 will manage them.
+
+### Compression
+
+Brod does not dependent on any compression/decompression implementation by default.
+To enable them, you must add the compression application as dependency in your project's rebar.config.
+
+For example:
+
+```erlang
+{deps, [
+    {snappyer, "1.2.9"}
+]}.
+```
 
 ### Start clients by default
 
