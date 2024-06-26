@@ -4,6 +4,9 @@
   - Made brod-cli to work on OTP 26. [PR#582](https://github.com/kafka4beam/brod/pull/582)
     - `--ssl` option is now mandatory if TLS is to be used (previously it can be derived from `--cacertfile` option)
     - TLS version defaults to 1.2, added `--ssl-versions` to support explictly setting TLS 1.3
+  - Support building on OTP 27 [PR#585](https://github.com/kafka4beam/brod/pull/585)
+    Also fixed rebar.lock for dependency `kafka_protocol-4.1.5`
+  - Guard against crashes in `brod_client:get_consumer/3` [PR#587](https://github.com/kafka4beam/brod/pull/587) (originally [PR#581](https://github.com/kafka4beam/brod/pull/581))
 
 - 3.19.0
   - Forward unhandled messages in topic/group consumer processes to handle_info/2 callbacks
