@@ -1,5 +1,11 @@
 # Changelog
 
+- 4.0.0
+  - Remove `snappyer` from default dependency [PR#547](https://github.com/kafka4beam/brod/pull/547).
+    Starting from `kafka_protocol-4.0`, it no longer requires compression libraries as rebar dependencies.
+    Now `brod-4.0` has it removed too.
+    For more compression options, see [kafka_protocol/README](https://github.com/kafka4beam/kafka_protocol/blob/master/README.md#compression-support)
+
 - 3.19.1
   - Made brod-cli to work on OTP 26. [PR#582](https://github.com/kafka4beam/brod/pull/582)
     - `--ssl` option is now mandatory if TLS is to be used (previously it can be derived from `--cacertfile` option)
