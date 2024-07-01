@@ -133,10 +133,10 @@
 %%==============================================================================
 
 %% @see start_link/3
--spec new(pid(), transactional_id(), transaction_config()) -> {ok, transaction()}.
-new(ClientPid, TxId, Config) ->
+-spec new(client(), transactional_id(), transaction_config()) -> {ok, transaction()}.
+new(Client, TxId, Config) ->
   gen_server:start_link(?MODULE,
-                        {ClientPid, TxId, Config},
+                        {Client, TxId, Config},
                         []).
 
 %% @doc Start a new transaction, `TxId'will be the id of the transaction
@@ -145,9 +145,9 @@ new(ClientPid, TxId, Config) ->
 %% `backoff_step': after each retry it will sleep for 2^Attempt * backoff_step
 %%  millis
 %% `max_retries'
--spec start_link(pid(), transactional_id(), transaction_config()) -> {ok, pid()}.
-start_link(ClientPid, TxId, Config) ->
-  gen_server:start_link(?MODULE, {ClientPid, TxId, Config}, []).
+-spec start_link(client(), transactional_id(), transaction_config()) -> {ok, pid()}.
+start_link(Client, TxId, Config) ->
+  gen_server:start_link(?MODULE, {Client, TxId, Config}, []).
 
 %% @doc Produce the message (key and value) to the indicated topic-partition
 %% synchronously.
