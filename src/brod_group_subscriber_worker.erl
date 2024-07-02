@@ -32,6 +32,7 @@
          , cb_module    := module()
          , cb_config    := term()
          , commit_fun   := brod_group_subscriber_v2:commit_fun()
+         , ack_fun      := brod_group_subscriber_v2:ack_fun()
          }.
 
 -record(state,
@@ -54,7 +55,7 @@ init(Topic, StartOpts) ->
    , begin_offset := BeginOffset
    , commit_fun   := CommitFun
    } = StartOpts,
-  InitInfo = maps:with( [topic, partition, group_id, commit_fun]
+  InitInfo = maps:with( [topic, partition, group_id, commit_fun, ack_fun]
                       , StartOpts
                       ),
   ?BROD_LOG_INFO("Starting group_subscriber_worker: ~p~n"
