@@ -212,7 +212,7 @@ start_link(Bootstrap, Topic, Partition, Config) ->
 %%     a relatively small `max_bytes', then let it dynamically adjust
 %%     to a number around `PrefetchCount * AverageSize'</li>
 %%
-%%  <li>`isolation_level': (optional, default = `read_commited')
+%%  <li>`isolation_level': (optional, default = `read_committed')
 %%
 %%     Level to control what transaction records are exposed to the
 %%     consumer. Two values are allowed, `read_uncommitted' to retrieve
