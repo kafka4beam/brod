@@ -1,5 +1,13 @@
 # Changelog
 
+- 4.1.0
+  - For v2 subscribers, pass offset `ack_fun` as a callback state init parameter.
+    This makes it possible for callback implementation to acknowledge offsets easier.
+    [PR#591](https://github.com/kafka4beam/brod/pull/591)
+  - Type spec fix. [PR#590](https://github.com/kafka4beam/brod/pull/590)
+  - Fix `brod:fold/8` to avoid exception when a stable offset points to en empty batch.
+    [PR#589](https://github.com/kafka4beam/brod/pull/589)
+
 - 4.0.0
   - Remove `snappyer` from default dependency [PR#547](https://github.com/kafka4beam/brod/pull/547).
     Starting from `kafka_protocol-4.0`, it no longer requires compression libraries as rebar dependencies.
