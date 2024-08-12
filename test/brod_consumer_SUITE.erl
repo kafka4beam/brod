@@ -32,6 +32,7 @@
         , t_fetch_aborted_from_the_middle/1
         , t_direct_fetch/1
         , t_fold/1
+        , t_fold_transactions/1
         , t_direct_fetch_with_small_max_bytes/1
         , t_direct_fetch_expand_max_bytes/1
         , t_resolve_offset/1
@@ -420,6 +421,26 @@ t_fold(Config) when is_list(Config) ->
   ?assertMatch({0, BadOffset, {fetch_failure, offset_out_of_range}},
     brod:fold(Client, Topic, Partition, BadOffset, #{},
               0, ErrorFoldF, #{})),
+  ok.
+
+t_fold_transactions(kafka_version_match) ->
+  has_txn();
+t_fold_transactions(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  Batch = [#{value => <<"one">>}, #{value => <<"two">>}],
+  {ok, Tx} = brod:transaction(Client, <<"some_transaction">>, []),
+  {ok, Offset} = brod:txn_produce(Tx, ?TOPIC, Partition, Batch),
+  ok = brod:commit(Tx),
+  FoldF =
+    fun F(#kafka_message{value = V}, Acc) -> {ok, F(V, Acc)};
+        F(V, Acc) -> [V | Acc]
+    end,
+  FetchOpts = #{max_bytes => 1},
+  ?assertMatch({Result, O, reached_end_of_partition}
+                when O =:= Offset + length(Batch) + 1 andalso length(Result) =:= 2,
+    brod:fold(Client, Topic, Partition, Offset, FetchOpts, [], FoldF, #{})),
   ok.
 
 %% This test case does not work with Kafka 0.9, not sure aobut 0.10 and 0.11
