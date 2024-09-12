@@ -459,6 +459,10 @@ Keytab should be the keytab file path, and Principal should be a byte-list or bi
 
 See also: <https://github.com/klarna/brod/wiki/SASL-gssapi-(kerberos)-authentication>
 
+### Additional Auth plugins
+
+- [brod_oauth](https://github.com/HCA-Healthcare/brod_oauth)  - OAuth Bearer support
+
 ## Other API to play with/inspect kafka
 
 These functions open a connection to kafka cluster, send a request,
