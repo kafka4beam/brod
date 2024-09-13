@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.1.1
+  - Upgrade `kafka_protocol` from version 4.1.5 to 4.1.9.
+
 - 4.1.0
   - For v2 subscribers, pass offset `ack_fun` as a callback state init parameter.
     This makes it possible for callback implementation to acknowledge offsets easier.
