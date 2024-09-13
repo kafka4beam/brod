@@ -80,7 +80,7 @@ jobs:
       - name: Create Cover Reports
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: rebar3 do cover,coveralls send
+        run: rebar3 do cover
   docs:
     needs: build
     runs-on: ubuntu-20.04

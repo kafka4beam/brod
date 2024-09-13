@@ -45,8 +45,5 @@ brod-cli:
 cover:
 	@rebar3 cover -v
 
-coveralls:
-	@rebar3 coveralls send
-
 dialyzer:
 	@rebar3 dialyzer
