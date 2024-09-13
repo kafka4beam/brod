@@ -72,7 +72,7 @@ jobs:
           make test-env
           make t
       - name: Store test logs
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ct-logs-otp-${{matrix.otp}}-kafka-${{matrix.kafka}}
@@ -80,7 +80,7 @@ jobs:
       - name: Create Cover Reports
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: rebar3 do cover,coveralls send
+        run: rebar3 do cover
   docs:
     needs: build
     runs-on: ubuntu-20.04
@@ -97,7 +97,7 @@ jobs:
       - name: Build Documentation
         run: rebar3 do hex build
       - name: Publish documentation
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: edoc
           path: doc

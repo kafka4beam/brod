@@ -5,18 +5,4 @@ Plugins =
       {project_plugins, lists:merge(ExtraPlugins, proplists:get_value(project_plugins, CONFIG))};
     _ -> {project_plugins, proplists:get_value(project_plugins, CONFIG)}
   end,
-CoverallsConfigs = case {os:getenv("GITHUB_ACTIONS"), os:getenv("GITHUB_TOKEN")} of
-  {"true", Token} when is_list(Token) ->
-    Configs = [{coveralls_repo_token, Token},
-               {coveralls_coverdata, "_build/test/cover/*.coverdata"},
-               {coveralls_service_job_id, os:getenv("GITHUB_RUN_ID")},
-               {coveralls_commit_sha, os:getenv("GITHUB_SHA")},
-               {coveralls_service_name, "github"},
-               {coveralls_service_number, os:getenv("GITHUB_RUN_NUMBER")}],
-    case os:getenv("GITHUB_EVENT_NAME") =:= "pull_request" andalso string:tokens(os:getenv("GITHUB_REF"), "/") of
-      [_, "pull", PRNO, _] -> [{coveralls_service_pull_request, PRNO} | Configs];
-      _ -> Configs
-    end;
-  _ -> []
-end,
-[Plugins | lists:merge(CoverallsConfigs, CONFIG)].
+[Plugins | CONFIG].
