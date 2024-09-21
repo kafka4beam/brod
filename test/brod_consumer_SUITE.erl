@@ -37,7 +37,8 @@
         , t_direct_fetch_expand_max_bytes/1
         , t_resolve_offset/1
         , t_consumer_max_bytes_too_small/1
-        , t_consumer_connection_restart/1
+        , t_consumer_connection_restart_0/1
+        , t_consumer_connection_restart_1/1
         , t_consumer_connection_restart_2/1
         , t_consumer_resubscribe/1
         , t_consumer_resubscribe_earliest/1
@@ -536,8 +537,20 @@ t_consumer_max_bytes_too_small(Config) ->
      end).
 
 %% @doc Consumer should auto recover from connection down, subscriber should not
-%% notice a thing except for a few seconds of break in data streaming
-t_consumer_connection_restart(Config) ->
+%% notice a thing except for a few seconds of break in data streaming.
+%% Covers the case when connection is shared with other partition leaders
+t_consumer_connection_restart_0(Config) ->
+  ConsumerConfig = [{share_leader_conn, true} | consumer_config()],
+  consumer_connection_restart(Config, ConsumerConfig).
+
+%% @doc Consumer should auto recover from connection down, subscriber should not
+%% notice a thing except for a few seconds of break in data streaming.
+%% Covers the case when connection is NOT shared with other partition leaders
+t_consumer_connection_restart_1(Config) ->
+  ConsumerConfig = [{share_leader_conn, false} | consumer_config()],
+  consumer_connection_restart(Config, ConsumerConfig).
+
+consumer_connection_restart(Config, ConsumerConfig) ->
   Client = ?config(client),
   Topic = ?TOPIC,
   Partition = 0,
@@ -546,7 +559,7 @@ t_consumer_connection_restart(Config) ->
                 , {prefetch_bytes, 0}
                 , {min_bytes, 1}
                 , {max_bytes, 12} %% ensure fetch exactly one message at a time
-                | consumer_config()
+                | ConsumerConfig
                 ],
   {ok, ConsumerPid} =
     brod_consumer:start_link(whereis(Client), Topic, Partition, ConsumerCfg),
@@ -586,11 +599,31 @@ t_consumer_connection_restart(Config) ->
   Nums2 = Receive(Nums1, 5000),
   ?assertError(timeout, Receive(Nums2, 100)),
   ?assertEqual(NumsCnt - 2, length(Nums2)),
-  ?assertEqual({ok, NewConnPid},
-               brod_client:get_leader_connection(Client, Topic, Partition)),
-  ok = brod_consumer:stop(ConsumerPid),
-  ?assertNot(is_process_alive(ConsumerPid)),
-  ?assert(is_process_alive(NewConnPid)), %% managed by brod_client
+  case proplists:get_bool(share_leader_conn, ConsumerConfig) of
+    true ->
+      ?assertEqual({ok, NewConnPid},
+                   brod_client:get_leader_connection(Client, Topic, Partition)),
+      ok = brod_consumer:stop(ConsumerPid),
+      ?assertNot(is_process_alive(ConsumerPid)),
+      ?assert(is_process_alive(NewConnPid));
+    false ->
+      %% assert normal shutdown
+      Ref1 = erlang:monitor(process, NewConnPid),
+      Ref2 = erlang:monitor(process, ConsumerPid),
+      %% assert connection linked to consumer
+      {links, Links} = process_info(ConsumerPid, links),
+      ?assert(lists:member(NewConnPid, Links)),
+      ok = brod_consumer:stop(ConsumerPid),
+      Wait = fun() ->
+        ?WAIT_ONLY({'DOWN', Ref, process, _, Reason},
+        begin
+          ?assertEqual(normal, Reason),
+          ?assert(Ref =:= Ref1 orelse Ref =:= Ref2)
+        end)
+      end,
+    Wait(),
+    Wait()
+  end,
   ok.
 
 %% @doc same as t_consumer_connection_restart,
