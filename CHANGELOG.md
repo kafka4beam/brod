@@ -1,5 +1,10 @@
 # Changelog
 
+- 4.2.0
+  - Optimize consumer fetch latency.
+    Introduced the `share_leader_conn` consumer configuration option (default: `false`).
+    This setting allows users to opt for the previous behavior if preferred (set to `true`).
+
 - 4.1.1
   - Upgrade `kafka_protocol` from version 4.1.5 to 4.1.9.
 

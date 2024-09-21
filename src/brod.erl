@@ -262,6 +262,7 @@
                            | {offset_reset_policy, brod_consumer:offset_reset_policy()}
                            | {size_stat_window,    non_neg_integer()}
                            | {isolation_level,     brod_consumer:isolation_level()}
+                           | {share_leader_conn,   boolean()}
                            ].
 %% Consumer configuration.
 %%

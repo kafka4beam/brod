@@ -1,5 +1,5 @@
-%%%
 %%%   Copyright (c) 2015-2021 Klarna Bank AB (publ)
+%%%   Copyright (c) 2022-2024 kafka4beam contributors
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
         , get_group_coordinator/2
         , get_transactional_coordinator/2
         , get_leader_connection/3
+        , get_bootstrap/1
         , get_metadata/2
         , get_metadata_safe/2
         , get_partitions_count/2
@@ -227,6 +228,10 @@ stop_consumer(Client, TopicName) ->
 get_leader_connection(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
+-spec get_bootstrap(client()) -> {ok, brod:bootstrap()} | {error, any()}.
+get_bootstrap(Client) ->
+  safe_gen_call(Client, get_bootstrap, infinity).
+
 %% @doc Get connection to a kafka broker.
 %%
 %% Return already established connection towards the broker,
@@ -388,6 +393,10 @@ handle_call({stop_consumer, Topic}, _From, State) ->
 handle_call({get_leader_connection, Topic, Partition}, _From, State) ->
   {Result, NewState} = do_get_leader_connection(State, Topic, Partition),
   {reply, Result, NewState};
+handle_call(get_bootstrap, _From, State) ->
+  #state{bootstrap_endpoints = Endpoints} = State,
+  ConnConfig = conn_config(State),
+  {reply, {ok, {Endpoints, ConnConfig}}, State};
 handle_call({get_connection, Host, Port}, _From, State) ->
   {Result, NewState} = maybe_connect(State, {Host, Port}),
   {reply, Result, NewState};

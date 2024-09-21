@@ -1,4 +1,5 @@
 %%%   Copyright (c) 2014-2021 Klarna Bank AB (publ)
+%%%   Copyright (c) 2022-2024 kafka4beam contributors
 %%%
 %%%   Licensed under the Apache License, Version 2.0 (the "License");
 %%%   you may not use this file except in compliance with the License.
@@ -93,7 +94,10 @@
 -type pending_acks() :: #pending_acks{}.
 -type isolation_level() :: kpro:isolation_level().
 
--record(state, { bootstrap           :: pid() | brod:bootstrap()
+-define(GET_FROM_CLIENT, get).
+-define(IGNORE, ignore).
+-record(state, { client_pid          :: ?IGNORE | pid()
+               , bootstrap           :: ?IGNORE | ?GET_FROM_CLIENT | brod:bootstrap()
                , connection          :: ?undef | pid()
                , topic               :: binary()
                , partition           :: integer()
@@ -136,6 +140,7 @@
 -define(INIT_CONNECTION, init_connection).
 -define(DEFAULT_AVG_WINDOW, 5).
 -define(DEFAULT_ISOLATION_LEVEL, ?kpro_read_committed).
+-define(DEFAULT_SHARE_LEADER_CONN, false).
 
 %%%_* APIs =====================================================================
 %% @equiv start_link(ClientPid, Topic, Partition, Config, [])
@@ -220,6 +225,16 @@ start_link(Bootstrap, Topic, Partition, Config) ->
 %%     and `read_committed' to get only the records from committed
 %%     transactions</li>
 %%
+%%  <li>`share_leader_conn': (optional, default = `false')
+%%
+%%     Whether or not share the partition leader connection with
+%%     other producers or consumers.
+%%     Set to `true' to consume less TCP connections towards Kafka,
+%%     but may lead to higher fetch latency. This is because Kafka can
+%%     ony accumulate messages for the oldest fetch request, later
+%%     requests behind it may get blocked until `max_wait_time' expires
+%%     for the oldest one</li>
+%%
 %% </ul>
 %% @end
 -spec start_link(pid() | brod:bootstrap(),
@@ -286,7 +301,7 @@ get_connection(Pid) ->
 
 %%%_* gen_server callbacks =====================================================
 
-init({Bootstrap, Topic, Partition, Config}) ->
+init({Bootstrap0, Topic, Partition, Config}) ->
   erlang:process_flag(trap_exit, true),
   Cfg = fun(Name, Default) ->
           proplists:get_value(Name, Config, Default)
@@ -300,15 +315,33 @@ init({Bootstrap, Topic, Partition, Config}) ->
   BeginOffset = Cfg(begin_offset, ?DEFAULT_BEGIN_OFFSET),
   OffsetResetPolicy = Cfg(offset_reset_policy, ?DEFAULT_OFFSET_RESET_POLICY),
   IsolationLevel = Cfg(isolation_level, ?DEFAULT_ISOLATION_LEVEL),
+  IsShareConn = Cfg(share_leader_conn, ?DEFAULT_SHARE_LEADER_CONN),
 
-  %% If bootstrap is a client pid, register self to the client
-  case is_shared_conn(Bootstrap) of
+  %% resolve connection bootstrap args
+  {ClientPid, Bootstrap} =
+    case is_pid(Bootstrap0) of
+      true when IsShareConn ->
+        %% share leader connection with other producers/consumers
+        %% the connection is to be managed by brod_client
+        {Bootstrap0, ?IGNORE};
+      true ->
+        %% not sharing leader connection with other producers/consumers
+        %% the bootstrap args will be resolved later when it's
+        %% time to establish a connection to partition leader
+        {Bootstrap0, ?GET_FROM_CLIENT};
+      false ->
+        %% this consumer process is not started from `brod' APIs
+        %% maybe managed by other supervisors.
+        {?IGNORE, Bootstrap0}
+    end,
+  case is_pid(ClientPid) of
     true ->
       ok = brod_client:register_consumer(Bootstrap, Topic, Partition);
     false ->
       ok
   end,
-  {ok, #state{ bootstrap           = Bootstrap
+  {ok, #state{ client_pid          = ClientPid
+             , bootstrap           = Bootstrap
              , topic               = Topic
              , partition           = Partition
              , begin_offset        = BeginOffset
@@ -418,20 +451,26 @@ handle_cast(Cast, State) ->
   {noreply, State}.
 
 %% @private
-terminate(Reason, #state{ bootstrap = Bootstrap
+terminate(Reason, #state{ client_pid = ClientPid
                         , topic = Topic
                         , partition = Partition
                         , connection = Connection
+                        , connection_mref = Mref
                         }) ->
-  IsShared = is_shared_conn(Bootstrap),
   IsNormal = brod_utils:is_normal_reason(Reason),
   %% deregister consumer if it's shared connection and normal shutdown
-  IsShared andalso IsNormal andalso
-    brod_client:deregister_consumer(Bootstrap, Topic, Partition),
-  %% close connection if it's working standalone
-  case not IsShared andalso is_pid(Connection) of
-    true -> kpro:close_connection(Connection);
-    false -> ok
+  case is_pid(ClientPid) andalso IsNormal of
+    true ->
+      brod_client:deregister_consumer(ClientPid, Topic, Partition);
+    false ->
+      ok
+  end,
+  %% close connection if it's owned by this consumer
+  case Mref =:= ?undef andalso is_pid(Connection) andalso is_process_alive(Connection) of
+    true ->
+      kpro:close_connection(Connection);
+    false ->
+      ok
   end,
   %% write a log if it's not a normal reason
   IsNormal orelse ?BROD_LOG_ERROR("Consumer ~s-~w terminate reason: ~p",
@@ -858,17 +897,19 @@ safe_gen_call(Server, Call, Timeout) ->
 -spec maybe_init_connection(state()) ->
         {ok, state()} | {{error, any()}, state()}.
 maybe_init_connection(
-  #state{ bootstrap  = Bootstrap
+  #state{ client_pid = ClientPid
+        , bootstrap  = Bootstrap
         , topic      = Topic
         , partition  = Partition
         , connection = ?undef
         } = State0) ->
   %% Lookup, or maybe (re-)establish a connection to partition leader
-  case connect_leader(Bootstrap, Topic, Partition) of
+  {MonitorOrLink, Result} = connect_leader(ClientPid, Bootstrap, Topic, Partition),
+  case Result of
     {ok, Connection} ->
-      Mref = case is_shared_conn(Bootstrap) of
-               true -> erlang:monitor(process, Connection);
-               false -> ?undef %% linked
+      Mref = case MonitorOrLink of
+               monitor -> erlang:monitor(process, Connection);
+               linked -> ?undef
              end,
       %% Switching to a new connection
       %% the response for last_req_ref will be lost forever
@@ -883,13 +924,23 @@ maybe_init_connection(
 maybe_init_connection(State) ->
   {ok, State}.
 
-connect_leader(ClientPid, Topic, Partition) when is_pid(ClientPid) ->
-  brod_client:get_leader_connection(ClientPid, Topic, Partition);
-connect_leader(Endpoints, Topic, Partition) when is_list(Endpoints) ->
-  connect_leader({Endpoints, []}, Topic, Partition);
-connect_leader({Endpoints, ConnCfg}, Topic, Partition) ->
+connect_leader(ClientPid, ?IGNORE, Topic, Partition) when is_pid(ClientPid) ->
+  {monitor, brod_client:get_leader_connection(ClientPid, Topic, Partition)};
+connect_leader(ClientPid, ?GET_FROM_CLIENT, Topic, Partition) when is_pid(ClientPid) ->
+  case brod_client:get_bootstrap(ClientPid) of
+    {ok, Bootstrap} ->
+      link_connect_leader(Bootstrap, Topic, Partition);
+    {error, Reason} ->
+      {linked, {error, Reason}}
+  end;
+connect_leader(?IGNORE, Bootstrap, Topic, Partition) ->
+  link_connect_leader(Bootstrap, Topic, Partition).
+
+link_connect_leader(Endpoints, Topic, Partition) when is_list(Endpoints) ->
+  link_connect_leader({Endpoints, []}, Topic, Partition);
+link_connect_leader({Endpoints, ConnCfg}, Topic, Partition) ->
   %% connection pid is linked to self()
-  kpro:connect_partition_leader(Endpoints, ConnCfg, Topic, Partition).
+  {linked, kpro:connect_partition_leader(Endpoints, ConnCfg, Topic, Partition)}.
 
 %% Send a ?INIT_CONNECTION delayed loopback message to re-init.
 -spec maybe_send_init_connection(state()) -> ok.
@@ -899,9 +950,6 @@ maybe_send_init_connection(#state{subscriber = Subscriber}) ->
   brod_utils:is_pid_alive(Subscriber) andalso
     erlang:send_after(Timeout, self(), ?INIT_CONNECTION),
   ok.
-
-%% In case 'bootstrap' is a client pid, connection is shared with other workers.
-is_shared_conn(Bootstrap) -> is_pid(Bootstrap).
 
 %%%_* Tests ====================================================================
 
