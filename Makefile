@@ -29,7 +29,7 @@ clean:
 	@rm -f pipe.testdata
 
 hex-publish: clean
-	@rebar3 hex publish
+	@rebar3 hex publish --repo=hexpm
 	@rebar3 hex build
 
 ## tests that require kafka running at localhost
