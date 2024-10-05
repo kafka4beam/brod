@@ -63,8 +63,6 @@ jobs:
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Compile
         run: rebar3 do compile
-      - name: Make brod_cli script
-        run: rebar3 as brod_cli escriptize
       - name: Run tests
         run: |
           export KAFKA_VERSION=${{ matrix.kafka }}
