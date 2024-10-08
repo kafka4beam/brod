@@ -100,7 +100,7 @@
         , delete_topics/4
         ]).
 
-%% APIs for quick metadata or message inspection and brod_cli
+%% APIs for quick metadata or message inspection
 -export([ get_metadata/1
         , get_metadata/2
         , get_metadata/3
@@ -127,10 +127,6 @@
 -export([ fetch/7
         , fetch/8
         ]).
-
--ifdef(build_brod_cli).
--export([main/1]).
--endif.
 
 -export_type([ batch_input/0
              , bootstrap/0
@@ -1364,10 +1360,6 @@ fetch_committed_offsets(BootstrapEndpoints, ConnCfg, GroupId) ->
         {ok, [kpro:struct()]} | {error, any()}.
 fetch_committed_offsets(Client, GroupId) ->
   brod_utils:fetch_committed_offsets(Client, GroupId, []).
-
--ifdef(build_brod_cli).
-main(X) -> brod_cli:main(X).
--endif.
 
 %% @doc Start a new transaction, `TxId' will be the id of the transaction
 %% @equiv brod_transaction:start_link/3

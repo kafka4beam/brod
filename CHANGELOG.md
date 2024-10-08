@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.3.0
+  - Split brod-cli out to a separate project [kafka4beam/brod-cli](https://github.com/kafka4beam/brod-cli)
+
 - 4.2.0
   - Optimize consumer fetch latency.
     Introduced the `share_leader_conn` consumer configuration option (default: `false`).
