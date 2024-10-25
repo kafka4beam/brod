@@ -52,6 +52,7 @@
         , t_assign_partitions_handles_updating_state/1
         , t_get_workers/1
         , v2_coordinator_crash/1
+        , v2_consumer_cleanup/1
         , v2_subscriber_shutdown/1
         , v2_subscriber_assignments_revoked/1
         ]).
@@ -97,6 +98,7 @@ groups() ->
      , t_assign_partitions_handles_updating_state
      , t_get_workers
      , v2_coordinator_crash
+     , v2_consumer_cleanup
      , v2_subscriber_shutdown
      , v2_subscriber_assignments_revoked
      ]}
@@ -390,6 +392,31 @@ v2_coordinator_crash(Config) when is_list(Config) ->
      fun(_Ret, _Trace) ->
          ok
      end).
+
+%% Checks that we don't leave `brod_consumer' processes lingering after we stop a group
+%% subscriber v2.
+v2_consumer_cleanup(Config) when is_list(Config) ->
+  InitArgs = #{},
+  Topic = ?topic,
+  Partition = 0,
+  Client = ?CLIENT_ID,
+  ?check_trace(
+     #{timetrap => 5_000},
+     begin
+       {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+       %% Send a message to the topic and wait until it's received to make sure
+       %% the subscriber is stable:
+       produce({Topic, Partition}, <<0>>),
+       {ok, _} = ?wait_message(Topic, Partition, <<0>>, _),
+       ?assertMatch({ok, _}, brod_client:get_consumer(Client, Topic, Partition)),
+       ok = stop_subscriber(Config, SubscriberPid),
+       ?assertMatch({error, {consumer_not_found, _}},
+                    brod_client:get_consumer(Client, Topic, Partition)),
+       ok
+     end,
+     []
+    ),
+  ok.
 
 v2_subscriber_shutdown(Config) when is_list(Config) ->
   %% Test graceful shutdown of the group subscriber:

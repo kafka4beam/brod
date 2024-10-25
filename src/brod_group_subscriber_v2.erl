@@ -395,12 +395,15 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{workers = Workers,
+terminate(_Reason, #state{config = Config,
+                          workers = Workers,
                           coordinator = Coordinator,
                           group_id = GroupId
                          }) ->
   ok = terminate_all_workers(Workers),
-  ok = flush_offset_commits(GroupId, Coordinator).
+  ok = flush_offset_commits(GroupId, Coordinator),
+  ok = stop_consumers(Config),
+  ok.
 
 %%%===================================================================
 %%% Internal functions
@@ -528,6 +531,16 @@ do_ack(Topic, Partition, Offset, #state{ workers = Workers
     _ ->
       {error, unknown_topic_or_partition}
   end.
+
+stop_consumers(Config) ->
+  #{ client := Client
+   , topics := Topics
+   } = Config,
+  lists:foreach(
+    fun(Topic) ->
+        _ = brod_client:stop_consumer(Client, Topic)
+    end,
+    Topics).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
