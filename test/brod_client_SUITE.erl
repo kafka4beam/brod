@@ -44,6 +44,7 @@
         , t_sasl_callback/1
         , t_magic_version/1
         , t_get_partitions_count_safe/1
+        , t_double_stop_consumer/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -51,9 +52,9 @@
 -include("brod_int.hrl").
 
 -define(HOST, "localhost").
--define(HOSTS, [{?HOST, 9092}]).
--define(HOSTS_SSL, [{?HOST, 9093}]).
--define(HOSTS_SASL_SSL, [{?HOST, 9094}]).
+-define(HOSTS, [{?HOST, 9192}]).
+-define(HOSTS_SSL, [{?HOST, 9193}]).
+-define(HOSTS_SASL_SSL, [{?HOST, 9194}]).
 -define(TOPIC, <<"brod-client-SUITE-topic">>).
 
 -define(WAIT(PATTERN, RESULT, TIMEOUT),
@@ -378,6 +379,21 @@ t_magic_version(Config) when is_list(Config) ->
       ?assertEqual(Headers, Hdrs),
       ?assert(is_integer(Ts))
   end.
+
+t_double_stop_consumer({init, Config}) -> Config;
+t_double_stop_consumer({'end', Config}) ->
+  brod:stop_client(?FUNCTION_NAME),
+  Config;
+t_double_stop_consumer(Config) when is_list(Config) ->
+  Client = ?FUNCTION_NAME,
+  ClientConfig = [{get_metadata_timeout_seconds, 10}],
+  ok = start_client(?HOSTS, Client, ClientConfig),
+  ok = brod:start_consumer(Client, ?TOPIC, []),
+  ?assertMatch({ok, _}, brod_client:get_consumer(Client, ?TOPIC, 0)),
+  ?assertMatch(ok, brod_client:stop_consumer(Client, ?TOPIC)),
+  ?assertMatch({error, {consumer_not_found, _}}, brod_client:get_consumer(Client, ?TOPIC, 0)),
+  ?assertMatch({error, not_found}, brod_client:stop_consumer(Client, ?TOPIC)),
+  ok.
 
 %%%_* Help functions ===========================================================
 
