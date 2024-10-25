@@ -1,5 +1,9 @@
 # Changelog
 
+- 4.3.1
+  - Fixed `brod_client:stop_consumer` so that it doesn't crash the client process if an unknown consumer is given as argument.
+  - Previously, `brod_group_subscriber_v2` could leave `brod_consumer` processes lingering even after its shutdown.  Now, those processes are terminated.
+
 - 4.3.0
   - Split brod-cli out to a separate project [kafka4beam/brod-cli](https://github.com/kafka4beam/brod-cli)
 

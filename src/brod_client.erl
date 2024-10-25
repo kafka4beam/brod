@@ -388,8 +388,8 @@ handle_call({stop_producer, Topic}, _From, State) ->
   ok = brod_producers_sup:stop_producer(State#state.producers_sup, Topic),
   {reply, ok, State};
 handle_call({stop_consumer, Topic}, _From, State) ->
-  ok = brod_consumers_sup:stop_consumer(State#state.consumers_sup, Topic),
-  {reply, ok, State};
+  Reply = brod_consumers_sup:stop_consumer(State#state.consumers_sup, Topic),
+  {reply, Reply, State};
 handle_call({get_leader_connection, Topic, Partition}, _From, State) ->
   {Result, NewState} = do_get_leader_connection(State, Topic, Partition),
   {reply, Result, NewState};
