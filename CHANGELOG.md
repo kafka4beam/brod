@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.3.2
+   - Upgrade kafka_protocol from 4.1.9 to 4.1.10 for partition leader discover/connect timeout fix.
+
 - 4.3.1
   - Fixed `brod_client:stop_consumer` so that it doesn't crash the client process if an unknown consumer is given as argument.
   - Previously, `brod_group_subscriber_v2` could leave `brod_consumer` processes lingering even after its shutdown.  Now, those processes are terminated.
