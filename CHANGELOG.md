@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.3.3
+   - Fixed `brod_consumer` so that it could correctly start consumption when the begin offset is -1
+
 - 4.3.2
    - Upgrade kafka_protocol from 4.1.9 to 4.1.10 for partition leader discover/connect timeout fix.
 

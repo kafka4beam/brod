@@ -845,7 +845,16 @@ resolve_begin_offset(#state{ begin_offset = BeginOffset
                            , topic        = Topic
                            , partition    = Partition
                            } = State) when ?IS_SPECIAL_OFFSET(BeginOffset) ->
-  case resolve_offset(Connection, Topic, Partition, BeginOffset) of
+  AdjustedBeginOffset =
+    case BeginOffset of
+      -1 ->
+         ?OFFSET_EARLIEST;
+      -2 ->
+         ?OFFSET_EARLIEST;
+      Value ->
+        Value
+    end,
+  case resolve_offset(Connection, Topic, Partition, AdjustedBeginOffset) of
     {ok, NewBeginOffset} ->
       {ok, State#state{begin_offset = NewBeginOffset}};
     {error, Reason} ->
