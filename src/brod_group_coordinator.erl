@@ -462,6 +462,13 @@ terminate(Reason, #state{ connection = Connection
 
 %%%_* Internal Functions =======================================================
 
+-spec ensure_member_pid_alive(pid()) -> ok 
+  ensure_member_pid_alive(MemberPid) ->
+    case brod_utils:is_pid_alive(MemberPid) of 
+      true -> ok
+      false -> exit(member_pid_shutdown)
+  end.
+
 -spec discover_coordinator(state()) -> {ok, state()}.
 discover_coordinator(#state{ client     = Client
                            , connection = Connection0
@@ -499,6 +506,7 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
     log(State0, info, "re-joining group, reason:~p", [Reason]),
 
   %% 1. unsubscribe all currently assigned partitions
+  ok = ensure_member_pid_alive(MemberPid), 
   ok = MemberModule:assignments_revoked(MemberPid),
 
   %% 2. some brod_group_member implementations may wait for messages
@@ -674,6 +682,7 @@ sync_group(#state{ groupId       = GroupId
   %% get my partition assignments
   Assignment = kpro:find(assignment, RspBody),
   TopicAssignments = get_topic_assignments(State, Assignment),
+  ok = ensure_member_pid_alive(MemberPid),
   ok = MemberModule:assignments_received(MemberPid, MemberId,
                                          GenerationId, TopicAssignments),
   NewState = State#state{is_in_group = true},
@@ -834,6 +843,7 @@ assign_partitions(State) when ?IS_LEADER(State) ->
   Assignments =
     case Strategy =:= callback_implemented of
       true  ->
+        ok = ensure_member_pid_alive(MemberPid),
         MemberModule:assign_partitions(MemberPid, Members, AllPartitions);
       false ->
         do_assign_partitions(Strategy, Members, AllPartitions)
