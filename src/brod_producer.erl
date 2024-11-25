@@ -54,9 +54,9 @@
 -include("brod_int.hrl").
 
 %% default number of messages in buffer before block callers
--define(DEFAULT_PARITION_BUFFER_LIMIT, 512).
+-define(DEFAULT_PARTITION_BUFFER_LIMIT, 512).
 %% default number of message sets sent on wire before block waiting for acks
--define(DEFAULT_PARITION_ONWIRE_LIMIT, 1).
+-define(DEFAULT_PARTITION_ONWIRE_LIMIT, 1).
 %% by default, send max 1 MB of data in one batch (message set)
 -define(DEFAULT_MAX_BATCH_SIZE, 1048576).
 %% by default, require acks from all ISR
@@ -288,8 +288,8 @@ stop(Pid) -> ok = gen_server:call(Pid, stop).
 %% @private
 init({ClientPid, Topic, Partition, Config}) ->
   erlang:process_flag(trap_exit, true),
-  BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARITION_BUFFER_LIMIT),
-  OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARITION_ONWIRE_LIMIT),
+  BufferLimit = ?config(partition_buffer_limit, ?DEFAULT_PARTITION_BUFFER_LIMIT),
+  OnWireLimit = ?config(partition_onwire_limit, ?DEFAULT_PARTITION_ONWIRE_LIMIT),
   MaxBatchSize = ?config(max_batch_size, ?DEFAULT_MAX_BATCH_SIZE),
   MaxRetries = ?config(max_retries, ?DEFAULT_MAX_RETRIES),
   RetryBackoffMs = ?config(retry_backoff_ms, ?DEFAULT_RETRY_BACKOFF_MS),
