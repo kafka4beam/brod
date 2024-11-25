@@ -462,12 +462,14 @@ terminate(Reason, #state{ connection = Connection
 
 %%%_* Internal Functions =======================================================
 
--spec ensure_member_pid_alive(pid()) -> ok 
-  ensure_member_pid_alive(MemberPid) ->
-    case brod_utils:is_pid_alive(MemberPid) of 
-      true -> ok
-      false -> exit(member_pid_shutdown)
-  end.
+% Exit the process if MemberPid is set to pid but it's not
+% currently alive
+-spec ensure_member_pid_alive(pid()) -> ok.
+ensure_member_pid_alive(MemberPid) ->
+  case brod_utils:is_pid_alive(MemberPid) of
+    true -> ok;
+    false -> exit(member_pid_shutdown)
+end.
 
 -spec discover_coordinator(state()) -> {ok, state()}.
 discover_coordinator(#state{ client     = Client
@@ -506,7 +508,7 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
     log(State0, info, "re-joining group, reason:~p", [Reason]),
 
   %% 1. unsubscribe all currently assigned partitions
-  ok = ensure_member_pid_alive(MemberPid), 
+  ok = ensure_member_pid_alive(MemberPid),
   ok = MemberModule:assignments_revoked(MemberPid),
 
   %% 2. some brod_group_member implementations may wait for messages
