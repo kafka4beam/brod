@@ -71,6 +71,7 @@
 
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 -define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
+-define(DEFAULT_UNKNOWN_TOPIC_CACHE_TTL, 120000).
 
 %% ClientId as ets table name.
 -define(ETS(ClientId), ClientId).
@@ -84,8 +85,6 @@
         {?PRODUCER_KEY(Topic, Partition), Pid}).
 -define(CONSUMER(Topic, Partition, Pid),
         {?CONSUMER_KEY(Topic, Partition), Pid}).
-
--define(UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS, 120).
 
 -type endpoint() :: brod:endpoint().
 -type client() :: brod:client().
@@ -613,6 +612,7 @@ do_get_metadata(Topic, State) when not is_tuple(Topic) ->
 do_get_metadata(FetchMetdataFor, Topic,
                 #state{ client_id   = ClientId
                       , workers_tab = Ets
+                      , config = Config
                       } = State0) ->
   Topics = case FetchMetdataFor of
              all -> all; %% in case no topic is given, get all
@@ -624,8 +624,10 @@ do_get_metadata(FetchMetdataFor, Topic,
   case request_sync(State, Request) of
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
       TopicMetadataArray = kf(topics, Metadata),
-      ok = update_partitions_count_cache(Ets, TopicMetadataArray),
-      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray),
+      UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
+                                    ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
+      ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl),
       {{ok, Metadata}, State};
     {error, Reason} ->
       ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
@@ -819,29 +821,31 @@ is_cooled_down(Ts, #state{config = Config}) ->
 
 %% call this function after fetched metadata for all topics
 %% to cache the not-found status of a given topic
-maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray) ->
+maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl) ->
   case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
     {error, unknown_topic_or_partition} = Err ->
-      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, os:timestamp()}),
+      ExpireTs = erlang:monotonic_time(millisecond) + UnknownTopicCacheTtl,
+      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, ExpireTs}),
       ok;
     _ ->
       %% do nothing when ok or any other error
       ok
   end.
 
--spec update_partitions_count_cache(ets:tab(), [kpro:struct()]) -> ok.
-update_partitions_count_cache(_Ets, []) -> ok;
-update_partitions_count_cache(Ets, [TopicMetadata | Rest]) ->
+-spec update_partitions_count_cache(ets:tab(), [kpro:struct()], non_neg_integer()) -> ok.
+update_partitions_count_cache(_Ets, [], _UnknownTopicCacheTtl) -> ok;
+update_partitions_count_cache(Ets, [TopicMetadata | Rest], UnknownTopicCacheTtl) ->
   Topic = kf(name, TopicMetadata),
   case get_partitions_count_in_metadata(TopicMetadata) of
     {ok, Cnt} ->
-      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, os:timestamp()});
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, nil});
     {error, ?unknown_topic_or_partition} = Err ->
-      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, os:timestamp()});
+      ExpireTs = erlang:monotonic_time(millisecond) + UnknownTopicCacheTtl,
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, ExpireTs});
     {error, _Reason} ->
       ok
   end,
-  update_partitions_count_cache(Ets, Rest).
+  update_partitions_count_cache(Ets, Rest, UnknownTopicCacheTtl).
 
 %% Get partition counter from cache.
 %% If cache is not hit, send meta data request to retrieve.
@@ -893,9 +897,8 @@ lookup_partitions_count_cache(Ets, Topic) ->
   try ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
     [{_, Count, _Ts}] when is_integer(Count) ->
       {ok, Count};
-    [{_, {error, Reason}, Ts}] ->
-      case timer:now_diff(os:timestamp(), Ts) =<
-            ?UNKNOWN_TOPIC_CACHE_EXPIRE_SECONDS * 1000000 of
+    [{_, {error, Reason}, ExpireTs}] ->
+      case erlang:monotonic_time(millisecond) - ExpireTs < 0 of
         true  -> {error, Reason};
         false -> false
       end;
