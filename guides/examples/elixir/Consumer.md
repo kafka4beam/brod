@@ -108,7 +108,7 @@ defmodule BrodSample.PartitionSubscriber do
   @impl true
   def init({topic, partition}) do
     # start the consumer(s)
-    # if you have more than one partition, do it somewhere else once for all paritions
+    # if you have more than one partition, do it somewhere else once for all partitions
     # (e.g. in the parent process)
     :ok = :brod.start_consumer(:kafka_client, topic, begin_offset: :latest)
 

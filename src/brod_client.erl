@@ -168,7 +168,7 @@ get_producer(Client, Topic, Partition) ->
       Error
   end.
 
-%% @doc Get consumer of the given topic-parition.
+%% @doc Get consumer of the given topic-partition.
 -spec get_consumer(client(), topic(), partition()) ->
         {ok, pid()} | {error, get_consumer_error()}.
 get_consumer(Client, Topic, Partition) ->
@@ -255,7 +255,7 @@ get_metadata(Client, Topic) ->
 -spec get_metadata_safe(client(), topic()) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata_safe(Client, Topic) ->
-  safe_gen_call(Client, {get_metadata, {_FetchMetdataForTopic = all, Topic}}, infinity).
+  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, Topic}}, infinity).
 
 %% @doc Get number of partitions for a given topic.
 -spec get_partitions_count(client(), topic()) -> {ok, pos_integer()} | {error, any()}.
@@ -610,11 +610,11 @@ do_get_metadata({all, Topic}, State) ->
 do_get_metadata(Topic, State) when not is_tuple(Topic) ->
     do_get_metadata(Topic, Topic, State).
 
-do_get_metadata(FetchMetdataFor, Topic,
+do_get_metadata(FetchMetadataFor, Topic,
                 #state{ client_id   = ClientId
                       , workers_tab = Ets
                       } = State0) ->
-  Topics = case FetchMetdataFor of
+  Topics = case FetchMetadataFor of
              all -> all; %% in case no topic is given, get all
              _   -> [Topic]
            end,
@@ -865,21 +865,21 @@ do_get_partitions_count(Client, Ets, Topic, #{allow_topic_auto_creation := Allow
             get_metadata_safe(Client, Topic)
         end,
       %% the metadata is returned, no need to look up the cache again
-      %% find the topic's parition count from the metadata directly
+      %% find the topic's partition count from the metadata directly
       find_partition_count_in_metadata(MetadataResponse, Topic)
   end.
 
 find_partition_count_in_metadata({ok, Meta}, Topic) ->
-  TopicMetadataArrary = kf(topics, Meta),
-  find_partition_count_in_topic_metadata_array(TopicMetadataArrary, Topic);
+  TopicMetadataArray = kf(topics, Meta),
+  find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic);
 find_partition_count_in_metadata({error, Reason}, _) ->
   {error, Reason}.
 
-find_partition_count_in_topic_metadata_array(TopicMetadataArrary, Topic) ->
+find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) ->
   FilterF = fun(#{name := N}) when N =:= Topic -> true;
                (_) -> false
             end,
-  case lists:filter(FilterF, TopicMetadataArrary) of
+  case lists:filter(FilterF, TopicMetadataArray) of
     [TopicMetadata] ->
       get_partitions_count_in_metadata(TopicMetadata);
     [] ->

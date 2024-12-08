@@ -159,7 +159,7 @@
 %% brod_group_coordinator:start_link/6} Optional</li>
 %%
 %% <li>`consumer_config': For partition consumer,
-%% {@link brod_topic_subscriber:start_link/6}. Optional
+%% {@link brod_consumer:start_link/5}. Optional
 %% </li>
 %%
 %% <li>`message_type': The type of message that is going to be handled

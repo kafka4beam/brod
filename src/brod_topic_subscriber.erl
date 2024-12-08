@@ -234,7 +234,7 @@ start_link(Client, Topic, Partitions, ConsumerConfig,
 %% functions implemented for message processing. Mandatory</li>
 %%
 %% <li>`consumer_config': For partition consumer, {@link
-%% brod_topic_subscriber:start_link/6}. Optional, defaults to `[]'
+%% brod_consumer:start_link/5}. Optional, defaults to `[]'
 %% </li>
 %%
 %% <li>`message_type': The type of message that is going to be handled
