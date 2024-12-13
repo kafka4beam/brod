@@ -897,7 +897,7 @@ lookup_partitions_count_cache(Ets, Topic) ->
   try ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
     [{_, Count, _Ts}] when is_integer(Count) ->
       {ok, Count};
-    [{_, {error, Reason}, ExpireTs}] when is_integer(ExpireTs) ->
+    [{_, {error, Reason}, {expire, ExpireTs}}] when is_integer(ExpireTs) ->
       case is_expired(ExpireTs) of
         true  -> {error, Reason};
         false -> false
