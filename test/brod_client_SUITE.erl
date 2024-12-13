@@ -129,13 +129,16 @@ t_get_partitions_count_safe(Config) when is_list(Config) ->
 
 t_get_partitions_count_configure_cache_ttl(Config) when is_list(Config) ->
   Client = ?FUNCTION_NAME,
-  ClientConfig = [{unknown_topic_cache_ttl, 0}],
+  ClientConfig = [{unknown_topic_cache_ttl, 100}],
   ok = start_client(?HOSTS, Client, ClientConfig),
   Topic = <<"unknown-topic-001">>,
   Res = brod:get_partitions_count_safe(Client, Topic),
   ?assertMatch({error, unknown_topic_or_partition}, Res),
   Res2 = brod_client:lookup_partitions_count_cache(Client, Topic),
-  ?assertMatch(false, Res2),
+  ?assertMatch({error, unknown_topic_or_partition}, Res2),
+  timer:sleep(101),
+  Res3 = brod_client:lookup_partitions_count_cache(Client, Topic),
+  ?assertMatch(false, Res3),
   ok = brod:stop_client(Client).
 
 

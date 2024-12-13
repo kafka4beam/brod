@@ -824,8 +824,7 @@ is_cooled_down(Ts, #state{config = Config}) ->
 maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl) ->
   case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
     {error, unknown_topic_or_partition} = Err ->
-      ExpireTs = erlang:monotonic_time(millisecond) + UnknownTopicCacheTtl,
-      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, ExpireTs}),
+      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, expire_ts(UnknownTopicCacheTtl)}),
       ok;
     _ ->
       %% do nothing when ok or any other error
@@ -840,8 +839,7 @@ update_partitions_count_cache(Ets, [TopicMetadata | Rest], UnknownTopicCacheTtl)
     {ok, Cnt} ->
       ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Cnt, nil});
     {error, ?unknown_topic_or_partition} = Err ->
-      ExpireTs = erlang:monotonic_time(millisecond) + UnknownTopicCacheTtl,
-      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, ExpireTs});
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, expire_ts(UnknownTopicCacheTtl)});
     {error, _Reason} ->
       ok
   end,
@@ -898,7 +896,7 @@ lookup_partitions_count_cache(Ets, Topic) ->
     [{_, Count, _Ts}] when is_integer(Count) ->
       {ok, Count};
     [{_, {error, Reason}, ExpireTs}] when is_integer(ExpireTs) ->
-      case erlang:monotonic_time(millisecond) - ExpireTs < 0 of
+      case is_expired(ExpireTs) of
         true  -> {error, Reason};
         false -> false
       end;
@@ -989,6 +987,12 @@ safe_gen_call(Server, Call, Timeout) ->
 
 -spec kf(kpro:field_name(), kpro:struct()) -> kpro:field_value().
 kf(FieldName, Struct) -> kpro:find(FieldName, Struct).
+
+-spec expire_ts(integer()) -> integer().
+expire_ts(Ttl) -> erlang:monotonic_time(millisecond) + Ttl.
+
+-spec is_expired(integer()) -> boolean().
+is_expired(ExpireTs) -> erlang:monotonic_time(millisecond) - ExpireTs < 0.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
