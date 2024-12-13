@@ -374,7 +374,7 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     Producer configuration to use when auto_start_producers is true.
 %%     See {@link brod_producer:start_link/4} for details about producer config</li>
 %%
-%%   <li>`unknown_topic_cache_ttl` (optional, default=120000)
+%%   <li>`unknown_topic_cache_ttl' (optional, default=120000)
 %%
 %%     For how long unknown_topic error will be cached, in ms.</li>
 %%
