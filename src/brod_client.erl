@@ -627,7 +627,8 @@ do_get_metadata(FetchMetdataFor, Topic,
       UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
                                     ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
       ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
-      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray,
+                                               UnknownTopicCacheTtl),
       {{ok, Metadata}, State};
     {error, Reason} ->
       ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
