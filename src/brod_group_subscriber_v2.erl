@@ -35,6 +35,7 @@
         , start_link/1
         , stop/1
         , get_workers/1
+        , get_coordinator/1
         ]).
 
 %% brod_group_coordinator callbacks
@@ -208,6 +209,15 @@ get_workers(Pid) ->
 get_workers(Pid, Timeout) ->
   gen_server:call(Pid, get_workers, Timeout).
 
+%% @doc Returns the group coordinator PID.
+-spec get_coordinator(pid()) -> pid() | undefined.
+get_coordinator(Pid) ->
+  get_coordinator(Pid, infinity).
+
+-spec get_coordinator(pid(), timeout()) -> pid() | undefined.
+get_coordinator(Pid, Timeout) ->
+  gen_server:call(Pid, get_coordinator, Timeout).
+
 %%%===================================================================
 %%% group_coordinator callbacks
 %%%===================================================================
@@ -315,6 +325,8 @@ handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
   {reply, Reply, State};
 handle_call(get_workers, _From, State = #state{workers = Workers}) ->
   {reply, Workers, State};
+handle_call(get_coordinator, _From, State = #state{coordinator = Coordinator}) ->
+  {reply, Coordinator, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
