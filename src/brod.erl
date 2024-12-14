@@ -374,6 +374,10 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%     Producer configuration to use when auto_start_producers is true.
 %%     See {@link brod_producer:start_link/4} for details about producer config</li>
 %%
+%%   <li>`unknown_topic_cache_ttl' (optional, default=120000)
+%%
+%%     For how long unknown_topic error will be cached, in ms.</li>
+%%
 %% </ul>
 %%
 %% Connection options can be added to the same proplist. See
@@ -510,7 +514,7 @@ start_consumer(Client, TopicName, ConsumerConfig) ->
 %% is not statically configured for them.
 %% It is up to the callers how they want to distribute their data
 %% (e.g. random, roundrobin or consistent-hashing) to the partitions.
-%% NOTE: The partitions count is cached for 120 seconds.
+%% NOTE: The partitions count is cached.
 -spec get_partitions_count(client(), topic()) ->
         {ok, pos_integer()} | {error, any()}.
 get_partitions_count(Client, Topic) ->

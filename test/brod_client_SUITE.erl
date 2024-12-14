@@ -43,6 +43,7 @@
         , t_sasl_plain_file_ssl/1
         , t_sasl_callback/1
         , t_magic_version/1
+        , t_get_partitions_count_configure_cache_ttl/1
         , t_get_partitions_count_safe/1
         , t_double_stop_consumer/1
         ]).
@@ -124,6 +125,22 @@ t_get_partitions_count_safe(Config) when is_list(Config) ->
   Res2 = brod_client:lookup_partitions_count_cache(Client, Topic),
   ?assertMatch({error, unknown_topic_or_partition}, Res2),
   ok = brod:stop_client(Client).
+
+
+t_get_partitions_count_configure_cache_ttl(Config) when is_list(Config) ->
+  Client = ?FUNCTION_NAME,
+  ClientConfig = [{unknown_topic_cache_ttl, 100}],
+  ok = start_client(?HOSTS, Client, ClientConfig),
+  Topic = <<"unknown-topic-001">>,
+  Res = brod:get_partitions_count_safe(Client, Topic),
+  ?assertMatch({error, unknown_topic_or_partition}, Res),
+  Res2 = brod_client:lookup_partitions_count_cache(Client, Topic),
+  ?assertMatch({error, unknown_topic_or_partition}, Res2),
+  timer:sleep(101),
+  Res3 = brod_client:lookup_partitions_count_cache(Client, Topic),
+  ?assertMatch(false, Res3),
+  ok = brod:stop_client(Client).
+
 
 t_skip_unreachable_endpoint(Config) when is_list(Config) ->
   Client = t_skip_unreachable_endpoint,
