@@ -79,8 +79,10 @@
   try
     EXPR
   catch
-    exit:{noproc, {gen_server, call, [MemberPid | _]}} ->
-      exit({shutdown, member_down})
+    exit:{noproc, _} ->
+      exit({shutdown, member_down});
+    exit:{Reason, _} ->
+      exit({shutdown, {member_down, Reason}})
   end).
 
 -type config() :: brod:group_config().
