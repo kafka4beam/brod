@@ -1,7 +1,12 @@
 # Changelog
 
+- 4.3.3
+  - Catch `exit` exception when group coordinator calls group member (owner) process.
+  - Add `unknown_topic_cache_ttl` option in client config.
+  - Doc improvements.
+
 - 4.3.2
-   - Upgrade kafka_protocol from 4.1.9 to 4.1.10 for partition leader discover/connect timeout fix.
+  - Upgrade kafka_protocol from 4.1.9 to 4.1.10 for partition leader discover/connect timeout fix.
 
 - 4.3.1
   - Fixed `brod_client:stop_consumer` so that it doesn't crash the client process if an unknown consumer is given as argument.
