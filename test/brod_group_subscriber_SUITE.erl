@@ -51,6 +51,7 @@
         , t_consumer_crash/1
         , t_assign_partitions_handles_updating_state/1
         , t_get_workers/1
+        , t_get_coordinator/1
         , v2_coordinator_crash/1
         , v2_consumer_cleanup/1
         , v2_subscriber_shutdown/1
@@ -97,6 +98,7 @@ groups() ->
      , t_async_commit
      , t_assign_partitions_handles_updating_state
      , t_get_workers
+     , t_get_coordinator
      , v2_coordinator_crash
      , v2_consumer_cleanup
      , v2_subscriber_shutdown
@@ -302,6 +304,30 @@ t_get_workers(Config) when is_list(Config) ->
              ct:pal("result: ~p", [Workers]),
              ?assert(is_map(Workers)),
              ?assert(lists:all(fun is_pid/1, maps:values(Workers))),
+             ok
+         end);
+    _ ->
+      ok
+  end.
+
+t_get_coordinator(Config) when is_list(Config) ->
+  case ?config(behavior) of
+     brod_group_subscriber_v2 ->
+      %% only present in v2
+      InitArgs = #{async_ack => true},
+      Topic = ?topic,
+      ?check_trace(
+         #{ timeout => 10000 },
+         %% Run stage:
+         begin
+           {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+           ct:sleep(2000),
+           brod_group_subscriber_v2:get_coordinator(SubscriberPid)
+         end,
+         %% Check stage:
+         fun(Coordinator, _Trace) ->
+             ct:pal("result: ~p", [Coordinator]),
+             ?assert(is_pid(Coordinator)),
              ok
          end);
     _ ->
