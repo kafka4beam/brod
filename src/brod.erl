@@ -241,7 +241,7 @@
                                 {ok, partition()}).
 -type partitioner() :: partition_fun() | random | hash.
 -type produce_ack_cb() :: fun((partition(), offset()) -> _).
--type compression() :: no_compression | gzip | snappy.
+-type compression() :: no_compression | gzip | snappy | lz4 | zstd.
 -type call_ref() :: #brod_call_ref{}. %% A record with caller, callee, and ref.
 -type produce_result() :: brod_produce_req_buffered
                         | brod_produce_req_acked.

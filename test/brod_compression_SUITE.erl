@@ -29,10 +29,12 @@
 %% Test cases
 -export([ t_produce_gzip/1
         , t_produce_snappy/1
-        %, t_produce_lz4/1
+        , t_produce_lz4/1
+        , t_produce_zstd/1
         , t_produce_compressed_batch_consume_from_middle_gzip/1
         , t_produce_compressed_batch_consume_from_middle_snappy/1
-        %, t_produce_compressed_batch_consume_from_middle_lz4/1
+        , t_produce_compressed_batch_consume_from_middle_lz4/1
+        , t_produce_compressed_batch_consume_from_middle_zstd/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -77,10 +79,29 @@ end_per_testcase(Case, Config) ->
   Config.
 
 all() -> [F || {F, _A} <- module_info(exports),
-                  case atom_to_list(F) of
-                    "t_" ++ _ -> true;
-                    _         -> false
-                  end].
+  is_test_case(F) andalso kafka_supports_compression_in_test(F)].
+
+is_test_case(F) ->
+  case atom_to_list(F) of
+    "t_" ++ _ -> true;
+    _         -> false
+  end.
+
+kafka_supports_compression_in_test(F) ->
+  CompressionMinVsns = #{
+    "gzip" => {0, 0},
+    "snappy" => {0, 8},
+    "lz4" => {0, 10},
+    "zstd" => {2, 1}
+  },
+  KafkaVsn = kafka_version(),
+  lists:all(
+    fun({Compression, MinVsn}) ->
+      IsTestContainCompression = string:str(atom_to_list(F), Compression) > 0,
+      not IsTestContainCompression orelse KafkaVsn >= MinVsn
+    end,
+    maps:to_list(CompressionMinVsns)
+  ).
 
 %%%_* Test functions ===========================================================
 
@@ -90,8 +111,11 @@ t_produce_gzip(Config) ->
 t_produce_snappy(Config) ->
   run(fun produce/1, snappy, Config).
 
-%t_produce_lz4(Config) ->
-%  run(fun produce/1, lz4, Config).
+t_produce_lz4(Config) ->
+ run(fun produce/1, lz4, Config).
+
+ t_produce_zstd(Config) ->
+  run(fun produce/1, zstd, Config).
 
 t_produce_compressed_batch_consume_from_middle_gzip(Config) ->
   run(fun produce_compressed_batch_consume_from_middle/1, gzip, Config).
@@ -99,8 +123,11 @@ t_produce_compressed_batch_consume_from_middle_gzip(Config) ->
 t_produce_compressed_batch_consume_from_middle_snappy(Config) ->
   run(fun produce_compressed_batch_consume_from_middle/1, snappy, Config).
 
-%t_produce_compressed_batch_consume_from_middle_lz4(Config) ->
-%  run(fun produce_compressed_batch_consume_from_middle/1, lz4, Config).
+t_produce_compressed_batch_consume_from_middle_lz4(Config) ->
+ run(fun produce_compressed_batch_consume_from_middle/1, lz4, Config).
+
+ t_produce_compressed_batch_consume_from_middle_zstd(Config) ->
+  run(fun produce_compressed_batch_consume_from_middle/1, zstd, Config).
 
 %%%_* Help functions ===========================================================
 
@@ -202,6 +229,15 @@ start_client(Hosts, ClientId) ->
 
 client_config() ->
   kafka_test_helper:client_config().
+
+kafka_version() ->
+  case os:getenv("KAFKA_VERSION") of
+    false ->
+      ?LATEST_KAFKA_VERSION;
+    Vsn ->
+      [Major, Minor | _] = string:tokens(Vsn, "."),
+      {list_to_integer(Major), list_to_integer(Minor)}
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

@@ -139,8 +139,8 @@ lookup_vsn_range(Conn, API) ->
 %% Do not change range without verification.
 supported_versions(API) ->
   case API of
-    produce          -> {0, 5};
-    fetch            -> {0, 7};
+    produce          -> {0, 7};
+    fetch            -> {0, 10};
     list_offsets     -> {0, 2};
     metadata         -> {0, 2};
     offset_commit    -> {2, 2};

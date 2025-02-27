@@ -169,7 +169,7 @@
 %%   </li>
 %%   <li>`compression' (optional, default = `no_compression`):
 %%
-%%     `gzip' or `snappy' to enable compression</li>
+%%     `gzip', `snappy', 'lz4' or `zstd` to enable compression</li>
 %%   <li>`max_linger_ms' (optional, default = 0):
 %%
 %%     Messages are allowed to 'linger' in buffer for this amount of
