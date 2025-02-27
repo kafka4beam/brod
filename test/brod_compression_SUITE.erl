@@ -91,7 +91,7 @@ kafka_supports_compression_in_test(F) ->
   CompressionMinVsns = #{
     "gzip" => {0, 0},
     "snappy" => {0, 8},
-    "lz4" => {0, 9},
+    "lz4" => {0, 10},
     "zstd" => {2, 1}
   },
   KafkaVsn = kafka_version(),
