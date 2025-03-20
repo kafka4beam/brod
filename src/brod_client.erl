@@ -369,7 +369,6 @@ handle_info(init, State0) ->
   {noreply, State};
 handle_info(sync, #state{config = Config, producers_sup = Sup} = State) ->
   Children = brod_supervisor3:which_children(Sup),
-  io:format("=========================~P~n", [Children, 1000]),
   NewState = sync_topics_metadata(Children, State),
   Ref = erlang:send_after(sync_interval(Config), self(), sync),
   {noreply, NewState#state{ sync_ref = Ref }};
