@@ -55,6 +55,7 @@
 
 %% Test export
 -export([ lookup_partitions_count_cache/2
+        , sync_topics_metadata/2
         ]).
 
 -export([ code_change/3
@@ -131,6 +132,7 @@
         , consumers_sup        :: ?undef | pid()
         , config               :: ?undef | config()
         , workers_tab          :: ?undef | ets:tab()
+        , sync_ref             :: ?undef | reference()
         }).
 
 -type state() :: #state{}.
@@ -346,11 +348,12 @@ init({BootstrapEndpoints, ClientId, Config}) ->
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
   self() ! init,
-  maybe_start_metadata_sync(Config),
+  SyncRef = maybe_start_metadata_sync(Config),
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
+             , sync_ref            = SyncRef
              }}.
 
 %% @private
@@ -366,9 +369,10 @@ handle_info(init, State0) ->
   {noreply, State};
 handle_info(sync, #state{config = Config, producers_sup = Sup} = State) ->
   Children = brod_supervisor3:which_children(Sup),
+  io:format("=========================~P~n", [Children, 1000]),
   NewState = sync_topics_metadata(Children, State),
-  erlang:send_after(sync_interval(Config), self(), sync),
-  {noreply, NewState};
+  Ref = erlang:send_after(sync_interval(Config), self(), sync),
+  {noreply, NewState#state{ sync_ref = Ref }};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
@@ -734,10 +738,9 @@ ensure_binary(ClientId) when is_binary(ClientId) ->
 maybe_start_metadata_sync(Config) ->
   case config(sync_metadata, Config, false) of
     true ->
-      erlang:send_after(sync_interval(Config), self(), sync),
-      ok;
+      erlang:send_after(sync_interval(Config), self(), sync);
     false ->
-      ok
+      undefined
   end.
 
 sync_topics_metadata(Children, State) ->
