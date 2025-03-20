@@ -1059,7 +1059,16 @@ create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs) ->
   brod_utils:create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs).
 
 %% @doc Create partitions(s) in kafka.
-%% See {@link create_topics/4} for more information.
+%%  <ul>
+%%    <li>`topic'
+%%      The topic name.
+%%    </li>
+%%
+%%    <li>`new_partitions'
+%%      The `count` of how many partitions will exist for the topic. current + desired
+%%      The number of `assignment` should be equal to the number of new partitions.
+%%      Each list for assignment specify the prefferred broker ids to assign
+%%    </li>
 %%
 %% Example:
 %% ```
