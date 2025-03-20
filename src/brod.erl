@@ -96,6 +96,8 @@
 %% Topic APIs
 -export([ create_topics/3
         , create_topics/4
+        , create_partitions/3
+        , create_partitions/4
         , delete_topics/3
         , delete_topics/4
         ]).
@@ -190,6 +192,7 @@
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
 -type topic_config() :: kpro:struct().
+-type topic_partition_config() :: kpro:struct().
 -type partition() :: kpro:partition().
 -type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset(). %% Physical offset (an integer)
@@ -1048,6 +1051,35 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
+
+%% @equiv create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, [])
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()}) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs) ->
+  brod_utils:create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs).
+
+%% @doc Create partitions(s) in kafka.
+%% See {@link create_topics/4} for more information.
+%%
+%% Example:
+%% ```
+%% > TopicPartitionConfigs = [
+%%       #{
+%%         topic: <<"my_topic">>,
+%%          new_partitions: #{
+%%            count: 6,
+%%            assignment: [[1,2], [2,3], [3,1]]
+%%        }
+%%      }
+%%   ].
+%% > brod:create_partitions([{"localhost", 9092}], TopicPartitionConfigs, #{timeout => 1000}, []).
+%% ok
+%% '''
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, Options) ->
+  brod_utils:create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, Options).
 
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->

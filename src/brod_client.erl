@@ -72,6 +72,7 @@
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 -define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
 -define(DEFAULT_UNKNOWN_TOPIC_CACHE_TTL, 120000).
+-define(DEFAULT_SYNC_METADATA_INTERVAL_SECONDS, 60).
 
 %% ClientId as ets table name.
 -define(ETS(ClientId), ClientId).
@@ -345,6 +346,7 @@ init({BootstrapEndpoints, ClientId, Config}) ->
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
   self() ! init,
+  maybe_start_metadata_sync(Config),
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
@@ -362,6 +364,11 @@ handle_info(init, State0) ->
                       , consumers_sup       = ConsumersSupPid
                       },
   {noreply, State};
+handle_info(sync, #state{config = Config, producers_sup = Sup} = State) ->
+  Children = brod_supervisor3:which_children(Sup),
+  NewState = sync_topics_metadata(Children, State),
+  erlang:send_after(sync_interval(Config), self(), sync),
+  {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
@@ -695,6 +702,11 @@ timeout(Config) ->
              ?DEFAULT_GET_METADATA_TIMEOUT_SECONDS),
   timer:seconds(T).
 
+sync_interval(Config) ->
+  T = config(sync_metadata_interval_seconds, Config,
+             ?DEFAULT_SYNC_METADATA_INTERVAL_SECONDS),
+  timer:seconds(T).
+
 config(Key, Config, Default) ->
   proplists:get_value(Key, Config, Default).
 
@@ -718,6 +730,35 @@ ensure_binary(ClientId) when is_atom(ClientId) ->
   ensure_binary(atom_to_binary(ClientId, utf8));
 ensure_binary(ClientId) when is_binary(ClientId) ->
   ClientId.
+
+maybe_start_metadata_sync(Config) ->
+  case config(sync_metadata, Config, false) of
+    true ->
+      erlang:send_after(sync_interval(Config), self(), sync),
+      ok;
+    false ->
+      ok
+  end.
+
+sync_topics_metadata(Children, State) ->
+  lists:foldl(fun({Topic, _, _, _}, StateAcc) -> sync_topic_metadata(Topic, StateAcc) end, State, Children).
+
+sync_topic_metadata(Topic, State) ->
+  case do_get_metadata(Topic, State) of
+    {{ok, #{ topics := [ #{ partitions := Partitions } ] }}, NewState} ->
+      lists:foreach(fun (Partition) -> sync_topic_partition(Partition, Topic, State) end, Partitions),
+      NewState;
+    {{error, _}, NewState} ->
+      NewState
+  end.
+
+sync_topic_partition(#{ partition_index := Partition }, Topic, #state{ producers_sup = Sup, client_id = Client, config = Config}) ->
+  case brod_producers_sup:find_producer(Sup, Topic, Partition) of
+    {ok, _} ->
+      ok;
+    {error, {producer_not_found, _, _}} ->
+      brod_producer:start_link(Client, Topic, Partition, Config)
+  end.
 
 -spec maybe_connect(state(), endpoint()) ->
         {Result, state()} when Result :: {ok, pid()} | {error, any()}.
