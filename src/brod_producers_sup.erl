@@ -22,13 +22,16 @@
 -module(brod_producers_sup).
 -behaviour(brod_supervisor3).
 
--export([ init/1
-        , post_init/1
-        , start_link/0
-        , find_producer/3
-        , start_producer/4
-        , stop_producer/2
-        ]).
+-export([
+    init/1,
+    post_init/1,
+    start_link/0,
+    find_producer/3,
+    start_producer/4,
+    start_producer/5,
+    stop_producer/2,
+    producer_spec/4
+]).
 
 -include("brod_int.hrl").
 
@@ -51,107 +54,127 @@
 %% @end
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-  brod_supervisor3:start_link(?MODULE, ?TOPICS_SUP).
+    brod_supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
 %% @doc Dynamically start a per-topic supervisor
 -spec start_producer(pid(), pid(), brod:topic(), brod:producer_config()) ->
-                        {ok, pid()} | {error, any()}.
+    {ok, pid()} | {error, any()}.
 start_producer(SupPid, ClientPid, TopicName, Config) ->
-  Spec = producers_sup_spec(ClientPid, TopicName, Config),
-  brod_supervisor3:start_child(SupPid, Spec).
+    Spec = producers_sup_spec(ClientPid, TopicName, Config),
+    brod_supervisor3:start_child(SupPid, Spec).
+
+%% @doc Dynamically start a per partition producer
+-spec start_producer(pid(), pid(), brod:topic(), non_neg_integer(), brod:producer_config()) ->
+    {ok, pid()} | {error, any()}.
+start_producer(SupPid, ClientPid, TopicName, Partition, Config) ->
+    Spec = producer_spec(ClientPid, TopicName, Partition, Config),
+    brod_supervisor3:start_child(SupPid, Spec).
 
 %% @doc Dynamically stop a per-topic supervisor
 -spec stop_producer(pid(), brod:topic()) -> ok | {}.
 stop_producer(SupPid, TopicName) ->
-  brod_supervisor3:terminate_child(SupPid, TopicName),
-  brod_supervisor3:delete_child(SupPid, TopicName).
+    brod_supervisor3:terminate_child(SupPid, TopicName),
+    brod_supervisor3:delete_child(SupPid, TopicName).
 
 %% @doc Find a brod_producer process pid running under ?PARTITIONS_SUP.
 -spec find_producer(pid(), brod:topic(), brod:partition()) ->
-                       {ok, pid()} | {error, Reason} when
-        Reason :: {producer_not_found, brod:topic()}
-                | {producer_not_found, brod:topic(), brod:partition()}
-                | {producer_down, any()}.
+    {ok, pid()} | {error, Reason}
+when
+    Reason ::
+        {producer_not_found, brod:topic()}
+        | {producer_not_found, brod:topic(), brod:partition()}
+        | {producer_down, any()}.
 find_producer(SupPid, Topic, Partition) ->
-  case brod_supervisor3:find_child(SupPid, Topic) of
-    [] ->
-      %% no such topic worker started,
-      %% check sys.config or brod:start_link_client args
-      {error, {producer_not_found, Topic}};
-    [PartitionsSupPid] ->
-      try
-        case brod_supervisor3:find_child(PartitionsSupPid, Partition) of
-          [] ->
-            %% no such partition?
-            {error, {producer_not_found, Topic, Partition}};
-          [Pid] ->
-            {ok, Pid}
-        end
-      catch exit : {Reason, _} ->
-        {error, {producer_down, Reason}}
-      end
-  end.
+    case brod_supervisor3:find_child(SupPid, Topic) of
+        [] ->
+            %% no such topic worker started,
+            %% check sys.config or brod:start_link_client args
+            {error, {producer_not_found, Topic}};
+        [PartitionsSupPid] ->
+            try
+                case brod_supervisor3:find_child(PartitionsSupPid, Partition) of
+                    [] ->
+                        %% no such partition?
+                        {error, {producer_not_found, Topic, Partition}};
+                    [Pid] ->
+                        {ok, Pid}
+                end
+            catch
+                exit:{Reason, _} ->
+                    {error, {producer_down, Reason}}
+            end
+    end.
 
 %% @doc brod_supervisor3 callback.
 init(?TOPICS_SUP) ->
-  {ok, {{one_for_one, 0, 1}, []}};
+    {ok, {{one_for_one, 0, 1}, []}};
 init({?PARTITIONS_SUP, _ClientPid, _Topic, _Config}) ->
-  post_init.
+    post_init.
 
 post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
-  case brod_client:get_partitions_count(ClientPid, Topic) of
-    {ok, PartitionsCnt} ->
-      Children = [ producer_spec(ClientPid, Topic, Partition, Config)
-                 || Partition <- lists:seq(0, PartitionsCnt - 1) ],
-      %% Producer may crash in case of exception in case of network failure,
-      %% or error code received in produce response (e.g. leader transition)
-      %% In any case, restart right away will erry likely fail again.
-      %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
-      %% before supervisor tries to restart it.
-      {ok, {{one_for_one, 0, 1}, Children}};
-    {error, Reason} ->
-      {error, Reason}
-  end.
+    case brod_client:get_partitions_count(ClientPid, Topic) of
+        {ok, PartitionsCnt} ->
+            Children = [
+                producer_spec(ClientPid, Topic, Partition, Config)
+             || Partition <- lists:seq(0, PartitionsCnt - 1)
+            ],
+            %% Producer may crash in case of exception in case of network failure,
+            %% or error code received in produce response (e.g. leader transition)
+            %% In any case, restart right away will erry likely fail again.
+            %% Hence set MaxR=0 here to cool-down for a configurable N-seconds
+            %% before supervisor tries to restart it.
+            {ok, {{one_for_one, 0, 1}, Children}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 producers_sup_spec(ClientPid, TopicName, Config0) ->
-  {Config, DelaySecs} =
-    take_delay_secs(Config0, topic_restart_delay_seconds,
-                    ?DEFAULT_PARTITIONS_SUP_RESTART_DELAY),
-  Args = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, Config}],
-  { _Id       = TopicName
-  , _Start    = {brod_supervisor3, start_link, Args}
-  , _Restart  = {permanent, DelaySecs}
-  , _Shutdown = infinity
-  , _Type     = supervisor
-  , _Module   = [?MODULE]
-  }.
+    {Config, DelaySecs} =
+        take_delay_secs(
+            Config0,
+            topic_restart_delay_seconds,
+            ?DEFAULT_PARTITIONS_SUP_RESTART_DELAY
+        ),
+    Args = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, Config}],
+    {
+        _Id = TopicName,
+        _Start = {brod_supervisor3, start_link, Args},
+        _Restart = {permanent, DelaySecs},
+        _Shutdown = infinity,
+        _Type = supervisor,
+        _Module = [?MODULE]
+    }.
 
 producer_spec(ClientPid, Topic, Partition, Config0) ->
-  {Config, DelaySecs} =
-    take_delay_secs(Config0, partition_restart_delay_seconds,
-                    ?DEFAULT_PRODUCER_RESTART_DELAY),
-  Args      = [ClientPid, Topic, Partition, Config],
-  { _Id       = Partition
-  , _Start    = {brod_producer, start_link, Args}
-  , _Restart  = {permanent, DelaySecs}
-  , _Shutdown = 5000
-  , _Type     = worker
-  , _Module   = [brod_producer]
-  }.
+    {Config, DelaySecs} =
+        take_delay_secs(
+            Config0,
+            partition_restart_delay_seconds,
+            ?DEFAULT_PRODUCER_RESTART_DELAY
+        ),
+    Args = [ClientPid, Topic, Partition, Config],
+    {
+        _Id = Partition,
+        _Start = {brod_producer, start_link, Args},
+        _Restart = {permanent, DelaySecs},
+        _Shutdown = 5000,
+        _Type = worker,
+        _Module = [brod_producer]
+    }.
 
 %%%_* Internal Functions =======================================================
 
 -spec take_delay_secs(brod:producer_config(), atom(), integer()) ->
-        {brod:producer_config(), integer()}.
+    {brod:producer_config(), integer()}.
 take_delay_secs(Config, Name, DefaultValue) ->
-  Secs =
-    case proplists:get_value(Name, Config) of
-      N when is_integer(N) andalso N >= ?MIN_SUPERVISOR3_DELAY_SECS ->
-        N;
-      _ ->
-        DefaultValue
-    end,
-  {proplists:delete(Name, Config), Secs}.
+    Secs =
+        case proplists:get_value(Name, Config) of
+            N when is_integer(N) andalso N >= ?MIN_SUPERVISOR3_DELAY_SECS ->
+                N;
+            _ ->
+                DefaultValue
+        end,
+    {proplists:delete(Name, Config), Secs}.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

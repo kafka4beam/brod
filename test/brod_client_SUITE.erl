@@ -29,7 +29,7 @@
 -export([ auth/6 ]).
 
 %% Test cases
--export([ t_optional_metadata_syncing/1
+-export([ t_optional_partitions_syncing/1
         , t_skip_unreachable_endpoint/1
         , t_no_reachable_endpoint/1
         , t_call_bad_client_id/1
@@ -80,7 +80,7 @@
         , consumers_sup        :: pid()
         , config               :: list()
         , workers_tab          :: ets:tab()
-        , sync_ref             :: reference()
+        , partitions_sync      :: reference()
         }).
 
 %%%_* ct callbacks =============================================================
@@ -129,16 +129,20 @@ all() ->
 
 %%%_* Test functions ===========================================================
 
-t_optional_metadata_syncing(Config) when is_list(Config) ->
+t_optional_partitions_syncing(Config) when is_list(Config) ->
   Client0 = has_sync,
-  Config0 = [{sync_metadata, true}],
-  {ok, #state{ sync_ref = HasRef }} = brod_client:init({?HOSTS, Client0, Config0}),
-  ?assertNot(HasRef =:= undefined),
+  Config0 = [{sync_partitions, true}],
+  ok = start_client(?HOSTS, Client0, Config0),
+  #state{ partitions_sync = Pid0 } = sys:get_state(Client0),
+  ?assert(is_process_alive(Pid0)),
+  ok = brod:stop_client(Client0),
 
-  Config1 = [{sync_metadata, false}],
+  Config1 = [{sync_partitions, false}],
   Client1 = no_sync,
-  {ok, #state{ sync_ref = NoRef }} = brod_client:init({?HOSTS, Client1, Config1}),
-  ?assertMatch(undefined, NoRef).
+  ok = start_client(?HOSTS, Client1, Config1),
+  #state{ partitions_sync = Pid1 } = sys:get_state(Client1),
+  ?assertMatch(undefined, Pid1),
+  ok = brod:stop_client(Client1).
 
 t_get_partitions_count_safe(Config) when is_list(Config) ->
   Client = ?FUNCTION_NAME,
@@ -150,7 +154,6 @@ t_get_partitions_count_safe(Config) when is_list(Config) ->
   Res2 = brod_client:lookup_partitions_count_cache(Client, Topic),
   ?assertMatch({error, unknown_topic_or_partition}, Res2),
   ok = brod:stop_client(Client).
-
 
 t_get_partitions_count_configure_cache_ttl(Config) when is_list(Config) ->
   Client = ?FUNCTION_NAME,
