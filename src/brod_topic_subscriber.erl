@@ -44,6 +44,7 @@
         , handle_call/3
         , handle_cast/2
         , handle_info/2
+        , handle_continue/2
         , init/1
         , terminate/2
         ]).
@@ -290,7 +291,7 @@ init(Config) ->
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, InitData),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
-  self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
+  %%self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
     #state{ client       = Client
           , client_mref  = erlang:monitor(process, Client)
@@ -299,13 +300,10 @@ init(Config) ->
           , cb_state     = CbState
           , message_type = MessageType
           },
-  {ok, State}.
+  {ok, State, {continue, ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions)}}.
 
 %% @private
-handle_info({_ConsumerPid, #kafka_message_set{} = MsgSet}, State0) ->
-  State = handle_consumer_delivery(MsgSet, State0),
-  {noreply, State};
-handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
+handle_continue(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
                                    Partitions0),
              #state{ client = Client
                    , topic  = Topic
@@ -337,7 +335,12 @@ handle_info(?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets,
       end, Partitions),
   NewState = State#state{consumers = Consumers},
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS),
-  {noreply, NewState};
+  {noreply, NewState}.
+
+%% @private
+handle_info({_ConsumerPid, #kafka_message_set{} = MsgSet}, State0) ->
+  State = handle_consumer_delivery(MsgSet, State0),
+  {noreply, State};
 handle_info(?LO_CMD_SUBSCRIBE_PARTITIONS, State) ->
   {ok, #state{} = NewState} = subscribe_partitions(State),
   _ = send_lo_cmd(?LO_CMD_SUBSCRIBE_PARTITIONS, ?RESUBSCRIBE_DELAY),
