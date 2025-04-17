@@ -330,7 +330,6 @@ init({SupName, Mod, Args}) ->
         {ok, {SupFlags, StartSpec}} ->
             do_init(SupName, SupFlags, StartSpec, Mod, Args);
         post_init ->
-            %%self() ! {post_init, SupName, Mod, Args},
             {ok, #state{}, {continue, {post_init, SupName, Mod, Args}}};
         ignore ->
             ignore;

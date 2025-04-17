@@ -291,7 +291,6 @@ init(Config) ->
   {ok, CommittedOffsets, CbState} = CbModule:init(Topic, InitData),
   ok = brod_utils:assert_client(Client),
   ok = brod_utils:assert_topic(Topic),
-  %%self() ! ?LO_CMD_START_CONSUMER(ConsumerConfig, CommittedOffsets, Partitions),
   State =
     #state{ client       = Client
           , client_mref  = erlang:monitor(process, Client)
