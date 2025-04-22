@@ -1,10 +1,14 @@
 # Changelog
 
+- 4.4.1
+  - Upgrade `kafka_protocol` from 4.2.3 to 4.2.5 for:
+    - `crc32c` performance improvements on ARM.
+
 - 4.4.0
   - Support `zstd` compression.
   - Upgrade `kafka_protocol` from 4.1.10 to 4.2.3 for:
     - logging improvements
-    - `crc32c` performance improvements
+    - `crc32c` performance improvements on x86
 
 - 4.3.3
   - Catch `exit` exception when group coordinator calls group member (owner) process.
