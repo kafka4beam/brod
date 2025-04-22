@@ -164,7 +164,7 @@
 %%
 %% <li>`message_type': The type of message that is going to be handled
 %% by the callback module. Can be either message or message set.
-%% Optional, defaults to `message'</li>
+%% Optional, defaults to `message_set'</li>
 %%
 %% <li>`init_data': The `term()' that is going to be passed to
 %% `CbModule:init/2' when initializing the subscriber. Optional,

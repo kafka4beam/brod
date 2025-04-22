@@ -7,12 +7,12 @@ on:
     branches:
       - master
 env:
-  OTP_VERSION: "26"
-  REBAR_VERSION: "3.23.0"
+  OTP_VERSION: "27"
+  REBAR_VERSION: "3.24.0"
 
 jobs:
   lint:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Lint
     steps:
       - name: Checkout
@@ -39,12 +39,12 @@ jobs:
       - name: Lint, Dialyzer & Xref
         run: rebar3 do compile,lint,dialyzer,xref
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: OTP ${{matrix.otp}} / Kafka ${{matrix.kafka}}
     strategy:
       fail-fast: false
       matrix:
-        otp: ["26", "27"]
+        otp: ["26.2", "27.2"]
         kafka: ["0.9", "0.10", "0.11", "2.8", "1.1", "3.6"]
     steps:
       - name: Checkout
@@ -81,7 +81,7 @@ jobs:
         run: rebar3 do cover
   docs:
     needs: build
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Publish Documentation
     steps:
       - name: Checkout
