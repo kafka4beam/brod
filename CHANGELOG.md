@@ -1,4 +1,7 @@
 # Changelog
+- 4.5.0
+  - Expose `create_partitions` from the underlying kafka_protocol
+  - Allow partitions to automatically have producers started for newly discovered partitions.
 
 - 4.4.1
   - Upgrade `kafka_protocol` from 4.2.3 to 4.2.5 for:
