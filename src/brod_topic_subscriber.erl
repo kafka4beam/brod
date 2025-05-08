@@ -273,7 +273,7 @@ ack(Pid, Partition, Offset) ->
 %%%_* gen_server callbacks =====================================================
 
 %% @private
--spec init(topic_subscriber_config()) -> {ok, state()}.
+-spec init(topic_subscriber_config()) -> {ok, state(), {continue, any()}}.
 init(Config) ->
   Defaults = #{ message_type      => message_set
               , init_data         => undefined
