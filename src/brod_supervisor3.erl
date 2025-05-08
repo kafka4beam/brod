@@ -82,7 +82,7 @@
 
 %% Internal exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         handle_continue/2, terminate/2, code_change/3]).
 -export([try_again_restart/3]).
 
 %%--------------------------------------------------------------------------
@@ -330,8 +330,7 @@ init({SupName, Mod, Args}) ->
         {ok, {SupFlags, StartSpec}} ->
             do_init(SupName, SupFlags, StartSpec, Mod, Args);
         post_init ->
-            self() ! {post_init, SupName, Mod, Args},
-            {ok, #state{}};
+            {ok, #state{}, {continue, {post_init, SupName, Mod, Args}}};
         ignore ->
             ignore;
         Error ->
@@ -669,6 +668,12 @@ handle_info({delayed_restart, {RestartType, _Reason, Child}}, State) ->
         _What ->
             {noreply, State}
     end;
+
+handle_info(Msg, State) ->
+    error_logger:error_msg("Supervisor received unexpected message: ~p~n",
+                           [Msg]),
+    {noreply, State}.
+
 %% [1] When we receive a delayed_restart message we want to reset the
 %% restarts field since otherwise the MaxT might not have elapsed and
 %% we would just delay again and again. Since a common use of the
@@ -676,7 +681,7 @@ handle_info({delayed_restart, {RestartType, _Reason, Child}}, State) ->
 %% (so that we don't end up bouncing around in non-delayed restarts)
 %% this is important.
 
-handle_info({post_init, SupName, Mod, Args}, State0) ->
+handle_continue({post_init, SupName, Mod, Args}, State0) ->
     Res = case Mod:post_init(Args) of
               {ok, {SupFlags, StartSpec}} ->
                   do_init(SupName, SupFlags, StartSpec, Mod, Args);
@@ -687,12 +692,7 @@ handle_info({post_init, SupName, Mod, Args}, State0) ->
     case Res of
         {ok, NewState} -> {noreply, NewState};
         {stop, Reason} -> {stop, Reason, State0}
-    end;
-
-handle_info(Msg, State) ->
-    error_logger:error_msg("Supervisor received unexpected message: ~p~n",
-                           [Msg]),
-    {noreply, State}.
+    end.
 
 %%
 %% Terminate this server.

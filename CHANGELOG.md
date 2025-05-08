@@ -3,6 +3,7 @@
 - 4.4.1
   - Upgrade `kafka_protocol` from 4.2.3 to 4.2.5 for:
     - `crc32c` performance improvements on ARM.
+  - Replace self messaging in `init` with `handle_continue`
 
 - 4.4.0
   - Support `zstd` compression.

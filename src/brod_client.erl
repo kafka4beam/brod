@@ -61,6 +61,7 @@
         , handle_call/3
         , handle_cast/2
         , handle_info/2
+        , handle_continue/2
         , init/1
         , terminate/2
         ]).
@@ -344,15 +345,14 @@ init({BootstrapEndpoints, ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
-  self() ! init,
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
              , workers_tab         = Tab
-             }}.
+             }, {continue, init}}.
 
 %% @private
-handle_info(init, State0) ->
+handle_continue(init, State0) ->
   Endpoints = State0#state.bootstrap_endpoints,
   State1 = ensure_metadata_connection(State0),
   {ok, ProducersSupPid} = brod_producers_sup:start_link(),
@@ -361,7 +361,9 @@ handle_info(init, State0) ->
                       , producers_sup       = ProducersSupPid
                       , consumers_sup       = ConsumersSupPid
                       },
-  {noreply, State};
+  {noreply, State}.
+
+%% @private
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
