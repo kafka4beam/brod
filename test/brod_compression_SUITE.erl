@@ -230,14 +230,8 @@ start_client(Hosts, ClientId) ->
 client_config() ->
   kafka_test_helper:client_config().
 
-kafka_version() ->
-  case os:getenv("KAFKA_VERSION") of
-    false ->
-      ?LATEST_KAFKA_VERSION;
-    Vsn ->
-      [Major, Minor | _] = string:tokens(Vsn, "."),
-      {list_to_integer(Major), list_to_integer(Minor)}
-  end.
+kafka_version() -> kafka_test_helper:kafka_version().
+
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

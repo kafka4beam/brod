@@ -478,25 +478,9 @@ mock_connection(EP) ->
     end,
   ok = meck:expect(kpro_connection, start, StartFun),
   ok = meck:expect(kpro_connection, get_endpoint, 1, {ok, EP}),
-  ok = meck:expect(kpro_connection, get_api_vsns, 1, {ok, default_versions()}),
   Ref.
 
-default_versions() ->
-  case kafka_test_helper:kafka_version() of
-    ?KAFKA_0_9 ->
-      ?undef;
-    _ ->
-      brod_kafka_apis:supported_versions()
-  end.
-
-kafka_version() ->
-  case os:getenv("KAFKA_VERSION") of
-    false ->
-      ?LATEST_KAFKA_VERSION;
-    Vsn ->
-      [Major, Minor | _] = string:tokens(Vsn, "."),
-      {list_to_integer(Major), list_to_integer(Minor)}
-  end.
+kafka_version() -> kafka_test_helper:kafka_version().
 
 start_client(Hosts, ClientId) -> start_client(Hosts, ClientId, []).
 
