@@ -96,18 +96,13 @@ maybe_zookeeper() ->
       %% Starting from 3.0, --zookeeper is no longer supported, must use --bootstrap-server
       "--bootstrap-server localhost:9092";
     false ->
-      "--zookeeper localhost:2181"
+      "--zookeeper " ++ env("ZOOKEEPER_IP") ++ ":2181"
   end.
 
 kafka_version() ->
-  VsnStr = os:getenv("KAFKA_VERSION"),
-  case VsnStr =:= "" orelse VsnStr =:= false of
-    true ->
-      error("KAFKA_VERSION is not set", []);
-    false ->
-      [Major, Minor | _] = string:tokens(VsnStr, "."),
-      {list_to_integer(Major), list_to_integer(Minor)}
-  end.
+  VsnStr = env("KAFKA_VERSION"),
+  [Major, Minor | _] = string:tokens(VsnStr, "."),
+  {list_to_integer(Major), list_to_integer(Minor)}.
 
 prepare_topic(Topic) when is_binary(Topic) ->
   prepare_topic({Topic, 1});
@@ -212,4 +207,10 @@ kill_process(Pid, Signal) ->
       ok
   after 1000 ->
       ct:fail("timed out waiting for the process to die")
+  end.
+
+env(Var) ->
+  case os:getenv(Var) of
+    [_|_] = Val-> Val;
+    _ -> error({env_var_missing, Var})
   end.

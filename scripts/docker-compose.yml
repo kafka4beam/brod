@@ -1,34 +1,57 @@
+networks:
+  kafka-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${KAFKA_NET}
+
 services:
   zookeeper:
     image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: zookeeper
+    networks:
+      kafka-net:
+        ipv4_address: ${ZOOKEEPER_IP}
     command: run zookeeper
-    network_mode: host
   kafka_1:
     depends_on:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: "kafka-1"
-    network_mode: host
+    networks:
+      kafka-net:
+        ipv4_address: ${KAFKA_1_IP}
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+      - "9094:9094"
+      - "9095:9095"
     environment:
       BROKER_ID: 1
       PLAINTEXT_PORT: 9092
       SSL_PORT: 9093
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
-      ADVERTISED_HOSTNAME: localhost
-      ZOOKEEPER_CONNECT: "localhost:2181"
+      ADVERTISED_HOSTNAME: ${KAFKA_1_IP}
+      ZOOKEEPER_CONNECT: ${ZOOKEEPER_IP}:2181
   kafka_2:
     depends_on:
       - zookeeper
     image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
     container_name: "kafka-2"
-    network_mode: host
+    networks:
+      kafka-net:
+        ipv4_address: ${KAFKA_2_IP}
+    ports:
+      - "9192:9092"
+      - "9193:9093"
+      - "9194:9094"
+      - "9195:9095"
     environment:
       BROKER_ID: 2
-      PLAINTEXT_PORT: 9192
-      SSL_PORT: 9193
-      SASL_SSL_PORT: 9194
-      SASL_PLAINTEXT_PORT: 9195
-      ADVERTISED_HOSTNAME: localhost
-      ZOOKEEPER_CONNECT: "localhost:2181"
+      PLAINTEXT_PORT: 9092
+      SSL_PORT: 9093
+      SASL_SSL_PORT: 9094
+      SASL_PLAINTEXT_PORT: 9095
+      ADVERTISED_HOSTNAME: ${KAFKA_2_IP}
+      ZOOKEEPER_CONNECT: ${ZOOKEEPER_IP}:2181

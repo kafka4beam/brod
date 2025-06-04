@@ -4,6 +4,10 @@ if [ -n "${DEBUG:-}" ]; then
     set -x
 fi
 
+TD="$(cd "$(dirname "$0")" && pwd)"
+
+. "$TD/.env"
+
 docker ps > /dev/null || {
     echo "You must be a member of docker group to run this script"
     exit 1
@@ -52,7 +56,7 @@ case $KAFKA_VERSION in
     ;;
 esac
 
-export KAFKA_IMAGE_VERSION="1.1-${KAFKA_VERSION}"
+export KAFKA_IMAGE_VERSION="1.1.1-${KAFKA_VERSION}"
 echo "env KAFKA_IMAGE_VERSION=$KAFKA_IMAGE_VERSION"
 
 KAFKA_MAJOR=$(echo "$KAFKA_VERSION" | cut -d. -f1)
@@ -63,14 +67,12 @@ else
 fi
 
 function bootstrap_opts() {
-  local port="${1:-:9092}"
   if [[ "$NEED_ZOOKEEPER" = true ]]; then
-    echo "--zookeeper localhost:2181"
+    echo "--zookeeper ${ZOOKEEPER_IP}:2181"
   else
-    echo "--bootstrap-server localhost${port}"
+    echo "--bootstrap-server ${KAFKA_1_IP}:9092"
   fi
 }
-TD="$(cd "$(dirname "$0")" && pwd)"
 
 docker_compose -f $TD/docker-compose.yml down || true
 docker_compose -f $TD/docker-compose-kraft.yml down || true
@@ -89,22 +91,15 @@ MAX_WAIT_SEC=10
 function wait_for_kafka() {
   local which_kafka="$1"
   local n=0
-  local port=':9092'
   local topic_list listener
-  if [ "$which_kafka" = 'kafka-2' ]; then
-    port=':9192'
-  fi
   while true; do
-    listener="$(netstat -tnlp 2>&1 | grep $port || true)"
-    if [ "$listener" != '' ]; then
-      cmd="opt/kafka/bin/kafka-topics.sh $(bootstrap_opts $port) --list"
-      topic_list="$(docker exec $which_kafka $cmd 2>&1)"
-      if [ "${topic_list-}" = '' ]; then
-          break
-      fi
+    cmd="opt/kafka/bin/kafka-topics.sh $(bootstrap_opts) --list"
+    topic_list="$(docker exec $which_kafka $cmd 2>&1)"
+    if [ "${topic_list-}" = '' ]; then
+      break
     fi
     if [ $n -gt $MAX_WAIT_SEC ]; then
-      echo "timeout waiting for kafka-1"
+      echo "timeout waiting for $which_kafka"
       echo "last print: ${topic_list:-}"
       exit 1
     fi
@@ -149,7 +144,7 @@ else
   MAYBE_NEW_CONSUMER="--new-consumer"
 fi
 # this is to warm-up kafka group coordinator for tests
-docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 $MAYBE_NEW_CONSUMER --group test-group --describe > /dev/null 2>&1 || true
+docker exec kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server ${KAFKA_1_IP}:9092 $MAYBE_NEW_CONSUMER --group test-group --describe > /dev/null 2>&1 || true
 
 # for kafka 0.11 or later, add sasl-scram test credentials
 if [[ "$KAFKA_VERSION" != 0.9* ]] && [[ "$KAFKA_VERSION" != 0.10* ]]; then

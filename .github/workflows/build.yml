@@ -65,7 +65,9 @@ jobs:
       - name: Run tests
         run: |
           export KAFKA_VERSION=${{ matrix.vsn[1] }}
-          echo "Running Kafka ${KAFKA_VERSION}"
+          . scripts/.env
+          export ZOOKEEPER_IP
+          echo "Running Kafka ${KAFKA_VERSION}, Zookeeper: ${ZOOKEEPER_IP}"
           make test-env
           make t
       - name: Store test logs

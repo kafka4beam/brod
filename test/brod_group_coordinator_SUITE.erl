@@ -60,7 +60,7 @@ end_per_suite(_Config) -> ok.
 
 common_init_per_testcase(_Case, Config) ->
   {ok, _} = application:ensure_all_started(brod),
-  BootstrapHosts = [{"localhost", 9092}],
+  BootstrapHosts = kafka_test_helper:bootstrap_hosts(),
   ClientConfig   = client_config(),
   ok = brod:start_client(BootstrapHosts, ?CLIENT_ID, ClientConfig),
   ok = brod:start_client(BootstrapHosts, ?OTHER_CLIENT_ID, ClientConfig),
@@ -141,7 +141,7 @@ t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
   brod_group_coordinator:update_topics(GroupCoordinatorPid, [?TOPIC1]),
   ?assert_receive({assignments_revoked, 1}, ok),
   GroupCoordinatorPid ! continue,
-  {GenerationId2, TopicAssignments} = 
+  {GenerationId2, TopicAssignments} =
     ?assert_receive({assignments_received, 1, GId2, TA}, {GId2, TA}),
   ?assert(GenerationId2 > GenerationId1),
   ?assert(lists:all(
