@@ -21,6 +21,7 @@
 
 -export([ default_version/1
         , pick_version/2
+        , supported_versions/0
         , start_link/0
         , stop/0
         ]).
@@ -136,25 +137,31 @@ lookup_vsn_range(Conn, API) ->
       maps:get(API, Vsns, none)
   end.
 
+supported_versions() ->
+  #{ produce => {0, 7}
+   , fetch => {0, 10}
+   , list_offsets => {0, 2}
+   , metadata => {0, 2}
+   , offset_commit => {2, 2}
+   , offset_fetch => {1, 2}
+   , find_coordinator => {0, 0}
+   , join_group => {0, 6}
+   , heartbeat => {0, 4}
+   , leave_group => {0, 4}
+   , sync_group => {0, 0}
+   , describe_groups => {0, 5}
+   , list_groups => {0, 3}
+   , create_topics => {0, 4}
+   , delete_topics => {0, 4}
+   }.
+
 %% Do not change range without verification.
 supported_versions(API) ->
-  case API of
-    produce          -> {0, 7};
-    fetch            -> {0, 10};
-    list_offsets     -> {0, 2};
-    metadata         -> {0, 2};
-    offset_commit    -> {2, 2};
-    offset_fetch     -> {1, 2};
-    find_coordinator -> {0, 0};
-    join_group       -> {0, 1};
-    heartbeat        -> {0, 0};
-    leave_group      -> {0, 0};
-    sync_group       -> {0, 0};
-    describe_groups  -> {0, 0};
-    list_groups      -> {0, 0};
-    create_topics    -> {0, 0};
-    delete_topics    -> {0, 0};
-    _                -> erlang:error({unsupported_api, API})
+  try
+    maps:get(API, supported_versions())
+  catch
+    _ : _ ->
+      erlang:error({unsupported_api, API})
   end.
 
 monitor_connection(Conn) ->

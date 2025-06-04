@@ -175,7 +175,12 @@ t_drop_aborted(kafka_version_match) ->
   has_txn();
 t_drop_aborted(Config) when is_list(Config) ->
   test_drop_aborted(Config, true),
-  test_drop_aborted(Config, false).
+  case kafka_test_helper:kafka_version() of
+    {Major, _} when Major < 1 ->
+      test_drop_aborted(Config, false);
+    _ ->
+      ok
+  end.
 
 %% When QueryApiVsn is set to false,
 %% brod will use lowest supported API version.
