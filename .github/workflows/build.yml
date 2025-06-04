@@ -40,12 +40,11 @@ jobs:
         run: rebar3 do compile,lint,dialyzer,xref
   build:
     runs-on: ubuntu-22.04
-    name: OTP ${{matrix.otp}} / Kafka ${{matrix.kafka}}
+    name: OTP ${{matrix.vsn[0]}} / Kafka ${{matrix.vsn[1]}}
     strategy:
       fail-fast: false
       matrix:
-        otp: ["26.2", "27.2"]
-        kafka: ["0.9", "0.10", "0.11", "2.8", "1.1", "3.6"]
+        vsn: [["26.2", "0.9"], ["27.2", "0.10"], ["26.2", "0.11"], ["27.2", "1.1"], ["26.2", "2.8"], ["27.2", "3.9"], ["27.2", "4.0"]]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -53,19 +52,19 @@ jobs:
         uses: actions/cache@v3
         with:
           path: _build
-          key: ${{ runner.os }}-${{ matrix.otp }}-rebar-${{ hashFiles('**/rebar.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.otp }}-rebar-
+          key: ${{ runner.os }}-${{ matrix.vsn[0] }}-rebar-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.vsn[0] }}-rebar-
       - name: Install Erlang
         uses: erlef/setup-beam@v1
         with:
           version-type: strict
-          otp-version: ${{matrix.otp}}
+          otp-version: ${{matrix.vsn[0]}}
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Compile
         run: rebar3 do compile
       - name: Run tests
         run: |
-          export KAFKA_VERSION=${{ matrix.kafka }}
+          export KAFKA_VERSION=${{ matrix.vsn[1] }}
           echo "Running Kafka ${KAFKA_VERSION}"
           make test-env
           make t
@@ -73,7 +72,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ct-logs-otp-${{matrix.otp}}-kafka-${{matrix.kafka}}
+          name: ct-logs-otp-${{matrix.vsn[0]}}-kafka-${{matrix.vsn[1]}}
           path: _build/test/logs
       - name: Create Cover Reports
         env:

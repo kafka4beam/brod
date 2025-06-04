@@ -1,0 +1,39 @@
+services:
+  kafka_1:
+    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    container_name: 'kafka-1'
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+      - "9094:9094"
+      - "9095:9095"
+    environment:
+      BROKER_ID: 1
+      CONTROLLER_PORT: 9090
+      INNER_PORT: 9091
+      PLAINTEXT_PORT: 9092
+      SSL_PORT: 9093
+      SASL_SSL_PORT: 9094
+      SASL_PLAINTEXT_PORT: 9095
+      ADVERTISED_HOSTNAME: localhost
+      INNER_HOSTNAME: kafka-1
+      VOTERS: "1@kafka-1:9090,2@kafka-2:9090"
+  kafka_2:
+    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    container_name: 'kafka-2'
+    ports:
+      - "9192:9192"
+      - "9193:9193"
+      - "9194:9194"
+      - "9195:9195"
+    environment:
+      BROKER_ID: 2
+      CONTROLLER_PORT: 9090
+      INNER_PORT: 9091
+      PLAINTEXT_PORT: 9192
+      SSL_PORT: 9193
+      SASL_SSL_PORT: 9194
+      SASL_PLAINTEXT_PORT: 9195
+      ADVERTISED_HOSTNAME: localhost
+      INNER_HOSTNAME: kafka-2
+      VOTERS: "1@kafka-1:9090,2@kafka-2:9090"
