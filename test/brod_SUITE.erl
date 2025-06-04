@@ -45,6 +45,7 @@ init_per_suite(Config) ->
     {0, 9} ->
       {skip, "no_topic_manaegment_apis"};
     _ ->
+      {ok, _} = application:ensure_all_started(brod),
       Config
   end.
 
