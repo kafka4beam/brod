@@ -89,25 +89,20 @@ client_config() ->
   end.
 
 maybe_zookeeper() ->
-  case kafka_version() of
-    {3, _} ->
+  {Major, _} = kafka_version(),
+  case Major >= 3 of
+    true ->
       %% Kafka 2.2 started supporting --bootstap-server, but 2.x still supports --zookeeper
       %% Starting from 3.0, --zookeeper is no longer supported, must use --bootstrap-server
       "--bootstrap-server localhost:9092";
-    _ ->
-      "--zookeeper localhost:2181"
+    false ->
+      "--zookeeper " ++ env("ZOOKEEPER_IP") ++ ":2181"
   end.
 
 kafka_version() ->
-  VsnStr = os:getenv("KAFKA_VERSION"),
-  case VsnStr =:= "" orelse VsnStr =:= false of
-    true ->
-      ct:pal("KAFKA_VERSION is not set, defaulting to 3.6", []),
-      {3, 6};
-    false ->
-      [Major, Minor | _] = string:tokens(VsnStr, "."),
-      {list_to_integer(Major), list_to_integer(Minor)}
-  end.
+  VsnStr = env("KAFKA_VERSION"),
+  [Major, Minor | _] = string:tokens(VsnStr, "."),
+  {list_to_integer(Major), list_to_integer(Minor)}.
 
 prepare_topic(Topic) when is_binary(Topic) ->
   prepare_topic({Topic, 1});
@@ -127,7 +122,8 @@ create_topic(Name, NumPartitions, NumReplicas) ->
   Create = "/opt/kafka/bin/kafka-topics.sh " ++ maybe_zookeeper() ++
     " --create --partitions ~p --replication-factor ~p"
     " --topic ~s --config min.insync.replicas=1",
-  exec_in_kafka_container(Create, [NumPartitions, NumReplicas, Name]).
+  0 = exec_in_kafka_container(Create, [NumPartitions, NumReplicas, Name]),
+  wait_for_topic_by_describe(Name).
 
 exec_in_kafka_container(FMT, Args) ->
   CMD0 = lists:flatten(io_lib:format(FMT, Args)),
@@ -135,6 +131,22 @@ exec_in_kafka_container(FMT, Args) ->
   Port = open_port({spawn, CMD}, [exit_status, stderr_to_stdout]),
   ?log(notice, "Running ~s~nin kafka container", [CMD0]),
   collect_port_output(Port, CMD).
+
+%% Kafka 3.9 in KRaft mode may not see the topic immediately after creation.
+wait_for_topic_by_describe(Name) ->
+  wait_for_topic_by_describe(Name, 0, undefined).
+
+wait_for_topic_by_describe(_Name, Attempt, Reason) when Attempt >= 10 ->
+  error({failed_to_create_topic, Reason});
+wait_for_topic_by_describe(Name, Attempt, _Reason) ->
+  Describe = "/opt/kafka/bin/kafka-topics.sh " ++ maybe_zookeeper() ++ " --describe --topic ~s",
+  try
+      0 = exec_in_kafka_container(Describe, [Name])
+  catch
+    C:E ->
+      timer:sleep(100),
+      wait_for_topic_by_describe(Name, Attempt + 1, {C, E})
+  end.
 
 collect_port_output(Port, CMD) ->
   receive
@@ -212,4 +224,10 @@ kill_process(Pid, Signal) ->
       ok
   after 1000 ->
       ct:fail("timed out waiting for the process to die")
+  end.
+
+env(Var) ->
+  case os:getenv(Var) of
+    [_|_] = Val-> Val;
+    _ -> error({env_var_missing, Var})
   end.

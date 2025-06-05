@@ -432,22 +432,33 @@ t_configure_produce_api_vsn({init, Config}) ->
     PidX   -> brod:stop_client(PidX)
   end,
   {ok, ClientPid} = brod:start_link_client(?HOSTS, Client, client_config()),
+  {Major, _} = kafka_test_helper:kafka_version(),
+  Vsn = case Major < 3 of
+    true ->
+      0;
+    false ->
+      4
+  end,
   ok = brod:start_producer(Client, Topic, [{max_linger_ms, 100},
                                            {max_linger_count, 3},
-                                           {produce_req_vsn, 0}]),
-  [{client, Client}, {client_pid, ClientPid} | Config];
+                                           {produce_req_vsn, Vsn}]),
+  [{vsn, Vsn}, {client, Client}, {client_pid, ClientPid} | Config];
 t_configure_produce_api_vsn(Config) when is_list(Config) ->
   Client = ?config(client),
+  Vsn = ?config(vsn),
   Partition = 0,
   {K, V} = make_unique_kv(),
   Msg = #{value => V, headers => [{"foo", "bar"}]},
   {ok, Offset} = brod:produce_sync_offset(Client, ?TOPIC, Partition, K, Msg),
   Bootstrap = {?HOSTS,  client_config()},
   {ok, {_, MsgSet}} = brod:fetch(Bootstrap, ?TOPIC, Partition, Offset),
-  ?assertMatch([#kafka_message{key = K,
-                               value = V,
-                               headers = [] % foo bar is dropped
-                               }], MsgSet).
+  ?assertMatch([#kafka_message{key = K, value = V}], MsgSet),
+  case Vsn =:= 0 of
+    true ->
+      ?assertMatch([#kafka_message{headers = []}], MsgSet);
+    false ->
+      ?assertMatch([#kafka_message{headers = [_]}], MsgSet)
+  end.
 
 %%%_* Help functions ===========================================================
 

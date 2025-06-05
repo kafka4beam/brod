@@ -1,5 +1,17 @@
 # Changelog
 
+- 4.4.2
+  - Expanded API version ranges to support Kafka 4.0.0
+    ```
+    join_group: {0,1} -> {0,6}
+    heartbeat: {0,0} -> {0,4}
+    leave_group: {0,0} -> {0,4}
+    describe_groups: {0,0} -> {0,5}
+    list_groups: {0,0} -> {0,3}
+    create_topics: {0,0} -> {0,4}
+    delete_topics: {0,0} -> {0,4}
+    ```
+
 - 4.4.1
   - Upgrade `kafka_protocol` from 4.2.3 to 4.2.5 for:
     - `crc32c` performance improvements on ARM.

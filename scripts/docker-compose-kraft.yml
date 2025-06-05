@@ -6,18 +6,9 @@ networks:
         - subnet: ${KAFKA_NET}
 
 services:
-  zookeeper:
-    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
-    container_name: zookeeper
-    networks:
-      kafka-net:
-        ipv4_address: ${ZOOKEEPER_IP}
-    command: run zookeeper
   kafka_1:
-    depends_on:
-      - zookeeper
-    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
-    container_name: "kafka-1"
+    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    container_name: 'kafka-1'
     networks:
       kafka-net:
         ipv4_address: ${KAFKA_1_IP}
@@ -28,17 +19,18 @@ services:
       - "9095:9095"
     environment:
       BROKER_ID: 1
+      CONTROLLER_PORT: 9090
+      INNER_PORT: 9091
       PLAINTEXT_PORT: 9092
       SSL_PORT: 9093
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
       ADVERTISED_HOSTNAME: ${KAFKA_1_IP}
-      ZOOKEEPER_CONNECT: ${ZOOKEEPER_IP}:2181
+      INNER_HOSTNAME: ${KAFKA_1_IP}
+      VOTERS: 1@${KAFKA_1_IP}:9090,2@${KAFKA_2_IP}:9090
   kafka_2:
-    depends_on:
-      - zookeeper
-    image: "zmstone/kafka:${KAFKA_IMAGE_VERSION}"
-    container_name: "kafka-2"
+    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    container_name: 'kafka-2'
     networks:
       kafka-net:
         ipv4_address: ${KAFKA_2_IP}
@@ -49,9 +41,12 @@ services:
       - "9195:9095"
     environment:
       BROKER_ID: 2
+      CONTROLLER_PORT: 9090
+      INNER_PORT: 9091
       PLAINTEXT_PORT: 9092
       SSL_PORT: 9093
       SASL_SSL_PORT: 9094
       SASL_PLAINTEXT_PORT: 9095
       ADVERTISED_HOSTNAME: ${KAFKA_2_IP}
-      ZOOKEEPER_CONNECT: ${ZOOKEEPER_IP}:2181
+      INNER_HOSTNAME: ${KAFKA_2_IP}
+      VOTERS: 1@${KAFKA_1_IP}:9090,2@${KAFKA_2_IP}:9090
