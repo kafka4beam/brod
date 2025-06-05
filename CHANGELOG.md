@@ -1,7 +1,7 @@
 # Changelog
 
 - 4.4.2
-  - Expaned API version ranges to support Kafka 4.0.0
+  - Expanded API version ranges to support Kafka 4.0.0
     ```
     join_group: {0,1} -> {0,6}
     heartbeat: {0,0} -> {0,4}
