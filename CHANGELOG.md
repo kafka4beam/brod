@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.4.3
+  - Modify`brod_client:get_metadata` and `brod_client:get_metadata_safe` function for support multiple topics.
+
 - 4.4.2
   - Expanded API version ranges to support Kafka 4.0.0
     ```
