@@ -244,18 +244,24 @@ get_connection(Client, Host, Port) ->
   safe_gen_call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get topic metadata, if topic is `undefined', will fetch ALL metadata.
--spec get_metadata(client(), all | ?undef | topic()) ->
+-spec get_metadata(client(), all | ?undef | topic() | [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
 get_metadata(Client, ?undef) ->
   get_metadata(Client, all);
+get_metadata(Client, all) ->
+  safe_gen_call(Client, {get_metadata, all}, infinity);
+get_metadata(Client, Topics) when is_list(Topics) ->
+  safe_gen_call(Client, {get_metadata, Topics}, infinity);
 get_metadata(Client, Topic) ->
-  safe_gen_call(Client, {get_metadata, Topic}, infinity).
+  safe_gen_call(Client, {get_metadata, [Topic]}, infinity).
 
 %% @doc Ensure not topic auto creation even if Kafka has it enabled.
--spec get_metadata_safe(client(), topic()) ->
+-spec get_metadata_safe(client(), topic() | [topic()]) ->
         {ok, kpro:struct()} | {error, any()}.
+get_metadata_safe(Client, Topics) when is_list(Topics) ->
+  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, Topics}}, infinity);
 get_metadata_safe(Client, Topic) ->
-  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, Topic}}, infinity).
+  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, [Topic]}}, infinity).
 
 %% @doc Get number of partitions for a given topic.
 -spec get_partitions_count(client(), topic()) -> {ok, pos_integer()} | {error, any()}.
@@ -429,8 +435,8 @@ handle_call(get_producers_sup_pid, _From, State) ->
   {reply, {ok, State#state.producers_sup}, State};
 handle_call(get_consumers_sup_pid, _From, State) ->
   {reply, {ok, State#state.consumers_sup}, State};
-handle_call({get_metadata, Topic}, _From, State) ->
-  {Result, NewState} = do_get_metadata(Topic, State),
+handle_call({get_metadata, Topics}, _From, State) ->
+  {Result, NewState} = do_get_metadata(Topics, State),
   {reply, Result, NewState};
 handle_call(stop, _From, State) ->
   {stop, normal, ok, State};
@@ -599,43 +605,45 @@ with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
 do_get_metadata_safe(Topic0, #state{config = Config} = State) ->
   Topic =
     case config(allow_topic_auto_creation, Config, true) of
-      true  -> Topic0;
-      false -> {all, Topic0}
+      true  -> [Topic0];
+      false -> {all, [Topic0]}
     end,
   do_get_metadata(Topic, State).
 
--spec do_get_metadata(all | topic() | {all, topic()}, state()) -> {Result, state()}
+-spec do_get_metadata(all | [topic()] | {all, [topic()]}, state()) -> {Result, state()}
         when Result :: {ok, kpro:struct()} | {error, any()}.
-do_get_metadata({all, Topic}, State) ->
-    do_get_metadata(all, Topic, State);
-do_get_metadata(Topic, State) when not is_tuple(Topic) ->
-    do_get_metadata(Topic, Topic, State).
+do_get_metadata(all, State) ->
+    do_get_metadata(all, [], State);
+do_get_metadata({all, Topics}, State) ->
+    do_get_metadata(all, Topics, State);
+do_get_metadata(Topics, State) when is_list(Topics) ->
+    do_get_metadata(Topics, Topics, State).
 
-do_get_metadata(FetchMetadataFor, Topic,
+do_get_metadata(FetchMetadataFor, Topics,
                 #state{ client_id   = ClientId
                       , workers_tab = Ets
                       , config = Config
                       } = State0) ->
-  Topics = case FetchMetadataFor of
+  FetchTopics = case FetchMetadataFor of
              all -> all; %% in case no topic is given, get all
-             _   -> [Topic]
+             _   -> Topics
            end,
   State = ensure_metadata_connection(State0),
   Conn = get_metadata_connection(State),
-  Request = brod_kafka_request:metadata(Conn, Topics),
+  Request = brod_kafka_request:metadata(Conn, FetchTopics),
   case request_sync(State, Request) of
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
       TopicMetadataArray = kf(topics, Metadata),
       UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
                                     ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
       ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
-      ok = maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray,
+      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicMetadataArray,
                                                UnknownTopicCacheTtl),
       {{ok, Metadata}, State};
     {error, Reason} ->
       ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
                       "reason=~p",
-                      [ClientId, Topics, Reason]),
+                      [ClientId, FetchTopics, Reason]),
       {{error, Reason}, State}
   end.
 
@@ -823,17 +831,17 @@ is_cooled_down(Ts, #state{config = Config}) ->
   Diff >= Threshold.
 
 %% call this function after fetched metadata for all topics
-%% to cache the not-found status of a given topic
-maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl) ->
-  case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
+%% to cache the not-found status of a given topics
+maybe_cache_unknown_topic_partition(_Ets, [], _TopicMetadata, _TopicCacheTTL) -> ok;
+maybe_cache_unknown_topic_partition(Ets, [Topic | Rest], TopicMetadata, TopicCacheTTL) ->
+  case find_partition_count_in_topic_metadata_array(TopicMetadata, Topic) of
     {error, unknown_topic_or_partition} = Err ->
-      _ = ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err,
-                     {expire, expire_ts(UnknownTopicCacheTtl)}}),
-      ok;
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, {expire, expire_ts(TopicCacheTTL)}});
     _ ->
       %% do nothing when ok or any other error
       ok
-  end.
+  end,
+  maybe_cache_unknown_topic_partition(Ets, Rest, TopicMetadata, TopicCacheTTL).
 
 -spec update_partitions_count_cache(ets:tab(), [kpro:struct()], non_neg_integer()) -> ok.
 update_partitions_count_cache(_Ets, [], _UnknownTopicCacheTtl) -> ok;
