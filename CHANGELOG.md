@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.4.5
+  - Start supervisor process for the new increase partitions at `do_get_metadata` function.
+
 - 4.4.4
   - Fixed `ListGroups` API request for Kafka Protocol API version 3.
 
