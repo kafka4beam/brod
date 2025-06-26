@@ -27,6 +27,7 @@
         , start_link/0
         , find_producer/3
         , start_producer/4
+        , start_producer/5
         , stop_producer/2
         ]).
 
@@ -58,6 +59,13 @@ start_link() ->
                         {ok, pid()} | {error, any()}.
 start_producer(SupPid, ClientPid, TopicName, Config) ->
   Spec = producers_sup_spec(ClientPid, TopicName, Config),
+  brod_supervisor3:start_child(SupPid, Spec).
+
+%% @doc Dynamically start a partition producer
+-spec start_producer(pid(), pid(), brod:topic(), brod:partition(), brod:producer_config()) ->
+  {ok, pid()} | {error, any()}.
+start_producer(SupPid, ClientPid, Topic, Partition, Config) ->
+  Spec = producer_spec(ClientPid, Topic, Partition, Config),
   brod_supervisor3:start_child(SupPid, Spec).
 
 %% @doc Dynamically stop a per-topic supervisor

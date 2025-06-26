@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.4.4
+  - Start supervisor process for the new increase partitions at `do_get_metadata` function.
+
 - 4.4.3
   - Modify`brod_client:get_metadata` and `brod_client:get_metadata_safe` function for support multiple topics.
 

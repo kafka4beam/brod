@@ -131,6 +131,7 @@
         , consumers_sup        :: ?undef | pid()
         , config               :: ?undef | config()
         , workers_tab          :: ?undef | ets:tab()
+        , producers_config     :: ?undef | #{}
         }).
 
 -type state() :: #state{}.
@@ -414,7 +415,15 @@ handle_call({get_transactional_coordinator, TransactionId}, _From, State) ->
   {Result, NewState} = do_get_transactional_coordinator(State, TransactionId),
   {reply, Result, NewState};
 handle_call({start_producer, TopicName, ProducerConfig}, _From, State) ->
-  {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State),
+  %% NOTE: Store ProducerConfig into the config in state
+  %% in case of start new partition producer processes.
+  Configs = case State#state.producers_config of
+    ?undef -> #{TopicName => ProducerConfig};
+    M -> M#{TopicName => ProducerConfig}
+  end,
+  State1 = State#state{ producers_config = Configs },
+
+  {Reply, NewState} = do_start_producer(TopicName, ProducerConfig, State1),
   {reply, Reply, NewState};
 handle_call({start_consumer, TopicName, ConsumerConfig}, _From, State) ->
   {Reply, NewState} = do_start_consumer(TopicName, ConsumerConfig, State),
@@ -623,6 +632,8 @@ do_get_metadata(FetchMetadataFor, Topics,
                 #state{ client_id   = ClientId
                       , workers_tab = Ets
                       , config = Config
+                      , producers_sup = ProducersSup
+                      , producers_config = ProducersConfig
                       } = State0) ->
   FetchTopics = case FetchMetadataFor of
              all -> all; %% in case no topic is given, get all
@@ -633,11 +644,19 @@ do_get_metadata(FetchMetadataFor, Topics,
   Request = brod_kafka_request:metadata(Conn, FetchTopics),
   case request_sync(State, Request) of
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
-      TopicMetadataArray = kf(topics, Metadata),
+      TopicsMetadata = kf(topics, Metadata),
+      ok = maybe_start_partition_producer(
+        filter_topics(TopicsMetadata),
+        started_producers(ProducersSup),
+        Topics,
+        ProducersSup,
+        ProducersConfig
+      ),
+
       UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
                                     ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
-      ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
-      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicMetadataArray,
+      ok = update_partitions_count_cache(Ets, TopicsMetadata, UnknownTopicCacheTtl),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicsMetadata,
                                                UnknownTopicCacheTtl),
       {{ok, Metadata}, State};
     {error, Reason} ->
@@ -980,6 +999,74 @@ ensure_partition_workers(TopicName, State, F) ->
           {{error, Reason}, NewState}
       end
     end).
+
+-spec maybe_start_partition_producer(TopicsMetadata, Producers, Topics, ProducerSup, Configs) -> ok
+when
+  TopicsMetadata :: #{Key => non_neg_integer()},
+  Producers :: #{Key => non_neg_integer()},
+  Topics :: [topic()],
+  ProducerSup :: pid(),
+  Configs :: #{Key => brod_producer:config()},
+  Key :: topic().
+maybe_start_partition_producer(_TopicsMetadata, _Producers, [], _ProducerSuf, _Configs) ->
+  ok;
+maybe_start_partition_producer(TopicsMetadata, Producers, [Topic | Rest], ProducerSup, Configs) when
+  is_map_key(Topic, TopicsMetadata), is_map_key(Topic, Producers)
+->
+  OldPartitionCnt = maps:get(Topic, Producers),
+  NewPartitionCnt = maps:get(Topic, TopicsMetadata),
+  lists:foreach(
+    fun
+      (PartitionIdx) when is_integer(PartitionIdx) ->
+        sync_partition(ProducerSup, Topic, PartitionIdx, Configs);
+      (_) ->
+        ok
+    end,
+    lists:seq(OldPartitionCnt, OldPartitionCnt + (NewPartitionCnt - OldPartitionCnt) - 1)
+  ),
+
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup, Configs);
+maybe_start_partition_producer(TopicsMetadata, Producers, [_Topic | Rest], ProducerSup, Configs) ->
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup, Configs).
+
+-spec filter_topics([kpro:struct()]) -> #{topic() => non_neg_integer()}.
+filter_topics(TopicsMetadataArray) ->
+  {NoErrors1, _} =
+    lists:partition(fun(#{error_code := E}) -> E =:= no_error end, TopicsMetadataArray),
+
+  NoErrors = [
+    {TopicName, erlang:length(Partitions)}
+    || #{name := <<TopicName/binary>>, partitions := Partitions} <- NoErrors1,
+    is_list(Partitions)
+  ],
+
+  maps:from_list(NoErrors).
+
+-spec started_producers(pid()) -> #{topic() => non_neg_integer()}.
+started_producers(ProducerSup) ->
+  Producers = brod_supervisor3:which_children(ProducerSup),
+
+  KeyFn = fun({Topic, _Partition, _, _}) -> Topic end,
+  ValueFn = fun({_Topic, Partition, _, _}) -> Partition end,
+  TopicsMap = maps:groups_from_list(KeyFn, ValueFn, Producers),
+
+  maps:map(
+    fun(_Topic, Partitions) ->
+      erlang:length(Partitions)
+    end,
+    TopicsMap
+  ).
+
+-spec sync_partition(pid(), topic(), partition(), #{topic() => brod_producer:config()}) -> ok.
+sync_partition(ProducerSup, Topic, Partition, Configs) ->
+  case brod_producers_sup:find_producer(ProducerSup, Topic, Partition) of
+    {ok, _Pid} -> ok;
+    {error, _} ->
+      ProducerConfig = maps:get(Topic, Configs, []),
+      %% start a new producer for the partition
+      brod_producers_sup:start_producer(ProducerSup, self(), Topic, Partition, ProducerConfig),
+      ok
+  end.
 
 %% Catches exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
