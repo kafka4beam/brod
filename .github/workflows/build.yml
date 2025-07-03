@@ -2,7 +2,7 @@ name: brod
 on:
   push:
     branches:
-      - "*"
+      - "**"
   pull_request:
     branches:
       - master
@@ -62,6 +62,12 @@ jobs:
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Compile
         run: rebar3 do compile
+      # NOTE: We have to use the latest version for fix this issue
+      # https://github.com/docker/compose/issues/12747
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v1
+        with:
+          version: latest
       - name: Run tests
         run: |
           export KAFKA_VERSION=${{ matrix.vsn[1] }}
