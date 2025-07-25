@@ -18,6 +18,8 @@
         , bootstrap_hosts/0
         , kill_process/2
         , kafka_version/0
+        , increase_topic_partition/2
+        , delete_topic/1
         ]).
 
 -include("brod_test_macros.hrl").
@@ -123,6 +125,12 @@ create_topic(Name, NumPartitions, NumReplicas) ->
     " --create --partitions ~p --replication-factor ~p"
     " --topic ~s --config min.insync.replicas=1",
   0 = exec_in_kafka_container(Create, [NumPartitions, NumReplicas, Name]),
+  wait_for_topic_by_describe(Name).
+
+increase_topic_partition(Name, NumPartitions) ->
+  Increase = "/opt/kafka/bin/kafka-topics.sh " ++ maybe_zookeeper() ++
+    " --alter --partitions ~p --topic ~s",
+  0 = exec_in_kafka_container(Increase, [NumPartitions, Name]),
   wait_for_topic_by_describe(Name).
 
 exec_in_kafka_container(FMT, Args) ->
