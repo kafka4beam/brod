@@ -46,6 +46,7 @@
         , t_subscribe_with_unknown_offset/1
         , t_offset_reset_policy/1
         , t_stop_kill/1
+        , t_smoke_list_groups/1
         ]).
 
 
@@ -883,6 +884,13 @@ t_stop_kill(Config) when is_list(Config) ->
   ok = brod_consumer:stop_maybe_kill(Pid, 100),
   ?WAIT_ONLY({'DOWN', Mref, process, Pid, killed}, ok),
   ok = brod_consumer:stop_maybe_kill(Pid, 100).
+
+%% Smoke test for `ListGroups` API.
+t_smoke_list_groups(Config) when is_list(Config) ->
+  [Endpoint] = ?HOSTS,
+  ConnOpts = kafka_test_helper:client_config(),
+  ?assertMatch({ok, Groups} when is_list(Groups), brod:list_groups(Endpoint, ConnOpts)),
+  ok.
 
 %%%_* Help functions ===========================================================
 

@@ -7,7 +7,7 @@ on:
     branches:
       - master
 env:
-  OTP_VERSION: "27"
+  OTP_VERSION: "27.2"
   REBAR_VERSION: "3.24.0"
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: OTP
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@v1.20.4
         with:
           version-type: strict
           otp-version: ${{ env.OTP_VERSION }}
