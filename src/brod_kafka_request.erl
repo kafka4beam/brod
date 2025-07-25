@@ -134,7 +134,12 @@ offset_fetch(Connection, GroupId, Topics0) ->
 -spec list_groups(conn()) -> kpro:req().
 list_groups(Connection) ->
   Vsn = pick_version(list_groups, Connection),
-  kpro:make_request(list_groups, Vsn, []).
+  case Vsn >= 3 of
+    true ->
+      kpro:make_request(list_groups, Vsn, #{tagged_fields => []});
+    false ->
+      kpro:make_request(list_groups, Vsn, [])
+  end.
 
 %% @doc Make a `join_group' request.
 -spec join_group(conn(), kpro:struct()) -> kpro:req().

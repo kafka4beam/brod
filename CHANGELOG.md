@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.4.4
+  - Fixed `ListGroups` API request for Kafka Protocol API version 3.
+
 - 4.4.3
   - Modify`brod_client:get_metadata` and `brod_client:get_metadata_safe` function for support multiple topics.
 
