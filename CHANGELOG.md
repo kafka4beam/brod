@@ -2,6 +2,7 @@
 
 - 4.4.5
   - Start supervisor process for the new increase partitions at `do_get_metadata` function.
+  - Upgrade to `kafka_protocol-4.2.7` for fast dependency (`crc32cer-1.0.3`) build.
 
 - 4.4.4
   - Fixed `ListGroups` API request for Kafka Protocol API version 3.
