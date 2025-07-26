@@ -41,6 +41,7 @@
         , t_produce_fire_n_forget/1
         , t_configure_produce_api_vsn/1
         , t_produce_pre_defined_partitioner/1
+        , t_producer_increased_partition/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -203,6 +204,51 @@ t_produce_no_ack(Config) when is_list(Config) ->
     end,
   ReceiveFun(K1, V1),
   ReceiveFun(K2, V2).
+
+t_producer_increased_partition({init, Config}) ->
+  Client = t_producer_increased_partition,
+  Topic = <<"brod_test_increased_partition">>,
+  case whereis(Client) of
+    ?undef -> ok;
+    Pid_   -> brod:stop_client(Pid_)
+  end,
+  TesterPid = self(),
+  kafka_test_helper:create_topic(Topic, 3, 1),
+  ok = brod:start_client(?HOSTS, Client, client_config()),
+  ok = brod:start_producer(Client, Topic, []),
+  [{client, Client}, {topic, Topic}, {tester, TesterPid} | Config];
+t_producer_increased_partition(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?config(topic),
+  Partition = 4,
+  ?assertEqual(
+    {error, {producer_not_found, Topic, Partition}},
+    brod:produce(Client, Topic, Partition, <<"k">>, <<"v">>)
+  ),
+
+  kafka_test_helper:increase_topic_partition(Topic, 5),
+  Ret = brod_client:get_metadata(Client, Topic),
+  ?assertMatch({ok, _}, Ret),
+
+  TesterPid = ?config(tester),
+  ok = brod:start_consumer(Client, Topic, []),
+  Subscriber = spawn_link(fun() -> subscriber_loop(TesterPid) end),
+  {ok, _ConsumerPid} = brod:subscribe(Client, Subscriber, Topic, Partition, []),
+
+  {Key, Value} = make_unique_kv(),
+  {ok, CallRef} = brod:produce(Client, Topic, Partition, Key, Value),
+  ok = brod:sync_produce_request(CallRef),
+  receive
+    {_, _, K, V} ->
+      ?assertEqual(Key, K),
+      ?assertEqual(Value, V)
+  after
+    5000 ->
+      ct:fail({?MODULE, ?LINE, timeout})
+  end,
+
+  kafka_test_helper:delete_topic(Topic),
+  unlink(Subscriber) andalso exit(Subscriber, kill).
 
 t_produce_no_ack_offset({init, Config}) ->
   t_produce_no_ack({init, Config});

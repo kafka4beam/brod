@@ -27,7 +27,10 @@
         , start_link/0
         , find_producer/3
         , start_producer/4
+        , start_producer/5
         , stop_producer/2
+        , get_producer_config/3
+        , count_started_children/1
         ]).
 
 -include("brod_int.hrl").
@@ -60,6 +63,13 @@ start_producer(SupPid, ClientPid, TopicName, Config) ->
   Spec = producers_sup_spec(ClientPid, TopicName, Config),
   brod_supervisor3:start_child(SupPid, Spec).
 
+%% @doc Dynamically start a partition producer
+-spec start_producer(pid(), pid(), brod:topic(), brod:partition(), brod:producer_config()) ->
+  {ok, pid()} | {error, any()}.
+start_producer(SupPid, ClientPid, Topic, Partition, Config) ->
+  Spec = producer_spec(ClientPid, Topic, Partition, Config),
+  brod_supervisor3:start_child(SupPid, Spec).
+
 %% @doc Dynamically stop a per-topic supervisor
 -spec stop_producer(pid(), brod:topic()) -> ok | {}.
 stop_producer(SupPid, TopicName) ->
@@ -90,6 +100,56 @@ find_producer(SupPid, Topic, Partition) ->
       catch exit : {Reason, _} ->
         {error, {producer_down, Reason}}
       end
+  end.
+
+%% @doc Get topic producer config from producer child specification.
+-spec get_producer_config(pid(), brod:topic(), brod:partition()) ->
+  {ok, brod_producer:config()} | {error, Reason} when
+  Reason :: {producer_not_found, brod:topic()}
+          | {not_found, brod:topic(), brod:partition()}
+          | {producer_down, any()}.
+get_producer_config(SupPid, Topic, Partition) ->
+  case brod_supervisor3:find_child(SupPid, Topic) of
+    [] ->
+      {error, {producer_not_found, Topic}};
+    [PartitionsSupPid]->
+      try
+        case brod_supervisor3:get_childspec(PartitionsSupPid, Partition) of
+          {ok, {_Name, {brod_producer, start_link, [_, _, _, Config]}, _Restart,
+            _Shutdown, _Type, _Module}} when is_list(Config) ->
+            {ok, Config};
+          _ ->
+            {error, {not_found, Topic, Partition}}
+        end
+      catch exit : {Reason, _} ->
+        {error, {producer_down, Reason}}
+      end
+  end.
+
+%% @doc Count started children under a given supervisor process.
+-spec count_started_children(pid()) -> #{brod:topic() => non_neg_integer()}.
+count_started_children(SupRef) ->
+  TopicSups = which_producers(SupRef),
+  lists:foldl(
+    fun
+      ({Topic, Pid, _Type, _Mods}, Acc) when is_binary(Topic), is_pid(Pid) ->
+        PartitionWorkers = which_producers(Pid),
+        case length(PartitionWorkers) of
+          0 ->
+            Acc;
+          N ->
+            Acc#{Topic => N}
+        end;
+      (_, Acc) ->
+        Acc
+    end, #{}, TopicSups).
+
+which_producers(Sup) ->
+  try
+    brod_supervisor3:which_children(Sup)
+  catch
+    _:_ ->
+      []
   end.
 
 %% @doc brod_supervisor3 callback.

@@ -78,7 +78,8 @@
          start_child/2, restart_child/2,
          delete_child/2, terminate_child/2,
          which_children/1, count_children/1,
-         find_child/2, check_childspecs/1]).
+         find_child/2, check_childspecs/1,
+         get_childspec/2]).
 
 %% Internal exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -296,6 +297,21 @@ check_childspecs(ChildSpecs) when is_list(ChildSpecs) ->
         Error -> {error, Error}
     end;
 check_childspecs(X) -> {error, {badarg, X}}.
+
+%%-----------------------------------------------------------------
+%% Func: get_childspec/2
+%% Returns: {ok, child_spec()} | {error, Reason}
+%%          the child specification tuple for the child identified by `Name' under
+%%          supervisor `SupRef'. The returned map contains all keys, both mandatory and
+%%          optional.
+%%-----------------------------------------------------------------
+-spec get_childspec(SupRef, Name) -> Result when
+  SupRef :: sup_ref(),
+  Name :: child_id(),
+  Result :: {'ok', child_spec()} | {'error', Error},
+  Error :: 'not_found'.
+get_childspec(Supervisor, Name) ->
+  call(Supervisor, {get_childspec, Name}).
 
 %%%-----------------------------------------------------------------
 %%% Called by timer:apply_after from restart/2
@@ -586,7 +602,15 @@ handle_call(count_children, _From, State) ->
     %% Reformat counts to a property list.
     Reply = [{specs, Specs}, {active, Active},
              {supervisors, Supers}, {workers, Workers}],
-    {reply, Reply, State}.
+    {reply, Reply, State};
+
+handle_call({get_childspec, Name}, _From, State) ->
+  case get_child(Name, State) of
+    {value, Child} ->
+      {reply, {ok, child_to_spec(Child)}, State};
+    _ ->
+      {reply, {error, not_found}, State}
+  end.
 
 count_if_alive(Pid, Alive, Total) ->
     case is_pid(Pid) andalso is_process_alive(Pid) of
@@ -612,6 +636,17 @@ count_child(#child{pid = Pid, child_type = supervisor},
         false -> {Specs + 1, Active, Supers + 1, Workers}
     end.
 
+-spec child_to_spec(child_rec()) -> child_spec().
+child_to_spec(#child{
+    pid = _Pid,
+    name = Name,
+    mfargs = Func,
+    restart_type = Restart,
+    shutdown = Shutdown,
+    child_type = Type,
+    modules = Mods
+}) ->
+  {Name, Func, Restart, Shutdown, Type, Mods}.
 
 %%% If a restart attempt failed, this message is sent via
 %%% timer:apply_after(0,...) in order to give gen_server the chance to

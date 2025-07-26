@@ -7,7 +7,7 @@ on:
     branches:
       - master
 env:
-  OTP_VERSION: "27.2"
+  OTP_VERSION: "27"
   REBAR_VERSION: "3.24.0"
 
 jobs:
@@ -18,9 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: OTP
-        uses: erlef/setup-beam@v1.20.4
+        uses: erlef/setup-beam@v1
         with:
-          version-type: strict
+          # NOTE: Due to set the erlang version is `OTP-27` which not assign a specific version,
+          # so the option of `version-type` should be `loose`.
+          version-type: loose
           otp-version: ${{ env.OTP_VERSION }}
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Cache Build
@@ -57,7 +59,7 @@ jobs:
       - name: Install Erlang
         uses: erlef/setup-beam@v1
         with:
-          version-type: strict
+          version-type: loose
           otp-version: ${{matrix.vsn[0]}}
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Compile
@@ -96,7 +98,7 @@ jobs:
       - name: OTP
         uses: erlef/setup-beam@v1
         with:
-          version-type: strict
+          version-type: loose
           otp-version: ${{ env.OTP_VERSION }}
           rebar3-version: ${{ env.REBAR_VERSION }}
       - name: Build Documentation

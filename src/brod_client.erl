@@ -623,6 +623,7 @@ do_get_metadata(FetchMetadataFor, Topics,
                 #state{ client_id   = ClientId
                       , workers_tab = Ets
                       , config = Config
+                      , producers_sup = ProducersSup
                       } = State0) ->
   FetchTopics = case FetchMetadataFor of
              all -> all; %% in case no topic is given, get all
@@ -633,11 +634,18 @@ do_get_metadata(FetchMetadataFor, Topics,
   Request = brod_kafka_request:metadata(Conn, FetchTopics),
   case request_sync(State, Request) of
     {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
-      TopicMetadataArray = kf(topics, Metadata),
+      TopicsMetadata = kf(topics, Metadata),
+      ok = maybe_start_partition_producer(
+        filter_topics(TopicsMetadata),
+        brod_producers_sup:count_started_children(ProducersSup),
+        Topics,
+        ProducersSup
+      ),
+
       UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
                                     ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
-      ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
-      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicMetadataArray,
+      ok = update_partitions_count_cache(Ets, TopicsMetadata, UnknownTopicCacheTtl),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicsMetadata,
                                                UnknownTopicCacheTtl),
       {{ok, Metadata}, State};
     {error, Reason} ->
@@ -980,6 +988,67 @@ ensure_partition_workers(TopicName, State, F) ->
           {{error, Reason}, NewState}
       end
     end).
+
+-spec maybe_start_partition_producer(TopicsMetadata, Producers, Topics, ProducerSup) -> ok
+when
+  TopicsMetadata :: #{Key => non_neg_integer()},
+  Producers :: #{Key => non_neg_integer()},
+  Topics :: [topic()],
+  ProducerSup :: pid(),
+  Key :: topic().
+maybe_start_partition_producer(_TopicsMetadata, _Producers, [], _ProducerSuf) ->
+  ok;
+maybe_start_partition_producer(TopicsMetadata, Producers, [Topic | Rest], ProducerSup) when
+  is_map_key(Topic, TopicsMetadata), is_map_key(Topic, Producers)
+->
+  OldPartitionCnt = maps:get(Topic, Producers),
+  NewPartitionCnt = maps:get(Topic, TopicsMetadata),
+
+  case NewPartitionCnt > OldPartitionCnt of
+    true ->
+      do_start_partition_producer(ProducerSup, Topic, OldPartitionCnt, NewPartitionCnt);
+    _ ->
+      ok
+  end,
+
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup);
+maybe_start_partition_producer(TopicsMetadata, Producers, [_Topic | Rest], ProducerSup) ->
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup).
+
+-spec do_start_partition_producer(pid(), topic(), non_neg_integer(), non_neg_integer()) -> ok.
+do_start_partition_producer(ProducerSup, Topic, OldPartitionCnt, NewPartitionCnt) ->
+  %% Get producer config from partition producer which partition index is 0.
+  case brod_producers_sup:get_producer_config(ProducerSup, Topic, 0) of
+    {ok, Config} ->
+      %% start new producers for the partitions that are not started yet
+      lists:foreach(
+        fun
+          (Partition) when is_integer(Partition) ->
+            %% start a new producer for the partition
+            brod_producers_sup:start_producer(ProducerSup, self(), Topic, Partition, Config),
+            ok;
+          (_) ->
+            ok
+        end,
+        lists:seq(OldPartitionCnt, NewPartitionCnt - 1)
+      );
+    _ ->
+      %% get producer config failed, do not start new producers
+      ok
+  end.
+
+-spec filter_topics([kpro:struct()]) -> #{topic() => non_neg_integer()}.
+filter_topics(TopicsMetadataArray) ->
+  {_, NoErrors1} =
+    lists:partition(fun(#{error_code := E}) -> ?IS_ERROR(E) end, TopicsMetadataArray),
+
+  NoErrors = [
+    {TopicName, erlang:length(Partitions)}
+    || #{name := <<TopicName/binary>>, partitions := Partitions} <- NoErrors1,
+    is_list(Partitions)
+  ],
+
+  maps:from_list(NoErrors).
 
 %% Catches exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return
