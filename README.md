@@ -30,7 +30,8 @@ Why "brod"? [http://en.wikipedia.org/wiki/Max_Brod](http://en.wikipedia.org/wiki
 
 ## Building and testing
 
-NOTE: Min Erlang/OTP version 22
+- Min Erlang/OTP version 24
+- CMake 4 which is required to build NIF for [crc32cer](https://github.com/kafka4beam/crc32cer)
 
 ```sh
 make compile
