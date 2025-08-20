@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.4.6
+  - Upgrade to `kafka_protocol-4.2.8` for dependency (`crc32cer-1.0.4`) to fix its link error.
+
 - 4.4.5
   - Start supervisor process for the new increase partitions at `do_get_metadata` function.
   - Upgrade to `kafka_protocol-4.2.7` for fast dependency (`crc32cer-1.0.3`) build.
