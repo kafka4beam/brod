@@ -73,6 +73,7 @@
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 -define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
 -define(DEFAULT_UNKNOWN_TOPIC_CACHE_TTL, 120000).
+-define(DEFAULT_SYNC_METADATA_INTERVAL_SECONDS, 60).
 
 %% ClientId as ets table name.
 -define(ETS(ClientId), ClientId).
@@ -131,6 +132,7 @@
         , consumers_sup        :: ?undef | pid()
         , config               :: ?undef | config()
         , workers_tab          :: ?undef | ets:tab()
+        , partitions_sync      :: ?undef | pid()
         }).
 
 -type state() :: #state{}.
@@ -363,13 +365,20 @@ handle_continue(init, State0) ->
   State1 = ensure_metadata_connection(State0),
   {ok, ProducersSupPid} = brod_producers_sup:start_link(),
   {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
-  State = State1#state{ bootstrap_endpoints = Endpoints
+  State2 = State1#state{ bootstrap_endpoints = Endpoints
                       , producers_sup       = ProducersSupPid
                       , consumers_sup       = ConsumersSupPid
                       },
+  State = State2#state{partitions_sync = maybe_start_partitions_sync(State2)},
   {noreply, State}.
 
 %% @private
+handle_info({'EXIT', Pid, Reason}, #state{ client_id        = ClientId
+                                         , partitions_sync  = Pid
+                                        } = State) ->
+    ?BROD_LOG_ERROR("client ~p partitions sync down~nReason: ~p", [ClientId, Pid, Reason]),
+    NewState = State#state{partitions_sync = maybe_start_partitions_sync(State)},
+    {noreply, NewState};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
@@ -736,6 +745,15 @@ ensure_binary(ClientId) when is_atom(ClientId) ->
   ensure_binary(atom_to_binary(ClientId, utf8));
 ensure_binary(ClientId) when is_binary(ClientId) ->
   ClientId.
+
+maybe_start_partitions_sync(#state{client_id = Client, producers_sup = ProducersSup, config = Config}) ->
+  case config(sync_partitions, Config, false) of
+    true ->
+      {ok, Pid} = brod_partitions_sync:start_link(Client, ProducersSup, Config),
+      Pid;
+    false ->
+      undefined
+  end.
 
 -spec maybe_connect(state(), endpoint()) ->
         {Result, state()} when Result :: {ok, pid()} | {error, any()}.

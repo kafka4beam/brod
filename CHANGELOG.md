@@ -1,4 +1,7 @@
 # Changelog
+- 4.5.0
+  - Expose `create_partitions` from the underlying kafka_protocol
+  - Allow partitions to automatically have producers started for newly discovered partitions.
 
 - 4.4.6
   - Upgrade to `kafka_protocol-4.2.8` for dependency (`crc32cer-1.0.4`) to fix its link error.

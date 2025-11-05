@@ -25,7 +25,7 @@
         ]).
 
 %% Test cases
--export([ t_create_delete_topics/1
+-export([ t_create_update_delete_topics/1
         , t_delete_topics_not_found/1
         ]).
 
@@ -60,7 +60,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 %%%_* Test functions ===========================================================
 
-t_create_delete_topics(Config) when is_list(Config) ->
+t_create_update_delete_topics(Config) when is_list(Config) ->
   Topic = iolist_to_binary(["test-topic-", integer_to_list(erlang:system_time())]),
   TopicConfig = [
     #{
@@ -71,9 +71,22 @@ t_create_delete_topics(Config) when is_list(Config) ->
       name => Topic
     }
   ],
+  TopicPartitionConfig = [
+    #{
+      topic => Topic,
+      new_partitions => #{
+        count => 2,
+        assignment => [[0]]
+      }
+    }
+  ],
   try
     ?assertEqual(ok,
       brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
+        #{connect_timeout => ?TIMEOUT})),
+
+    ?assertEqual(ok,
+      brod:create_partitions(?HOSTS, TopicPartitionConfig, #{timeout => ?TIMEOUT},
         #{connect_timeout => ?TIMEOUT}))
   after
     ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,

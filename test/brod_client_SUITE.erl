@@ -29,7 +29,8 @@
 -export([ auth/6 ]).
 
 %% Test cases
--export([ t_skip_unreachable_endpoint/1
+-export([ t_optional_partitions_syncing/1
+        , t_skip_unreachable_endpoint/1
         , t_no_reachable_endpoint/1
         , t_call_bad_client_id/1
         , t_metadata_connection_restart/1
@@ -68,6 +69,18 @@
             ct:fail(timeout)
           end
         end()).
+
+-record(state,
+        { client_id            :: pid()
+        , bootstrap_endpoints  :: [brod:endpoint()]
+        , meta_conn            :: kpro:connection()
+        , payload_conns = []   :: list()
+        , producers_sup        :: pid()
+        , consumers_sup        :: pid()
+        , config               :: list()
+        , workers_tab          :: ets:tab()
+        , partitions_sync      :: reference()
+        }).
 
 %%%_* ct callbacks =============================================================
 
@@ -114,6 +127,20 @@ all() ->
 
 
 %%%_* Test functions ===========================================================
+t_optional_partitions_syncing(Config) when is_list(Config) ->
+  Client0 = has_sync,
+  Config0 = [{sync_partitions, true}],
+  ok = start_client(?HOSTS, Client0, Config0),
+  #state{ partitions_sync = Pid0 } = sys:get_state(Client0),
+  ?assert(is_process_alive(Pid0)),
+  ok = brod:stop_client(Client0),
+
+  Config1 = [{sync_partitions, false}],
+  Client1 = no_sync,
+  ok = start_client(?HOSTS, Client1, Config1),
+  #state{ partitions_sync = Pid1 } = sys:get_state(Client1),
+  ?assertMatch(undefined, Pid1),
+  ok = brod:stop_client(Client1).
 
 t_get_partitions_count_safe(Config) when is_list(Config) ->
   Client = ?FUNCTION_NAME,
