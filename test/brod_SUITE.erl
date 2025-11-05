@@ -76,7 +76,7 @@ t_create_update_delete_topics(Config) when is_list(Config) ->
       topic => Topic,
       new_partitions => #{
         count => 2,
-        assignment => [[0]]
+        assignment => [[1]]
       }
     }
   ],
