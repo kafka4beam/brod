@@ -806,7 +806,7 @@ do_connect(Endpoint, State) ->
   kpro:connect(Endpoint, ConnConfig).
 
 maybe_start_partitions_sync(#state{ client_id = Client
-                                  , producers_sup = ProducersSup 
+                                  , producers_sup = ProducersSup
                                   , config = Config }) ->
   case config(sync_partitions, Config, false) of
     true ->
