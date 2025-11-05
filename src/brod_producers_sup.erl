@@ -63,13 +63,6 @@ start_producer(SupPid, ClientPid, TopicName, Config) ->
     Spec = producers_sup_spec(ClientPid, TopicName, Config),
     brod_supervisor3:start_child(SupPid, Spec).
 
-%% @doc Dynamically start a per partition producer
--spec start_producer(pid(), pid(), brod:topic(), non_neg_integer(), brod:producer_config()) ->
-    {ok, pid()} | {error, any()}.
-start_producer(SupPid, ClientPid, TopicName, Partition, Config) ->
-    Spec = producer_spec(ClientPid, TopicName, Partition, Config),
-    brod_supervisor3:start_child(SupPid, Spec).
-
 %% @doc Dynamically start a partition producer
 -spec start_producer(pid(), pid(), brod:topic(), brod:partition(), brod:producer_config()) ->
   {ok, pid()} | {error, any()}.

@@ -923,20 +923,6 @@ is_cooled_down(Ts, #state{config = Config}) ->
     Diff >= Threshold.
 
 %% call this function after fetched metadata for all topics
-<<<<<<< HEAD
-%% to cache the not-found status of a given topic
-maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl) ->
-    case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
-        {error, unknown_topic_or_partition} = Err ->
-            _ = ets:insert(Ets, {
-                ?TOPIC_METADATA_KEY(Topic), Err, {expire, expire_ts(UnknownTopicCacheTtl)}
-            }),
-            ok;
-        _ ->
-            %% do nothing when ok or any other error
-            ok
-    end.
-=======
 %% to cache the not-found status of a given topics
 maybe_cache_unknown_topic_partition(_Ets, [], _TopicMetadata, _TopicCacheTTL) -> ok;
 maybe_cache_unknown_topic_partition(Ets, [Topic | Rest], TopicMetadata, TopicCacheTTL) ->
@@ -948,7 +934,6 @@ maybe_cache_unknown_topic_partition(Ets, [Topic | Rest], TopicMetadata, TopicCac
       ok
   end,
   maybe_cache_unknown_topic_partition(Ets, Rest, TopicMetadata, TopicCacheTTL).
->>>>>>> a85a76390f92a85e1fe412d7e7e662775b300127
 
 -spec update_partitions_count_cache(ets:tab(), [kpro:struct()], non_neg_integer()) -> ok.
 update_partitions_count_cache(_Ets, [], _UnknownTopicCacheTtl) ->
