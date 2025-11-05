@@ -572,8 +572,17 @@ maybe_produce(#state{ buffer = Buffer0
 %% If connection is down, keep using the version previously used.
 req_vsn(_, {configured, Vsn}) ->
   {configured, Vsn};
-req_vsn(Conn, _NotConfigured) when is_pid(Conn) ->
-  {resolved, brod_kafka_apis:pick_version(Conn, produce)}.
+req_vsn(Conn, {_, OldVsn} = Old) when is_pid(Conn) ->
+  Default = brod_kafka_apis:default_version(produce),
+  NewVsn = brod_kafka_apis:pick_version(Conn, produce),
+  case NewVsn =:= Default andalso NewVsn < OldVsn of
+    true ->
+      %% Failed to resolve max version, e.g. during connection restart
+      %% keep using the old
+      Old;
+    false ->
+      {resolved, NewVsn}
+  end.
 
 %% Start delay send timer.
 -spec start_delay_send_timer(milli_sec()) -> delay_send_ref().

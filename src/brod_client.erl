@@ -58,14 +58,14 @@
 %% Test export
 -export([lookup_partitions_count_cache/2]).
 
--export([
-    code_change/3,
-    handle_call/3,
-    handle_cast/2,
-    handle_info/2,
-    init/1,
-    terminate/2
-]).
+-export([ code_change/3
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , handle_continue/2
+        , init/1
+        , terminate/2
+        ]).
 
 -export_type([config/0]).
 
@@ -74,6 +74,7 @@
 -define(DEFAULT_RECONNECT_COOL_DOWN_SECONDS, 1).
 -define(DEFAULT_GET_METADATA_TIMEOUT_SECONDS, 5).
 -define(DEFAULT_UNKNOWN_TOPIC_CACHE_TTL, 120000).
+-define(DEFAULT_SYNC_METADATA_INTERVAL_SECONDS, 60).
 
 %% ClientId as ets table name.
 -define(ETS(ClientId), ClientId).
@@ -128,17 +129,17 @@
     pid :: connection() | dead_conn()
 }).
 -type conn_state() :: #conn{}.
--record(state, {
-    client_id :: client_id(),
-    bootstrap_endpoints :: [endpoint()],
-    meta_conn :: ?undef | connection(),
-    payload_conns = [] :: [conn_state()],
-    producers_sup :: ?undef | pid(),
-    consumers_sup :: ?undef | pid(),
-    config :: ?undef | config(),
-    workers_tab :: ?undef | ets:tab(),
-    partitions_sync :: ?undef | pid()
-}).
+-record(state,
+        { client_id            :: client_id()
+        , bootstrap_endpoints  :: [endpoint()]
+        , meta_conn            :: ?undef | connection()
+        , payload_conns = []   :: [conn_state()]
+        , producers_sup        :: ?undef | pid()
+        , consumers_sup        :: ?undef | pid()
+        , config               :: ?undef | config()
+        , workers_tab          :: ?undef | ets:tab()
+        , partitions_sync      :: ?undef | pid()
+        }).
 
 -type state() :: #state{}.
 
@@ -253,18 +254,24 @@ get_connection(Client, Host, Port) ->
     safe_gen_call(Client, {get_connection, Host, Port}, infinity).
 
 %% @doc Get topic metadata, if topic is `undefined', will fetch ALL metadata.
--spec get_metadata(client(), all | ?undef | topic()) ->
-    {ok, kpro:struct()} | {error, any()}.
+-spec get_metadata(client(), all | ?undef | topic() | [topic()]) ->
+        {ok, kpro:struct()} | {error, any()}.
 get_metadata(Client, ?undef) ->
-    get_metadata(Client, all);
+  get_metadata(Client, all);
+get_metadata(Client, all) ->
+  safe_gen_call(Client, {get_metadata, all}, infinity);
+get_metadata(Client, Topics) when is_list(Topics) ->
+  safe_gen_call(Client, {get_metadata, Topics}, infinity);
 get_metadata(Client, Topic) ->
-    safe_gen_call(Client, {get_metadata, Topic}, infinity).
+  safe_gen_call(Client, {get_metadata, [Topic]}, infinity).
 
 %% @doc Ensure not topic auto creation even if Kafka has it enabled.
--spec get_metadata_safe(client(), topic()) ->
-    {ok, kpro:struct()} | {error, any()}.
+-spec get_metadata_safe(client(), topic() | [topic()]) ->
+        {ok, kpro:struct()} | {error, any()}.
+get_metadata_safe(Client, Topics) when is_list(Topics) ->
+  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, Topics}}, infinity);
 get_metadata_safe(Client, Topic) ->
-    safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, Topic}}, infinity).
+  safe_gen_call(Client, {get_metadata, {_FetchMetadataForTopic = all, [Topic]}}, infinity).
 
 %% @doc Get number of partitions for a given topic.
 -spec get_partitions_count(client(), topic()) -> {ok, pos_integer()} | {error, any()}.
@@ -350,68 +357,47 @@ deregister_consumer(Client, Topic, Partition) ->
 
 %% @private
 init({BootstrapEndpoints, ClientId, Config}) ->
-    erlang:process_flag(trap_exit, true),
-    Tab = ets:new(
-        ?ETS(ClientId),
-        [named_table, protected, {read_concurrency, true}]
-    ),
-    self() ! init,
-
-    {ok, #state{
-        client_id = ClientId,
-        bootstrap_endpoints = BootstrapEndpoints,
-        config = Config,
-        workers_tab = Tab
-    }}.
+  erlang:process_flag(trap_exit, true),
+  Tab = ets:new(?ETS(ClientId),
+                [named_table, protected, {read_concurrency, true}]),
+  {ok, #state{ client_id           = ClientId
+             , bootstrap_endpoints = BootstrapEndpoints
+             , config              = Config
+             , workers_tab         = Tab
+             }, {continue, init}}.
 
 %% @private
-handle_info(init, State0) ->
-    Endpoints = State0#state.bootstrap_endpoints,
-    State1 = ensure_metadata_connection(State0),
-    {ok, ProducersSupPid} = brod_producers_sup:start_link(),
-    {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
-    State2 = State1#state{
-        bootstrap_endpoints = Endpoints,
-        producers_sup = ProducersSupPid,
-        consumers_sup = ConsumersSupPid
-    },
+handle_continue(init, State0) ->
+  Endpoints = State0#state.bootstrap_endpoints,
+  State1 = ensure_metadata_connection(State0),
+  {ok, ProducersSupPid} = brod_producers_sup:start_link(),
+  {ok, ConsumersSupPid} = brod_consumers_sup:start_link(),
+  State2 = State1#state{ bootstrap_endpoints = Endpoints
+                      , producers_sup       = ProducersSupPid
+                      , consumers_sup       = ConsumersSupPid
+                      },
+  State = State2#state{partitions_sync = maybe_start_partitions_sync(State2)},
+  {noreply, State}.
 
-    State = State2#state{partitions_sync = maybe_start_partitions_sync(State2)},
-
-    {noreply, State};
-handle_info(
-    {'EXIT', Pid, Reason},
-    #state{
-        client_id = ClientId,
-        producers_sup = Pid
-    } = State
-) ->
-    ?BROD_LOG_ERROR(
-        "client ~p producers supervisor down~nReason: ~p",
-        [ClientId, Pid, Reason]
-    ),
-    {stop, {producers_sup_down, Reason}, State};
-handle_info(
-    {'EXIT', Pid, Reason},
-    #state{
-        client_id = ClientId,
-        consumers_sup = Pid
-    } = State
-) ->
-    ?BROD_LOG_ERROR(
-        "client ~p consumers supervisor down~nReason: ~p",
-        [ClientId, Pid, Reason]
-    ),
-    {stop, {consumers_sup_down, Reason}, State};
-handle_info(
-    {'EXIT', Pid, Reason},
-    #state{
-        client_id = ClientId,
-        partitions_sync = Pid
-    } = State
-) ->
+%% @private
+handle_info({'EXIT', Pid, Reason}, #state{ client_id        = ClientId
+                                         , partitions_sync  = Pid
+                                        } = State) ->
     ?BROD_LOG_ERROR("client ~p partitions sync down~nReason: ~p", [ClientId, Pid, Reason]),
-    {noreply, State#state{partitions_sync = maybe_start_partitions_sync(State)}};
+    NewState = State#state{partitions_sync = maybe_start_partitions_sync(State)},
+    {noreply, NewState};
+handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
+                                         , producers_sup = Pid
+                                         } = State) ->
+  ?BROD_LOG_ERROR("client ~p producers supervisor down~nReason: ~p",
+                  [ClientId, Pid, Reason]),
+  {stop, {producers_sup_down, Reason}, State};
+handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
+                                         , consumers_sup = Pid
+                                         } = State) ->
+  ?BROD_LOG_ERROR("client ~p consumers supervisor down~nReason: ~p",
+                  [ClientId, Pid, Reason]),
+  {stop, {consumers_sup_down, Reason}, State};
 handle_info({'EXIT', Pid, Reason}, State) ->
     NewState = handle_connection_down(State, Pid, Reason),
     {noreply, NewState};
@@ -466,10 +452,10 @@ handle_call(get_workers_table, _From, State) ->
 handle_call(get_producers_sup_pid, _From, State) ->
     {reply, {ok, State#state.producers_sup}, State};
 handle_call(get_consumers_sup_pid, _From, State) ->
-    {reply, {ok, State#state.consumers_sup}, State};
-handle_call({get_metadata, Topic}, _From, State) ->
-    {Result, NewState} = do_get_metadata(Topic, State),
-    {reply, Result, NewState};
+  {reply, {ok, State#state.consumers_sup}, State};
+handle_call({get_metadata, Topics}, _From, State) ->
+  {Result, NewState} = do_get_metadata(Topics, State),
+  {reply, Result, NewState};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(Call, _From, State) ->
@@ -646,62 +632,57 @@ with_ok({{error, _}, #state{}} = Return, _Continue) -> Return.
 -spec do_get_metadata_safe(topic(), state()) -> {Result, state()} when
     Result :: {ok, kpro:struct()} | {error, any()}.
 do_get_metadata_safe(Topic0, #state{config = Config} = State) ->
-    Topic =
-        case config(allow_topic_auto_creation, Config, true) of
-            true -> Topic0;
-            false -> {all, Topic0}
-        end,
-    do_get_metadata(Topic, State).
+  Topic =
+    case config(allow_topic_auto_creation, Config, true) of
+      true  -> [Topic0];
+      false -> {all, [Topic0]}
+    end,
+  do_get_metadata(Topic, State).
 
--spec do_get_metadata(all | topic() | {all, topic()}, state()) -> {Result, state()} when
-    Result :: {ok, kpro:struct()} | {error, any()}.
-do_get_metadata({all, Topic}, State) ->
-    do_get_metadata(all, Topic, State);
-do_get_metadata(Topic, State) when not is_tuple(Topic) ->
-    do_get_metadata(Topic, Topic, State).
+-spec do_get_metadata(all | [topic()] | {all, [topic()]}, state()) -> {Result, state()}
+        when Result :: {ok, kpro:struct()} | {error, any()}.
+do_get_metadata(all, State) ->
+    do_get_metadata(all, [], State);
+do_get_metadata({all, Topics}, State) ->
+    do_get_metadata(all, Topics, State);
+do_get_metadata(Topics, State) when is_list(Topics) ->
+    do_get_metadata(Topics, Topics, State).
 
-do_get_metadata(
-    FetchMetadataFor,
-    Topic,
-    #state{
-        client_id = ClientId,
-        workers_tab = Ets,
-        config = Config
-    } = State0
-) ->
-    Topics =
-        case FetchMetadataFor of
-            %% in case no topic is given, get all
-            all -> all;
-            _ -> [Topic]
-        end,
-    State = ensure_metadata_connection(State0),
-    Conn = get_metadata_connection(State),
-    Request = brod_kafka_request:metadata(Conn, Topics),
-    case request_sync(State, Request) of
-        {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
-            TopicMetadataArray = kf(topics, Metadata),
-            UnknownTopicCacheTtl = config(
-                unknown_topic_cache_ttl,
-                Config,
-                ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL
-            ),
-            ok = update_partitions_count_cache(Ets, TopicMetadataArray, UnknownTopicCacheTtl),
-            ok = maybe_cache_unknown_topic_partition(
-                Ets,
-                Topic,
-                TopicMetadataArray,
-                UnknownTopicCacheTtl
-            ),
-            {{ok, Metadata}, State};
-        {error, Reason} ->
-            ?BROD_LOG_ERROR(
-                "~p failed to fetch metadata for topics: ~p\n"
-                "reason=~p",
-                [ClientId, Topics, Reason]
-            ),
-            {{error, Reason}, State}
-    end.
+do_get_metadata(FetchMetadataFor, Topics,
+                #state{ client_id   = ClientId
+                      , workers_tab = Ets
+                      , config = Config
+                      , producers_sup = ProducersSup
+                      } = State0) ->
+  FetchTopics = case FetchMetadataFor of
+             all -> all; %% in case no topic is given, get all
+             _   -> Topics
+           end,
+  State = ensure_metadata_connection(State0),
+  Conn = get_metadata_connection(State),
+  Request = brod_kafka_request:metadata(Conn, FetchTopics),
+  case request_sync(State, Request) of
+    {ok, #kpro_rsp{api = metadata, msg = Metadata}} ->
+      TopicsMetadata = kf(topics, Metadata),
+      ok = maybe_start_partition_producer(
+        filter_topics(TopicsMetadata),
+        brod_producers_sup:count_started_children(ProducersSup),
+        Topics,
+        ProducersSup
+      ),
+
+      UnknownTopicCacheTtl = config(unknown_topic_cache_ttl, Config,
+                                    ?DEFAULT_UNKNOWN_TOPIC_CACHE_TTL),
+      ok = update_partitions_count_cache(Ets, TopicsMetadata, UnknownTopicCacheTtl),
+      ok = maybe_cache_unknown_topic_partition(Ets, Topics, TopicsMetadata,
+                                               UnknownTopicCacheTtl),
+      {{ok, Metadata}, State};
+    {error, Reason} ->
+      ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
+                      "reason=~p",
+                      [ClientId, FetchTopics, Reason]),
+      {{error, Reason}, State}
+  end.
 
 %% Ensure there is at least one metadata connection
 ensure_metadata_connection(
@@ -942,6 +923,7 @@ is_cooled_down(Ts, #state{config = Config}) ->
     Diff >= Threshold.
 
 %% call this function after fetched metadata for all topics
+<<<<<<< HEAD
 %% to cache the not-found status of a given topic
 maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopicCacheTtl) ->
     case find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) of
@@ -954,6 +936,19 @@ maybe_cache_unknown_topic_partition(Ets, Topic, TopicMetadataArray, UnknownTopic
             %% do nothing when ok or any other error
             ok
     end.
+=======
+%% to cache the not-found status of a given topics
+maybe_cache_unknown_topic_partition(_Ets, [], _TopicMetadata, _TopicCacheTTL) -> ok;
+maybe_cache_unknown_topic_partition(Ets, [Topic | Rest], TopicMetadata, TopicCacheTTL) ->
+  case find_partition_count_in_topic_metadata_array(TopicMetadata, Topic) of
+    {error, unknown_topic_or_partition} = Err ->
+      ets:insert(Ets, {?TOPIC_METADATA_KEY(Topic), Err, {expire, expire_ts(TopicCacheTTL)}});
+    _ ->
+      %% do nothing when ok or any other error
+      ok
+  end,
+  maybe_cache_unknown_topic_partition(Ets, Rest, TopicMetadata, TopicCacheTTL).
+>>>>>>> a85a76390f92a85e1fe412d7e7e662775b300127
 
 -spec update_partitions_count_cache(ets:tab(), [kpro:struct()], non_neg_integer()) -> ok.
 update_partitions_count_cache(_Ets, [], _UnknownTopicCacheTtl) ->
@@ -1114,6 +1109,67 @@ ensure_partition_workers(TopicName, State, F) ->
             end
         end
     ).
+
+-spec maybe_start_partition_producer(TopicsMetadata, Producers, Topics, ProducerSup) -> ok
+when
+  TopicsMetadata :: #{Key => non_neg_integer()},
+  Producers :: #{Key => non_neg_integer()},
+  Topics :: [topic()],
+  ProducerSup :: pid(),
+  Key :: topic().
+maybe_start_partition_producer(_TopicsMetadata, _Producers, [], _ProducerSuf) ->
+  ok;
+maybe_start_partition_producer(TopicsMetadata, Producers, [Topic | Rest], ProducerSup) when
+  is_map_key(Topic, TopicsMetadata), is_map_key(Topic, Producers)
+->
+  OldPartitionCnt = maps:get(Topic, Producers),
+  NewPartitionCnt = maps:get(Topic, TopicsMetadata),
+
+  case NewPartitionCnt > OldPartitionCnt of
+    true ->
+      do_start_partition_producer(ProducerSup, Topic, OldPartitionCnt, NewPartitionCnt);
+    _ ->
+      ok
+  end,
+
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup);
+maybe_start_partition_producer(TopicsMetadata, Producers, [_Topic | Rest], ProducerSup) ->
+  maybe_start_partition_producer(TopicsMetadata, Producers, Rest, ProducerSup).
+
+-spec do_start_partition_producer(pid(), topic(), non_neg_integer(), non_neg_integer()) -> ok.
+do_start_partition_producer(ProducerSup, Topic, OldPartitionCnt, NewPartitionCnt) ->
+  %% Get producer config from partition producer which partition index is 0.
+  case brod_producers_sup:get_producer_config(ProducerSup, Topic, 0) of
+    {ok, Config} ->
+      %% start new producers for the partitions that are not started yet
+      lists:foreach(
+        fun
+          (Partition) when is_integer(Partition) ->
+            %% start a new producer for the partition
+            brod_producers_sup:start_producer(ProducerSup, self(), Topic, Partition, Config),
+            ok;
+          (_) ->
+            ok
+        end,
+        lists:seq(OldPartitionCnt, NewPartitionCnt - 1)
+      );
+    _ ->
+      %% get producer config failed, do not start new producers
+      ok
+  end.
+
+-spec filter_topics([kpro:struct()]) -> #{topic() => non_neg_integer()}.
+filter_topics(TopicsMetadataArray) ->
+  {_, NoErrors1} =
+    lists:partition(fun(#{error_code := E}) -> ?IS_ERROR(E) end, TopicsMetadataArray),
+
+  NoErrors = [
+    {TopicName, erlang:length(Partitions)}
+    || #{name := <<TopicName/binary>>, partitions := Partitions} <- NoErrors1,
+    is_list(Partitions)
+  ],
+
+  maps:from_list(NoErrors).
 
 %% Catches exit exceptions when making gen_server:call.
 -spec safe_gen_call(pid() | atom(), Call, Timeout) -> Return when

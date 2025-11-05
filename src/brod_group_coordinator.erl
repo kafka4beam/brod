@@ -152,6 +152,8 @@
         , offset_commit_policy           :: offset_commit_policy()
         , offset_commit_interval_seconds :: pos_integer()
         , protocol_name                  :: protocol_name()
+          %% Static member ID
+        , group_instance_id              :: binary()
         }).
 
 -type state() :: #state{}.
@@ -256,7 +258,7 @@
 %%      is irrelevant if `offset_commit_policy' is
 %%      `consumer_managed'.</li>
 %%
-%%  <li>`protocol_name' (optional, default = roundrobin_v2)
+%%  <li>`protocol_name' (optional, default = "roundrobin_v2")
 %%
 %%      This is the protocol name used when join a group, if not given,
 %%      by default `partition_assignment_strategy' is used as the protocol name.
@@ -265,6 +267,11 @@
 %%      commonly used protocol name for JAVA client. However, brod only supports
 %%      roundrobin protocol out of the box, in order to mimic 'range' protocol
 %%      one will have to do it via `callback_implemented' assignment strategy
+%%  </li>
+%%
+%%  <li>`group_instance_id' (optional)
+%%      This is the static group member ID.
+%%      Default value is `node()/pid()'. For example, `bord@host.domain/<0.1293.0>'
 %%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -328,7 +335,12 @@ stop(Pid) ->
 init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   erlang:process_flag(trap_exit, true),
   GetCfg = fun(Name, Default) ->
-             proplists:get_value(Name, Config, Default)
+             case proplists:get_value(Name, Config, undefined) of
+               undefined ->
+                 Default;
+               Value ->
+                 Value
+             end
            end,
   PaStrategy = GetCfg(partition_assignment_strategy,
                       ?PARTITION_ASSIGMENT_STRATEGY_ROUNDROBIN),
@@ -341,7 +353,8 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   OffsetCommitPolicy = GetCfg(offset_commit_policy, ?OFFSET_COMMIT_POLICY),
   OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
                                        ?OFFSET_COMMIT_INTERVAL_SECONDS),
-  ProtocolName = GetCfg(protocol_name, PaStrategy),
+  ProtocolName = GetCfg(protocol_name, bin(PaStrategy)),
+  StaticMemberID = GetCfg(group_instance_id, default_group_instance_id()),
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
   State =
@@ -360,6 +373,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_commit_policy           = OffsetCommitPolicy
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           , protocol_name                  = ProtocolName
+          , group_instance_id              = StaticMemberID
           },
   {ok, State}.
 
@@ -623,6 +637,7 @@ join_group(#state{ groupId                    = GroupId
                  , protocol_name              = ProtocolName
                  , member_module              = MemberModule
                  , member_pid                 = MemberPid
+                 , group_instance_id          = StaticMemberID
                  } = State0) ->
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
@@ -642,6 +657,7 @@ join_group(#state{ groupId                    = GroupId
     , {member_id, MemberId0}
     , {protocol_type, ?PROTOCOL_TYPE}
     , {protocols, [Protocol]}
+    , {group_instance_id, StaticMemberID}
     ],
   Req = brod_kafka_request:join_group(Connection, Body),
   %% send join group request and wait for response
@@ -1157,7 +1173,8 @@ make_group_connection_client_id() -> coordinator_id().
 coordinator_id() ->
   bin(io_lib:format("~p/~p", [node(), self()])).
 
--spec bin(iodata()) -> binary().
+-spec bin(atom() | iodata()) -> binary().
+bin(A) when is_atom(A) -> atom_to_binary(A);
 bin(X) -> iolist_to_binary(X).
 
 %% Before roundrobin_v2, brod had two versions of commit metadata:
@@ -1193,6 +1210,9 @@ maybe_upgrade_from_roundrobin_v1(Offset, Metadata) ->
 is_default_offset_retention(-1) -> true;
 is_default_offset_retention(?undef) -> true;
 is_default_offset_retention(_) -> false.
+
+default_group_instance_id() ->
+    bin([bin(node()), "/", pid_to_list(self())]).
 
 -ifdef(TEST).
 

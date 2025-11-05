@@ -3,11 +3,41 @@
   - Expose `create_partitions` from the underlying kafka_protocol
   - Allow partitions to automatically have producers started for newly discovered partitions.
 
+- 4.4.6
+  - Upgrade to `kafka_protocol-4.2.8` for dependency (`crc32cer-1.0.4`) to fix its link error.
+
+- 4.4.5
+  - Start supervisor process for the new increase partitions at `do_get_metadata` function.
+  - Upgrade to `kafka_protocol-4.2.7` for fast dependency (`crc32cer-1.0.3`) build.
+
+- 4.4.4
+  - Fixed `ListGroups` API request for Kafka Protocol API version 3.
+
+- 4.4.3
+  - Modify`brod_client:get_metadata` and `brod_client:get_metadata_safe` function for support multiple topics.
+
+- 4.4.2
+  - Expanded API version ranges to support Kafka 4.0.0
+    ```
+    join_group: {0,1} -> {0,6}
+    heartbeat: {0,0} -> {0,4}
+    leave_group: {0,0} -> {0,4}
+    describe_groups: {0,0} -> {0,5}
+    list_groups: {0,0} -> {0,3}
+    create_topics: {0,0} -> {0,4}
+    delete_topics: {0,0} -> {0,4}
+    ```
+
+- 4.4.1
+  - Upgrade `kafka_protocol` from 4.2.3 to 4.2.5 for:
+    - `crc32c` performance improvements on ARM.
+  - Replace self messaging in `init` with `handle_continue`
+
 - 4.4.0
   - Support `zstd` compression.
   - Upgrade `kafka_protocol` from 4.1.10 to 4.2.3 for:
     - logging improvements
-    - `crc32c` performance improvements
+    - `crc32c` performance improvements on x86
 
 - 4.3.3
   - Catch `exit` exception when group coordinator calls group member (owner) process.

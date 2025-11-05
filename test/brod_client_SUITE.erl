@@ -70,7 +70,6 @@
           end
         end()).
 
-
 -record(state,
         { client_id            :: pid()
         , bootstrap_endpoints  :: [brod:endpoint()]
@@ -128,7 +127,6 @@ all() ->
 
 
 %%%_* Test functions ===========================================================
-
 t_optional_partitions_syncing(Config) when is_list(Config) ->
   Client0 = has_sync,
   Config0 = [{sync_partitions, true}],
@@ -505,17 +503,9 @@ mock_connection(EP) ->
     end,
   ok = meck:expect(kpro_connection, start, StartFun),
   ok = meck:expect(kpro_connection, get_endpoint, 1, {ok, EP}),
-  ok = meck:expect(kpro_connection, get_api_vsns, 1, {ok, ?undef}),
   Ref.
 
-kafka_version() ->
-  case os:getenv("KAFKA_VERSION") of
-    false ->
-      ?LATEST_KAFKA_VERSION;
-    Vsn ->
-      [Major, Minor | _] = string:tokens(Vsn, "."),
-      {list_to_integer(Major), list_to_integer(Minor)}
-  end.
+kafka_version() -> kafka_test_helper:kafka_version().
 
 start_client(Hosts, ClientId) -> start_client(Hosts, ClientId, []).
 

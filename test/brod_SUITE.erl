@@ -43,8 +43,9 @@ suite() -> [{timetrap, {minutes, 5}}].
 init_per_suite(Config) ->
   case kafka_test_helper:kafka_version() of
     {0, 9} ->
-      {skip, "no_topic_manaegment_apis"};
+      {skip, "no_topic_management_apis"};
     _ ->
+      {ok, _} = application:ensure_all_started(brod),
       Config
   end.
 

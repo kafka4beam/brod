@@ -78,11 +78,12 @@
          start_child/2, restart_child/2,
          delete_child/2, terminate_child/2,
          which_children/1, count_children/1,
-         find_child/2, check_childspecs/1]).
+         find_child/2, check_childspecs/1,
+         get_childspec/2]).
 
 %% Internal exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         handle_continue/2, terminate/2, code_change/3]).
 -export([try_again_restart/3]).
 
 %%--------------------------------------------------------------------------
@@ -297,6 +298,21 @@ check_childspecs(ChildSpecs) when is_list(ChildSpecs) ->
     end;
 check_childspecs(X) -> {error, {badarg, X}}.
 
+%%-----------------------------------------------------------------
+%% Func: get_childspec/2
+%% Returns: {ok, child_spec()} | {error, Reason}
+%%          the child specification tuple for the child identified by `Name' under
+%%          supervisor `SupRef'. The returned map contains all keys, both mandatory and
+%%          optional.
+%%-----------------------------------------------------------------
+-spec get_childspec(SupRef, Name) -> Result when
+  SupRef :: sup_ref(),
+  Name :: child_id(),
+  Result :: {'ok', child_spec()} | {'error', Error},
+  Error :: 'not_found'.
+get_childspec(Supervisor, Name) ->
+  call(Supervisor, {get_childspec, Name}).
+
 %%%-----------------------------------------------------------------
 %%% Called by timer:apply_after from restart/2
 -spec try_again_restart(SupRef, Child, Reason) -> ok when
@@ -330,8 +346,7 @@ init({SupName, Mod, Args}) ->
         {ok, {SupFlags, StartSpec}} ->
             do_init(SupName, SupFlags, StartSpec, Mod, Args);
         post_init ->
-            self() ! {post_init, SupName, Mod, Args},
-            {ok, #state{}};
+            {ok, #state{}, {continue, {post_init, SupName, Mod, Args}}};
         ignore ->
             ignore;
         Error ->
@@ -587,7 +602,15 @@ handle_call(count_children, _From, State) ->
     %% Reformat counts to a property list.
     Reply = [{specs, Specs}, {active, Active},
              {supervisors, Supers}, {workers, Workers}],
-    {reply, Reply, State}.
+    {reply, Reply, State};
+
+handle_call({get_childspec, Name}, _From, State) ->
+  case get_child(Name, State) of
+    {value, Child} ->
+      {reply, {ok, child_to_spec(Child)}, State};
+    _ ->
+      {reply, {error, not_found}, State}
+  end.
 
 count_if_alive(Pid, Alive, Total) ->
     case is_pid(Pid) andalso is_process_alive(Pid) of
@@ -613,6 +636,17 @@ count_child(#child{pid = Pid, child_type = supervisor},
         false -> {Specs + 1, Active, Supers + 1, Workers}
     end.
 
+-spec child_to_spec(child_rec()) -> child_spec().
+child_to_spec(#child{
+    pid = _Pid,
+    name = Name,
+    mfargs = Func,
+    restart_type = Restart,
+    shutdown = Shutdown,
+    child_type = Type,
+    modules = Mods
+}) ->
+  {Name, Func, Restart, Shutdown, Type, Mods}.
 
 %%% If a restart attempt failed, this message is sent via
 %%% timer:apply_after(0,...) in order to give gen_server the chance to
@@ -669,6 +703,12 @@ handle_info({delayed_restart, {RestartType, _Reason, Child}}, State) ->
         _What ->
             {noreply, State}
     end;
+
+handle_info(Msg, State) ->
+    error_logger:error_msg("Supervisor received unexpected message: ~p~n",
+                           [Msg]),
+    {noreply, State}.
+
 %% [1] When we receive a delayed_restart message we want to reset the
 %% restarts field since otherwise the MaxT might not have elapsed and
 %% we would just delay again and again. Since a common use of the
@@ -676,7 +716,7 @@ handle_info({delayed_restart, {RestartType, _Reason, Child}}, State) ->
 %% (so that we don't end up bouncing around in non-delayed restarts)
 %% this is important.
 
-handle_info({post_init, SupName, Mod, Args}, State0) ->
+handle_continue({post_init, SupName, Mod, Args}, State0) ->
     Res = case Mod:post_init(Args) of
               {ok, {SupFlags, StartSpec}} ->
                   do_init(SupName, SupFlags, StartSpec, Mod, Args);
@@ -687,12 +727,7 @@ handle_info({post_init, SupName, Mod, Args}, State0) ->
     case Res of
         {ok, NewState} -> {noreply, NewState};
         {stop, Reason} -> {stop, Reason, State0}
-    end;
-
-handle_info(Msg, State) ->
-    error_logger:error_msg("Supervisor received unexpected message: ~p~n",
-                           [Msg]),
-    {noreply, State}.
+    end.
 
 %%
 %% Terminate this server.
