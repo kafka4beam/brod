@@ -43,7 +43,7 @@
 
 -type state() :: #state{}.
 
--spec start_link(pid(), pid(), brod_client:config()) ->
+-spec start_link(atom(), pid(), brod_client:config()) ->
     {ok, pid()} | {error, any()}.
 start_link(ClientId, ProducersSup, Config) ->
     gen_server:start_link(?MODULE, {ClientId, ProducersSup, Config}, []).
