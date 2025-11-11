@@ -1,5 +1,9 @@
 # Changelog
 
+- 4.4.7
+  - Upgrade to `kafka_protocol-4.3.0` for improved message encoding performance. See [kafka_protocol changelog](https://github.com/kafka4beam/kafka_protocol/blob/master/changelog.md) for details.
+  - Add a warning log when group coordinator 'EXIT' signal is received by `group_subscriber_v2`.
+
 - 4.4.6
   - Upgrade to `kafka_protocol-4.2.8` for dependency (`crc32cer-1.0.4`) to fix its link error.
 
