@@ -51,6 +51,7 @@
         , t_consumer_crash/1
         , t_assign_partitions_handles_updating_state/1
         , t_get_workers/1
+        , v2_health_check/1
         , v2_coordinator_crash/1
         , v2_consumer_cleanup/1
         , v2_subscriber_shutdown/1
@@ -97,6 +98,7 @@ groups() ->
      , t_async_commit
      , t_assign_partitions_handles_updating_state
      , t_get_workers
+     , v2_health_check
      , v2_coordinator_crash
      , v2_consumer_cleanup
      , v2_subscriber_shutdown
@@ -302,6 +304,44 @@ t_get_workers(Config) when is_list(Config) ->
              ct:pal("result: ~p", [Workers]),
              ?assert(is_map(Workers)),
              ?assert(lists:all(fun is_pid/1, maps:values(Workers))),
+             ok
+         end);
+    _ ->
+      ok
+  end.
+
+v2_health_check(Config) when is_list(Config) ->
+  case ?config(behavior) of
+     brod_group_subscriber_v2 ->
+      InitArgs = #{async_ack => true},
+      Topic = ?topic,
+      Partition = 0,
+      Timeout = 5000,
+      ?check_trace(
+         #{ timeout => 10000 },
+         %% Run stage:
+         begin
+           {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
+           %% Send a message to ensure workers are established
+           produce({Topic, Partition}, <<"test">>),
+           {ok, _} = ?wait_message(Topic, Partition, <<"test">>, _),
+           %% Test 1: When all workers are healthy, should return empty list
+           HealthResult1 = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
+           %% Test 2: Test with non-existent PID
+           FakePid = list_to_pid("<0.999.0>"),
+           HealthResult2 = brod_group_subscriber_v2:health_check(FakePid, 1000),
+           %% Cleanup: stop the subscriber
+           ok = stop_subscriber(Config, SubscriberPid),
+           {HealthResult1, HealthResult2}
+         end,
+         %% Check stage:
+         fun({HealthResult1, HealthResult2}, _Trace) ->
+             %% When healthy, should return empty list
+             ct:pal("Health check result (healthy): ~p", [HealthResult1]),
+             ?assertMatch(ok, HealthResult1),
+             %% When process doesn't exist, should return error
+             ct:pal("Health check result (non-existent): ~p", [HealthResult2]),
+             ?assertMatch({error, [_|_]}, HealthResult2),
              ok
          end);
     _ ->
@@ -749,6 +789,7 @@ start_subscriber(GroupId, Config, Topics, GroupConfig, ConsumerConfig, InitArgs)
   {ok, SubscriberPid}.
 
 stop_subscriber(Config, Pid) ->
+  unlink(Pid),
   (?config(behavior)):stop(Pid).
 
 %%%_* Emacs ====================================================================

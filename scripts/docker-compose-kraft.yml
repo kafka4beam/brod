@@ -18,6 +18,7 @@ services:
       - "9094:9094"
       - "9095:9095"
     environment:
+      KAFKA_connections__max__idle__ms: 30000
       BROKER_ID: 1
       CONTROLLER_PORT: 9090
       INNER_PORT: 9091
@@ -40,6 +41,7 @@ services:
       - "9194:9094"
       - "9195:9095"
     environment:
+      KAFKA_connections__max__idle__ms: 30000
       BROKER_ID: 2
       CONTROLLER_PORT: 9090
       INNER_PORT: 9091

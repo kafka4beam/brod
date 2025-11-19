@@ -31,6 +31,7 @@
 -export([ ack/3
         , start_link/1
         , stop/1
+        , health_check/2
         ]).
 
 %% Deprecated APIs kept for backward compatibility:
@@ -270,6 +271,17 @@ stop(Pid) ->
 ack(Pid, Partition, Offset) ->
   gen_server:cast(Pid, {ack, Partition, Offset}).
 
+%% @doc Returns empty if all consumers are connected,
+%% otherwise a list of errors.
+-spec health_check(pid(), pos_integer()) -> [map()].
+health_check(Pid, Timeout) ->
+  try
+    gen_server:call(Pid, {health_check, Timeout}, Timeout + 50)
+  catch
+    exit : Reason ->
+      ?MF_ERR_MAP(Reason)
+  end.
+
 %%%_* gen_server callbacks =====================================================
 
 %% @private
@@ -374,6 +386,8 @@ handle_info(Info, #state{cb_module = CbModule, cb_state = CbState} = State) ->
   end.
 
 %% @private
+handle_call({health_check, Timeout}, _From, State) ->
+  {reply, do_health_check(State, Timeout), State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -538,6 +552,23 @@ send_lo_cmd(CMD) -> send_lo_cmd(CMD, 0).
 
 send_lo_cmd(CMD, 0)       -> self() ! CMD;
 send_lo_cmd(CMD, DelayMS) -> erlang:send_after(DelayMS, self(), CMD).
+
+do_health_check(#state{consumers = Consumers}, Timeout) ->
+  Fn = fun(#consumer{partition = Partition, consumer_pid = ConsumerPid}) ->
+          case brod_consumer:check_connectivity(ConsumerPid, Timeout) of
+            ok ->
+              [];
+            {error, Reason} ->
+              #{partition => Partition,
+                cause => Reason}
+          end
+       end,
+  try
+    lists:flatten(brod_utils:pmap(Fn, Consumers, Timeout))
+  catch
+    throw : timeout ->
+      [?MF_ERR_MAP(timeout)]
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
