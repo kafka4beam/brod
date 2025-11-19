@@ -26,7 +26,7 @@ function docker_compose() {
     fi
 }
 
-KAFKA_VERSION="${KAFKA_VERSION:${1:-4.0.0}}"
+KAFKA_VERSION="${KAFKA_VERSION:-${1:-4.0.0}}"
 
 case $KAFKA_VERSION in
   0.9*)
@@ -56,7 +56,7 @@ case $KAFKA_VERSION in
     ;;
 esac
 
-export KAFKA_IMAGE_VERSION="1.1.1-${KAFKA_VERSION}"
+export KAFKA_IMAGE_VERSION="1.3.0-${KAFKA_VERSION}"
 echo "env KAFKA_IMAGE_VERSION=$KAFKA_IMAGE_VERSION"
 
 KAFKA_MAJOR=$(echo "$KAFKA_VERSION" | cut -d. -f1)
