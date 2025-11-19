@@ -7,7 +7,7 @@ networks:
 
 services:
   kafka_1:
-    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    image: "zmstone/kafka:1.3.0-${KAFKA_VERSION}"
     container_name: 'kafka-1'
     networks:
       kafka-net:
@@ -29,7 +29,7 @@ services:
       INNER_HOSTNAME: ${KAFKA_1_IP}
       VOTERS: 1@${KAFKA_1_IP}:9090,2@${KAFKA_2_IP}:9090
   kafka_2:
-    image: "zmstone/kafka:1.1-${KAFKA_VERSION}"
+    image: "zmstone/kafka:1.3.0-${KAFKA_VERSION}"
     container_name: 'kafka-2'
     networks:
       kafka-net:
