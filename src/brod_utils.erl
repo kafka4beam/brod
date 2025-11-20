@@ -999,9 +999,11 @@ pmap(Fun, [_|_] = List, Timeout) when is_function(Fun, 1), ?IS_TIMEOUT(Timeout) 
                       end, lists:zip(SeqL, List)),
   receive
     {Collector, Res} ->
+      ok = drain_exits([Collector | Workers]),
       Res
   after Timeout ->
     lists:foreach(fun unlink_kill/1, [Collector | Workers]),
+    ok = drain_exits([Collector | Workers]),
     throw(timeout)
   end.
 
@@ -1009,6 +1011,15 @@ unlink_kill(Pid) ->
   unlink(Pid),
   exit(Pid, kill),
   ok.
+
+drain_exits(Pids) ->
+  erlang:yield(),
+  lists:foreach(fun drain_exit/1, Pids).
+
+drain_exit(Pid) ->
+  receive {'EXIT', Pid, _} -> ok
+  after 0 -> ok
+  end.
 
 collect_pmap_results(Parent, [], Acc) ->
   Parent ! {self(), lists:reverse(Acc)},

@@ -109,7 +109,42 @@ pmap_test_() ->
      %% Function that returns different types
      Result = brod_utils:pmap(fun(X) -> {result, X} end, [1, 2, 3], infinity),
      ?assertEqual([{result, 1}, {result, 2}, {result, 3}], Result)
+   end,
+   fun() ->
+     %% Test that EXIT messages from temp workers are drained when caller traps exits
+     Self = self(),
+     TestPid = spawn(fun() ->
+                        process_flag(trap_exit, true),
+                        %% Call pmap which spawns linked workers
+                        Result = brod_utils:pmap(fun(X) -> X * 2 end, [1, 2, 3, 4, 5], infinity),
+                        %% Give a moment for any EXIT messages to arrive
+                        timer:sleep(10),
+                        %% Check mailbox for EXIT messages from temp workers
+                        %% There should be none - they should have been drained
+                        ExitMessages = collect_exit_messages(),
+                        Self ! {test_result, Result, ExitMessages}
+                     end),
+     receive
+       {test_result, Result, ExitMessages} ->
+         ?assertEqual([2, 4, 6, 8, 10], Result),
+         %% Verify no EXIT messages from temp workers remain
+         ?assertEqual([], ExitMessages)
+     after 5000 ->
+       exit(TestPid, kill),
+       ?assert(false, "Test timeout")
+     end
    end].
+
+collect_exit_messages() ->
+  collect_exit_messages([]).
+
+collect_exit_messages(Acc) ->
+  receive
+    {'EXIT', Pid, Reason} ->
+      collect_exit_messages([{'EXIT', Pid, Reason} | Acc])
+  after 0 ->
+    Acc
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
