@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.5.1
+  - Refine warning log for `group_subscriber_v2` when corrdinator exits.
+
 - 4.5.0
   - Add `brod_group_subscriber_v2:health_check/2` to check topic-partition consumer connectivity status.
 

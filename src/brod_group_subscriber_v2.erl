@@ -392,10 +392,19 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'EXIT', Pid, Reason}, #state{coordinator = Pid} = State) ->
-  %% Coordinator is owned by self and never explictly shutdown,
-  %% so there is no 'normal' exit, hence the warning level log.
-  ?BROD_LOG_WARNING("Coordinator EXIT:~p", [Reason]),
+handle_info({'EXIT', Pid, Reason},
+            #state{group_id = GroupId,
+                   coordinator = Pid} = State) ->
+  case Reason of
+    normal ->
+      ok;
+    shutdown ->
+      ok;
+    {shutdown, _} ->
+      ok;
+    _ ->
+      ?BROD_LOG_WARNING("Coordinator ~s EXIT: ~p", [GroupId, Reason])
+  end,
   {stop, {shutdown, coordinator_failure}, State#state{coordinator = undefined}};
 handle_info({'EXIT', Pid, Reason}, State) ->
   case [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid] of
