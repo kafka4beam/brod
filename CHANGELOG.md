@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.5.0
+  - Add `brod_group_subscriber_v2:health_check/2` to check topic-partition consumer connectivity status.
+
 - 4.4.7
   - Upgrade to `kafka_protocol-4.3.0` for improved message encoding performance. See [kafka_protocol changelog](https://github.com/kafka4beam/kafka_protocol/blob/master/changelog.md) for details.
   - Add a warning log when group coordinator 'EXIT' signal is received by `group_subscriber_v2`.

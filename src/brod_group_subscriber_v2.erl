@@ -35,6 +35,7 @@
         , start_link/1
         , stop/1
         , get_workers/1
+        , health_check/2
         ]).
 
 %% brod_group_coordinator callbacks
@@ -208,6 +209,22 @@ get_workers(Pid) ->
 get_workers(Pid, Timeout) ->
   gen_server:call(Pid, get_workers, Timeout).
 
+%% @doc Returns `ok' if all workers are healthy,
+%% otherwise `{error, Reasons}' where `Reasons' is a list of errors.
+-spec health_check(pid(), timeout()) -> ok | {error, [map()]}.
+health_check(Pid, Timeout) ->
+  try
+    case gen_server:call(Pid, {health_check, Timeout}, Timeout) of
+      [] ->
+        ok;
+      Errors ->
+        {error, Errors}
+    end
+  catch
+    exit : Reason ->
+      {error, [?MF_ERR_MAP(#{reason => Reason, group_subscriber => Pid})]}
+  end.
+
 %%%===================================================================
 %%% group_coordinator callbacks
 %%%===================================================================
@@ -315,6 +332,8 @@ handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
   {reply, Reply, State};
 handle_call(get_workers, _From, State = #state{workers = Workers}) ->
   {reply, Workers, State};
+handle_call({health_check, Timeout}, _From, State = #state{workers = Workers}) ->
+  {reply, do_health_check(Workers, Timeout), State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -544,6 +563,25 @@ stop_consumers(Config) ->
         _ = brod_client:stop_consumer(Client, Topic)
     end,
     Topics).
+
+do_health_check(Workers0, Timeout) ->
+  Workers = lists:keysort(1, maps:to_list(Workers0)),
+  Fn = fun({{Topic, _Partition}, Pid}) ->
+         case brod_topic_subscriber:health_check(Pid, Timeout) of
+           [] ->
+             [];
+           [Error] ->
+             %% start one consumer for each topic
+             %% so it's always a one-element list
+             [Error#{topic => Topic}]
+         end
+       end,
+  try
+    lists:flatten(brod_utils:pmap(Fn, Workers, Timeout))
+  catch
+    throw : timeout ->
+      [?MF_ERR_MAP(timeout)]
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

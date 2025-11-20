@@ -47,6 +47,7 @@
         , t_offset_reset_policy/1
         , t_stop_kill/1
         , t_smoke_list_groups/1
+        , t_check_connectivity/1
         ]).
 
 
@@ -890,6 +891,63 @@ t_smoke_list_groups(Config) when is_list(Config) ->
   [Endpoint] = ?HOSTS,
   ConnOpts = kafka_test_helper:client_config(),
   ?assertMatch({ok, Groups} when is_list(Groups), brod:list_groups(Endpoint, ConnOpts)),
+  ok.
+
+%% @doc Test check_connectivity function for brod_consumer.
+t_check_connectivity(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  ConsumerCfg = consumer_config(),
+  {ok, ConsumerPid} =
+    brod_consumer:start_link(whereis(Client), Topic, Partition, ConsumerCfg),
+  %% Subscribe to establish connection
+  {ok, Offset} = brod:resolve_offset(?HOSTS, Topic, Partition,
+                                     ?OFFSET_LATEST, ?config(client_config)),
+  ok = brod_consumer:subscribe(ConsumerPid, self(), [{begin_offset, Offset}]),
+  Timeout = 5000,
+  %% Wait for connection to be established
+  WaitForConnection = fun() ->
+    case brod_consumer:get_connection(ConsumerPid) of
+      undefined -> false;
+      Pid when is_pid(Pid) -> is_process_alive(Pid)
+    end
+  end,
+  ?assertEqual(true, retry(WaitForConnection, 5)),
+  %% Test 1: When connection is alive, should return ok
+  ?assertEqual(ok, brod_consumer:check_connectivity(ConsumerPid, Timeout)),
+  %% Verify connection exists
+  ConnPid = brod_consumer:get_connection(ConsumerPid),
+  ?assert(is_pid(ConnPid)),
+  ?assert(is_process_alive(ConnPid)),
+  %% Test 2: Kill connection, should return {error, disconnected}
+  exit(ConnPid, kill),
+  %% Wait for the consumer to detect the connection is dead
+  %% Use retry mechanism similar to other tests
+  WaitForDisconnected = fun() ->
+    case brod_consumer:check_connectivity(ConsumerPid, 1000) of
+      {error, disconnected} -> true;
+      _ -> false
+    end
+  end,
+  ?assertEqual(true, retry(WaitForDisconnected, 5)),
+  %% Test 3: Suspend the pid, assert {error, {timeout, ...}}
+  sys:suspend(ConsumerPid),
+  ?assertMatch({error, {timeout, _}}, brod_consumer:check_connectivity(ConsumerPid, 100)),
+  sys:resume(ConsumerPid),
+  %% Wait for connection to be re-established after resuming
+  WaitForReconnected = fun() ->
+    case brod_consumer:check_connectivity(ConsumerPid, 1000) of
+      ok -> true;
+      _ -> false
+    end
+  end,
+  ?assertEqual(true, retry(WaitForReconnected, 5)),
+  %% Test 4: Test with non-existent PID, should return {error, Reason}
+  FakePid = list_to_pid("<0.999.0>"),
+  ?assertMatch({error, _}, brod_consumer:check_connectivity(FakePid, 1000)),
+  %% Cleanup
+  ok = brod_consumer:stop(ConsumerPid),
   ok.
 
 %%%_* Help functions ===========================================================

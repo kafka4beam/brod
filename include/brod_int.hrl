@@ -76,6 +76,8 @@
 -define(BROD_LOG_INFO(Fmt, Args),    ?LOG_INFO(   Fmt, Args, #{domain => [brod]})).
 -define(BROD_LOG(Level, Fmt, Args),  ?LOG(Level,  Fmt, Args, #{domain => [brod]})).
 
+-define(MF_ERR_MAP(Reason), #{cause => Reason, module => ?MODULE, func => ?FUNCTION_NAME}).
+
 -endif. % include brod_int.hrl
 
 %%%_* Emacs ====================================================================

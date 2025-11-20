@@ -60,6 +60,7 @@
         , resolve_offset/5
         , resolve_offset/6
         , kpro_connection_options/1
+        , pmap/3
         ]).
 
 -include("brod_int.hrl").
@@ -984,6 +985,50 @@ is_batch(_) -> false.
 
 nolink(C) when is_list(C) -> [{nolink, true} | C];
 nolink(C) when is_map(C) -> C#{nolink => true}.
+
+%% @doc Parallel map with timeout.
+-define(IS_TIMEOUT(T), ((is_integer(Timeout) andalso Timeout >= 0) orelse Timeout =:= infinity)).
+-spec pmap(fun((A) -> B), list(A), timeout()) -> list(B).
+pmap(_Fun, [], _Timeout) -> [];
+pmap(Fun, [_|_] = List, Timeout) when is_function(Fun, 1), ?IS_TIMEOUT(Timeout) ->
+  SeqL = lists:seq(1, length(List)),
+  Parent = self(),
+  Collector = erlang:spawn_link(fun() -> collect_pmap_results(Parent, SeqL, []) end),
+  Workers = lists:map(fun({Seq, Item}) ->
+                        erlang:spawn_link(fun() -> Collector ! {Seq, Fun(Item)} end)
+                      end, lists:zip(SeqL, List)),
+  receive
+    {Collector, Res} ->
+      ok = drain_exits([Collector | Workers]),
+      Res
+  after Timeout ->
+    lists:foreach(fun unlink_kill/1, [Collector | Workers]),
+    ok = drain_exits([Collector | Workers]),
+    throw(timeout)
+  end.
+
+unlink_kill(Pid) ->
+  unlink(Pid),
+  exit(Pid, kill),
+  ok.
+
+drain_exits(Pids) ->
+  erlang:yield(),
+  lists:foreach(fun drain_exit/1, Pids).
+
+drain_exit(Pid) ->
+  receive {'EXIT', Pid, _} -> ok
+  after 0 -> ok
+  end.
+
+collect_pmap_results(Parent, [], Acc) ->
+  Parent ! {self(), lists:reverse(Acc)},
+  ok;
+collect_pmap_results(Parent, [Seq | SeqL], Acc) ->
+  receive
+    {Seq, Result} ->
+      collect_pmap_results(Parent, SeqL, [Result | Acc])
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

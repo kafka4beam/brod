@@ -44,6 +44,7 @@
         , stop_maybe_kill/2
         , subscribe/3
         , unsubscribe/2
+        , check_connectivity/2
         ]).
 
 %% Debug API
@@ -299,6 +300,21 @@ debug(Pid, File) when is_list(File) ->
 get_connection(Pid) ->
   gen_server:call(Pid, get_connection).
 
+%% @doc Return 'ok' if the payload connection is alive.
+-spec check_connectivity(pid(), pos_integer()) -> ok | {error, term()}.
+check_connectivity(Pid, Timeout) ->
+  try
+    case gen_server:call(Pid, is_connected, Timeout) of
+      true ->
+        ok;
+      false ->
+        {error, disconnected}
+    end
+  catch
+    exit : Reason ->
+      {error, Reason}
+  end.
+
 %%%_* gen_server callbacks =====================================================
 
 init({Bootstrap0, Topic, Partition, Config}) ->
@@ -402,6 +418,8 @@ handle_info(Info, State) ->
   {noreply, State}.
 
 %% @private
+handle_call(is_connected, _From, #state{connection = C} = State) ->
+  {reply, is_pid(C) andalso is_process_alive(C), State};
 handle_call(get_connection, _From, #state{connection = C} = State) ->
   {reply, C, State};
 handle_call({subscribe, Pid, Options}, _From,
