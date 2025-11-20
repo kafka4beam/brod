@@ -1003,18 +1003,24 @@ pmap(Fun, [_|_] = List, Timeout) when is_function(Fun, 1), ?IS_TIMEOUT(Timeout) 
       Res
   after Timeout ->
     lists:foreach(fun unlink_kill/1, [Collector | Workers]),
-    ok = drain_exits([Collector | Workers]),
     throw(timeout)
   end.
 
 unlink_kill(Pid) ->
   unlink(Pid),
+  %% in case it's aready dead
+  drain_exit(Pid),
   exit(Pid, kill),
   ok.
 
 drain_exits(Pids) ->
-  erlang:yield(),
-  lists:foreach(fun drain_exit/1, Pids).
+  case erlang:process_info(self(), trap_exit) of
+    {trap_exit, true} ->
+      timer:sleep(5),
+      lists:foreach(fun drain_exit/1, Pids);
+    _ ->
+      ok
+  end.
 
 drain_exit(Pid) ->
   receive {'EXIT', Pid, _} -> ok
