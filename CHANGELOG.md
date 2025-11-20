@@ -1,4 +1,7 @@
 # Changelog
+- 4.5.0
+  - Expose `create_partitions` from the underlying kafka_protocol
+  - Allow partitions to automatically have producers started for newly discovered partitions.
 
 - 4.4.7
   - Upgrade to `kafka_protocol-4.3.0` for improved message encoding performance. See [kafka_protocol changelog](https://github.com/kafka4beam/kafka_protocol/blob/master/changelog.md) for details.

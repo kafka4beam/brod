@@ -18,6 +18,7 @@
 -module(brod_kafka_request).
 
 -export([ create_topics/3
+        , create_partitions/3
         , delete_topics/3
         , fetch/8
         , list_groups/1
@@ -36,6 +37,7 @@
 -type vsn() :: brod_kafka_apis:vsn().
 -type topic() :: brod:topic().
 -type topic_config() :: kpro:struct().
+-type topic_partition_config() :: kpro:struct().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
 -type conn() :: kpro:connection().
@@ -64,6 +66,16 @@ create_topics(Connection, TopicConfigs, RequestConfigs)
   create_topics(Vsn, TopicConfigs, RequestConfigs);
 create_topics(Vsn, TopicConfigs, RequestConfigs) ->
   kpro_req_lib:create_topics(Vsn, TopicConfigs, RequestConfigs).
+
+%% @doc Make a create_partitions request.
+-spec create_partitions(vsn() | conn(), [topic_partition_config()], #{timeout => kpro:int32(),
+                    validate_only => boolean()}) -> kpro:req().
+create_partitions(Connection, TopicPartitionConfigs, RequestConfigs)
+              when is_pid(Connection) ->
+  Vsn = brod_kafka_apis:pick_version(Connection, create_partitions),
+  create_partitions(Vsn, TopicPartitionConfigs, RequestConfigs);
+create_partitions(Vsn, TopicPartitionConfigs, RequestConfigs) ->
+  kpro_req_lib:create_partitions(Vsn, TopicPartitionConfigs, RequestConfigs).
 
 %% @doc Make a delete_topics request.
 -spec delete_topics(vsn() | conn(), [topic()], pos_integer()) -> kpro:req().
