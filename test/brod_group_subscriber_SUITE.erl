@@ -325,7 +325,7 @@ v2_health_check(Config) when is_list(Config) ->
            %% Send a message to ensure workers are established
            produce({Topic, Partition}, <<"test">>),
            {ok, _} = ?wait_message(Topic, Partition, <<"test">>, _),
-           %% Test 1: When all workers are healthy, should return empty list
+           %% Test 1: When all workers are healthy, should return ok.
            HealthResult1 = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
            %% Test 2: Test with non-existent PID
            FakePid = list_to_pid("<0.999.0>"),
@@ -336,7 +336,7 @@ v2_health_check(Config) when is_list(Config) ->
          end,
          %% Check stage:
          fun({HealthResult1, HealthResult2}, _Trace) ->
-             %% When healthy, should return empty list
+             %% When healthy, should return ok.
              ct:pal("Health check result (healthy): ~p", [HealthResult1]),
              ?assertMatch(ok, HealthResult1),
              %% When process doesn't exist, should return error

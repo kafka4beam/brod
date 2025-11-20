@@ -209,8 +209,8 @@ get_workers(Pid) ->
 get_workers(Pid, Timeout) ->
   gen_server:call(Pid, get_workers, Timeout).
 
-%% @doc Returns empty list if all workers are healthy,
-%% otherwise a list of errors.
+%% @doc Returns `ok' if all workers are healthy,
+%% otherwise `{error, Reasons}' where `Reasons' is a list of errors.
 -spec health_check(pid(), timeout()) -> ok | {error, [map()]}.
 health_check(Pid, Timeout) ->
   try

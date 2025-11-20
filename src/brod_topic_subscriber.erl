@@ -276,10 +276,10 @@ ack(Pid, Partition, Offset) ->
 -spec health_check(pid(), pos_integer()) -> [map()].
 health_check(Pid, Timeout) ->
   try
-    gen_server:call(Pid, {health_check, Timeout}, Timeout + 50)
+    gen_server:call(Pid, {health_check, Timeout}, Timeout)
   catch
     exit : Reason ->
-      ?MF_ERR_MAP(Reason)
+      [?MF_ERR_MAP(Reason)]
   end.
 
 %%%_* gen_server callbacks =====================================================

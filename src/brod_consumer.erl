@@ -300,7 +300,7 @@ debug(Pid, File) when is_list(File) ->
 get_connection(Pid) ->
   gen_server:call(Pid, get_connection).
 
-%% @doc Return 'true' if the payload connection is alive.
+%% @doc Return 'ok' if the payload connection is alive.
 -spec check_connectivity(pid(), pos_integer()) -> ok | {error, term()}.
 check_connectivity(Pid, Timeout) ->
   try
