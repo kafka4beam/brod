@@ -318,30 +318,45 @@ v2_health_check(Config) when is_list(Config) ->
       Partition = 0,
       Timeout = 5000,
       ?check_trace(
-         #{ timeout => 10000 },
+         #{ timeout => 15000 },
          %% Run stage:
          begin
            {ok, SubscriberPid} = start_subscriber(?group_id, Config, [Topic], InitArgs),
-           %% Send a message to ensure workers are established
+           %% Test 1: Health check before assignments are received (pending state)
+           %% Should return rebalancing
+           HealthResultPending = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
+           %% Send a message to ensure workers are established and assignments received
            produce({Topic, Partition}, <<"test">>),
            {ok, _} = ?wait_message(Topic, Partition, <<"test">>, _),
-           %% Test 1: When all workers are healthy, should return ok.
-           HealthResult1 = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
-           %% Test 2: Test with non-existent PID
+           %% Give a moment for assignments to be processed
+           timer:sleep(100),
+           %% Test 2: When all workers are healthy and assignments received, should return healthy.
+           HealthResultHealthy = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
+           %% Test 3: Revoke assignments and check health (should return rebalancing)
+           ok = brod_group_subscriber_v2:assignments_revoked(SubscriberPid),
+           HealthResultRevoked = brod_group_subscriber_v2:health_check(SubscriberPid, Timeout),
+           %% Test 4: Test with non-existent PID
            FakePid = list_to_pid("<0.999.0>"),
-           HealthResult2 = brod_group_subscriber_v2:health_check(FakePid, 1000),
+           HealthResultNonExistent = brod_group_subscriber_v2:health_check(FakePid, 1000),
            %% Cleanup: stop the subscriber
            ok = stop_subscriber(Config, SubscriberPid),
-           {HealthResult1, HealthResult2}
+           {HealthResultPending, HealthResultHealthy, HealthResultRevoked, HealthResultNonExistent}
          end,
          %% Check stage:
-         fun({HealthResult1, HealthResult2}, _Trace) ->
-             %% When healthy, should return ok.
-             ct:pal("Health check result (healthy): ~p", [HealthResult1]),
-             ?assertMatch(ok, HealthResult1),
+         fun({HealthResultPending, HealthResultHealthy,
+              HealthResultRevoked, HealthResultNonExistent}, _Trace) ->
+             %% When assignments are pending, should return rebalancing
+             ct:pal("Health check result (pending): ~p", [HealthResultPending]),
+             ?assertMatch(rebalancing, HealthResultPending),
+             %% When healthy and assignments received, should return healthy
+             ct:pal("Health check result (healthy): ~p", [HealthResultHealthy]),
+             ?assertMatch(healthy, HealthResultHealthy),
+             %% When assignments are revoked, should return rebalancing
+             ct:pal("Health check result (revoked): ~p", [HealthResultRevoked]),
+             ?assertMatch(rebalancing, HealthResultRevoked),
              %% When process doesn't exist, should return error
-             ct:pal("Health check result (non-existent): ~p", [HealthResult2]),
-             ?assertMatch({error, [_|_]}, HealthResult2),
+             ct:pal("Health check result (non-existent): ~p", [HealthResultNonExistent]),
+             ?assertMatch({error, [_|_]}, HealthResultNonExistent),
              ok
          end);
     _ ->

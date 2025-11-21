@@ -379,7 +379,10 @@ init({Bootstrap0, Topic, Partition, Config}) ->
              }}.
 
 %% @private
-handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber} = State0) ->
+handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber,
+                                     topic = Topic,
+                                     partition = Partition
+                                    } = State0) ->
   case brod_utils:is_pid_alive(Subscriber) andalso
        maybe_init_connection(State0) of
     false ->
@@ -388,9 +391,11 @@ handle_info(?INIT_CONNECTION, #state{subscriber = Subscriber} = State0) ->
     {ok, State1} ->
       State = maybe_send_fetch_request(State1),
       {noreply, State};
-    {{error, _Reason}, State} ->
+    {{error, Reason}, State} ->
       %% failed when connecting to partition leader
       %% retry after a delay
+      ?BROD_LOG_WARNING("Consumer ~s-~w failed to connect: ~p",
+                        [Topic, Partition, Reason]),
       ok = maybe_send_init_connection(State),
       {noreply, State}
   end;

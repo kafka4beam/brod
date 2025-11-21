@@ -111,11 +111,6 @@
 
 -type workers() :: #{brod:topic_partition() => worker()}.
 
--type committed_offsets() :: #{brod:topic_partition() =>
-                                 { brod:offset()
-                                 , boolean()
-                                 }}.
-
 -record(state,
         { config                  :: subscriber_config()
         , message_type            :: message | message_set
@@ -123,10 +118,10 @@
         , coordinator             :: undefined | pid()
         , generation_id           :: integer() | ?undef
         , workers = #{}           :: workers()
-        , committed_offsets = #{} :: committed_offsets()
         , cb_module               :: module()
         , cb_config               :: term()
         , client                  :: brod:client()
+        , assignments = pending   :: pending | received | revoked
         }).
 
 -type state() :: #state{}.
@@ -209,17 +204,13 @@ get_workers(Pid) ->
 get_workers(Pid, Timeout) ->
   gen_server:call(Pid, get_workers, Timeout).
 
-%% @doc Returns `ok' if all workers are healthy,
-%% otherwise `{error, Reasons}' where `Reasons' is a list of errors.
--spec health_check(pid(), timeout()) -> ok | {error, [map()]}.
+%% @doc Returns `healthy' if all workers are healthy.
+%% Returns `rebalancing' if assignment is not received yet or revoked.
+%% Otherwise `{error, Reasons}' where `Reasons' is a list of errors.
+-spec health_check(pid(), timeout()) -> healthy | rebalancing | {error, [map()]}.
 health_check(Pid, Timeout) ->
   try
-    case gen_server:call(Pid, {health_check, Timeout}, Timeout) of
-      [] ->
-        ok;
-      Errors ->
-        {error, Errors}
-    end
+    gen_server:call(Pid, {health_check, Timeout}, Timeout)
   catch
     exit : Reason ->
       {error, [?MF_ERR_MAP(#{reason => Reason, group_subscriber => Pid})]}
@@ -323,6 +314,7 @@ handle_call(unsubscribe_all_partitions, _From,
                   } = State) ->
   terminate_all_workers(Workers),
   {reply, ok, State#state{ workers = #{}
+                         , assignments = revoked
                          }};
 handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
   #state{ cb_module = CbModule
@@ -332,8 +324,20 @@ handle_call({assign_partitions, Members, TopicPartitionList}, _From, State) ->
   {reply, Reply, State};
 handle_call(get_workers, _From, State = #state{workers = Workers}) ->
   {reply, Workers, State};
-handle_call({health_check, Timeout}, _From, State = #state{workers = Workers}) ->
-  {reply, do_health_check(Workers, Timeout), State};
+handle_call({health_check, Timeout}, _From,
+            State = #state{workers = Workers, assignments = Assignments}) ->
+  Res = case Assignments =:= received of
+    true ->
+      case do_health_check(Workers, Timeout) of
+        [] ->
+          healthy;
+        Errors ->
+          {error, Errors}
+      end;
+    false ->
+      rebalancing
+  end,
+  {reply, Res, State};
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
@@ -382,7 +386,7 @@ handle_cast({new_assignments, MemberId, GenerationId, Assignments},
                      , State1
                      , Assignments
                      ),
-  {noreply, State};
+  {noreply, State#state{assignments = received}};
 handle_cast(_Cast, State) ->
   {noreply, State}.
 
@@ -392,10 +396,19 @@ handle_cast(_Cast, State) ->
 %% Handling all non call/cast messages
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'EXIT', Pid, Reason}, #state{coordinator = Pid} = State) ->
-  %% Coordinator is owned by self and never explictly shutdown,
-  %% so there is no 'normal' exit, hence the warning level log.
-  ?BROD_LOG_WARNING("Coordinator EXIT:~p", [Reason]),
+handle_info({'EXIT', Pid, Reason},
+            #state{group_id = GroupId,
+                   coordinator = Pid} = State) ->
+  case Reason of
+    normal ->
+      ok;
+    shutdown ->
+      ok;
+    {shutdown, _} ->
+      ok;
+    _ ->
+      ?BROD_LOG_WARNING("Coordinator ~s EXIT: ~p", [GroupId, Reason])
+  end,
   {stop, {shutdown, coordinator_failure}, State#state{coordinator = undefined}};
 handle_info({'EXIT', Pid, Reason}, State) ->
   case [TP || {TP, Pid1} <- maps:to_list(State#state.workers), Pid1 =:= Pid] of
