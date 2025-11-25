@@ -152,6 +152,7 @@ supported_versions() ->
    , describe_groups => {0, 5}
    , list_groups => {0, 3}
    , create_topics => {0, 4}
+   , create_partitions => {0, 1}
    , delete_topics => {0, 4}
    }.
 

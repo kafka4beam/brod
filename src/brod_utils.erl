@@ -26,6 +26,8 @@
         , describe_groups/3
         , create_topics/3
         , create_topics/4
+        , create_partitions/3
+        , create_partitions/4
         , delete_topics/3
         , delete_topics/4
         , epoch_ms/0
@@ -74,6 +76,7 @@
 -type conn_config() :: brod:conn_config().
 -type topic() :: brod:topic().
 -type topic_config() :: kpro:struct().
+-type topic_partition_config() :: kpro:struct().
 -type partition() :: brod:partition().
 -type offset() :: brod:offset().
 -type endpoint() :: brod:endpoint().
@@ -104,6 +107,27 @@ create_topics(Hosts, TopicConfigs, RequestConfigs, ConnCfg) ->
                   Pid, TopicConfigs, RequestConfigs),
                 request_sync(Pid, Request)
             end).
+
+%% @equiv create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, [])
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()}) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs) ->
+  create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, _ConnCfg = []).
+
+%% @doc Try to connect to the controller node using the given
+%% connection options and create the given partitions with configs
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, ConnCfg) ->
+  KproOpts = kpro_connection_options(ConnCfg),
+  with_conn(kpro:connect_controller(Hosts, nolink(ConnCfg), KproOpts),
+            fun(Pid) ->
+                Request = brod_kafka_request:create_partitions(
+                  Pid, TopicPartitionConfigs, RequestConfigs),
+                request_sync(Pid, Request)
+            end).
+
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->
         ok | {error, any()}.
