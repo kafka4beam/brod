@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.5.2
+  - Pin kafka_protocol-4.3.2 (crc32cer-1.1.2).
+
 - 4.5.1
   - Refine warning log for `group_subscriber_v2` when corrdinator exits.
   - Function `brod_group_subscriber_v2:health_check/2` returns `healthy | rebalancing | {error, [..]}`.
