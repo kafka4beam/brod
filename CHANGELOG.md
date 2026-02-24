@@ -1,5 +1,11 @@
 # Changelog
 
+- 4.5.3
+  - Pin kafka_protocol-4.3.4 (crc32cer-1.1.3 and kafka_protocol-4.3.4)
+    If a new re-authentication happens before the connection is still processing requests left-over from the previous re-authentication, the pending requests may get lost.
+    For producers, it means a synced produce call may timeout.
+    For consumers, if a fetch request was lost, it may cause the consumer process to stall indefinitely.
+
 - 4.5.2
   - Pin kafka_protocol-4.3.2 (crc32cer-1.1.2).
 
