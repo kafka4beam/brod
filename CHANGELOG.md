@@ -1,5 +1,11 @@
 # Changelog
 
+- 4.5.3
+  - Pin kafka_protocol-4.3.4 (crc32cer-1.1.3 and kafka_protocol-4.3.4)
+    This fixes a race condition when Kafka requires re-authentication: some sent requests during re-authentication may never get a response.
+    For pruducers, it means a synced publish call may timeout.
+    For consumers, if a fetch request was lost, it may cause the consumer process to stall indefinitely.
+
 - 4.5.2
   - Pin kafka_protocol-4.3.2 (crc32cer-1.1.2).
 
