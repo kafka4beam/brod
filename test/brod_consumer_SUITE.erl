@@ -28,6 +28,7 @@
 
 %% Test cases
 -export([ t_drop_aborted/1
+        , t_drop_aborted_same_producer/1
         , t_wait_for_unstable_offsets/1
         , t_fetch_aborted_from_the_middle/1
         , t_direct_fetch/1
@@ -238,6 +239,57 @@ test_drop_aborted(Config, QueryApiVsn) ->
                     #kafka_message{offset = Offset2, key = Key2}
                    ], Msgs)
   end.
+
+%% produce three transactions in the order: commit, abort, commit
+%% with read_committed isolation, only the two committed messages should
+%% be visible — the aborted message in between (and both control batches)
+%% must be dropped
+t_drop_aborted_same_producer(kafka_version_match) ->
+  has_txn();
+t_drop_aborted_same_producer(Config) when is_list(Config) ->
+  Client = ?config(client),
+  Topic = ?TOPIC,
+  Partition = 0,
+  %% the same producer_id is reused for all three transactions.
+  TxnId = make_transactional_id(),
+  {ok, Conn} = connect_txn_coordinator(TxnId, ?config(client_config)),
+  TxnProduceFun =
+    fun(CommitOrAbort) ->
+        {ok, TxnCtx} = ?RETRY(kpro:txn_init_ctx(Conn, TxnId), 10),
+        ok = kpro:txn_send_partitions(TxnCtx, [{Topic, Partition}]),
+        Key = bin([atom_to_list(CommitOrAbort), "-", make_unique_key()]),
+        Vsn = 3, %% lowest API version which supports transactional produce
+        Opts = #{txn_ctx => TxnCtx, first_sequence => 0},
+        Batch = [#{key => Key, value => <<>>}],
+        ProduceReq = kpro_req_lib:produce(Vsn, Topic, Partition, Batch, Opts),
+        {ok, LeaderConn} =
+          brod_client:get_leader_connection(Client, Topic, Partition),
+        {ok, ProduceRsp} = kpro:request_sync(LeaderConn, ProduceReq, 5000),
+        {ok, Offset} = brod_utils:parse_rsp(ProduceRsp),
+        case CommitOrAbort of
+          commit -> ok = kpro:txn_commit(TxnCtx);
+          abort -> ok = kpro:txn_abort(TxnCtx)
+        end,
+        {Offset, Key}
+    end,
+  {Offset1, Key1} = TxnProduceFun(commit),
+  {_OffsetA, _KeyA} = TxnProduceFun(abort),
+  {Offset3, Key3} = TxnProduceFun(commit),
+  ok = kpro:close_connection(Conn),
+  Cfg = [{query_api_versions, true} | ?config(client_config)],
+  Fetch =
+    fun(Offset, Opts) ->
+        {ok, {_HighWmOffset, Msgs}} =
+          brod:fetch({?HOSTS, Cfg}, Topic, Partition, Offset, Opts),
+        Msgs
+    end,
+  ?assertMatch([#kafka_message{offset = Offset1, key = Key1},
+                #kafka_message{offset = Offset3, key = Key3}],
+               Fetch(Offset1, #{max_bytes => 1000})),
+  ?assertMatch([#kafka_message{offset = Offset3, key = Key3}],
+               Fetch(Offset1 + 1, #{max_bytes => 1000})),
+  ?assertMatch([#kafka_message{offset = Offset3, key = Key3}],
+               Fetch(Offset3, #{max_bytes => 1000})).
 
 t_wait_for_unstable_offsets(kafka_version_match) ->
   has_txn();

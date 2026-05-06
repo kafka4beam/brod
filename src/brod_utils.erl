@@ -739,9 +739,9 @@ do_drop_aborted(ProducerId, FirstOffset, [{_Meta, []} | Batches], Acc) ->
 do_drop_aborted(ProducerId, FirstOffset, [{Meta, Msgs} | Batches], Acc) ->
   #kafka_message{offset = BaseOffset} = hd(Msgs),
   case {is_txn(Meta, ProducerId), is_control(Meta)} of
-    {true, true} ->
-      %% this is the end of a transaction
-      %% no need to scan remaining batches
+    {true, true} when BaseOffset >= FirstOffset ->
+      %% end-of-transaction marker for the aborted txn entry being scanned.
+      %% no need to scan remaining batches.
       lists:reverse(Acc) ++ Batches;
     {true, false} when BaseOffset >= FirstOffset ->
       %% this batch is a part of aborted transaction, drop it
