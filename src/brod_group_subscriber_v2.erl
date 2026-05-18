@@ -490,11 +490,13 @@ terminate_worker(WorkerPid) ->
                         , brod:consumer_config()
                         , brod:topic()
                         , brod:partition()
-                        , brod:offset() | undefined
+                        , undefined
+                          | brod:offset()
+                          | {begin_offset, brod:offset_time()}
                         , state()
                         ) -> state().
 maybe_start_worker( _MemberId
-                  , ConsumerConfig
+                  , ConsumerConfig0
                   , Topic
                   , Partition
                   , BeginOffset
@@ -512,6 +514,8 @@ maybe_start_worker( _MemberId
     #{TopicPartition := _Worker} ->
       State;
     _ ->
+      ConsumerConfig =
+        maybe_apply_reset_policy(BeginOffset, ConsumerConfig0, Topic, Partition),
       Self = self(),
       CommitFun = fun(Offset) -> commit(Self, Topic, Partition, Offset) end,
       AckFun = fun(Offset) -> ack(Self, Topic, Partition, Offset) end,
@@ -566,6 +570,40 @@ do_ack(Topic, Partition, Offset, #state{ workers = Workers
     _ ->
       {error, unknown_topic_or_partition}
   end.
+
+%% When the coordinator has no committed offset for this partition
+%% (`BeginOffset = ?undef'), make the fallback explicit: honour
+%% `begin_offset' in consumer config first (backwards compatible
+%% start-point override), otherwise inject `{begin_offset, X}' from
+%% `offset_reset_policy'. Either way the chosen offset is logged so the
+%% start-up choice is no longer silent. `?undef' is then passed through
+%% to the worker — the consumer applies the (possibly updated)
+%% `begin_offset' from its config.
+maybe_apply_reset_policy(?undef, ConsumerConfig, Topic, Partition) ->
+  case proplists:is_defined(begin_offset, ConsumerConfig) of
+    true ->
+      ?BROD_LOG_INFO("No committed offset for ~s-~p, starting from "
+                     "consumer config begin_offset=~p",
+                     [Topic, Partition,
+                      proplists:get_value(begin_offset, ConsumerConfig)]),
+      ConsumerConfig;
+    false ->
+      Policy = proplists:get_value(offset_reset_policy, ConsumerConfig,
+                                   reset_by_subscriber),
+      Offset = reset_policy_to_offset(Policy),
+      ?BROD_LOG_INFO("No committed offset for ~s-~p, starting from ~p "
+                     "(offset_reset_policy=~p)",
+                     [Topic, Partition, Offset, Policy]),
+      [{begin_offset, Offset} | ConsumerConfig]
+  end;
+maybe_apply_reset_policy(_BeginOffset, ConsumerConfig, _Topic, _Partition) ->
+  ConsumerConfig.
+
+%% reset_by_subscriber has no equivalent at assignment time, so default to
+%% ?OFFSET_LATEST — matches brod_consumer's own default begin_offset.
+reset_policy_to_offset(reset_to_earliest) -> ?OFFSET_EARLIEST;
+reset_policy_to_offset(reset_to_latest)   -> ?OFFSET_LATEST;
+reset_policy_to_offset(_)                 -> ?OFFSET_LATEST.
 
 stop_consumers(Config) ->
   #{ client := Client

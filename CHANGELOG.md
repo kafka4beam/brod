@@ -1,5 +1,20 @@
 # Changelog
 
+- 4.5.4
+  - Fix silent fallback in `brod_group_subscriber`/`v2` when Kafka's `OffsetFetch` returns `committed_offset=-1`
+    (no committed offset for the group, e.g. new group, topic recreated, `offsets.retention.minutes` expired).
+    Previously the partition was silently dropped from the result and the subscriber started from the
+    consumer's default `begin_offset` (typically `latest`) with no log. The coordinator now surfaces
+    `{begin_offset, per_reset_policy}` in `#brod_received_assignment{}`, and the subscriber resolves it
+    via consumer config: `begin_offset` wins if set (backwards compatible), otherwise
+    `offset_reset_policy` is consulted; either fallback is logged.
+    [PR#660](https://github.com/kafka4beam/brod/pull/660),
+    [PR#661](https://github.com/kafka4beam/brod/pull/661).
+  - Fix `read_committed` isolation: `drop_aborted` could stop scanning too early when control records
+    from non-aborted transactions appeared before the abort marker, causing aborted batches to be
+    returned in the record set.
+    [PR#659](https://github.com/kafka4beam/brod/pull/659).
+
 - 4.5.3
   - Pin kafka_protocol-4.3.4 (crc32cer-1.1.3 and kafka_protocol-4.3.4)
     If a new re-authentication happens before the connection is still processing requests left-over from the previous re-authentication, the pending requests may get lost.

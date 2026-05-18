@@ -39,6 +39,7 @@
 %% Test cases
 -export([ t_acks_during_revoke/1
         , t_update_topics_triggers_rebalance/1
+        , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
         ]).
 
 -define(assert_receive(Pattern, Return),
@@ -49,6 +50,7 @@
   end).
 
 -include_lib("snabbkaffe/include/ct_boilerplate.hrl").
+-include_lib("kafka_protocol/include/kpro.hrl").
 -include("brod.hrl").
 
 %%%_* ct callbacks =============================================================
@@ -148,6 +150,100 @@ t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
             fun(#brod_received_assignment{topic=Topic}) ->
               Topic == ?TOPIC1
             end, TopicAssignments)).
+
+%% When Kafka's OffsetFetch returns committed_offset=-1 (error_code=NONE), it
+%% means "no committed offset exists" (e.g. new group, topic recreated,
+%% offsets.retention.minutes expired). Previously the partition was silently
+%% dropped, begin_offset became `undefined', and brod_group_subscriber fell
+%% back to the consumer's default begin_offset with no log.
+%%
+%% After the fix the assignment carries begin_offset=undefined for those
+%% partitions and the subscriber resolves it via the consumer config's
+%% begin_offset / offset_reset_policy with a log entry. With
+%% reset_to_earliest, the consumer's first Fetch request must target
+%% offset 0, not "latest".
+t_offset_fetch_minus_one_falls_back_to_reset_policy({init, Config}) ->
+  meck:new(brod_utils, [passthrough]),
+  meck:new(brod_kafka_request, [passthrough]),
+  Config;
+t_offset_fetch_minus_one_falls_back_to_reset_policy({'end', _Config}) ->
+  meck:unload(brod_kafka_request),
+  meck:unload(brod_utils),
+  ok;
+t_offset_fetch_minus_one_falls_back_to_reset_policy(Config) when is_list(Config) ->
+  Topic = ?TOPIC,
+  %% Topic has 3 partitions (created by setup-test-env.sh).
+  Partitions = [0, 1, 2],
+  %% Produce a message so the partition has a non-zero high-watermark.
+  %% earliest is still offset 0 regardless of HWM.
+  {ok, _} = brod:produce_sync_offset(?CLIENT_ID, Topic, ?PARTITION,
+                                     <<>>, <<"msg">>),
+  %% Inject a fake OffsetFetch response: committed_offset=-1 for every
+  %% partition ("no committed offset").
+  FakeBody = fake_offset_fetch_minus_one_body(Topic, Partitions),
+  meck:expect(brod_utils, request_sync,
+    fun(_Conn, #kpro_req{api = offset_fetch}, _Timeout) ->
+        {ok, FakeBody};
+       (Conn, Req, Timeout) ->
+        meck:passthrough([Conn, Req, Timeout])
+    end),
+  %% Capture the offset arg of the first Kafka Fetch request per partition.
+  Self = self(),
+  meck:expect(brod_kafka_request, fetch,
+    fun(Pid, T, P, Offset, WT, MinB, MaxB, IL) ->
+        Self ! {fetch, T, P, Offset},
+        meck:passthrough([Pid, T, P, Offset, WT, MinB, MaxB, IL])
+    end),
+  %% Start a real v2 subscriber with reset_to_earliest. A unique group id is
+  %% not strictly required (the OffsetFetch meck overrides), but it avoids
+  %% interacting with offsets committed by earlier test cases.
+  GroupId = list_to_binary(
+              "brod-grp-coord-no-commit-" ++
+              integer_to_list(erlang:unique_integer([positive]))),
+  ConsumerConfig = [{offset_reset_policy, reset_to_earliest}],
+  {ok, SubscriberPid} =
+    brod:start_link_group_subscriber_v2(
+      #{ client          => ?CLIENT_ID
+       , group_id        => GroupId
+       , topics          => [Topic]
+       , group_config    => []
+       , consumer_config => ConsumerConfig
+       , cb_module       => brod_test_group_subscriber
+       , init_data       => #{}
+       }),
+  try
+    FetchOffset = receive
+                    {fetch, Topic, ?PARTITION, O} -> O
+                  after 30000 ->
+                    ct:fail({no_fetch_observed,
+                             erlang:process_info(self(), messages)})
+                  end,
+    %% offset_reset_policy=reset_to_earliest => first fetch at offset 0.
+    %% Pre-fix: would have been the HWM (>=1) since "latest" is the consumer
+    %% default begin_offset.
+    ?assertEqual(0, FetchOffset)
+  after
+    ok = brod_group_subscriber_v2:stop(SubscriberPid)
+  end.
+
+%% Build an OffsetFetch response returning committed_offset=-1 for every
+%% listed partition of `Topic'.
+fake_offset_fetch_minus_one_body(Topic, Partitions) ->
+  [ {error_code, ?no_error}
+  , {topics,
+     [ [ {name, Topic}
+       , {partitions,
+          [ [ {partition_index, P}
+            , {committed_offset, -1}
+            , {metadata, <<>>}
+            , {error_code, ?no_error}
+            ]
+            || P <- Partitions
+          ]}
+       ]
+     ]}
+  ].
+
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

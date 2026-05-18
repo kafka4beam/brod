@@ -986,7 +986,7 @@ get_topic_assignments(#state{} = State, Assignment) ->
 %% or call the consumer callback to read committed offsets.
 -spec get_committed_offsets(state(), [{brod:topic(), brod:partition()}]) ->
         [{{brod:topic(), brod:partition()},
-          brod:offset() | {begin_offset, brod:offset_time()}}].
+          brod:offset() | {begin_offset, brod:offset_time()} | ?undef}].
 get_committed_offsets(#state{ offset_commit_policy = consumer_managed
                             , member_pid           = MemberPid
                             , member_module        = MemberModule
@@ -1016,9 +1016,13 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
             EC = kpro:find(error_code, PartitionOffset),
             ?ESCALATE_EC(EC),
             %% Offset -1 in offset_fetch_response is an indicator of 'no-value'
+            %% (e.g. new group, topic recreated, offsets.retention.minutes
+            %% expired). Surface it as ?undef so the subscriber can apply
+            %% offset_reset_policy rather than silently falling back to the
+            %% consumer config begin_offset.
             case Offset0 =:= -1 of
               true ->
-                Acc;
+                [{{Topic, Partition}, ?undef} | Acc];
               false ->
                 Offset = maybe_upgrade_from_roundrobin_v1(Offset0, Metadata),
                 [{{Topic, Partition}, Offset} | Acc]
@@ -1029,7 +1033,7 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
 
 -spec resolve_begin_offsets(
         [TP],
-        [{TP, brod:offset() | {begin_offset, brod:offset_time()}}],
+        [{TP, brod:offset() | {begin_offset, brod:offset_time()} | ?undef}],
         boolean()) ->
           brod:received_assignments()
             when TP :: {brod:topic(), brod:partition()}.
@@ -1038,6 +1042,12 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
                       IsConsumerManaged) ->
   BeginOffset =
     case lists:keyfind({Topic, Partition}, 1, CommittedOffsets) of
+      {_, ?undef} ->
+        %% No committed offset (OffsetFetch returned -1, or the
+        %% consumer_managed callback returned ?undef explicitly). The
+        %% subscriber will resolve via the consumer config begin_offset /
+        %% offset_reset_policy.
+        ?undef;
       {_, {begin_offset, Offset}} ->
         %% already resolved
         resolve_special_offset(Offset);
@@ -1050,9 +1060,10 @@ resolve_begin_offsets([{Topic, Partition} | Rest], CommittedOffsets,
         %% offsets committed to kafka is already begin_offset
         %% since the introduction of 'roundrobin_v2' protocol
         Offset;
-      false  ->
-        %% No commit history found
-        %% Should use default begin_offset in consumer config
+      false ->
+        %% Partition missing from the result. Kafka omits partitions
+        %% with no committed offset in some response versions, so this
+        %% has the same "no committed offset" meaning.
         ?undef
     end,
   Assignment =

@@ -578,14 +578,16 @@ consume_ack(Pid, Offset) ->
 do_commit_ack(Pid, GenerationId, Topic, Partition, Offset) ->
   ok = brod_group_coordinator:ack(Pid, GenerationId, Topic, Partition, Offset).
 
-subscribe_partitions(#state{ client    = Client
-                           , consumers = Consumers0
+subscribe_partitions(#state{ client          = Client
+                           , consumer_config = ConsumerConfig
+                           , consumers       = Consumers0
                            } = State) ->
   Consumers =
-    lists:map(fun(C) -> subscribe_partition(Client, C) end, Consumers0),
+    lists:map(fun(C) -> subscribe_partition(Client, ConsumerConfig, C) end,
+              Consumers0),
   {ok, State#state{consumers = Consumers}}.
 
-subscribe_partition(Client, Consumer) ->
+subscribe_partition(Client, ConsumerConfig, Consumer) ->
   #consumer{ topic_partition = {Topic, Partition}
            , consumer_pid    = Pid
            , begin_offset    = BeginOffset0
@@ -608,11 +610,7 @@ subscribe_partition(Client, Consumer) ->
                       ?undef        -> BeginOffset0;
                       N when N >= 0 -> N + 1
                     end,
-      Options =
-        case BeginOffset =:= ?undef of
-          true  -> []; %% fetch from 'begin_offset' in consumer config
-          false -> [{begin_offset, BeginOffset}]
-        end,
+      Options = subscribe_options(BeginOffset, ConsumerConfig, Topic, Partition),
       case brod:subscribe(Client, self(), Topic, Partition, Options) of
         {ok, ConsumerPid} ->
           Mref = erlang:monitor(process, ConsumerPid),
@@ -625,6 +623,39 @@ subscribe_partition(Client, Consumer) ->
                            }
       end
   end.
+
+%% Decide subscribe options based on the assigned begin_offset.
+%% `?undef' means the coordinator has no committed offset for this partition
+%% (OffsetFetch returned -1, the partition was omitted from the response, or
+%% the consumer_managed callback returned ?undef). Honour `begin_offset' in
+%% consumer config first (backwards compatible: pass no options and let the
+%% consumer use its configured start point), otherwise inject
+%% `{begin_offset, X}' derived from `offset_reset_policy'. Either way the
+%% choice is logged so the fallback is no longer silent.
+subscribe_options(?undef, ConsumerConfig, Topic, Partition) ->
+  case proplists:lookup(begin_offset, ConsumerConfig) of
+    {begin_offset, Offset} ->
+      ?BROD_LOG_INFO("No committed offset for ~s-~p, starting from "
+                     "consumer config begin_offset=~p",
+                     [Topic, Partition, Offset]),
+      []; %% consumer will use its configured begin_offset
+    none ->
+      Policy = proplists:get_value(offset_reset_policy, ConsumerConfig,
+                                   reset_by_subscriber),
+      Offset = reset_policy_to_offset(Policy),
+      ?BROD_LOG_INFO("No committed offset for ~s-~p, starting from ~p "
+                     "(offset_reset_policy=~p)",
+                     [Topic, Partition, Offset, Policy]),
+      [{begin_offset, Offset}]
+  end;
+subscribe_options(BeginOffset, _ConsumerConfig, _Topic, _Partition) ->
+  [{begin_offset, BeginOffset}].
+
+%% reset_by_subscriber has no equivalent at assignment time, so default to
+%% ?OFFSET_LATEST — matches brod_consumer's own default begin_offset.
+reset_policy_to_offset(reset_to_earliest) -> ?OFFSET_EARLIEST;
+reset_policy_to_offset(reset_to_latest)   -> ?OFFSET_LATEST;
+reset_policy_to_offset(_)                 -> ?OFFSET_LATEST.
 
 log(#state{ groupId  = GroupId
           , memberId = MemberId
