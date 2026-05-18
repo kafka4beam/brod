@@ -7,7 +7,7 @@
   {env,[]},
   {mod, {brod, []}},
   {modules,[]},
-  {licenses, ["Apache License 2.0"]},
+  {licenses, ["Apache-2.0"]},
   {links, [{"Github", "https://github.com/kafka4beam/brod"}]},
   {build_tools, ["rebar3", "cmake"]},
   {files, ["src", "include", "rebar.config", "rebar.config.script",
