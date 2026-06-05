@@ -270,8 +270,11 @@
 %%  </li>
 %%
 %%  <li>`group_instance_id' (optional)
-%%      This is the static group member ID.
-%%      Default value is `node()/pid()'. For example, `bord@host.domain/<0.1293.0>'
+%%      The static group member ID (KIP-345, Kafka 2.3+, JoinGroup v5+).
+%%      Default value is `node()/pid()' (e.g. `bord@host.domain/<0.1293.0>')
+%%      — non-null by default so brokers take the KIP-345 fast path on first
+%%      JoinGroup. Set to the atom `null' to opt out of static membership
+%%      (dynamic member; required for Kafka 2.2 which predates KIP-345).
 %%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -354,7 +357,15 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
                                        ?OFFSET_COMMIT_INTERVAL_SECONDS),
   ProtocolName = GetCfg(protocol_name, bin(PaStrategy)),
-  StaticMemberID = GetCfg(group_instance_id, default_group_instance_id()),
+  %% `null' is the explicit user opt-out — sends a null group_instance_id on
+  %% the wire (dynamic membership). `undefined' falls back to the default
+  %% static id derived from node()/pid.
+  StaticMemberID =
+    case proplists:get_value(group_instance_id, Config, undefined) of
+      undefined -> default_group_instance_id();
+      null      -> ?kpro_null;
+      Value     -> Value
+    end,
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
   State =
@@ -521,8 +532,12 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
   Reason =/= ?undef andalso
     log(State0, info, "re-joining group, reason:~p", [Reason]),
 
-  %% 1. unsubscribe all currently assigned partitions
-  ?CALL_MEMBER(MemberPid, MemberModule:assignments_revoked(MemberPid)),
+  %% 1. unsubscribe all currently assigned partitions — only on the first
+  %% attempt of this stabilize cycle. On a retry (AttemptNo > 0) the previous
+  %% attempt already revoked, and re-revoking is observable to the member
+  %% (e.g. extra `assignments_revoked' callbacks) without changing state.
+  AttemptNo =:= 0 andalso
+    ?CALL_MEMBER(MemberPid, MemberModule:assignments_revoked(MemberPid)),
 
   %% 2. some brod_group_member implementations may wait for messages
   %%    to finish processing when assignments_revoked is called.
@@ -594,8 +609,16 @@ do_stabilize([F | Rest], RetryFun, State) ->
     {ok, #state{} = NewState} = F(State),
     do_stabilize(Rest, RetryFun, NewState)
   catch throw : Reason ->
-    RetryFun(State, Reason)
+    RetryFun(save_assigned_member_id(State, Reason), Reason)
   end.
+
+%% KIP-394: when the broker assigns a `member_id' via a
+%% MEMBER_ID_REQUIRED reply, remember it so the next JoinGroup
+%% carries the id instead of re-sending an empty one.
+save_assigned_member_id(State, {member_id_required, MemberId}) ->
+  State#state{memberId = MemberId};
+save_assigned_member_id(State, _) ->
+  State.
 
 maybe_reset_member_id(State, Reason) ->
   case should_reset_member_id(Reason) of
@@ -663,6 +686,14 @@ join_group(#state{ groupId                    = GroupId
   %% send join group request and wait for response
   %% as long as the session timeout config
   RspBody = send_sync(Connection, Req, SessionTimeout),
+  case kpro:find(error_code, RspBody, ?no_error) of
+    member_id_required ->
+      %% KIP-394: broker assigned a member_id; throw it so the catch in
+      %% do_stabilize saves it into state for the next JoinGroup attempt.
+      throw({member_id_required, kpro:find(member_id, RspBody)});
+    _ ->
+      ok
+  end,
   GenerationId = kpro:find(generation_id, RspBody),
   LeaderId = kpro:find(leader, RspBody),
   MemberId = kpro:find(member_id, RspBody),

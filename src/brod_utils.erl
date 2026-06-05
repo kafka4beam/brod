@@ -857,7 +857,18 @@ parse(find_coordinator, _, Msg) ->
   ok = throw_error_code([Msg]),
   Msg;
 parse(join_group, _, Msg) ->
-  ok = throw_error_code([Msg]),
+  %% KIP-394 (Kafka 2.2+, JoinGroup v4+): when a member joins with an empty
+  %% `member_id', the broker may reply with `error_code=MEMBER_ID_REQUIRED'
+  %% and a freshly allocated `member_id' in the body. The client is expected
+  %% to remember the id and retry. Surface the body so the caller can
+  %% capture the id; throwing here would discard it and the retry would
+  %% use an empty `member_id' again, looping until `max_rejoin_attempts'.
+  case kpro:find(error_code, Msg) of
+    member_id_required ->
+      ok;
+    _ ->
+      throw_error_code([Msg])
+  end,
   Msg;
 parse(heartbeat, _, Msg) ->
   ok = throw_error_code([Msg]),

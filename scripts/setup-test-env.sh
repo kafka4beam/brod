@@ -41,6 +41,9 @@ case $KAFKA_VERSION in
   1.*)
     KAFKA_VERSION="1.1"
     ;;
+  2.2*)
+    KAFKA_VERSION="2.2"
+    ;;
   2.*)
     KAFKA_VERSION="2.8"
     ;;
@@ -56,7 +59,7 @@ case $KAFKA_VERSION in
     ;;
 esac
 
-export KAFKA_IMAGE_VERSION="1.3.0-${KAFKA_VERSION}"
+export KAFKA_IMAGE_VERSION="1.3.1-${KAFKA_VERSION}"
 echo "env KAFKA_IMAGE_VERSION=$KAFKA_IMAGE_VERSION"
 
 KAFKA_MAJOR=$(echo "$KAFKA_VERSION" | cut -d. -f1)
