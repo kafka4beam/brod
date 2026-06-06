@@ -40,6 +40,7 @@
 -export([ t_acks_during_revoke/1
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
+        , t_member_id_required_dynamic_member/1
         ]).
 
 -define(assert_receive(Pattern, Return),
@@ -224,6 +225,47 @@ t_offset_fetch_minus_one_falls_back_to_reset_policy(Config) when is_list(Config)
     ?assertEqual(0, FetchOffset)
   after
     ok = brod_group_subscriber_v2:stop(SubscriberPid)
+  end.
+
+%% KIP-394 / KAFKA-7950: when a dynamic member sends JoinGroup with an
+%% empty `member_id', the broker (any Kafka >= 2.2 speaking JoinGroup v4+)
+%% replies `error_code=MEMBER_ID_REQUIRED' with a freshly allocated id in
+%% the body. brod must capture that id and retry; the previous behavior
+%% threw the EC and discarded the id, then re-sent the JoinGroup with an
+%% empty `member_id' again, looping until `max_rejoin_attempts'.
+%%
+%% Forcing `{group_instance_id, null}' here is what makes this case
+%% exercise the dynamic-member path on every broker version brod CIs
+%% against. With brod's default static `group_instance_id', Kafka 2.3+
+%% takes the KIP-345 fast path and never sends MEMBER_ID_REQUIRED.
+%% On Kafka 2.2 (no KIP-345) the path is taken regardless, but the
+%% explicit `null' here keeps the case meaningful on the 3.x / 4.x CI
+%% rows too.
+t_member_id_required_dynamic_member(Config) when is_list(Config) ->
+  GroupId = list_to_binary(
+              "brod-grp-coord-member-id-required-" ++
+              integer_to_list(erlang:unique_integer([positive]))),
+  GroupConfig = [ {group_instance_id, null}
+                  %% Allow the first attempt to fail with MEMBER_ID_REQUIRED
+                  %% (expected KIP-394 handshake) and one retry to succeed.
+                  %% Without the fix, the retry uses an empty member_id and
+                  %% the broker replies MEMBER_ID_REQUIRED again — the cap
+                  %% trips quickly so the case fails fast (<5s).
+                , {max_rejoin_attempts, 3}
+                ],
+  {ok, CoordinatorPid} =
+    brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                      GroupConfig, ?MODULE, {self(), 1}),
+  try
+    %% Without the fix: coordinator dies with `max_rejoin_attempts' before
+    %% the first JoinGroup retry can succeed, and `assignments_received'
+    %% never fires (test times out and ct:fails).
+    ?assert_receive({assignments_revoked, 1}, ok),
+    CoordinatorPid ! continue,
+    ?assert_receive({assignments_received, 1, _, _}, ok)
+  after
+    unlink(CoordinatorPid),
+    exit(CoordinatorPid, shutdown)
   end.
 
 %% Build an OffsetFetch response returning committed_offset=-1 for every

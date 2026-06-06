@@ -1,5 +1,24 @@
 # Changelog
 
+- 4.5.5
+  - Fix infinite `MEMBER_ID_REQUIRED` rejoin loop against Kafka brokers that
+    take the dynamic-membership path on JoinGroup. Per KIP-394 (Kafka 2.2+,
+    JoinGroup v4+), a member that joins with an empty `member_id` receives
+    `error_code=MEMBER_ID_REQUIRED` and a broker-allocated `member_id` in
+    the same response, and is expected to retry with the new id. brod
+    previously threw the error code before reading the body, dropping the
+    `member_id`, so every retry sent an empty `member_id` again and the
+    coordinator died with `max_rejoin_attempts` (subscribers then restarted
+    with `{shutdown, coordinator_failure}`, looping forever).
+    Hidden on Kafka 2.3+ because brod's default `group_instance_id` makes
+    the broker take the KIP-345 static-member fast path; exposed on
+    Kafka 2.2 (no static membership) and on any broker when the user sets
+    `{group_instance_id, null}` to opt out of static membership.
+    Also fixed: `assignments_revoked` was called once per stabilize retry
+    instead of once per stabilize cycle, producing duplicate revoke
+    callbacks on any retry path.
+    Added Kafka 2.2 to the CI matrix.
+
 - 4.5.4
   - Fix silent fallback in `brod_group_subscriber`/`v2` when Kafka's `OffsetFetch` returns `committed_offset=-1`
     (no committed offset for the group, e.g. new group, topic recreated, `offsets.retention.minutes` expired).
