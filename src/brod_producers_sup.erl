@@ -159,7 +159,7 @@ init({?PARTITIONS_SUP, _ClientPid, _Topic, _Config}) ->
   post_init.
 
 post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
-  case brod_client:get_partitions_count(ClientPid, Topic) of
+  case get_partitions_count(ClientPid, Topic) of
     {ok, PartitionsCnt} ->
       Children = [ producer_spec(ClientPid, Topic, Partition, Config)
                  || Partition <- lists:seq(0, PartitionsCnt - 1) ],
@@ -171,6 +171,22 @@ post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
       {ok, {{one_for_one, 0, 1}, Children}};
     {error, Reason} ->
       {error, Reason}
+  end.
+
+%% Resolve partition count without calling back into brod_client (issue #662).
+%% brod_client populates its partition count cache via
+%% `validate_topic_existence/3' immediately before starting this per-topic
+%% supervisor, so the cache lookup is expected to hit on the brod_client-driven
+%% code path. This avoids a synchronous `gen_server:call' into brod_client
+%% during `post_init', which would deadlock when brod_client is concurrently
+%% walking the producer supervisor tree from `count_started_children/1'
+%% inside `do_get_metadata'.
+%% Fall back to the synchronous brod_client API on cache miss to preserve
+%% behaviour for any external caller of `start_producer/4'.
+get_partitions_count(ClientPid, Topic) ->
+  case brod_client:lookup_partitions_count_cache(ClientPid, Topic) of
+    {ok, N} when is_integer(N), N > 0 -> {ok, N};
+    _Other -> brod_client:get_partitions_count(ClientPid, Topic)
   end.
 
 producers_sup_spec(ClientPid, TopicName, Config0) ->

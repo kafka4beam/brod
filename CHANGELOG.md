@@ -18,6 +18,22 @@
     instead of once per stabilize cycle, producing duplicate revoke
     callbacks on any retry path.
     Added Kafka 2.2 to the CI matrix.
+  - Fix deadlock between `brod_client' and a per-topic `brod_producers_sup'
+    (issue #662; regression in 4.4.5 / PR #636 widened exposure).
+    The producer supervisor's `post_init/1' callback called back into
+    `brod_client' via `brod_client:get_partitions_count/2', forming a cycle
+    with `brod_client''s own `count_started_children/1' walk inside
+    `do_get_metadata' — under concurrent `auto_start_producer' calls the
+    two processes would block on each other indefinitely with
+    `timeout=infinity'.
+    `brod_producers_sup:post_init/1' now reads the partition count directly
+    from `brod_client''s `workers_tab' ETS cache (a `named_table, protected'
+    table named after the client id, populated by `validate_topic_existence/3'
+    immediately before the per-topic supervisor is started). This removes
+    the `gen_server:call' back into `brod_client' on the hot path and breaks
+    the cycle. The synchronous `brod_client:get_partitions_count/2' is still
+    used as a fallback on cache miss for external callers of
+    `brod_producers_sup:start_producer/4'. No public API change.
 
 - 4.5.4
   - Fix silent fallback in `brod_group_subscriber`/`v2` when Kafka's `OffsetFetch` returns `committed_offset=-1`
