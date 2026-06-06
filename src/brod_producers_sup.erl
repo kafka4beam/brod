@@ -28,6 +28,7 @@
         , find_producer/3
         , start_producer/4
         , start_producer/5
+        , start_topic_producer/5
         , stop_producer/2
         , get_producer_config/3
         , count_started_children/1
@@ -56,11 +57,35 @@
 start_link() ->
   brod_supervisor3:start_link(?MODULE, ?TOPICS_SUP).
 
-%% @doc Dynamically start a per-topic supervisor
+%% @doc Dynamically start a per-topic supervisor.
+%%
+%% The per-topic supervisor will discover the partition count by calling
+%% `brod_client:get_partitions_count/2' from its `post_init/1' callback.
+%% That callback runs a synchronous `gen_server:call' into `brod_client',
+%% and can deadlock with `brod_client' if `brod_client' is concurrently
+%% walking the producer supervisor tree (e.g. inside
+%% `count_started_children/1' from `do_get_metadata') — see issue #662.
+%% Prefer `start_topic_producer/5' from `brod_client' callers; this 4-arity
+%% variant is kept for backward compatibility with external callers that
+%% do not know the partition count up front.
 -spec start_producer(pid(), pid(), brod:topic(), brod:producer_config()) ->
                         {ok, pid()} | {error, any()}.
 start_producer(SupPid, ClientPid, TopicName, Config) ->
-  Spec = producers_sup_spec(ClientPid, TopicName, Config),
+  start_topic_producer(SupPid, ClientPid, TopicName, undefined, Config).
+
+%% @doc Dynamically start a per-topic supervisor with a known partition count.
+%%
+%% Bypasses the `post_init' callback's `brod_client:get_partitions_count/2'
+%% call by supplying the count up front. This is what `brod_client' uses
+%% from `do_start_producer/3' after its own `validate_topic_existence/3'
+%% has populated the partition count cache — eliminating the deadlock
+%% cycle described in issue #662.
+-spec start_topic_producer(pid(), pid(), brod:topic(),
+                           pos_integer() | undefined,
+                           brod:producer_config()) ->
+                              {ok, pid()} | {error, any()}.
+start_topic_producer(SupPid, ClientPid, TopicName, PartitionsCount, Config) ->
+  Spec = producers_sup_spec(ClientPid, TopicName, PartitionsCount, Config),
   brod_supervisor3:start_child(SupPid, Spec).
 
 %% @doc Dynamically start a partition producer
@@ -155,11 +180,11 @@ which_producers(Sup) ->
 %% @doc brod_supervisor3 callback.
 init(?TOPICS_SUP) ->
   {ok, {{one_for_one, 0, 1}, []}};
-init({?PARTITIONS_SUP, _ClientPid, _Topic, _Config}) ->
+init({?PARTITIONS_SUP, _ClientPid, _Topic, _PartitionsCount, _Config}) ->
   post_init.
 
-post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
-  case brod_client:get_partitions_count(ClientPid, Topic) of
+post_init({?PARTITIONS_SUP, ClientPid, Topic, PartitionsCount, Config}) ->
+  case resolve_partitions_count(ClientPid, Topic, PartitionsCount) of
     {ok, PartitionsCnt} ->
       Children = [ producer_spec(ClientPid, Topic, Partition, Config)
                  || Partition <- lists:seq(0, PartitionsCnt - 1) ],
@@ -173,11 +198,20 @@ post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
       {error, Reason}
   end.
 
-producers_sup_spec(ClientPid, TopicName, Config0) ->
+%% Use the pre-supplied partition count when available (the deadlock-free
+%% path used by brod_client). Fall back to brod_client:get_partitions_count/2
+%% only when the caller did not know the count.
+resolve_partitions_count(_ClientPid, _Topic, N)
+    when is_integer(N), N > 0 ->
+  {ok, N};
+resolve_partitions_count(ClientPid, Topic, _Undefined) ->
+  brod_client:get_partitions_count(ClientPid, Topic).
+
+producers_sup_spec(ClientPid, TopicName, PartitionsCount, Config0) ->
   {Config, DelaySecs} =
     take_delay_secs(Config0, topic_restart_delay_seconds,
                     ?DEFAULT_PARTITIONS_SUP_RESTART_DELAY),
-  Args = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, Config}],
+  Args = [?MODULE, {?PARTITIONS_SUP, ClientPid, TopicName, PartitionsCount, Config}],
   { _Id       = TopicName
   , _Start    = {brod_supervisor3, start_link, Args}
   , _Restart  = {permanent, DelaySecs}

@@ -46,6 +46,7 @@
         , t_get_partitions_count_configure_cache_ttl/1
         , t_get_partitions_count_safe/1
         , t_double_stop_consumer/1
+        , t_start_producer_does_not_post_init_callback/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -481,6 +482,53 @@ mock_connection(EP) ->
   Ref.
 
 kafka_version() -> kafka_test_helper:kafka_version().
+
+%% Regression for issue #662: brod_client and brod_producers_sup could
+%% deadlock when brod_client's `do_get_metadata' walked the producer
+%% supervisor tree via `count_started_children/1' while a per-topic
+%% supervisor was sitting in its `post_init/1' callback waiting for
+%% brod_client to answer `get_partitions_count/2'.
+%%
+%% The fix is for brod_client to pre-supply the partition count to
+%% `brod_producers_sup:start_topic_producer/5' so the new per-topic
+%% supervisor's `post_init/1' never calls back into brod_client. This
+%% test asserts that property white-box: after `brod:start_producer/3'
+%% (which goes through the same `do_start_producer/3' path as the
+%% `auto_start_producers' flow that exposed the deadlock), no
+%% `brod_client:get_partitions_count/2' call should originate from the
+%% per-topic supervisor's `post_init/1' callback. Before the fix this
+%% count would be at least 1 (one call per per-topic supervisor created).
+t_start_producer_does_not_post_init_callback({init, Config}) ->
+  meck:new(brod_client, [passthrough]),
+  Config;
+t_start_producer_does_not_post_init_callback({'end', Config}) ->
+  meck:unload(brod_client),
+  brod:stop_client(t_start_producer_does_not_post_init_callback),
+  Config;
+t_start_producer_does_not_post_init_callback(Config) when is_list(Config) ->
+  Client = t_start_producer_does_not_post_init_callback,
+  Topic = ?TOPIC,
+  ok = start_client(?HOSTS, Client),
+  %% Warm the partition count cache via a direct call so the counter below
+  %% only attributes new calls to the per-topic supervisor's `post_init/1'.
+  {ok, _} = brod_client:get_partitions_count(Client, Topic),
+  %% From here on, every `brod_client:get_partitions_count/2' call must come
+  %% from `brod_producers_sup:post_init/1' — there is no other caller in the
+  %% `start_producer' code path.
+  Counter = counters:new(1, []),
+  meck:expect(brod_client, get_partitions_count,
+    fun(C, T) ->
+        counters:add(Counter, 1, 1),
+        meck:passthrough([C, T])
+    end),
+  ok = brod:start_producer(Client, Topic, []),
+  %% Allow the per-topic supervisor's `handle_continue' / `post_init/1' to run.
+  ok = timer:sleep(200),
+  ?assertEqual(
+    0, counters:get(Counter, 1),
+    "brod_producers_sup:post_init/1 must not call back into brod_client "
+    "when brod_client has pre-supplied the partition count"),
+  ok.
 
 start_client(Hosts, ClientId) -> start_client(Hosts, ClientId, []).
 

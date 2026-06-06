@@ -961,15 +961,26 @@ request_sync(State, Request) ->
 
 do_start_producer(TopicName, ProducerConfig, State) ->
   SupPid = State#state.producers_sup,
-  F = fun() ->
-        brod_producers_sup:start_producer(SupPid, self(),
-                                          TopicName, ProducerConfig)
+  %% Issue #662: pre-supply the partition count from the cache (just populated
+  %% by validate_topic_existence) so the per-topic producers supervisor's
+  %% post_init does not need to call back into this brod_client process —
+  %% which would deadlock when brod_client is in `count_started_children'
+  %% walking the supervisor tree.
+  F = fun(NewState) ->
+        PartitionsCount =
+          case lookup_partitions_count_cache(NewState#state.workers_tab,
+                                             TopicName) of
+            {ok, N} -> N;
+            _       -> undefined
+          end,
+        brod_producers_sup:start_topic_producer(
+          SupPid, self(), TopicName, PartitionsCount, ProducerConfig)
       end,
   ensure_partition_workers(TopicName, State, F).
 
 do_start_consumer(TopicName, ConsumerConfig, State) ->
   SupPid = State#state.consumers_sup,
-  F = fun() ->
+  F = fun(_NewState) ->
         brod_consumers_sup:start_consumer(SupPid, self(),
                                           TopicName, ConsumerConfig)
       end,
@@ -979,7 +990,7 @@ ensure_partition_workers(TopicName, State, F) ->
   with_ok(
     validate_topic_existence(TopicName, State, _IsRetry = false),
     fun(ok, NewState) ->
-      case F() of
+      case F(NewState) of
         {ok, _Pid} ->
           {ok, NewState};
         {error, {already_started, _Pid}} ->
