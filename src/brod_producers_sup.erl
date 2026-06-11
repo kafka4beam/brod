@@ -173,20 +173,27 @@ post_init({?PARTITIONS_SUP, ClientPid, Topic, Config}) ->
       {error, Reason}
   end.
 
-%% Resolve partition count without calling back into brod_client (issue #662).
-%% brod_client populates its partition count cache via
-%% `validate_topic_existence/3' immediately before starting this per-topic
-%% supervisor, so the cache lookup is expected to hit on the brod_client-driven
-%% code path. This avoids a synchronous `gen_server:call' into brod_client
-%% during `post_init', which would deadlock when brod_client is concurrently
-%% walking the producer supervisor tree from `count_started_children/1'
-%% inside `do_get_metadata'.
-%% Fall back to the synchronous brod_client API on cache miss to preserve
-%% behaviour for any external caller of `start_producer/4'.
+%% Resolve partition count without a synchronous callback into brod_client
+%% to break the deadlock cycle in issue #662
+%% (brod_client.count_started_children ↔ pertopic_sup.post_init.get_partitions_count
+%% under concurrent producer starts).
+%%
+%% The cache lookup is expected to hit on every brod_client-driven path:
+%% `brod_client:do_start_producer/3' calls `validate_topic_existence/3'
+%% immediately before starting this per-topic supervisor, which populates
+%% the cache entry on success. Positive entries in brod_client's
+%% `workers_tab' have no TTL and no eviction path, so restarts of this
+%% supervisor by `brod_supervisor3' also hit.
+%%
+%% The synchronous fallback is therefore only reached when an external
+%% caller invokes `brod_producers_sup:start_producer/4' directly, bypassing
+%% brod_client. Such callers retain the pre-fix deadlock risk if they race
+%% with brod_client's own metadata refresh — they should serialise against
+%% brod_client traffic or use `brod:start_producer/3' instead.
 get_partitions_count(ClientPid, Topic) ->
   case brod_client:lookup_partitions_count_cache(ClientPid, Topic) of
     {ok, N} when is_integer(N), N > 0 -> {ok, N};
-    _Other -> brod_client:get_partitions_count(ClientPid, Topic)
+    _Miss -> brod_client:get_partitions_count(ClientPid, Topic)
   end.
 
 producers_sup_spec(ClientPid, TopicName, Config0) ->
