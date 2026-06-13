@@ -53,7 +53,8 @@
         , find_consumer/3
         ]).
 
-%% Test export
+%% Used by brod_producers_sup:post_init/1 to avoid a synchronous callback
+%% into this process (issue #662). Also kept exported for tests.
 -export([ lookup_partitions_count_cache/2
         ]).
 
@@ -908,9 +909,17 @@ find_partition_count_in_topic_metadata_array(TopicMetadataArray, Topic) ->
       {error, unknown_topic_or_partition}
   end.
 
--spec lookup_partitions_count_cache(ets:tab(), ?undef | topic()) ->
+-spec lookup_partitions_count_cache(ets:tab() | pid(), ?undef | topic()) ->
         {ok, pos_integer()} | {error, any()} | false.
-lookup_partitions_count_cache(_Ets, ?undef) -> false;
+lookup_partitions_count_cache(_EtsOrPid, ?undef) -> false;
+lookup_partitions_count_cache(ClientPid, Topic) when is_pid(ClientPid) ->
+  %% Resolve the workers_tab ETS table from the registered client id without
+  %% issuing a gen_server:call into brod_client. brod_client is always
+  %% started with `{local, ClientId}' (see start_link/3) and the table is a
+  %% `named_table' named after that atom (see init/1 and the ?ETS macro),
+  %% so the registered_name lookup is guaranteed to hit for a live client.
+  {registered_name, ClientId} = erlang:process_info(ClientPid, registered_name),
+  lookup_partitions_count_cache(?ETS(ClientId), Topic);
 lookup_partitions_count_cache(Ets, Topic) ->
   try ets:lookup(Ets, ?TOPIC_METADATA_KEY(Topic)) of
     [{_, Count, _Ts}] when is_integer(Count) ->
