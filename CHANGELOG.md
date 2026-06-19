@@ -1,4 +1,7 @@
 # Changelog
+- 4.5.0
+  - Expose `create_partitions` from the underlying kafka_protocol
+  - Allow partitions to automatically have producers started for newly discovered partitions.
 
 - 4.5.5
   - Fix infinite `MEMBER_ID_REQUIRED` rejoin loop against Kafka brokers that
