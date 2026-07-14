@@ -30,6 +30,7 @@
 -export([ t_normal_flow/1
         , t_no_required_acks/1
         , t_retry_on_same_connection/1
+        , t_retry_on_kafka_storage_error/1
         , t_connection_down_retry/1
         , t_leader_migration/1
         ]).
@@ -178,6 +179,50 @@ t_retry_on_same_connection(Config) when is_list(Config) ->
           {produce, ProducerPid, #kpro_req{ref = Ref}} ->
             Rsp = case N of
                     1 -> fake_rsp(Ref, <<"topic">>, 0, ?request_timed_out);
+                    2 -> fake_rsp(Ref, <<"topic">>, 0)
+                  end,
+            Tester ! {'try', N},
+            ProducerPid ! {msg, self(), Rsp},
+            Loop(N + 1)
+        end
+    end,
+  ConnPid = erlang:spawn_link(fun() -> ConnLoop(1) end),
+  meck:expect(brod_client, get_leader_connection,
+              fun(client, <<"topic">>, 0) ->
+                  {ok, ConnPid}
+              end),
+  ProducerConfig = [{required_acks, 1},
+                    {max_linger_ms, 0},
+                    {retry_backoff_ms, 100}],
+  {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0,
+                                            ProducerConfig),
+  meck:expect(kpro, request_async,
+              fun(Connection, Req) ->
+                  Connection ! {produce, Producer, Req},
+                  ok
+              end),
+  {ok, CallRef} = brod_producer:produce(Producer, <<"k">>, <<"v">>),
+  ?WAIT({'try', 1}, ok, 1000),
+  ?WAIT({'try', 2}, ok, 1000),
+  ?WAIT(#brod_produce_reply{call_ref = CallRef,
+                            result = brod_produce_req_acked},
+        ok, 2000),
+  ok = brod_producer:stop(Producer).
+
+%% kafka_storage_error (error code 56) is retriable per the Kafka protocol.
+%% Expect brod_producer to keep the buffer and retry
+%% instead of exiting with {not_retriable, _}.
+t_retry_on_kafka_storage_error(Config) when is_list(Config) ->
+  Tester = self(),
+  %% A mocked connection process which expects 2 requests to be sent
+  %% reply kafka_storage_error for the first one
+  %% and succeed the second one
+  ConnLoop =
+    fun Loop(N) ->
+        receive
+          {produce, ProducerPid, #kpro_req{ref = Ref}} ->
+            Rsp = case N of
+                    1 -> fake_rsp(Ref, <<"topic">>, 0, ?kafka_storage_error);
                     2 -> fake_rsp(Ref, <<"topic">>, 0)
                   end,
             Tester ! {'try', N},

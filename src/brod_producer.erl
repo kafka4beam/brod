@@ -618,7 +618,8 @@ is_retriable(EC) when EC =:= ?unknown_topic_or_partition;
                       EC =:= ?not_leader_for_partition;
                       EC =:= ?request_timed_out;
                       EC =:= ?not_enough_replicas;
-                      EC =:= ?not_enough_replicas_after_append ->
+                      EC =:= ?not_enough_replicas_after_append;
+                      EC =:= ?kafka_storage_error ->
   true;
 is_retriable(_) ->
   false.
