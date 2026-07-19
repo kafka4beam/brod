@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.5.6
+  - Make `kafka_storage_error` retriable.
+
 - 4.5.5
   - Fix infinite `MEMBER_ID_REQUIRED` rejoin loop against Kafka brokers that
     take the dynamic-membership path on JoinGroup. Per KIP-394 (Kafka 2.2+,
