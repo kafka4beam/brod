@@ -44,7 +44,11 @@ common_init_per_testcase(Module, Case, Config) ->
   Config.
 
 common_end_per_testcase(_Case, _Config) ->
-  catch brod:stop_client(?TEST_CLIENT_ID),
+  try
+      brod:stop_client(?TEST_CLIENT_ID)
+  catch
+      _:_ -> ok
+  end,
   ok.
 
 produce(TopicPartition, Value) ->
