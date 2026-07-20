@@ -107,7 +107,7 @@ t_acks_during_revoke(Config) when is_list(Config) ->
 
   {ok, GroupCoordinator2Pid} =
     brod_group_coordinator:start_link(?OTHER_CLIENT_ID, ?GROUP, [?TOPIC],
-                                      _Config = [], ?MODULE, {self(), 2}),
+                                      [], ?MODULE, {self(), 2}),
 
   %% Allow new partition to be started
   ?assert_receive({assignments_revoked, 2}, ok),

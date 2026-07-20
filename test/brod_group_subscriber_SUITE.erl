@@ -125,7 +125,7 @@ common_init_per_testcase(Case, Config0) ->
 common_end_per_testcase(Case, Config) ->
   %% Clean up stuff while trying not to be killed by brod
   process_flag(trap_exit, true),
-  catch brod:stop_client(?CLIENT_ID),
+  try brod:stop_client(?CLIENT_ID) catch _:_ -> ok end,
   kafka_test_helper:common_end_per_testcase(Case, Config),
   receive
     {'EXIT', From, Reason} ->
