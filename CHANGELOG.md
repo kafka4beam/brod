@@ -1,5 +1,8 @@
 # Changelog
 
+- 4.5.7
+  - Replace old `catch` expressions with `try ... catch` for OTP-29.
+
 - 4.5.6
   - Make `kafka_storage_error` retriable.
 
