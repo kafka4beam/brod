@@ -408,7 +408,7 @@ start_children([], NChildren, _SupName) ->
 
 do_start_child(SupName, Child) ->
     #child{mfargs = {M, F, Args}} = Child,
-    case catch apply(M, F, Args) of
+    try apply(M, F, Args) of
         {ok, Pid} when is_pid(Pid) ->
             NChild = Child#child{pid = Pid},
             report_progress(NChild, SupName),
@@ -419,12 +419,13 @@ do_start_child(SupName, Child) ->
             {ok, Pid, Extra};
         ignore ->
             {ok, undefined};
-        {error, What} -> {error, What};
-        What -> {error, What}
+        {error, What} -> {error, What}
+    catch
+        C:What -> {error, {C, What}}
     end.
 
 do_start_child_i(M, F, A) ->
-    case catch apply(M, F, A) of
+    try apply(M, F, A) of
         {ok, Pid} when is_pid(Pid) ->
             {ok, Pid};
         {ok, Pid, Extra} when is_pid(Pid) ->
@@ -432,9 +433,10 @@ do_start_child_i(M, F, A) ->
         ignore ->
             {ok, undefined};
         {error, Error} ->
-            {error, Error};
-        What ->
-            {error, What}
+            {error, Error}
+    catch
+        C:What ->
+            {error, {C, What}}
     end.
 
 %%% ---------------------------------------------------
@@ -754,15 +756,16 @@ terminate(_Reason, State) ->
 code_change(_, State, _) ->
     case (State#state.module):init(State#state.args) of
         {ok, {SupFlags, StartSpec}} ->
-            case catch check_flags(SupFlags) of
+            try check_flags(SupFlags) of
                 ok ->
                     {Strategy, MaxIntensity, Period} = SupFlags,
                     update_childspec(State#state{strategy = Strategy,
                                                  intensity = MaxIntensity,
                                                  period = Period},
-                                     StartSpec);
-                Error ->
-                    {error, Error}
+                                     StartSpec)
+            catch
+                C:Error ->
+                    {error, {C, Error}}
             end;
         ignore ->
             {ok, State};
@@ -1419,13 +1422,14 @@ remove_child(Child, State) ->
 %% Returns: {ok, state()} | Error
 %%-----------------------------------------------------------------
 do_init(SupName, Type, StartSpec, Mod, Args) ->
-    case catch init_state(SupName, Type, Mod, Args) of
+    try init_state(SupName, Type, Mod, Args) of
         {ok, State} when ?is_simple(State) ->
             init_dynamic(State, StartSpec);
         {ok, State} ->
-            init_children(State, StartSpec);
-        Error ->
-            {stop, {supervisor_data, Error}}
+            init_children(State, StartSpec)
+    catch
+        C:Error ->
+            {stop, {supervisor_data, {C, Error}}}
     end.
 
 init_state(SupName, {Strategy, MaxIntensity, Period}, Mod, Args) ->
@@ -1489,7 +1493,12 @@ check_startspec([], Res) ->
     {ok, lists:reverse(Res)}.
 
 check_childspec({Name, Func, RestartType, Shutdown, ChildType, Mods}) ->
-    catch check_childspec(Name, Func, RestartType, Shutdown, ChildType, Mods);
+    try
+        check_childspec(Name, Func, RestartType, Shutdown, ChildType, Mods)
+    catch
+        C:Reason ->
+            {C, Reason}
+    end;
 check_childspec(X) -> {invalid_child_spec, X}.
 
 check_childspec(Name, Func, RestartType, Shutdown, ChildType, Mods) ->
