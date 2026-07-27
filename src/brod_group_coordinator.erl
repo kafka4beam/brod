@@ -154,6 +154,8 @@
         , protocol_name                  :: protocol_name()
           %% Static member ID
         , group_instance_id              :: binary()
+          %% True only when the caller supplies a stable group instance ID.
+        , static_membership               :: boolean()
         }).
 
 -type state() :: #state{}.
@@ -275,6 +277,8 @@
 %%      — non-null by default so brokers take the KIP-345 fast path on first
 %%      JoinGroup. Set to the atom `null' to opt out of static membership
 %%      (dynamic member; required for Kafka 2.2 which predates KIP-345).
+%%      When set to a binary, the coordinator does not send LeaveGroup on
+%%      shutdown, so a replacement can take over the same ID without a rebalance.
 %%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -360,11 +364,11 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   %% `null' is the explicit user opt-out — sends a null group_instance_id on
   %% the wire (dynamic membership). `undefined' falls back to the default
   %% static id derived from node()/pid.
-  StaticMemberID =
+  {StaticMemberID, StaticMembership} =
     case proplists:get_value(group_instance_id, Config, undefined) of
-      undefined -> default_group_instance_id();
-      null      -> ?kpro_null;
-      Value     -> Value
+      undefined -> {default_group_instance_id(), false};
+      null      -> {?kpro_null, false};
+      Value     -> {Value, true}
     end,
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
@@ -385,19 +389,29 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           , protocol_name                  = ProtocolName
           , group_instance_id              = StaticMemberID
+          , static_membership               = StaticMembership
           },
   {ok, State}.
 
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
-  {ok, NewState} =
+  CommitResult =
     try
       do_commit_offsets(State)
-    catch throw : Reason ->
-      stabilize(State, 0, Reason)
+    catch
+      throw : ?fenced_instance_id ->
+        {stop, ?fenced_instance_id};
+      throw : Reason ->
+        stabilize(State, 0, Reason)
     end,
-  {noreply, NewState};
+  case CommitResult of
+    {stop, ?fenced_instance_id} ->
+      {stop, ?fenced_instance_id, State};
+    Result ->
+      {ok, NewState} = Result,
+      {noreply, NewState}
+  end;
 handle_info(?LO_CMD_STABILIZE(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
@@ -446,6 +460,8 @@ handle_info({msg, _Pid, #kpro_rsp{ api = heartbeat
   EC = kpro:find(error_code, Body),
   State = State0#state{hb_ref = ?undef},
   case ?IS_ERROR(EC) of
+    true when EC =:= ?fenced_instance_id ->
+      {stop, ?fenced_instance_id, State};
     true ->
       {ok, NewState} = stabilize(State, 0, EC),
       {noreply, NewState};
@@ -460,10 +476,14 @@ handle_call({commit_offsets, ExtraOffsets}, From, State) ->
     Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
     {ok, NewState} = do_commit_offsets(State#state{acked_offsets = Offsets}),
     {reply, ok, NewState}
-  catch throw : Reason ->
-    gen_server:reply(From, {error, Reason}),
-    {ok, NewState_} = stabilize(State, 0, Reason),
-    {noreply, NewState_}
+  catch
+    throw : ?fenced_instance_id ->
+      gen_server:reply(From, {error, ?fenced_instance_id}),
+      {stop, ?fenced_instance_id, State};
+    throw : Reason ->
+      gen_server:reply(From, {error, Reason}),
+      {ok, NewState_} = stabilize(State, 0, Reason),
+      {noreply, NewState_}
   end;
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
@@ -478,19 +498,26 @@ handle_cast(_Cast, #state{} = State) ->
 code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
-terminate(Reason, #state{ connection = Connection
-                        , groupId  = GroupId
-                        , memberId = MemberId
-                        } = State) ->
+terminate(Reason, State) ->
+  _ = try_commit_offsets(State),
+  maybe_leave_group(Reason, State).
+
+maybe_leave_group(Reason, #state{static_membership = true} = State) ->
+  log(State, info, "Static member stopped without leaving group, reason: ~p\n",
+      [Reason]),
+  ok;
+maybe_leave_group(Reason, #state{ connection = Connection
+                                , groupId  = GroupId
+                                , memberId = MemberId
+                                } = State) ->
   log(State, info, "Leaving group, reason: ~p\n", [Reason]),
   Body = [{group_id, GroupId}, {member_id, MemberId}],
-  _ = try_commit_offsets(State),
   Request = kpro:make_request(leave_group, _V = 0, Body),
   try
     _ = send_sync(Connection, Request, 1000),
     ok
   catch
-    _ : _ ->
+    _:_ ->
       ok
   end.
 
@@ -608,8 +635,11 @@ do_stabilize([F | Rest], RetryFun, State) ->
   try
     {ok, #state{} = NewState} = F(State),
     do_stabilize(Rest, RetryFun, NewState)
-  catch throw : Reason ->
-    RetryFun(save_assigned_member_id(State, Reason), Reason)
+  catch
+    throw : ?fenced_instance_id ->
+      exit(?fenced_instance_id);
+    throw : Reason ->
+      RetryFun(save_assigned_member_id(State, Reason), Reason)
   end.
 
 %% KIP-394: when the broker assigns a `member_id' via a
@@ -717,14 +747,19 @@ sync_group(#state{ groupId       = GroupId
                  , connection    = Connection
                  , member_pid    = MemberPid
                  , member_module = MemberModule
+                 , group_instance_id = StaticMemberID
+                 , static_membership = StaticMembership
                  } = State) ->
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     , {assignments, assign_partitions(State)}
     ],
-  SyncReq = brod_kafka_request:sync_group(Connection, ReqBody),
+  Vsn = group_request_version(StaticMembership, _StaticVsn = 3,
+                              _DynamicVsn = 0),
+  SyncReq = brod_kafka_request:sync_group(Vsn, ReqBody),
   %% send sync group request and wait for response
   RspBody = send_sync(Connection, SyncReq),
   %% get my partition assignments
@@ -811,6 +846,8 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          , connection               = Connection
                          , offset_retention_seconds = OffsetRetentionSecs
                          , acked_offsets            = AckedOffsets
+                         , group_instance_id        = StaticMemberID
+                         , static_membership        = StaticMembership
                          } = State) ->
   Metadata = make_offset_commit_metadata(),
   TopicOffsets0 =
@@ -819,6 +856,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
         PartitionOffset =
           [ {partition_index, Partition}
           , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
+          , {committed_leader_epoch, -1}
           , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}
@@ -839,10 +877,13 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     , {retention_time_ms, Retention}
     , {topics, TopicOffsets}
     ],
-  Req = brod_kafka_request:offset_commit(Connection, ReqBody),
+  Vsn = group_request_version(StaticMembership, _StaticVsn = 7,
+                              _DynamicVsn = 2),
+  Req = brod_kafka_request:offset_commit(Vsn, ReqBody),
   RspBody = send_sync(Connection, Req),
   Topics = kpro:find(topics, RspBody),
   ok = assert_commit_response(Topics),
@@ -1154,19 +1195,27 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                            , memberId     = MemberId
                            , generationId = GenerationId
                            , connection   = Connection
+                           , group_instance_id = StaticMemberID
+                           , static_membership = StaticMembership
                            } = State) ->
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     ],
-  Req = kpro:make_request(heartbeat, 0, ReqBody),
+  Vsn = group_request_version(StaticMembership, _StaticVsn = 3,
+                              _DynamicVsn = 0),
+  Req = brod_kafka_request:heartbeat(Vsn, ReqBody),
   ok = kpro:request_async(Connection, Req),
   NewState = State#state{hb_ref = {Req#kpro_req.ref, os:timestamp()}},
   {ok, NewState};
 maybe_send_heartbeat(#state{} = State) ->
   %% do not send heartbeat when not in group
   {ok, State#state{hb_ref = ?undef}}.
+
+group_request_version(true, StaticVsn, _DynamicVsn) -> StaticVsn;
+group_request_version(false, _StaticVsn, DynamicVsn) -> DynamicVsn.
 
 send_sync(Connection, Request) ->
   send_sync(Connection, Request, 5000).
