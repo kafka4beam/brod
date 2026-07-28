@@ -157,8 +157,8 @@ heartbeat(Conn, Fields) ->
 sync_group(Conn, Fields) ->
   make_req(sync_group, Conn, Fields).
 
-%% @doc Make a `offset_commit' request.
--spec offset_commit(conn(), kpro:struct()) -> kpro:req().
+%% @doc Make an `offset_commit' request.
+-spec offset_commit(conn() | vsn(), kpro:struct()) -> kpro:req().
 offset_commit(Conn, Fields) ->
   make_req(offset_commit, Conn, Fields).
 
@@ -167,6 +167,10 @@ offset_commit(Conn, Fields) ->
 make_req(API, Conn, Fields) when is_pid(Conn) ->
   Vsn = pick_version(API, Conn),
   make_req(API, Vsn, Fields);
+make_req(offset_commit, Vsn, Fields) when Vsn > 2 ->
+  %% kafka_protocol has schemas for these versions, but its request builder
+  %% caps OffsetCommit at v2. Leave the body for its encoder to encode later.
+  #kpro_req{api = offset_commit, vsn = Vsn, msg = Fields, ref = make_ref()};
 make_req(API, Vsn, Fields) ->
   kpro:make_request(API, Vsn, Fields).
 
