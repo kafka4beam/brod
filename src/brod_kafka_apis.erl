@@ -127,10 +127,11 @@ do_pick_version(Conn, API, {Min, Max} = MyRange) ->
   case lookup_vsn_range(Conn, API) of
     none ->
       Min; %% no version received from kafka, use min
-    {KproMin, KproMax} = Range when KproMin > Max orelse KproMax < Min ->
+    {BrokerMin, BrokerMax} = Range
+        when BrokerMin > Max orelse BrokerMax < Min ->
       erlang:error({unsupported_vsn_range, API, MyRange, Range});
-    {_, KproMax} ->
-      min(KproMax, Max) %% try to use highest version
+    {_, BrokerMax} ->
+      min(BrokerMax, Max) %% try to use highest version
   end.
 
 %% Lookup API from cache, return 'none' if not found.
@@ -139,7 +140,7 @@ do_pick_version(Conn, API, {Min, Max} = MyRange) ->
 lookup_vsn_range(Conn, API) ->
   case ets:lookup(?ETS, Conn) of
     [] ->
-      case kpro:get_api_versions(Conn) of
+      case kpro_connection:get_api_vsns(Conn) of
         {ok, Versions} when is_map(Versions) ->
           %% public ets, insert it by caller
           ets:insert(?ETS, {Conn, Versions}),
@@ -147,6 +148,8 @@ lookup_vsn_range(Conn, API) ->
           %% so to delete it from cache when 'DOWN' is received
           ok = monitor_connection(Conn),
           maps:get(API, Versions, none);
+        {ok, ?undef} ->
+          none; %% API version queries are disabled
         {error, _Reason} ->
           none %% connection died, ignore
       end;

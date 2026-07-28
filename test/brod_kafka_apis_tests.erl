@@ -102,16 +102,24 @@ unsupported_or_unknown_version_test() ->
       ?assertNot(brod_kafka_apis:supports_version(self(), offset_commit, 8))
     end).
 
+version_query_disabled_test() ->
+  ?WITH_MECK(
+    undefined,
+    begin
+      ?assertEqual(0, brod_kafka_apis:pick_version(self(), sync_group)),
+      ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 3))
+    end).
+
 setup(Versions) ->
   _ = application:stop(brod), %% other tests might have it started
   _ = brod_kafka_apis:start_link(),
-  meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(kpro, get_api_versions, fun(_) -> {ok, Versions} end),
+  meck:new(kpro_connection, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(kpro_connection, get_api_vsns, fun(_) -> {ok, Versions} end),
   ok.
 
 clear() ->
   brod_kafka_apis:stop(),
-  meck:unload(kpro),
+  meck:unload(kpro_connection),
   ok.
 
 %%%_* Emacs ====================================================================
