@@ -75,6 +75,12 @@
         {lo_cmd_stabilize, AttemptCount, Reason}).
 
 -define(INITIAL_MEMBER_ID, <<>>).
+-define(STATIC_MEMBERSHIP_API_VERSIONS,
+        [ {join_group, 5}
+        , {sync_group, 3}
+        , {offset_commit, 7}
+        , {heartbeat, 3}
+        ]).
 -define(CALL_MEMBER(MemberPid, EXPR),
   try
     EXPR
@@ -154,7 +160,9 @@
         , protocol_name                  :: protocol_name()
           %% Static member ID
         , group_instance_id              :: binary()
-          %% True only when the caller supplies a stable group instance ID.
+          %% True when the caller supplies a stable group instance ID.
+        , static_membership_requested     :: boolean()
+          %% True when the broker supports every KIP-345 request version.
         , static_membership               :: boolean()
         }).
 
@@ -278,7 +286,8 @@
 %%      JoinGroup. Set to the atom `null' to opt out of static membership
 %%      (dynamic member; required for Kafka 2.2 which predates KIP-345).
 %%      When set to a binary, the coordinator does not send LeaveGroup on
-%%      shutdown, so a replacement can take over the same ID without a rebalance.
+%%      shutdown if the broker supports all required KIP-345 API versions,
+%%      so a replacement can take over the same ID without a rebalance.
 %%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -364,7 +373,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   %% `null' is the explicit user opt-out — sends a null group_instance_id on
   %% the wire (dynamic membership). `undefined' falls back to the default
   %% static id derived from node()/pid.
-  {StaticMemberID, StaticMembership} =
+  {StaticMemberID, StaticMembershipRequested} =
     case proplists:get_value(group_instance_id, Config, undefined) of
       undefined -> {default_group_instance_id(), false};
       null      -> {?kpro_null, false};
@@ -389,7 +398,8 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           , protocol_name                  = ProtocolName
           , group_instance_id              = StaticMemberID
-          , static_membership               = StaticMembership
+          , static_membership_requested     = StaticMembershipRequested
+          , static_membership               = false
           },
   {ok, State}.
 
@@ -538,8 +548,31 @@ discover_coordinator(#state{ client     = Client
       ClientId = make_group_connection_client_id(),
       ConnConfig = ConnConfig0#{client_id => ClientId},
       Connection = ?ESCALATE(kpro:connect(Endpoint, ConnConfig)),
-      {ok, State#state{connection = Connection}}
+      {ok, update_static_membership(State, Connection)}
   end.
+
+update_static_membership(
+  #state{static_membership_requested = Requested} = State,
+  Connection
+) ->
+  Enabled = Requested andalso supports_static_membership(Connection),
+  case {Requested, Enabled} of
+    {true, false} ->
+      log(State, warning,
+          "Broker does not support all static membership API versions; "
+          "using dynamic membership", []);
+    _ ->
+      ok
+  end,
+  State#state{ connection = Connection
+             , static_membership = Enabled
+             }.
+
+supports_static_membership(Connection) ->
+  lists:all(
+    fun({API, Vsn}) ->
+      brod_kafka_apis:supports_version(Connection, API, Vsn)
+    end, ?STATIC_MEMBERSHIP_API_VERSIONS).
 
 %% Return true if there is already a connection to the given endpoint.
 is_already_connected(#state{connection = Conn}, _) when not is_pid(Conn) ->
@@ -690,8 +723,8 @@ join_group(#state{ groupId                    = GroupId
                  , protocol_name              = ProtocolName
                  , member_module              = MemberModule
                  , member_pid                 = MemberPid
-                 , group_instance_id          = StaticMemberID
                  } = State0) ->
+  StaticMemberID = request_group_instance_id(State0),
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
     , {topics, Topics}
@@ -747,9 +780,8 @@ sync_group(#state{ groupId       = GroupId
                  , connection    = Connection
                  , member_pid    = MemberPid
                  , member_module = MemberModule
-                 , group_instance_id = StaticMemberID
-                 , static_membership = StaticMembership
                  } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
@@ -757,9 +789,7 @@ sync_group(#state{ groupId       = GroupId
     , {group_instance_id, StaticMemberID}
     , {assignments, assign_partitions(State)}
     ],
-  Vsn = group_request_version(StaticMembership, _StaticVsn = 3,
-                              _DynamicVsn = 0),
-  SyncReq = brod_kafka_request:sync_group(Vsn, ReqBody),
+  SyncReq = brod_kafka_request:sync_group(Connection, ReqBody),
   %% send sync group request and wait for response
   RspBody = send_sync(Connection, SyncReq),
   %% get my partition assignments
@@ -846,9 +876,8 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          , connection               = Connection
                          , offset_retention_seconds = OffsetRetentionSecs
                          , acked_offsets            = AckedOffsets
-                         , group_instance_id        = StaticMemberID
-                         , static_membership        = StaticMembership
                          } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   Metadata = make_offset_commit_metadata(),
   TopicOffsets0 =
     brod_utils:group_per_key(
@@ -881,9 +910,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     , {retention_time_ms, Retention}
     , {topics, TopicOffsets}
     ],
-  Vsn = group_request_version(StaticMembership, _StaticVsn = 7,
-                              _DynamicVsn = 2),
-  Req = brod_kafka_request:offset_commit(Vsn, ReqBody),
+  Req = brod_kafka_request:offset_commit(Connection, ReqBody),
   RspBody = send_sync(Connection, Req),
   Topics = kpro:find(topics, RspBody),
   ok = assert_commit_response(Topics),
@@ -1195,18 +1222,15 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                            , memberId     = MemberId
                            , generationId = GenerationId
                            , connection   = Connection
-                           , group_instance_id = StaticMemberID
-                           , static_membership = StaticMembership
                            } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
     , {group_instance_id, StaticMemberID}
     ],
-  Vsn = group_request_version(StaticMembership, _StaticVsn = 3,
-                              _DynamicVsn = 0),
-  Req = brod_kafka_request:heartbeat(Vsn, ReqBody),
+  Req = brod_kafka_request:heartbeat(Connection, ReqBody),
   ok = kpro:request_async(Connection, Req),
   NewState = State#state{hb_ref = {Req#kpro_req.ref, os:timestamp()}},
   {ok, NewState};
@@ -1214,8 +1238,14 @@ maybe_send_heartbeat(#state{} = State) ->
   %% do not send heartbeat when not in group
   {ok, State#state{hb_ref = ?undef}}.
 
-group_request_version(true, StaticVsn, _DynamicVsn) -> StaticVsn;
-group_request_version(false, _StaticVsn, DynamicVsn) -> DynamicVsn.
+request_group_instance_id(
+  #state{ static_membership_requested = true
+        , static_membership = false
+        }
+) ->
+  ?kpro_null;
+request_group_instance_id(#state{group_instance_id = StaticMemberID}) ->
+  StaticMemberID.
 
 send_sync(Connection, Request) ->
   send_sync(Connection, Request, 5000).
@@ -1332,6 +1362,63 @@ is_roundrobin_v1_commit_test() ->
   ?assertNot(is_roundrobin_v1_commit(?kpro_null)),
   ?assertNot(is_roundrobin_v1_commit(<<"+1/not-node()-pid()">>)),
   ?assertNot(is_roundrobin_v1_commit(make_offset_commit_metadata())),
+  ok.
+
+supports_static_membership_test() ->
+  meck:new(brod_kafka_apis, [passthrough]),
+  try
+    meck:expect(
+      brod_kafka_apis, supports_version,
+      fun(_Connection, API, Vsn) ->
+        lists:member({API, Vsn}, ?STATIC_MEMBERSHIP_API_VERSIONS)
+      end),
+    ?assert(supports_static_membership(self())),
+    RequestedState =
+      #state{ groupId = <<"group">>
+            , member_pid = self()
+            , static_membership_requested = true
+            , static_membership = false
+            },
+    Connection = self(),
+    ?assertMatch(
+      #state{connection = Connection, static_membership = true},
+      update_static_membership(RequestedState, Connection)),
+    meck:expect(
+      brod_kafka_apis, supports_version,
+      fun(_Connection, offset_commit, 7) -> false;
+         (_Connection, _API, _Vsn) -> true
+      end),
+    ?assertNot(supports_static_membership(self())),
+    ?assertMatch(
+      #state{connection = Connection, static_membership = false},
+      update_static_membership(RequestedState, Connection))
+  after
+    meck:unload(brod_kafka_apis)
+  end.
+
+request_group_instance_id_test() ->
+  StaticMemberID = <<"member-1">>,
+  ?assertEqual(
+    ?kpro_null,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = true
+            , static_membership = false
+            })),
+  ?assertEqual(
+    StaticMemberID,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = true
+            , static_membership = true
+            })),
+  ?assertEqual(
+    StaticMemberID,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = false
+            , static_membership = false
+            })),
   ok.
 
 -endif. % TEST

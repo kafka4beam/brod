@@ -21,6 +21,7 @@
 
 -export([ default_version/1
         , pick_version/2
+        , supports_version/3
         , supported_versions/0
         , start_link/0
         , stop/0
@@ -69,6 +70,22 @@ default_version(API) ->
 -spec pick_version(conn(), api()) -> vsn().
 pick_version(Conn, API) ->
   do_pick_version(Conn, API, supported_versions(API)).
+
+%% @doc Return true when both brod and the broker support an API version.
+-spec supports_version(conn(), api(), vsn()) -> boolean().
+supports_version(Conn, API, Vsn) ->
+  {Min, Max} = supported_versions(API),
+  case Vsn >= Min andalso Vsn =< Max of
+    false ->
+      false;
+    true ->
+      case lookup_vsn_range(Conn, API) of
+        none ->
+          false;
+        {BrokerMin, BrokerMax} ->
+          Vsn >= BrokerMin andalso Vsn =< BrokerMax
+      end
+  end.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -142,13 +159,13 @@ supported_versions() ->
    , fetch => {0, 10}
    , list_offsets => {0, 2}
    , metadata => {0, 2}
-   , offset_commit => {2, 2}
+   , offset_commit => {2, 7}
    , offset_fetch => {1, 2}
    , find_coordinator => {0, 0}
    , join_group => {0, 6}
    , heartbeat => {0, 4}
    , leave_group => {0, 4}
-   , sync_group => {0, 0}
+   , sync_group => {0, 3}
    , describe_groups => {0, 5}
    , list_groups => {0, 3}
    , create_topics => {0, 4}

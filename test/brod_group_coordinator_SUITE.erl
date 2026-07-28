@@ -42,6 +42,7 @@
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
         , t_member_id_required_dynamic_member/1
+        , t_static_member_falls_back_on_old_broker/1
         , t_static_member_does_not_leave_group/1
         , t_fenced_static_member_stops/1
         ]).
@@ -296,6 +297,26 @@ t_member_id_required_dynamic_member(Config) when is_list(Config) ->
   after
     unlink(CoordinatorPid),
     exit(CoordinatorPid, shutdown)
+  end.
+
+t_static_member_falls_back_on_old_broker(Config) when is_list(Config) ->
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn >= {2, 3} ->
+      {skip, "broker supports static group membership"};
+    _ ->
+      GroupId = unique_group_id("static-fallback"),
+      GroupConfig = [{group_instance_id, <<"member-1">>}],
+      {ok, CoordinatorPid} =
+        brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 1}),
+      try
+        ?assert_receive({assignments_revoked, 1}, ok),
+        CoordinatorPid ! continue,
+        ?assert_receive({assignments_received, 1, _, _}, ok)
+      after
+        unlink(CoordinatorPid),
+        exit(CoordinatorPid, shutdown)
+      end
   end.
 
 t_static_member_does_not_leave_group(Config) when is_list(Config) ->
