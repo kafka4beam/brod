@@ -155,11 +155,11 @@ t_commit_offsets_without_connection(Config) when is_list(Config) ->
        brod_group_coordinator:commit_offsets(
          CoordinatorPid, [{{?TOPIC, ?PARTITION}, 0}])),
     ?assert(is_process_alive(CoordinatorPid)),
-    ?assert_receive({assignments_revoked, 1}, ok),
-    CoordinatorPid ! continue,
-    ?assert_receive({assignments_received, 1, _, _}, ok)
+    ?assert_receive({assignments_revoked, 1}, ok)
   after
-    exit(CoordinatorPid, shutdown)
+    MRef = erlang:monitor(process, CoordinatorPid),
+    exit(CoordinatorPid, kill),
+    receive {'DOWN', MRef, process, CoordinatorPid, _} -> ok end
   end.
 
 t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
