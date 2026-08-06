@@ -75,10 +75,11 @@
         {lo_cmd_stabilize, AttemptCount, Reason}).
 
 -define(INITIAL_MEMBER_ID, <<>>).
--define(STATIC_MEMBERSHIP_API_VERSIONS,
+%% KIP-345 introduced static membership in Kafka 2.3. These are the minimum
+%% API versions whose requests carry the static member's group instance ID.
+-define(STATIC_MEMBERSHIP_MIN_API_VERSIONS,
         [ {join_group, 5}
         , {sync_group, 3}
-        , {offset_commit, 7}
         , {heartbeat, 3}
         ]).
 -define(CALL_MEMBER(MemberPid, EXPR),
@@ -406,21 +407,16 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
-  CommitResult =
-    try
-      do_commit_offsets(State)
-    catch
-      throw : ?fenced_instance_id ->
-        {stop, ?fenced_instance_id};
-      throw : Reason ->
-        stabilize(State, 0, Reason)
-    end,
-  case CommitResult of
-    {stop, ?fenced_instance_id} ->
-      {stop, ?fenced_instance_id, State};
-    Result ->
-      {ok, NewState} = Result,
-      {noreply, NewState}
+  try
+    {ok, NewState} = do_commit_offsets(State),
+    {noreply, NewState}
+  catch
+    throw : ?fenced_instance_id ->
+      {ok, NewState1} = retry_after_fencing(State, 0),
+      {noreply, NewState1};
+    throw : Reason ->
+      {ok, NewState1} = stabilize(State, 0, Reason),
+      {noreply, NewState1}
   end;
 handle_info(?LO_CMD_STABILIZE(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
@@ -471,7 +467,8 @@ handle_info({msg, _Pid, #kpro_rsp{ api = heartbeat
   State = State0#state{hb_ref = ?undef},
   case ?IS_ERROR(EC) of
     true when EC =:= ?fenced_instance_id ->
-      {stop, ?fenced_instance_id, State};
+      {ok, NewState} = retry_after_fencing(State, 0),
+      {noreply, NewState};
     true ->
       {ok, NewState} = stabilize(State, 0, EC),
       {noreply, NewState};
@@ -488,8 +485,8 @@ handle_call({commit_offsets, ExtraOffsets}, From, State) ->
     {reply, ok, NewState}
   catch
     throw : ?fenced_instance_id ->
-      gen_server:reply(From, {error, ?fenced_instance_id}),
-      {stop, ?fenced_instance_id, State};
+      {ok, NewState1} = retry_after_fencing(State, 0),
+      {reply, {error, ?fenced_instance_id}, NewState1};
     throw : Reason ->
       gen_server:reply(From, {error, Reason}),
       {ok, NewState_} = stabilize(State, 0, Reason),
@@ -572,7 +569,7 @@ supports_static_membership(Connection) ->
   lists:all(
     fun({API, Vsn}) ->
       brod_kafka_apis:supports_version(Connection, API, Vsn)
-    end, ?STATIC_MEMBERSHIP_API_VERSIONS).
+    end, ?STATIC_MEMBERSHIP_MIN_API_VERSIONS).
 
 %% Return true if there is already a connection to the given endpoint.
 is_already_connected(#state{connection = Conn}, _) when not is_pid(Conn) ->
@@ -639,18 +636,36 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
 
   RetryFun =
     fun(StateIn, NewReason) ->
-      log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
-      _ = case AttemptNo =:= 0 of
-        true ->
-          %% do not delay before the first retry
-          self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
-        false ->
-          erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
-                            ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
-      end,
-      {ok, StateIn}
+      case NewReason of
+        ?fenced_instance_id ->
+          retry_after_fencing(StateIn, AttemptNo + 1);
+        _ ->
+          log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
+          _ = case AttemptNo =:= 0 of
+            true ->
+              %% do not delay before the first retry
+              self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
+            false ->
+              erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
+                                ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
+          end,
+          {ok, StateIn}
+      end
     end,
   do_stabilize([F1, F2, F3], RetryFun, State).
+
+retry_after_fencing(
+  #state{rejoin_delay_seconds = RejoinDelaySeconds} = State,
+  AttemptNo
+) ->
+  log(State, error,
+      "Static member was fenced by another member using the same "
+      "group_instance_id; check for duplicate group member configuration. "
+      "Retrying stabilization after ~p seconds.",
+      [RejoinDelaySeconds]),
+  _ = erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
+                        ?LO_CMD_STABILIZE(AttemptNo, ?fenced_instance_id)),
+  {ok, State#state{is_in_group = false, hb_ref = ?undef}}.
 
 -spec receive_pending_acks(state()) -> state().
 receive_pending_acks(State) ->
@@ -668,11 +683,8 @@ do_stabilize([F | Rest], RetryFun, State) ->
   try
     {ok, #state{} = NewState} = F(State),
     do_stabilize(Rest, RetryFun, NewState)
-  catch
-    throw : ?fenced_instance_id ->
-      exit(?fenced_instance_id);
-    throw : Reason ->
-      RetryFun(save_assigned_member_id(State, Reason), Reason)
+  catch throw : Reason ->
+    RetryFun(save_assigned_member_id(State, Reason), Reason)
   end.
 
 %% KIP-394: when the broker assigns a `member_id' via a
@@ -696,6 +708,9 @@ should_reset_member_id(?unknown_member_id) ->
 should_reset_member_id(?not_coordinator) ->
   %% the coordinator have moved to another broker
   %% set it to ?undef to trigger a re-discover
+  true;
+should_reset_member_id(?fenced_instance_id) ->
+  %% another member now owns this static slot; rejoin as a replacement
   true;
 should_reset_member_id({connection_down, _Reason}) ->
   %% old connection was down, new connection will lead
@@ -877,7 +892,6 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          , offset_retention_seconds = OffsetRetentionSecs
                          , acked_offsets            = AckedOffsets
                          } = State) ->
-  StaticMemberID = request_group_instance_id(State),
   Metadata = make_offset_commit_metadata(),
   TopicOffsets0 =
     brod_utils:group_per_key(
@@ -885,7 +899,6 @@ do_commit_offsets_(#state{ groupId                  = GroupId
         PartitionOffset =
           [ {partition_index, Partition}
           , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
-          , {committed_leader_epoch, -1}
           , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}
@@ -906,7 +919,6 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
-    , {group_instance_id, StaticMemberID}
     , {retention_time_ms, Retention}
     , {topics, TopicOffsets}
     ],
@@ -1370,7 +1382,7 @@ supports_static_membership_test() ->
     meck:expect(
       brod_kafka_apis, supports_version,
       fun(_Connection, API, Vsn) ->
-        lists:member({API, Vsn}, ?STATIC_MEMBERSHIP_API_VERSIONS)
+        lists:member({API, Vsn}, ?STATIC_MEMBERSHIP_MIN_API_VERSIONS)
       end),
     ?assert(supports_static_membership(self())),
     RequestedState =
@@ -1385,7 +1397,7 @@ supports_static_membership_test() ->
       update_static_membership(RequestedState, Connection)),
     meck:expect(
       brod_kafka_apis, supports_version,
-      fun(_Connection, offset_commit, 7) -> false;
+      fun(_Connection, heartbeat, 3) -> false;
          (_Connection, _API, _Vsn) -> true
       end),
     ?assertNot(supports_static_membership(self())),
@@ -1420,6 +1432,24 @@ request_group_instance_id_test() ->
             , static_membership = false
             })),
   ok.
+
+retry_after_fencing_test() ->
+  State =
+    #state{ groupId = <<"group">>
+          , member_pid = self()
+          , rejoin_delay_seconds = 0
+          , is_in_group = true
+          , hb_ref = {make_ref(), os:timestamp()}
+          },
+  {ok, NewState} = retry_after_fencing(State, 0),
+  ?assertNot(NewState#state.is_in_group),
+  ?assertEqual(?undef, NewState#state.hb_ref),
+  ?assert(should_reset_member_id(?fenced_instance_id)),
+  receive
+    ?LO_CMD_STABILIZE(0, ?fenced_instance_id) -> ok
+  after
+    1000 -> error(stabilization_not_scheduled)
+  end.
 
 -endif. % TEST
 

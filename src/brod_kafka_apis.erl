@@ -74,18 +74,7 @@ pick_version(Conn, API) ->
 %% @doc Return true when both brod and the broker support an API version.
 -spec supports_version(conn(), api(), vsn()) -> boolean().
 supports_version(Conn, API, Vsn) ->
-  {Min, Max} = supported_versions(API),
-  case Vsn >= Min andalso Vsn =< Max of
-    false ->
-      false;
-    true ->
-      case lookup_vsn_range(Conn, API) of
-        none ->
-          false;
-        {BrokerMin, BrokerMax} ->
-          Vsn >= BrokerMin andalso Vsn =< BrokerMax
-      end
-  end.
+  do_pick_version(Conn, API, supported_versions(API)) >= Vsn.
 
 %%%_* gen_server callbacks =====================================================
 
@@ -140,7 +129,7 @@ do_pick_version(Conn, API, {Min, Max} = MyRange) ->
 lookup_vsn_range(Conn, API) ->
   case ets:lookup(?ETS, Conn) of
     [] ->
-      case kpro_connection:get_api_vsns(Conn) of
+      case kpro:get_api_versions(Conn) of
         {ok, Versions} when is_map(Versions) ->
           %% public ets, insert it by caller
           ets:insert(?ETS, {Conn, Versions}),
@@ -148,8 +137,6 @@ lookup_vsn_range(Conn, API) ->
           %% so to delete it from cache when 'DOWN' is received
           ok = monitor_connection(Conn),
           maps:get(API, Versions, none);
-        {ok, ?undef} ->
-          none; %% API version queries are disabled
         {error, _Reason} ->
           none %% connection died, ignore
       end;
@@ -162,7 +149,7 @@ supported_versions() ->
    , fetch => {0, 10}
    , list_offsets => {0, 2}
    , metadata => {0, 2}
-   , offset_commit => {2, 7}
+   , offset_commit => {2, 2}
    , offset_fetch => {1, 2}
    , find_coordinator => {0, 0}
    , join_group => {0, 6}

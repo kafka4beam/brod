@@ -63,14 +63,12 @@ no_version_range_intersection_test() ->
 pick_static_membership_versions_test() ->
   Versions =
     #{ sync_group => {0, 4}
-     , offset_commit => {0, 8}
      , heartbeat => {0, 4}
      },
   ?WITH_MECK(
     Versions,
     begin
       ?assertEqual(3, brod_kafka_apis:pick_version(self(), sync_group)),
-      ?assertEqual(7, brod_kafka_apis:pick_version(self(), offset_commit)),
       ?assertEqual(4, brod_kafka_apis:pick_version(self(), heartbeat))
     end).
 
@@ -78,7 +76,6 @@ supports_version_test() ->
   Versions =
     #{ join_group => {0, 6}
      , sync_group => {0, 4}
-     , offset_commit => {0, 8}
      , heartbeat => {0, 4}
      },
   ?WITH_MECK(
@@ -86,40 +83,28 @@ supports_version_test() ->
     begin
       ?assert(brod_kafka_apis:supports_version(self(), join_group, 5)),
       ?assert(brod_kafka_apis:supports_version(self(), sync_group, 3)),
-      ?assert(brod_kafka_apis:supports_version(self(), offset_commit, 7)),
       ?assert(brod_kafka_apis:supports_version(self(), heartbeat, 3)),
       ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 4))
     end).
 
 unsupported_or_unknown_version_test() ->
   ?WITH_MECK(
-    #{ heartbeat => {0, 2}
-     , offset_commit => {0, 8}
-     },
+    #{heartbeat => {0, 2}},
     begin
       ?assertNot(brod_kafka_apis:supports_version(self(), heartbeat, 3)),
-      ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 3)),
-      ?assertNot(brod_kafka_apis:supports_version(self(), offset_commit, 8))
-    end).
-
-version_query_disabled_test() ->
-  ?WITH_MECK(
-    undefined,
-    begin
-      ?assertEqual(0, brod_kafka_apis:pick_version(self(), sync_group)),
       ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 3))
     end).
 
 setup(Versions) ->
   _ = application:stop(brod), %% other tests might have it started
   _ = brod_kafka_apis:start_link(),
-  meck:new(kpro_connection, [passthrough, no_passthrough_cover, no_history]),
-  meck:expect(kpro_connection, get_api_vsns, fun(_) -> {ok, Versions} end),
+  meck:new(kpro, [passthrough, no_passthrough_cover, no_history]),
+  meck:expect(kpro, get_api_versions, fun(_) -> {ok, Versions} end),
   ok.
 
 clear() ->
   brod_kafka_apis:stop(),
-  meck:unload(kpro_connection),
+  meck:unload(kpro),
   ok.
 
 %%%_* Emacs ====================================================================
