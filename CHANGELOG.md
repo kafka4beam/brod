@@ -1,6 +1,6 @@
 # Changelog
 
-- Unreleased
+- 4.5.8
   - Fix a consumer-group coordinator crash when offset commits race with
     recovery from a lost broker connection.
 
