@@ -38,6 +38,7 @@
 
 %% Test cases
 -export([ t_acks_during_revoke/1
+        , t_commit_offsets_without_connection/1
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
         , t_member_id_required_dynamic_member/1
@@ -133,6 +134,33 @@ t_acks_during_revoke(Config) when is_list(Config) ->
               ),
 
   ok.
+
+t_commit_offsets_without_connection(Config) when is_list(Config) ->
+  GroupId = list_to_binary(
+              "brod-grp-coord-no-connection-" ++
+              integer_to_list(erlang:unique_integer([positive]))),
+  {ok, CoordinatorPid} =
+    brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                      _Config = [], ?MODULE, {self(), 1}),
+  unlink(CoordinatorPid),
+  try
+    ?assert_receive({assignments_revoked, 1}, ok),
+    CoordinatorPid ! continue,
+    ?assert_receive({assignments_received, 1, _, _}, ok),
+    %% `connection` is the seventh state record field, at tuple index 8.
+    _ = sys:replace_state(
+          CoordinatorPid, fun(State) -> setelement(8, State, undefined) end),
+    ?assertEqual(
+       {error, {connection_down, noproc}},
+       brod_group_coordinator:commit_offsets(
+         CoordinatorPid, [{{?TOPIC, ?PARTITION}, 0}])),
+    ?assert(is_process_alive(CoordinatorPid)),
+    ?assert_receive({assignments_revoked, 1}, ok)
+  after
+    MRef = erlang:monitor(process, CoordinatorPid),
+    exit(CoordinatorPid, kill),
+    receive {'DOWN', MRef, process, CoordinatorPid, _} -> ok end
+  end.
 
 t_update_topics_triggers_rebalance(Config) when is_list(Config) ->
   {ok, GroupCoordinatorPid} =

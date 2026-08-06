@@ -803,6 +803,8 @@ do_commit_offsets_(#state{acked_offsets = []} = State) ->
   {ok, State};
 do_commit_offsets_(#state{offset_commit_policy = consumer_managed} = State) ->
   {ok, State};
+do_commit_offsets_(#state{connection = Connection}) when not is_pid(Connection) ->
+  erlang:throw({connection_down, noproc});
 do_commit_offsets_(#state{ groupId                  = GroupId
                          , memberId                 = MemberId
                          , generationId             = GenerationId

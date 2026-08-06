@@ -1,5 +1,9 @@
 # Changelog
 
+- 4.5.8
+  - Fix a consumer-group coordinator crash when offset commits race with
+    recovery from a lost broker connection.
+
 - 4.5.7
   - Replace old `catch` expressions with `try ... catch` for OTP-29.
 
