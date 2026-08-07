@@ -1,5 +1,20 @@
 # Changelog
 
+- 4.6.0
+  - Add KIP-345 **static group membership** for coordinators configured with an
+    explicit `group_instance_id`. On Kafka 2.3+, brod now negotiates the
+    required `JoinGroup`, `SyncGroup`, and `Heartbeat` versions, includes the
+    instance ID in those requests, and avoids sending `LeaveGroup` on shutdown
+    so a replacement can retain the member's assignment without a rebalance.
+    Older brokers fall back to dynamic membership with a warning.
+    This expands the supported `SyncGroup` API range from `{0, 0}` to `{0, 3}`
+    and changes heartbeat requests from hard-coded v0 to version negotiation;
+    this means that Kafka-compatible servers that pay attention to to API-version
+    combinations might see different request versions after upgrading.
+    A member fenced by another process using the same `group_instance_id` now
+    logs the conflict and retries after `rejoin_delay_seconds` instead of
+    crashing and causing a supervisor restart loop.
+
 - 4.5.8
   - Fix a consumer-group coordinator crash when offset commits race with
     recovery from a lost broker connection.

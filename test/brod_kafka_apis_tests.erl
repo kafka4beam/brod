@@ -56,9 +56,48 @@ pick_min_brod_version_2_test() ->
 
 no_version_range_intersection_test() ->
   %% brod supports 0 - 11, kafka supports 80 - 90
-  ?WITH_MECK(#{produce => {80, 90}},
-             ?assertError({unsupported_vsn_range, _, _, _},
-                          brod_kafka_apis:pick_version(self(), produce))).
+  ?WITH_MECK(
+    #{produce => {80, 90}},
+    begin
+      ?assertError({unsupported_vsn_range, _, _, _},
+                   brod_kafka_apis:pick_version(self(), produce)),
+      ?assertNot(brod_kafka_apis:supports_version(self(), produce, 7))
+    end).
+
+pick_static_membership_versions_test() ->
+  Versions =
+    #{ sync_group => {0, 4}
+     , heartbeat => {0, 4}
+     },
+  ?WITH_MECK(
+    Versions,
+    begin
+      ?assertEqual(3, brod_kafka_apis:pick_version(self(), sync_group)),
+      ?assertEqual(4, brod_kafka_apis:pick_version(self(), heartbeat))
+    end).
+
+supports_version_test() ->
+  Versions =
+    #{ join_group => {0, 6}
+     , sync_group => {0, 4}
+     , heartbeat => {0, 4}
+     },
+  ?WITH_MECK(
+    Versions,
+    begin
+      ?assert(brod_kafka_apis:supports_version(self(), join_group, 5)),
+      ?assert(brod_kafka_apis:supports_version(self(), sync_group, 3)),
+      ?assert(brod_kafka_apis:supports_version(self(), heartbeat, 3)),
+      ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 4))
+    end).
+
+unsupported_or_unknown_version_test() ->
+  ?WITH_MECK(
+    #{heartbeat => {0, 2}},
+    begin
+      ?assertNot(brod_kafka_apis:supports_version(self(), heartbeat, 3)),
+      ?assertNot(brod_kafka_apis:supports_version(self(), sync_group, 3))
+    end).
 
 setup(Versions) ->
   _ = application:stop(brod), %% other tests might have it started

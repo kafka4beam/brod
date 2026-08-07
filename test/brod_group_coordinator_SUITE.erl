@@ -42,6 +42,9 @@
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
         , t_member_id_required_dynamic_member/1
+        , t_static_member_falls_back_on_old_broker/1
+        , t_static_member_does_not_leave_group/1
+        , t_fenced_static_member_retries/1
         ]).
 
 -define(assert_receive(Pattern, Return),
@@ -295,6 +298,112 @@ t_member_id_required_dynamic_member(Config) when is_list(Config) ->
     unlink(CoordinatorPid),
     exit(CoordinatorPid, shutdown)
   end.
+
+t_static_member_falls_back_on_old_broker(Config) when is_list(Config) ->
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn >= {2, 3} ->
+      {skip, "broker supports static group membership"};
+    _ ->
+      GroupId = unique_group_id("static-fallback"),
+      GroupConfig = [{group_instance_id, <<"member-1">>}],
+      {ok, CoordinatorPid} =
+        brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 1}),
+      try
+        ?assert_receive({assignments_revoked, 1}, ok),
+        CoordinatorPid ! continue,
+        ?assert_receive({assignments_received, 1, _, _}, ok)
+      after
+        unlink(CoordinatorPid),
+        exit(CoordinatorPid, shutdown)
+      end
+  end.
+
+t_static_member_does_not_leave_group(Config) when is_list(Config) ->
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn < {2, 3} ->
+      {skip, "no static group membership"};
+    _ ->
+      GroupId = unique_group_id("static-restart"),
+      StaticMemberID = <<"member-1">>,
+      GroupConfig = [{group_instance_id, StaticMemberID}],
+      {ok, Coordinator1} =
+        brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 1}),
+      ?assert_receive({assignments_revoked, 1}, ok),
+      Coordinator1 ! continue,
+      GenerationID1 =
+        ?assert_receive({assignments_received, 1, GID1, _}, GID1),
+
+      Ref = monitor(process, Coordinator1),
+      unlink(Coordinator1),
+      exit(Coordinator1, shutdown),
+      ?assert_receive({'DOWN', Ref, process, Coordinator1, shutdown}, ok),
+
+      {ok, Coordinator2} =
+        brod_group_coordinator:start_link(?OTHER_CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 2}),
+      try
+        ?assert_receive({assignments_revoked, 2}, ok),
+        Coordinator2 ! continue,
+        GenerationID2 =
+          ?assert_receive({assignments_received, 2, GID2, _}, GID2),
+        ?assertEqual(GenerationID1, GenerationID2)
+      after
+        unlink(Coordinator2),
+        exit(Coordinator2, shutdown)
+      end
+  end.
+
+t_fenced_static_member_retries(Config) when is_list(Config) ->
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn < {2, 3} ->
+      {skip, "no static group membership"};
+    _ ->
+      GroupId = unique_group_id("static-fencing"),
+      GroupConfig =
+        [ {group_instance_id, <<"member-1">>}
+        , {heartbeat_rate_seconds, 30}
+        , {rejoin_delay_seconds, 1}
+        ],
+      {ok, Coordinator1} =
+        brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 1}),
+      ?assert_receive({assignments_revoked, 1}, ok),
+      Coordinator1 ! continue,
+      ?assert_receive({assignments_received, 1, _, _}, ok),
+      try
+        {ok, Coordinator2} =
+          brod_group_coordinator:start_link(?OTHER_CLIENT_ID, GroupId, [?TOPIC],
+                                            GroupConfig, ?MODULE, {self(), 2}),
+        try
+          ?assert_receive({assignments_revoked, 2}, ok),
+          Coordinator2 ! continue,
+          ?assert_receive({assignments_received, 2, _, _}, ok),
+
+          %% The replacement keeps the same generation, so only a request
+          %% carrying group_instance_id can tell the old member that it lost
+          %% ownership of the static slot.
+          Coordinator1 ! lo_cmd_send_heartbeat,
+          ?assert_receive({assignments_revoked, 1}, ok),
+          ?assert(is_process_alive(Coordinator1)),
+          Coordinator1 ! continue,
+          ?assert_receive({assignments_received, 1, _, _}, ok),
+          ?assert(is_process_alive(Coordinator1))
+        after
+          unlink(Coordinator2),
+          exit(Coordinator2, shutdown)
+        end
+      after
+        unlink(Coordinator1),
+        exit(Coordinator1, shutdown)
+      end
+  end.
+
+unique_group_id(Suffix) ->
+  list_to_binary(
+    "brod-grp-coord-" ++ Suffix ++ "-" ++
+    integer_to_list(erlang:unique_integer([positive]))).
 
 %% Build an OffsetFetch response returning committed_offset=-1 for every
 %% listed partition of `Topic'.

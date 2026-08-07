@@ -21,6 +21,7 @@
 
 -export([ default_version/1
         , pick_version/2
+        , supports_version/3
         , supported_versions/0
         , start_link/0
         , stop/0
@@ -70,6 +71,15 @@ default_version(API) ->
 pick_version(Conn, API) ->
   do_pick_version(Conn, API, supported_versions(API)).
 
+%% @doc Return true when both brod and the broker support an API version.
+-spec supports_version(conn(), api(), vsn()) -> boolean().
+supports_version(Conn, API, Vsn) ->
+  try
+    do_pick_version(Conn, API, supported_versions(API)) >= Vsn
+  catch
+    error : {unsupported_vsn_range, _, _, _} -> false
+  end.
+
 %%%_* gen_server callbacks =====================================================
 
 init([]) ->
@@ -110,10 +120,11 @@ do_pick_version(Conn, API, {Min, Max} = MyRange) ->
   case lookup_vsn_range(Conn, API) of
     none ->
       Min; %% no version received from kafka, use min
-    {KproMin, KproMax} = Range when KproMin > Max orelse KproMax < Min ->
+    {BrokerMin, BrokerMax} = Range
+        when BrokerMin > Max orelse BrokerMax < Min ->
       erlang:error({unsupported_vsn_range, API, MyRange, Range});
-    {_, KproMax} ->
-      min(KproMax, Max) %% try to use highest version
+    {_, BrokerMax} ->
+      min(BrokerMax, Max) %% try to use highest version
   end.
 
 %% Lookup API from cache, return 'none' if not found.
@@ -148,7 +159,7 @@ supported_versions() ->
    , join_group => {0, 6}
    , heartbeat => {0, 4}
    , leave_group => {0, 4}
-   , sync_group => {0, 0}
+   , sync_group => {0, 3}
    , describe_groups => {0, 5}
    , list_groups => {0, 3}
    , create_topics => {0, 4}

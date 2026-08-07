@@ -20,6 +20,7 @@
 -export([ create_topics/3
         , delete_topics/3
         , fetch/8
+        , heartbeat/2
         , list_groups/1
         , list_offsets/4
         , join_group/2
@@ -146,12 +147,17 @@ list_groups(Connection) ->
 join_group(Conn, Fields) ->
   make_req(join_group, Conn, Fields).
 
+%% @doc Make a `heartbeat' request.
+-spec heartbeat(conn(), kpro:struct()) -> kpro:req().
+heartbeat(Conn, Fields) ->
+  make_req(heartbeat, Conn, Fields).
+
 %% @doc Make a `sync_group' request.
 -spec sync_group(conn(), kpro:struct()) -> kpro:req().
 sync_group(Conn, Fields) ->
   make_req(sync_group, Conn, Fields).
 
-%% @doc Make a `offset_commit' request.
+%% @doc Make an `offset_commit' request.
 -spec offset_commit(conn(), kpro:struct()) -> kpro:req().
 offset_commit(Conn, Fields) ->
   make_req(offset_commit, Conn, Fields).

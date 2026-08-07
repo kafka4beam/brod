@@ -73,8 +73,18 @@
 -define(LO_CMD_COMMIT_OFFSETS, lo_cmd_commit_offsets).
 -define(LO_CMD_STABILIZE(AttemptCount, Reason),
         {lo_cmd_stabilize, AttemptCount, Reason}).
+-define(LO_CMD_STABILIZE_PREPARED(AttemptCount, Reason),
+        {lo_cmd_stabilize, AttemptCount, Reason, prepared}).
 
 -define(INITIAL_MEMBER_ID, <<>>).
+-define(MIN_FENCED_RETRY_DELAY_SECONDS, 10).
+%% KIP-345 introduced static membership in Kafka 2.3. These are the minimum
+%% API versions whose requests carry the static member's group instance ID.
+-define(STATIC_MEMBERSHIP_MIN_API_VERSIONS,
+        [ {join_group, 5}
+        , {sync_group, 3}
+        , {heartbeat, 3}
+        ]).
 -define(CALL_MEMBER(MemberPid, EXPR),
   try
     EXPR
@@ -154,6 +164,10 @@
         , protocol_name                  :: protocol_name()
           %% Static member ID
         , group_instance_id              :: binary()
+          %% True when the caller supplies a stable group instance ID.
+        , static_membership_requested    :: boolean()
+          %% True when the broker supports every KIP-345 request version.
+        , static_membership              :: boolean()
         }).
 
 -type state() :: #state{}.
@@ -275,6 +289,9 @@
 %%      — non-null by default so brokers take the KIP-345 fast path on first
 %%      JoinGroup. Set to the atom `null' to opt out of static membership
 %%      (dynamic member; required for Kafka 2.2 which predates KIP-345).
+%%      When set to a binary, the coordinator does not send LeaveGroup on
+%%      shutdown if the broker supports all required KIP-345 API versions,
+%%      so a replacement can take over the same ID without a rebalance.
 %%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
@@ -360,11 +377,11 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   %% `null' is the explicit user opt-out — sends a null group_instance_id on
   %% the wire (dynamic membership). `undefined' falls back to the default
   %% static id derived from node()/pid.
-  StaticMemberID =
+  {StaticMemberID, StaticMembershipRequested} =
     case proplists:get_value(group_instance_id, Config, undefined) of
-      undefined -> default_group_instance_id();
-      null      -> ?kpro_null;
-      Value     -> Value
+      undefined -> {default_group_instance_id(), false};
+      null      -> {?kpro_null, false};
+      Value     -> {Value, true}
     end,
   self() ! ?LO_CMD_STABILIZE(0, ?undef),
   ok = start_heartbeat_timer(HbRateSec),
@@ -385,24 +402,31 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           , protocol_name                  = ProtocolName
           , group_instance_id              = StaticMemberID
+          , static_membership_requested     = StaticMembershipRequested
+          , static_membership               = false
           },
   {ok, State}.
 
 handle_info({ack, GenerationId, Topic, Partition, Offset}, State) ->
   {noreply, handle_ack(State, GenerationId, Topic, Partition, Offset)};
 handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
-  {ok, NewState} =
-    try
-      do_commit_offsets(State)
-    catch throw : Reason ->
-      stabilize(State, 0, Reason)
-    end,
-  {noreply, NewState};
+  try
+    {ok, NewState} = do_commit_offsets(State),
+    {noreply, NewState}
+  catch throw : Reason ->
+    {ok, NewState1} = stabilize(State, 0, Reason),
+    {noreply, NewState1}
+  end;
+handle_info(?LO_CMD_STABILIZE_PREPARED(N, _Reason),
+            #state{max_rejoin_attempts = Max} = State) when N >= Max ->
+  {stop, max_rejoin_attempts, State};
 handle_info(?LO_CMD_STABILIZE(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
+handle_info(?LO_CMD_STABILIZE_PREPARED(N, Reason), State) ->
+  {ok, NewState} = stabilize(State, N, Reason, prepared),
+  {noreply, NewState};
 handle_info(?LO_CMD_STABILIZE(N, Reason), State) ->
-
   {ok, NewState} = stabilize(State, N, Reason),
   {noreply, NewState};
 handle_info({'EXIT', Pid, Reason},
@@ -446,6 +470,9 @@ handle_info({msg, _Pid, #kpro_rsp{ api = heartbeat
   EC = kpro:find(error_code, Body),
   State = State0#state{hb_ref = ?undef},
   case ?IS_ERROR(EC) of
+    true when EC =:= ?fenced_instance_id ->
+      {ok, NewState} = retry_after_fencing(State, 0),
+      {noreply, NewState};
     true ->
       {ok, NewState} = stabilize(State, 0, EC),
       {noreply, NewState};
@@ -478,19 +505,26 @@ handle_cast(_Cast, #state{} = State) ->
 code_change(_OldVsn, #state{} = State, _Extra) ->
   {ok, State}.
 
-terminate(Reason, #state{ connection = Connection
-                        , groupId  = GroupId
-                        , memberId = MemberId
-                        } = State) ->
+terminate(Reason, State) ->
+  _ = try_commit_offsets(State),
+  maybe_leave_group(Reason, State).
+
+maybe_leave_group(Reason, #state{static_membership = true} = State) ->
+  log(State, info, "Static member stopped without leaving group, reason: ~p\n",
+      [Reason]),
+  ok;
+maybe_leave_group(Reason, #state{ connection = Connection
+                                , groupId  = GroupId
+                                , memberId = MemberId
+                                } = State) ->
   log(State, info, "Leaving group, reason: ~p\n", [Reason]),
   Body = [{group_id, GroupId}, {member_id, MemberId}],
-  _ = try_commit_offsets(State),
   Request = kpro:make_request(leave_group, _V = 0, Body),
   try
     _ = send_sync(Connection, Request, 1000),
     ok
   catch
-    _ : _ ->
+    _:_ ->
       ok
   end.
 
@@ -511,8 +545,31 @@ discover_coordinator(#state{ client     = Client
       ClientId = make_group_connection_client_id(),
       ConnConfig = ConnConfig0#{client_id => ClientId},
       Connection = ?ESCALATE(kpro:connect(Endpoint, ConnConfig)),
-      {ok, State#state{connection = Connection}}
+      {ok, update_static_membership(State, Connection)}
   end.
+
+update_static_membership(
+  #state{static_membership_requested = Requested} = State,
+  Connection
+) ->
+  Enabled = Requested andalso supports_static_membership(Connection),
+  case {Requested, Enabled} of
+    {true, false} ->
+      log(State, warning,
+          "Broker does not support all static membership API versions; "
+          "using dynamic membership", []);
+    _ ->
+      ok
+  end,
+  State#state{ connection = Connection
+             , static_membership = Enabled
+             }.
+
+supports_static_membership(Connection) ->
+  lists:all(
+    fun({API, Vsn}) ->
+      brod_kafka_apis:supports_version(Connection, API, Vsn)
+    end, ?STATIC_MEMBERSHIP_MIN_API_VERSIONS).
 
 %% Return true if there is already a connection to the given endpoint.
 is_already_connected(#state{connection = Conn}, _) when not is_pid(Conn) ->
@@ -523,38 +580,24 @@ is_already_connected(#state{connection = Conn}, {Host, Port}) ->
   Port0 =:= Port.
 
 -spec stabilize(state(), integer(), any()) -> {ok, state()}.
-stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
-                , member_module        = MemberModule
-                , member_pid           = MemberPid
-                , offset_commit_timer  = Timer
-                } = State0, AttemptNo, Reason) ->
-  is_reference(Timer) andalso erlang:cancel_timer(Timer),
+stabilize(State, AttemptNo, Reason) ->
+  stabilize(State, AttemptNo, Reason, preparation_required).
+
+stabilize(#state{rejoin_delay_seconds = RejoinDelaySeconds} = State0,
+          AttemptNo, Reason, Preparation) ->
   Reason =/= ?undef andalso
     log(State0, info, "re-joining group, reason:~p", [Reason]),
 
-  %% 1. unsubscribe all currently assigned partitions — only on the first
-  %% attempt of this stabilize cycle. On a retry (AttemptNo > 0) the previous
-  %% attempt already revoked, and re-revoking is observable to the member
-  %% (e.g. extra `assignments_revoked' callbacks) without changing state.
-  AttemptNo =:= 0 andalso
-    ?CALL_MEMBER(MemberPid, MemberModule:assignments_revoked(MemberPid)),
-
-  %% 2. some brod_group_member implementations may wait for messages
-  %%    to finish processing when assignments_revoked is called.
-  %%    The acknowledments of those messages would then be sitting
-  %%    in our inbox. So we do an explicit pass to collect all pending
-  %%    acks so they are included in the best-effort commit below.
-  State1 = receive_pending_acks(State0),
+  %% 1-2. Stop periodic commits, revoke current assignments, and collect final
+  %% acknowledgements once per stabilization cycle. Fencing performs these
+  %% steps before its delayed retry, so its loopback command skips them.
+  State1 = maybe_prepare_for_stabilization(State0, AttemptNo, Preparation),
 
   %% 3. try to commit current offsets before re-joinning the group.
   %%    try only on the first re-join attempt
-  %%    do not try if it was illegal generation or unknown member id
-  %%    exception received because it will fail on the same exception
-  %%    again
+  %%    do not try if the last error makes a commit impossible
   State2 =
-    case AttemptNo =:= 0 andalso
-         Reason    =/= ?illegal_generation andalso
-         Reason    =/= ?unknown_member_id of
+    case AttemptNo =:= 0 andalso is_commit_possible(Reason) of
       true ->
         {ok, #state{} = State2_} = try_commit_offsets(State1),
         State2_;
@@ -579,18 +622,67 @@ stabilize(#state{ rejoin_delay_seconds = RejoinDelaySeconds
 
   RetryFun =
     fun(StateIn, NewReason) ->
-      log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
-      _ = case AttemptNo =:= 0 of
-        true ->
-          %% do not delay before the first retry
-          self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
-        false ->
-          erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
-                            ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
-      end,
-      {ok, StateIn}
+      case NewReason of
+        ?fenced_instance_id ->
+          schedule_retry_after_fencing(StateIn, AttemptNo + 1);
+        _ ->
+          log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
+          _ = case AttemptNo =:= 0 of
+            true ->
+              %% do not delay before the first retry
+              self() ! ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason);
+            false ->
+              erlang:send_after(timer:seconds(RejoinDelaySeconds), self(),
+                                ?LO_CMD_STABILIZE(AttemptNo + 1, NewReason))
+          end,
+          {ok, StateIn}
+      end
     end,
   do_stabilize([F1, F2, F3], RetryFun, State).
+
+maybe_prepare_for_stabilization(State, 0, preparation_required) ->
+  prepare_for_stabilization(State);
+maybe_prepare_for_stabilization(State, _AttemptNo, _Preparation) ->
+  State.
+
+prepare_for_stabilization(
+  #state{ member_module       = MemberModule
+        , member_pid          = MemberPid
+        , offset_commit_timer = Timer
+        } = State0
+) ->
+  is_reference(Timer) andalso erlang:cancel_timer(Timer),
+  ?CALL_MEMBER(MemberPid, MemberModule:assignments_revoked(MemberPid)),
+  %% Some members wait for in-flight messages before returning from the revoke
+  %% callback. Collect their final acknowledgements after the callback returns.
+  receive_pending_acks(State0#state{offset_commit_timer = ?undef}).
+
+is_commit_possible(?illegal_generation) -> false;
+is_commit_possible(?unknown_member_id) -> false;
+is_commit_possible(?fenced_instance_id) -> false;
+is_commit_possible(_) -> true.
+
+retry_after_fencing(State0, AttemptNo) ->
+  {ok, State1} = schedule_retry_after_fencing(State0, AttemptNo),
+  {ok, prepare_for_stabilization(State1)}.
+
+schedule_retry_after_fencing(
+  #state{rejoin_delay_seconds = RejoinDelaySeconds} = State,
+  AttemptNo
+) ->
+  RetryDelaySeconds = fenced_retry_delay_seconds(RejoinDelaySeconds),
+  log(State, error,
+      "Static member was fenced by another member using the same "
+      "group_instance_id; check for duplicate group member configuration. "
+      "Retrying stabilization after ~p seconds.",
+      [RetryDelaySeconds]),
+  _ = erlang:send_after(
+        timer:seconds(RetryDelaySeconds), self(),
+        ?LO_CMD_STABILIZE_PREPARED(AttemptNo, ?fenced_instance_id)),
+  {ok, State#state{is_in_group = false, hb_ref = ?undef}}.
+
+fenced_retry_delay_seconds(RejoinDelaySeconds) ->
+  max(RejoinDelaySeconds, ?MIN_FENCED_RETRY_DELAY_SECONDS).
 
 -spec receive_pending_acks(state()) -> state().
 receive_pending_acks(State) ->
@@ -634,6 +726,9 @@ should_reset_member_id(?not_coordinator) ->
   %% the coordinator have moved to another broker
   %% set it to ?undef to trigger a re-discover
   true;
+should_reset_member_id(?fenced_instance_id) ->
+  %% another member now owns this static slot; rejoin as a replacement
+  true;
 should_reset_member_id({connection_down, _Reason}) ->
   %% old connection was down, new connection will lead
   %% to a new member id
@@ -660,8 +755,8 @@ join_group(#state{ groupId                    = GroupId
                  , protocol_name              = ProtocolName
                  , member_module              = MemberModule
                  , member_pid                 = MemberPid
-                 , group_instance_id          = StaticMemberID
                  } = State0) ->
+  StaticMemberID = request_group_instance_id(State0),
   Meta =
     [ {version, ?BROD_CONSUMER_GROUP_PROTOCOL_VERSION}
     , {topics, Topics}
@@ -718,10 +813,12 @@ sync_group(#state{ groupId       = GroupId
                  , member_pid    = MemberPid
                  , member_module = MemberModule
                  } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     , {assignments, assign_partitions(State)}
     ],
   SyncReq = brod_kafka_request:sync_group(Connection, ReqBody),
@@ -1155,18 +1252,29 @@ maybe_send_heartbeat(#state{ is_in_group  = true
                            , generationId = GenerationId
                            , connection   = Connection
                            } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   ReqBody =
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     ],
-  Req = kpro:make_request(heartbeat, 0, ReqBody),
+  Req = brod_kafka_request:heartbeat(Connection, ReqBody),
   ok = kpro:request_async(Connection, Req),
   NewState = State#state{hb_ref = {Req#kpro_req.ref, os:timestamp()}},
   {ok, NewState};
 maybe_send_heartbeat(#state{} = State) ->
   %% do not send heartbeat when not in group
   {ok, State#state{hb_ref = ?undef}}.
+
+request_group_instance_id(
+  #state{ static_membership_requested = true
+        , static_membership = false
+        }
+) ->
+  ?kpro_null;
+request_group_instance_id(#state{group_instance_id = StaticMemberID}) ->
+  StaticMemberID.
 
 send_sync(Connection, Request) ->
   send_sync(Connection, Request, 5000).
@@ -1284,6 +1392,118 @@ is_roundrobin_v1_commit_test() ->
   ?assertNot(is_roundrobin_v1_commit(<<"+1/not-node()-pid()">>)),
   ?assertNot(is_roundrobin_v1_commit(make_offset_commit_metadata())),
   ok.
+
+supports_static_membership_test() ->
+  meck:new(brod_kafka_apis, [passthrough]),
+  try
+    meck:expect(
+      brod_kafka_apis, supports_version,
+      fun(_Connection, API, Vsn) ->
+        lists:member({API, Vsn}, ?STATIC_MEMBERSHIP_MIN_API_VERSIONS)
+      end),
+    ?assert(supports_static_membership(self())),
+    RequestedState =
+      #state{ groupId = <<"group">>
+            , member_pid = self()
+            , static_membership_requested = true
+            , static_membership = false
+            },
+    Connection = self(),
+    ?assertMatch(
+      #state{connection = Connection, static_membership = true},
+      update_static_membership(RequestedState, Connection)),
+    meck:expect(
+      brod_kafka_apis, supports_version,
+      fun(_Connection, heartbeat, 3) -> false;
+         (_Connection, _API, _Vsn) -> true
+      end),
+    ?assertNot(supports_static_membership(self())),
+    ?assertMatch(
+      #state{connection = Connection, static_membership = false},
+      update_static_membership(RequestedState, Connection))
+  after
+    meck:unload(brod_kafka_apis)
+  end.
+
+request_group_instance_id_test() ->
+  StaticMemberID = <<"member-1">>,
+  ?assertEqual(
+    ?kpro_null,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = true
+            , static_membership = false
+            })),
+  ?assertEqual(
+    StaticMemberID,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = true
+            , static_membership = true
+            })),
+  ?assertEqual(
+    StaticMemberID,
+    request_group_instance_id(
+      #state{ group_instance_id = StaticMemberID
+            , static_membership_requested = false
+            , static_membership = false
+            })),
+  ok.
+
+retry_after_fencing_test() ->
+  MemberModule = brod_group_member_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  try
+    GenerationId = 1,
+    Topic = <<"topic">>,
+    Partition = 0,
+    Offset = 42,
+    meck:expect(
+      MemberModule, assignments_revoked,
+      fun(MemberPid) ->
+        MemberPid ! {ack, GenerationId, Topic, Partition, Offset},
+        ok
+      end),
+    OffsetCommitTimer =
+      erlang:send_after(timer:seconds(60), self(), offset_commit_timer_fired),
+    State =
+      #state{ groupId = <<"group">>
+            , generationId = GenerationId
+            , member_pid = self()
+            , member_module = MemberModule
+            , rejoin_delay_seconds = 0
+            , offset_commit_timer = OffsetCommitTimer
+            , is_in_group = true
+            , hb_ref = {make_ref(), os:timestamp()}
+            },
+    {ok, NewState} = retry_after_fencing(State, 0),
+    ?assertNot(NewState#state.is_in_group),
+    ?assertEqual(?undef, NewState#state.hb_ref),
+    ?assertEqual(?undef, NewState#state.offset_commit_timer),
+    ?assertEqual(false, erlang:read_timer(OffsetCommitTimer)),
+    ?assertEqual([{{Topic, Partition}, Offset}], NewState#state.acked_offsets),
+    ?assertEqual(1, meck:num_calls(MemberModule, assignments_revoked, ['_'])),
+    ?assert(should_reset_member_id(?fenced_instance_id)),
+    receive
+      ?LO_CMD_STABILIZE_PREPARED(0, ?fenced_instance_id) ->
+        error(stabilization_scheduled_too_soon)
+    after
+      100 -> ok
+    end
+  after
+    meck:unload(MemberModule)
+  end.
+
+fenced_retry_delay_seconds_test() ->
+  ?assertEqual(10, fenced_retry_delay_seconds(0)),
+  ?assertEqual(10, fenced_retry_delay_seconds(10)),
+  ?assertEqual(11, fenced_retry_delay_seconds(11)).
+
+is_commit_possible_test() ->
+  ?assertNot(is_commit_possible(?illegal_generation)),
+  ?assertNot(is_commit_possible(?unknown_member_id)),
+  ?assertNot(is_commit_possible(?fenced_instance_id)),
+  ?assert(is_commit_possible(?not_coordinator)).
 
 -endif. % TEST
 
