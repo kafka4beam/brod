@@ -1,9 +1,7 @@
 # Changelog
 
-- 4.5.8
-  - Fix a consumer-group coordinator crash when offset commits race with
-    recovery from a lost broker connection.
-  - Add KIP-345 static group membership for coordinators configured with an
+- 4.6.0
+  - Add KIP-345 **static group membership** for coordinators configured with an
     explicit `group_instance_id`. On Kafka 2.3+, brod now negotiates the
     required `JoinGroup`, `SyncGroup`, and `Heartbeat` versions, includes the
     instance ID in those requests, and avoids sending `LeaveGroup` on shutdown
@@ -12,6 +10,10 @@
     A member fenced by another process using the same `group_instance_id` now
     logs the conflict and retries after `rejoin_delay_seconds` instead of
     crashing and causing a supervisor restart loop.
+
+- 4.5.8
+  - Fix a consumer-group coordinator crash when offset commits race with
+    recovery from a lost broker connection.
 
 - 4.5.7
   - Replace old `catch` expressions with `try ... catch` for OTP-29.
