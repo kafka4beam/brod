@@ -56,9 +56,13 @@ pick_min_brod_version_2_test() ->
 
 no_version_range_intersection_test() ->
   %% brod supports 0 - 11, kafka supports 80 - 90
-  ?WITH_MECK(#{produce => {80, 90}},
-             ?assertError({unsupported_vsn_range, _, _, _},
-                          brod_kafka_apis:pick_version(self(), produce))).
+  ?WITH_MECK(
+    #{produce => {80, 90}},
+    begin
+      ?assertError({unsupported_vsn_range, _, _, _},
+                   brod_kafka_apis:pick_version(self(), produce)),
+      ?assertNot(brod_kafka_apis:supports_version(self(), produce, 7))
+    end).
 
 pick_static_membership_versions_test() ->
   Versions =

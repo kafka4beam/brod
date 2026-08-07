@@ -7,6 +7,10 @@
     instance ID in those requests, and avoids sending `LeaveGroup` on shutdown
     so a replacement can retain the member's assignment without a rebalance.
     Older brokers fall back to dynamic membership with a warning.
+    This expands the supported `SyncGroup` API range from `{0, 0}` to `{0, 3}`
+    and changes heartbeat requests from hard-coded v0 to version negotiation;
+    this means that Kafka-compatible servers that pay attention to to API-version
+    combinations might see different request versions after upgrading.
     A member fenced by another process using the same `group_instance_id` now
     logs the conflict and retries after `rejoin_delay_seconds` instead of
     crashing and causing a supervisor restart loop.

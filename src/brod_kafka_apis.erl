@@ -74,7 +74,11 @@ pick_version(Conn, API) ->
 %% @doc Return true when both brod and the broker support an API version.
 -spec supports_version(conn(), api(), vsn()) -> boolean().
 supports_version(Conn, API, Vsn) ->
-  do_pick_version(Conn, API, supported_versions(API)) >= Vsn.
+  try
+    do_pick_version(Conn, API, supported_versions(API)) >= Vsn
+  catch
+    error : {unsupported_vsn_range, _, _, _} -> false
+  end.
 
 %%%_* gen_server callbacks =====================================================
 
