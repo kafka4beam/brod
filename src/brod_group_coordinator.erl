@@ -162,9 +162,9 @@
           %% Static member ID
         , group_instance_id              :: binary()
           %% True when the caller supplies a stable group instance ID.
-        , static_membership_requested     :: boolean()
+        , static_membership_requested    :: boolean()
           %% True when the broker supports every KIP-345 request version.
-        , static_membership               :: boolean()
+        , static_membership              :: boolean()
         }).
 
 -type state() :: #state{}.
