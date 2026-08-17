@@ -153,7 +153,7 @@ supported_versions() ->
    , fetch => {0, 10}
    , list_offsets => {0, 2}
    , metadata => {0, 2}
-   , offset_commit => {2, 2}
+   , offset_commit => {2, 8}
    , offset_fetch => {1, 2}
    , find_coordinator => {0, 0}
    , join_group => {0, 6}

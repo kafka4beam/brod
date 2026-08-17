@@ -83,6 +83,7 @@
 -define(STATIC_MEMBERSHIP_MIN_API_VERSIONS,
         [ {join_group, 5}
         , {sync_group, 3}
+        , {offset_commit, 7}
         , {heartbeat, 3}
         ]).
 -define(CALL_MEMBER(MemberPid, EXPR),
@@ -909,6 +910,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          , offset_retention_seconds = OffsetRetentionSecs
                          , acked_offsets            = AckedOffsets
                          } = State) ->
+  StaticMemberID = request_group_instance_id(State),
   Metadata = make_offset_commit_metadata(),
   TopicOffsets0 =
     brod_utils:group_per_key(
@@ -916,6 +918,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
         PartitionOffset =
           [ {partition_index, Partition}
           , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
+          , {committed_leader_epoch, -1}
           , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}
@@ -936,6 +939,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
     [ {group_id, GroupId}
     , {generation_id, GenerationId}
     , {member_id, MemberId}
+    , {group_instance_id, StaticMemberID}
     , {retention_time_ms, Retention}
     , {topics, TopicOffsets}
     ],
@@ -1414,7 +1418,7 @@ supports_static_membership_test() ->
       update_static_membership(RequestedState, Connection)),
     meck:expect(
       brod_kafka_apis, supports_version,
-      fun(_Connection, heartbeat, 3) -> false;
+      fun(_Connection, offset_commit, 7) -> false;
          (_Connection, _API, _Vsn) -> true
       end),
     ?assertNot(supports_static_membership(self())),
