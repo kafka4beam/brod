@@ -53,6 +53,17 @@ make_batch_input_test_() ->
 
 mk(K, V) -> brod_utils:make_batch_input(K, V).
 
+stats_test_() ->
+  [fun() -> ?assertEqual({0, 0}, brod_utils:stats([])) end,
+   fun() ->
+      %% 8 bytes per message accounting for the timestamp
+      Batch = [#{key => <<"k1">>, value => <<"v1">>},
+               #{key => <<"k2">>, value => <<"v2">>,
+                 headers => [{<<"hk">>, <<"hv">>}]}],
+      ?assertEqual({2, 28}, brod_utils:stats(Batch)),
+      ?assertEqual(28, brod_utils:bytes(Batch))
+   end].
+
 pmap_test_() ->
   [fun() ->
     %% Basic functionality - simple map operation

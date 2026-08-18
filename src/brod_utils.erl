@@ -59,6 +59,7 @@
         , resolve_offset/4
         , resolve_offset/5
         , resolve_offset/6
+        , stats/1
         , kpro_connection_options/1
         , pmap/3
         ]).
@@ -573,7 +574,15 @@ describe_groups(CoordinatorEndpoint, ConnCfg, IDs) ->
 %% such as magic bytes, attributes, and length tags etc.
 -spec bytes(brod:batch_input()) -> non_neg_integer().
 bytes(Msgs) ->
-  F = fun(#{key := Key, value := Value} = Msg, Acc) ->
+  {_Count, Bytes} = stats(Msgs),
+  Bytes.
+
+%% @doc Return message set message count and size in number of bytes.
+%% NOTE: This does not include the overheads of encoding protocol.
+%% such as magic bytes, attributes, and length tags etc.
+-spec stats(brod:batch_input()) -> {non_neg_integer(), non_neg_integer()}.
+stats(Msgs) ->
+  F = fun(#{key := Key, value := Value} = Msg, {Count, Bytes}) ->
           %% this is message from a magic v2 batch
           %% last 8 bytes are for timestamp although it is encoded as varint
           %% which in best case scenario takes only 1 byte.
@@ -581,9 +590,9 @@ bytes(Msgs) ->
                          fun({K, V}, AccH) ->
                              size(K) + size(V) + AccH
                          end, 0, maps:get(headers, Msg, [])),
-          size(Key) + size(Value) + HeaderSize + 8 + Acc
+          {Count + 1, size(Key) + size(Value) + HeaderSize + 8 + Bytes}
       end,
-  lists:foldl(F, 0, Msgs).
+  lists:foldl(F, {0, 0}, Msgs).
 
 %% @doc Group values per-key in a key-value list.
 -spec group_per_key([{Key, Val}]) -> [{Key, [Val]}]

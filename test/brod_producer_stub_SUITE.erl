@@ -196,8 +196,8 @@ t_produce_request_telemetry(Config) when is_list(Config) ->
     ?WAIT({request_async, _}, ok, 2000),
     ?WAIT({telemetry, [brod, produce_request_sent], Measurements, Metadata},
           begin
-            ?assertMatch(#{count := 3, bytes := Bytes} when Bytes > 0,
-                         Measurements),
+            MessageBytes = 12,
+            ?assertEqual(#{count => 3, bytes => 3 * MessageBytes}, Measurements),
             ?assertEqual(#{topic => <<"topic">>, partition => 0}, Metadata)
           end, 2000),
     ok = brod_producer:stop(Producer)
