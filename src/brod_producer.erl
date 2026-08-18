@@ -442,10 +442,12 @@ do_send_fun(ExtraArg, Conn, BatchInput, Vsn) ->
     brod_kafka_request:produce(Vsn, Topic, Partition, BatchInput,
                                RequiredAcks, AckTimeout, Compression),
   case send(Conn, ProduceRequest) of
-    ok when ProduceRequest#kpro_req.no_ack ->
-      ok;
     ok ->
-      {ok, ProduceRequest#kpro_req.ref};
+      brod_metrics:produce_request_sent(Topic, Partition, BatchInput),
+      case ProduceRequest#kpro_req.no_ack of
+        true -> ok;
+        false -> {ok, ProduceRequest#kpro_req.ref}
+      end;
     {error, Reason} ->
       {error, Reason}
   end.

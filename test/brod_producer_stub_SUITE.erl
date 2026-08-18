@@ -29,11 +29,15 @@
 %% Test cases
 -export([ t_normal_flow/1
         , t_no_required_acks/1
+        , t_produce_request_telemetry/1
         , t_retry_on_same_connection/1
         , t_retry_on_kafka_storage_error/1
         , t_connection_down_retry/1
         , t_leader_migration/1
         ]).
+
+%% Telemetry test handler
+-export([ handle_telemetry_event/4 ]).
 
 
 -include_lib("eunit/include/eunit.hrl").
@@ -167,6 +171,39 @@ t_no_required_acks(Config) when is_list(Config) ->
   ?WAIT(#brod_produce_reply{call_ref = CallRef4,
                             result = brod_produce_req_acked}, ok, 2000),
   ok = brod_producer:stop(Producer).
+
+t_produce_request_telemetry(Config) when is_list(Config) ->
+  Tester = self(),
+  HandlerId = <<"t-produce-request-telemetry">>,
+  ok = telemetry:attach(HandlerId, [brod, produce_request_sent],
+                        fun ?MODULE:handle_telemetry_event/4,
+                        #{pid => Tester}),
+  try
+    meck:expect(brod_client, get_leader_connection,
+                fun(_, <<"topic">>, 0) -> {ok, Tester} end),
+    meck:expect(kpro, request_async,
+                fun(Connection, KafkaReq) ->
+                    Connection ! {request_async, KafkaReq},
+                    ok
+                end),
+    ProducerConfig = [{max_linger_ms, 1000},
+                      {max_linger_count, 3}],
+    {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0,
+                                              ProducerConfig),
+    {ok, _} = brod_producer:produce(Producer, <<"k1">>, <<"v1">>),
+    {ok, _} = brod_producer:produce(Producer, <<"k2">>, <<"v2">>),
+    {ok, _} = brod_producer:produce(Producer, <<"k3">>, <<"v3">>),
+    ?WAIT({request_async, _}, ok, 2000),
+    ?WAIT({telemetry, [brod, produce_request_sent], Measurements, Metadata},
+          begin
+            MessageBytes = 12,
+            ?assertEqual(#{count => 3, bytes => 3 * MessageBytes}, Measurements),
+            ?assertEqual(#{topic => <<"topic">>, partition => 0}, Metadata)
+          end, 2000),
+    ok = brod_producer:stop(Producer)
+  after
+    telemetry:detach(HandlerId)
+  end.
 
 t_retry_on_same_connection(Config) when is_list(Config) ->
   Tester = self(),
@@ -412,6 +449,9 @@ t_leader_migration(Config) when is_list(Config) ->
   ok = brod_producer:stop(Producer).
 
 %%%_* Help functions ===========================================================
+
+handle_telemetry_event(Event, Measurements, Metadata, #{pid := Pid}) ->
+  Pid ! {telemetry, Event, Measurements, Metadata}.
 
 meck_module(Module) ->
   meck:new(Module, [passthrough, no_passthrough_cover, no_history]).

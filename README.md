@@ -434,6 +434,11 @@ start(ClientId) ->
                                    _CallbackInitArg = []).
 ```
 
+## Beam Telemetry Hooks
+
+Brod emits [Beam Telemetry](https://github.com/beam-telemetry/telemetry) events that users can attach handler functions to.
+The emitted events are documented in the `brod_metrics` module.
+
 ## Authentication support
 
 brod supports SASL `PLAIN`, `SCRAM-SHA-256` and `SCRAM-SHA-512` authentication mechanisms out of the box.
