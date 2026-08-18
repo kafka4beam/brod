@@ -6,6 +6,10 @@
     because the request no longer includes a per-request retention time. Use
     the broker-side `offsets.retention.minutes` setting instead. Negotiated
     versions v2 through v4 continue to use `offset_retention_seconds`.
+  - Emit [`telemetry`](https://github.com/beam-telemetry/telemetry) events,
+    starting with `[brod, produce_request_sent]`.
+    Events are documented in the new `brod_metrics` module.
+    This adds a dependency on the `telemetry` library.
 
 - 4.6.0
   - Add KIP-345 **static group membership** for coordinators configured with an
