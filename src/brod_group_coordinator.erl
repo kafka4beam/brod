@@ -918,7 +918,7 @@ do_commit_offsets_(#state{ groupId                  = GroupId
         PartitionOffset =
           [ {partition_index, Partition}
           , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
-          , {committed_leader_epoch, -1}
+          , {committed_leader_epoch, -1} %% -1 = unknown leader epoch
           , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}

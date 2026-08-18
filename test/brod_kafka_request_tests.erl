@@ -26,6 +26,7 @@ offset_commit_request_test_() ->
   ].
 
 assert_offset_commit_request(Vsn) ->
+  GroupInstanceID = <<"unique-offset-commit-group-instance-id">>,
   Partition =
     [ {partition_index, 0}
     , {committed_offset, 1}
@@ -36,7 +37,7 @@ assert_offset_commit_request(Vsn) ->
     [ {group_id, <<"group">>}
     , {generation_id, 1}
     , {member_id, <<"member">>}
-    , {group_instance_id, <<"instance">>}
+    , {group_instance_id, GroupInstanceID}
     , {retention_time_ms, -1}
     , {topics,
        [[ {name, <<"topic">>}
@@ -46,4 +47,7 @@ assert_offset_commit_request(Vsn) ->
   Req = brod_kafka_request:offset_commit(Vsn, Fields),
   ?assertMatch(#kpro_req{api = offset_commit, vsn = Vsn}, Req),
   Encoded = iolist_to_binary(kpro:encode_request(<<"brod">>, 1, Req)),
-  ?assert(is_binary(Encoded)).
+  case Vsn >= 7 of
+    true -> ?assertMatch({_, _}, binary:match(Encoded, GroupInstanceID));
+    false -> ?assertEqual(nomatch, binary:match(Encoded, GroupInstanceID))
+  end.
