@@ -14,6 +14,11 @@
     A member fenced by another process using the same `group_instance_id` now
     logs the conflict and retries after `rejoin_delay_seconds` instead of
     crashing and causing a supervisor restart loop.
+  - Expand the supported `OffsetCommit` API range from `{2, 2}` to `{2, 8}`.
+    When brod negotiates v5 or later, `offset_retention_seconds` has no effect
+    because the request no longer includes a per-request retention time. Use
+    the broker-side `offsets.retention.minutes` setting instead. Negotiated
+    versions v2 through v4 continue to use `offset_retention_seconds`.
 
 - 4.5.8
   - Fix a consumer-group coordinator crash when offset commits race with

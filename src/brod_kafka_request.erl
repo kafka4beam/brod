@@ -158,7 +158,7 @@ sync_group(Conn, Fields) ->
   make_req(sync_group, Conn, Fields).
 
 %% @doc Make an `offset_commit' request.
--spec offset_commit(conn(), kpro:struct()) -> kpro:req().
+-spec offset_commit(conn() | vsn(), kpro:struct()) -> kpro:req().
 offset_commit(Conn, Fields) ->
   make_req(offset_commit, Conn, Fields).
 
