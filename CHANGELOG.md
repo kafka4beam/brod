@@ -1,5 +1,11 @@
 # Changelog
 
+- 4.7.0
+  - Add `brod:create_partitions/3,4` to add partitions to an existing topic.
+  - Add optional client config `metadata_refresh_interval_seconds` to
+    periodically refresh topic metadata, so producers are started
+    automatically for newly discovered partitions.
+
 - 4.6.2
   - Pin `kafka_protocol-4.3.6` (previous version 4.3.5).
   - Emit [`telemetry`](https://github.com/beam-telemetry/telemetry) events,
