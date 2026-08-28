@@ -252,8 +252,18 @@
 %%  <li>`fenced_member_action' (optional, default = `retry')
 %%
 %%      What to do when another member uses the same `group_instance_id'.
-%%      `retry' keeps trying to re-join, subject to `max_rejoin_attempts'.
-%%      `stop' stops the gen_server with reason `fenced_instance_id'.</li>
+%%      `retry' re-joins to take the slot back. It waits at least 10 seconds
+%%      between attempts and continues for as long as the conflict exists.
+%%      `max_rejoin_attempts' limits only consecutive failed join attempts
+%%      within one stabilization cycle.
+%%
+%%      `stop' stops the coordinator with reason `fenced_instance_id'. A
+%%      `brod_group_subscriber_v2' then exits with
+%%      `{shutdown, coordinator_failure}'. When supervised as `transient', it
+%%      stays down. When supervised as `permanent', it restarts and can resume
+%%      the fencing cycle. A `brod_group_subscriber' exits with reason
+%%      `fenced_instance_id'. When supervised, both `transient' and `permanent'
+%%      restart it; `temporary' keeps it down.</li>
 %%
 %%  <li>`offset_commit_policy' (optional, default = `commit_to_kafka_v2')
 %%
@@ -512,7 +522,7 @@ handle_call({commit_offsets, ExtraOffsets}, From, State) ->
         handle_fencing(StateWithOffsets, 0, preparation_required));
     throw : Reason ->
       gen_server:reply(From, {error, Reason}),
-      handle_stabilize_result(stabilize(State, 0, Reason))
+      handle_stabilize_result(stabilize(StateWithOffsets, 0, Reason))
   end;
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
@@ -634,7 +644,7 @@ continue_stabilization({ok, State2}, AttemptNo, Reason,
                        RejoinDelaySeconds) ->
   State3 = State2#state{is_in_group = false},
 
-  %$ 4. Clean up state based on the last failure reason
+  %% 4. Clean up state based on the last failure reason
   State4 = maybe_reset_member_id(State3, Reason),
 
   %% 5. Clean up ongoing heartbeat request ref if connection
