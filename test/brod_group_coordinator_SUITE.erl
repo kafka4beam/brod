@@ -44,7 +44,8 @@
         , t_member_id_required_dynamic_member/1
         , t_static_member_falls_back_on_old_broker/1
         , t_static_member_does_not_leave_group/1
-        , t_fenced_static_member_retries/1
+        , t_fenced_static_member_retries_by_default/1
+        , t_fenced_static_member_stops/1
         ]).
 
 -define(assert_receive(Pattern, Return),
@@ -355,12 +356,12 @@ t_static_member_does_not_leave_group(Config) when is_list(Config) ->
       end
   end.
 
-t_fenced_static_member_retries(Config) when is_list(Config) ->
+t_fenced_static_member_retries_by_default(Config) when is_list(Config) ->
   case kafka_test_helper:kafka_version() of
     Vsn when Vsn < {2, 3} ->
       {skip, "no static group membership"};
     _ ->
-      GroupId = unique_group_id("static-fencing"),
+      GroupId = unique_group_id("static-fencing-retry"),
       GroupConfig =
         [ {group_instance_id, <<"member-1">>}
         , {heartbeat_rate_seconds, 30}
@@ -381,9 +382,6 @@ t_fenced_static_member_retries(Config) when is_list(Config) ->
           Coordinator2 ! continue,
           ?assert_receive({assignments_received, 2, _, _}, ok),
 
-          %% The replacement keeps the same generation, so only a request
-          %% carrying group_instance_id can tell the old member that it lost
-          %% ownership of the static slot.
           Coordinator1 ! lo_cmd_send_heartbeat,
           ?assert_receive({assignments_revoked, 1}, ok),
           ?assert(is_process_alive(Coordinator1)),
@@ -397,6 +395,62 @@ t_fenced_static_member_retries(Config) when is_list(Config) ->
       after
         unlink(Coordinator1),
         exit(Coordinator1, shutdown)
+      end
+  end.
+
+t_fenced_static_member_stops(Config) when is_list(Config) ->
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn < {2, 3} ->
+      {skip, "no static group membership"};
+    _ ->
+      GroupId = unique_group_id("static-fencing"),
+      GroupConfig =
+        [ {group_instance_id, <<"member-1">>}
+        , {heartbeat_rate_seconds, 30}
+        , {fenced_member_action, stop}
+        ],
+      {ok, Coordinator1} =
+        brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                          GroupConfig, ?MODULE, {self(), 1}),
+      ?assert_receive({assignments_revoked, 1}, ok),
+      Coordinator1 ! continue,
+      ?assert_receive({assignments_received, 1, _, _}, ok),
+      Ref = monitor(process, Coordinator1),
+      unlink(Coordinator1),
+      try
+        {ok, Coordinator2} =
+          brod_group_coordinator:start_link(?OTHER_CLIENT_ID, GroupId, [?TOPIC],
+                                            GroupConfig, ?MODULE, {self(), 2}),
+        try
+          ?assert_receive({assignments_revoked, 2}, ok),
+          Coordinator2 ! continue,
+          ?assert_receive({assignments_received, 2, _, _}, ok),
+
+          %% The replacement keeps the same generation, so only a request
+          %% carrying group_instance_id can tell the old member that it lost
+          %% ownership of the static slot.
+          Coordinator1 ! lo_cmd_send_heartbeat,
+          ?assert_receive({assignments_revoked, 1}, ok),
+          Coordinator1 ! continue,
+          ?assert_receive(
+             {'DOWN', Ref, process, Coordinator1, fenced_instance_id},
+             ok
+          ),
+          ?assert(is_process_alive(Coordinator2)),
+          receive
+            {assignments_revoked, 2} ->
+              ct:fail(replacement_lost_assignment);
+            {assignments_received, 1, _, _} ->
+              ct:fail(fenced_member_rejoined)
+          after
+            1000 -> ok
+          end
+        after
+          unlink(Coordinator2),
+          exit(Coordinator2, shutdown)
+        end
+      after
+        is_process_alive(Coordinator1) andalso exit(Coordinator1, shutdown)
       end
   end.
 

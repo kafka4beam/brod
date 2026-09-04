@@ -5,6 +5,12 @@
   - Add optional client config `metadata_refresh_interval_seconds` to
     periodically refresh topic metadata, so producers are started
     automatically for newly discovered partitions.
+- 4.6.3
+  - Add `fenced_member_action` for static group members. The default `retry`
+    action keeps trying to take back a shared `group_instance_id`. The new
+    `stop` action stops a fenced coordinator. The subscriber version and its
+    supervisor restart type decide whether the subscriber then stays down or
+    starts again.
 
 - 4.6.2
   - Pin `kafka_protocol-4.3.6` (previous version 4.3.5).

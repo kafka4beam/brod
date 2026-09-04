@@ -46,6 +46,7 @@
 -type brod_partition_assignment_strategy() :: roundrobin_v2
                                             | callback_implemented.
 -type partition_assignment_strategy() :: brod_partition_assignment_strategy().
+-type fenced_member_action() :: retry | stop.
 
 %% default configs
 -define(SESSION_TIMEOUT_SECONDS, 30).
@@ -54,6 +55,7 @@
 -define(PROTOCOL_TYPE, <<"consumer">>).
 -define(MAX_REJOIN_ATTEMPTS, 5).
 -define(REJOIN_DELAY_SECONDS, 1).
+-define(FENCED_MEMBER_ACTION, retry).
 -define(OFFSET_COMMIT_POLICY, commit_to_kafka_v2).
 -define(OFFSET_COMMIT_INTERVAL_SECONDS, 5).
 %% use kafka's offset meta-topic retention policy
@@ -159,6 +161,7 @@
         , heartbeat_rate_seconds         :: pos_integer()
         , max_rejoin_attempts            :: non_neg_integer()
         , rejoin_delay_seconds           :: non_neg_integer()
+        , fenced_member_action           :: fenced_member_action()
         , offset_retention_seconds       :: ?undef | integer()
         , offset_commit_policy           :: offset_commit_policy()
         , offset_commit_interval_seconds :: pos_integer()
@@ -243,7 +246,24 @@
 %%
 %%  <li>`rejoin_delay_seconds' (optional, default = 1)
 %%
-%%      Delay in seconds before re-joining the group.</li>
+%%      Delay in seconds before re-joining the group. Fenced members wait at
+%%      least 10 seconds between attempts.</li>
+%%
+%%  <li>`fenced_member_action' (optional, default = `retry')
+%%
+%%      What to do when another member uses the same `group_instance_id'.
+%%      `retry' re-joins to take the slot back. It waits at least 10 seconds
+%%      between attempts and continues for as long as the conflict exists.
+%%      `max_rejoin_attempts' limits only consecutive failed join attempts
+%%      within one stabilization cycle.
+%%
+%%      `stop' stops the coordinator with reason `fenced_instance_id'. A
+%%      `brod_group_subscriber_v2' then exits with
+%%      `{shutdown, coordinator_failure}'. When supervised as `transient', it
+%%      stays down. When supervised as `permanent', it restarts and can resume
+%%      the fencing cycle. A `brod_group_subscriber' exits with reason
+%%      `fenced_instance_id'. When supervised, both `transient' and `permanent'
+%%      restart it; `temporary' keeps it down.</li>
 %%
 %%  <li>`offset_commit_policy' (optional, default = `commit_to_kafka_v2')
 %%
@@ -370,6 +390,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   HbRateSec = GetCfg(heartbeat_rate_seconds, ?HEARTBEAT_RATE_SECONDS),
   MaxRejoinAttempts = GetCfg(max_rejoin_attempts, ?MAX_REJOIN_ATTEMPTS),
   RejoinDelaySeconds = GetCfg(rejoin_delay_seconds, ?REJOIN_DELAY_SECONDS),
+  FencedMemberAction = GetCfg(fenced_member_action, ?FENCED_MEMBER_ACTION),
   OffsetRetentionSeconds = GetCfg(offset_retention_seconds, ?undef),
   OffsetCommitPolicy = GetCfg(offset_commit_policy, ?OFFSET_COMMIT_POLICY),
   OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
@@ -398,6 +419,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , heartbeat_rate_seconds         = HbRateSec
           , max_rejoin_attempts            = MaxRejoinAttempts
           , rejoin_delay_seconds           = RejoinDelaySeconds
+          , fenced_member_action           = FencedMemberAction
           , offset_retention_seconds       = OffsetRetentionSeconds
           , offset_commit_policy           = OffsetCommitPolicy
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
@@ -414,9 +436,12 @@ handle_info(?LO_CMD_COMMIT_OFFSETS, #state{is_in_group = true} = State) ->
   try
     {ok, NewState} = do_commit_offsets(State),
     {noreply, NewState}
-  catch throw : Reason ->
-    {ok, NewState1} = stabilize(State, 0, Reason),
-    {noreply, NewState1}
+  catch
+    throw : ?fenced_instance_id ->
+      handle_stabilize_result(
+        handle_fencing(State, 0, preparation_required));
+    throw : Reason ->
+      handle_stabilize_result(stabilize(State, 0, Reason))
   end;
 handle_info(?LO_CMD_STABILIZE_PREPARED(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
@@ -425,15 +450,17 @@ handle_info(?LO_CMD_STABILIZE(N, _Reason),
             #state{max_rejoin_attempts = Max} = State) when N >= Max ->
   {stop, max_rejoin_attempts, State};
 handle_info(?LO_CMD_STABILIZE_PREPARED(N, Reason), State) ->
-  {ok, NewState} = stabilize(State, N, Reason, prepared),
-  {noreply, NewState};
+  handle_stabilize_result(stabilize(State, N, Reason, prepared));
 handle_info(?LO_CMD_STABILIZE(N, Reason), State) ->
-  {ok, NewState} = stabilize(State, N, Reason),
-  {noreply, NewState};
+  handle_stabilize_result(stabilize(State, N, Reason));
 handle_info({'EXIT', Pid, Reason},
             #state{connection = Pid} = State) ->
-  {ok, NewState} = stabilize(State, 0, {connection_down, Reason}),
-  {noreply, NewState#state{connection = ?undef}};
+  case stabilize(State, 0, {connection_down, Reason}) of
+    {ok, NewState} ->
+      {noreply, NewState#state{connection = ?undef}};
+    Stop ->
+      Stop
+  end;
 handle_info({'EXIT', Pid, Reason}, #state{member_pid = Pid} = State) ->
   case Reason of
     shutdown      -> {stop, shutdown, State};
@@ -472,11 +499,10 @@ handle_info({msg, _Pid, #kpro_rsp{ api = heartbeat
   State = State0#state{hb_ref = ?undef},
   case ?IS_ERROR(EC) of
     true when EC =:= ?fenced_instance_id ->
-      {ok, NewState} = retry_after_fencing(State, 0),
-      {noreply, NewState};
+      handle_stabilize_result(
+        handle_fencing(State, 0, preparation_required));
     true ->
-      {ok, NewState} = stabilize(State, 0, EC),
-      {noreply, NewState};
+      handle_stabilize_result(stabilize(State, 0, EC));
     false ->
       {noreply, State}
   end;
@@ -484,22 +510,26 @@ handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
 handle_call({commit_offsets, ExtraOffsets}, From, State) ->
+  Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
+  StateWithOffsets = State#state{acked_offsets = Offsets},
   try
-    Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
-    {ok, NewState} = do_commit_offsets(State#state{acked_offsets = Offsets}),
+    {ok, NewState} = do_commit_offsets(StateWithOffsets),
     {reply, ok, NewState}
-  catch throw : Reason ->
-    gen_server:reply(From, {error, Reason}),
-    {ok, NewState_} = stabilize(State, 0, Reason),
-    {noreply, NewState_}
+  catch
+    throw : ?fenced_instance_id ->
+      gen_server:reply(From, {error, ?fenced_instance_id}),
+      handle_stabilize_result(
+        handle_fencing(StateWithOffsets, 0, preparation_required));
+    throw : Reason ->
+      gen_server:reply(From, {error, Reason}),
+      handle_stabilize_result(stabilize(StateWithOffsets, 0, Reason))
   end;
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
 
 handle_cast({update_topics, Topics}, State) ->
   NewState0 = State#state{ topics = Topics},
-  {ok, NewState} = stabilize(NewState0, 0, topics),
-  {noreply, NewState};
+  handle_stabilize_result(stabilize(NewState0, 0, topics));
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
@@ -580,34 +610,41 @@ is_already_connected(#state{connection = Conn}, {Host, Port}) ->
   iolist_to_binary(Host0) =:= iolist_to_binary(Host) andalso
   Port0 =:= Port.
 
--spec stabilize(state(), integer(), any()) -> {ok, state()}.
+-spec stabilize(state(), integer(), any()) ->
+        {ok, state()} | {stop, fenced_instance_id, state()}.
 stabilize(State, AttemptNo, Reason) ->
   stabilize(State, AttemptNo, Reason, preparation_required).
 
-stabilize(#state{rejoin_delay_seconds = RejoinDelaySeconds} = State0,
-          AttemptNo, Reason, Preparation) ->
+stabilize(State, AttemptNo, Reason, Preparation) ->
+  #state{rejoin_delay_seconds = RejoinDelaySeconds} = State,
   Reason =/= ?undef andalso
-    log(State0, info, "re-joining group, reason:~p", [Reason]),
+    log(State, info, "re-joining group, reason:~p", [Reason]),
 
-  %% 1-2. Stop periodic commits, revoke current assignments, and collect final
-  %% acknowledgements once per stabilization cycle. Fencing performs these
-  %% steps before its delayed retry, so its loopback command skips them.
-  State1 = maybe_prepare_for_stabilization(State0, AttemptNo, Preparation),
+  %% 1-2. Stop periodic commits, revoke current assignments, and collect
+  %% final acknowledgements once per stabilization cycle.
+  State1 = maybe_prepare_for_stabilization(State, AttemptNo, Preparation),
 
   %% 3. try to commit current offsets before re-joinning the group.
   %%    try only on the first re-join attempt
   %%    do not try if the last error makes a commit impossible
-  State2 =
+  CommitResult =
     case AttemptNo =:= 0 andalso is_commit_possible(Reason) of
       true ->
-        {ok, #state{} = State2_} = try_commit_offsets(State1),
-        State2_;
+        try_commit_offsets_before_rejoin(State1);
       false ->
-        State1
+        {ok, State1}
     end,
+  continue_stabilization(CommitResult, AttemptNo, Reason,
+                         RejoinDelaySeconds).
+
+continue_stabilization({stop, ?fenced_instance_id, _State} = Stop,
+                       _AttemptNo, _Reason, _RejoinDelaySeconds) ->
+  Stop;
+continue_stabilization({ok, State2}, AttemptNo, Reason,
+                       RejoinDelaySeconds) ->
   State3 = State2#state{is_in_group = false},
 
-  %$ 4. Clean up state based on the last failure reason
+  %% 4. Clean up state based on the last failure reason
   State4 = maybe_reset_member_id(State3, Reason),
 
   %% 5. Clean up ongoing heartbeat request ref if connection
@@ -625,7 +662,7 @@ stabilize(#state{rejoin_delay_seconds = RejoinDelaySeconds} = State0,
     fun(StateIn, NewReason) ->
       case NewReason of
         ?fenced_instance_id ->
-          schedule_retry_after_fencing(StateIn, AttemptNo + 1);
+          handle_fencing(StateIn, AttemptNo + 1, prepared);
         _ ->
           log(StateIn, info, "failed to join group\nreason: ~p", [NewReason]),
           _ = case AttemptNo =:= 0 of
@@ -663,15 +700,27 @@ is_commit_possible(?unknown_member_id) -> false;
 is_commit_possible(?fenced_instance_id) -> false;
 is_commit_possible(_) -> true.
 
-retry_after_fencing(State0, AttemptNo) ->
-  {ok, State1} = schedule_retry_after_fencing(State0, AttemptNo),
-  {ok, prepare_for_stabilization(State1)}.
+handle_fencing(#state{fenced_member_action = retry} = State,
+               AttemptNo, Preparation) ->
+  retry_after_fencing(State, AttemptNo, Preparation);
+handle_fencing(#state{fenced_member_action = stop} = State,
+               _AttemptNo, Preparation) ->
+  stop_after_fencing(State, Preparation).
+
+retry_after_fencing(State0, AttemptNo, Preparation) ->
+  State1 =
+    case Preparation of
+      preparation_required -> prepare_for_stabilization(State0);
+      prepared -> State0
+    end,
+  schedule_retry_after_fencing(State1, AttemptNo).
 
 schedule_retry_after_fencing(
   #state{rejoin_delay_seconds = RejoinDelaySeconds} = State,
   AttemptNo
 ) ->
-  RetryDelaySeconds = fenced_retry_delay_seconds(RejoinDelaySeconds),
+  RetryDelaySeconds = max(RejoinDelaySeconds,
+                          ?MIN_FENCED_RETRY_DELAY_SECONDS),
   log(State, error,
       "Static member was fenced by another member using the same "
       "group_instance_id; check for duplicate group member configuration. "
@@ -682,8 +731,23 @@ schedule_retry_after_fencing(
         ?LO_CMD_STABILIZE_PREPARED(AttemptNo, ?fenced_instance_id)),
   {ok, State#state{is_in_group = false, hb_ref = ?undef}}.
 
-fenced_retry_delay_seconds(RejoinDelaySeconds) ->
-  max(RejoinDelaySeconds, ?MIN_FENCED_RETRY_DELAY_SECONDS).
+stop_after_fencing(State, Preparation) ->
+  log(State, error,
+      "Static member was fenced by another member using the same "
+      "group_instance_id; check for duplicate group member configuration. "
+      "Stopping group coordinator.", []),
+  PreparedState =
+    case Preparation of
+      preparation_required -> prepare_for_stabilization(State);
+      prepared -> State
+    end,
+  {stop, ?fenced_instance_id,
+   PreparedState#state{is_in_group = false, hb_ref = ?undef}}.
+
+handle_stabilize_result({ok, State}) ->
+  {noreply, State};
+handle_stabilize_result({stop, ?fenced_instance_id, State}) ->
+  {stop, ?fenced_instance_id, State}.
 
 -spec receive_pending_acks(state()) -> state().
 receive_pending_acks(State) ->
@@ -701,8 +765,12 @@ do_stabilize([F | Rest], RetryFun, State) ->
   try
     {ok, #state{} = NewState} = F(State),
     do_stabilize(Rest, RetryFun, NewState)
-  catch throw : Reason ->
-    RetryFun(save_assigned_member_id(State, Reason), Reason)
+  catch
+    throw : ?fenced_instance_id ->
+      %% stabilize/4 prepared this state before JoinGroup or SyncGroup.
+      RetryFun(State, ?fenced_instance_id);
+    throw : Reason ->
+      RetryFun(save_assigned_member_id(State, Reason), Reason)
   end.
 
 %% KIP-394: when the broker assigns a `member_id' via a
@@ -888,6 +956,19 @@ try_commit_offsets(#state{} = State) ->
     {ok, #state{}} = do_commit_offsets(State)
   catch _ : _ ->
     {ok, State}
+  end.
+
+try_commit_offsets_before_rejoin(#state{} = State) ->
+  try
+    {ok, #state{}} = do_commit_offsets(State)
+  catch
+    throw : ?fenced_instance_id ->
+      case State#state.fenced_member_action of
+        retry -> {ok, State};
+        stop  -> stop_after_fencing(State, prepared)
+      end;
+    _ : _ ->
+      {ok, State}
   end.
 
 %% Commit collected offsets, stop old commit timer, start new timer.
@@ -1454,7 +1535,7 @@ request_group_instance_id_test() ->
             })),
   ok.
 
-retry_after_fencing_test() ->
+heartbeat_fencing_stops_test() ->
   MemberModule = brod_group_member_test_stub,
   meck:new(MemberModule, [non_strict]),
   try
@@ -1470,38 +1551,30 @@ retry_after_fencing_test() ->
       end),
     OffsetCommitTimer =
       erlang:send_after(timer:seconds(60), self(), offset_commit_timer_fired),
+    HbRef = make_ref(),
     State =
       #state{ groupId = <<"group">>
             , generationId = GenerationId
             , member_pid = self()
             , member_module = MemberModule
-            , rejoin_delay_seconds = 0
             , offset_commit_timer = OffsetCommitTimer
             , is_in_group = true
-            , hb_ref = {make_ref(), os:timestamp()}
+            , hb_ref = {HbRef, os:timestamp()}
+            , fenced_member_action = stop
             },
-    {ok, NewState} = retry_after_fencing(State, 0),
+    Response =
+      #kpro_rsp{api = heartbeat, ref = HbRef,
+                msg = [{error_code, ?fenced_instance_id}]},
+    {stop, ?fenced_instance_id, NewState} =
+      handle_info({msg, self(), Response}, State),
     ?assertNot(NewState#state.is_in_group),
-    ?assertEqual(?undef, NewState#state.hb_ref),
     ?assertEqual(?undef, NewState#state.offset_commit_timer),
     ?assertEqual(false, erlang:read_timer(OffsetCommitTimer)),
     ?assertEqual([{{Topic, Partition}, Offset}], NewState#state.acked_offsets),
-    ?assertEqual(1, meck:num_calls(MemberModule, assignments_revoked, ['_'])),
-    ?assert(should_reset_member_id(?fenced_instance_id)),
-    receive
-      ?LO_CMD_STABILIZE_PREPARED(0, ?fenced_instance_id) ->
-        error(stabilization_scheduled_too_soon)
-    after
-      100 -> ok
-    end
+    ?assertEqual(1, meck:num_calls(MemberModule, assignments_revoked, ['_']))
   after
     meck:unload(MemberModule)
   end.
-
-fenced_retry_delay_seconds_test() ->
-  ?assertEqual(10, fenced_retry_delay_seconds(0)),
-  ?assertEqual(10, fenced_retry_delay_seconds(10)),
-  ?assertEqual(11, fenced_retry_delay_seconds(11)).
 
 is_commit_possible_test() ->
   ?assertNot(is_commit_possible(?illegal_generation)),
