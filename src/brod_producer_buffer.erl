@@ -28,6 +28,7 @@
         ]).
 
 -export([ is_empty/1
+        , is_onwire/2
         ]).
 
 -export_type([buf/0]).
@@ -182,6 +183,11 @@ is_empty(#buf{ pending = Pending
   queue:is_empty(Pending) andalso
   queue:is_empty(Buffer) andalso
   Onwire =:= [].
+
+%% @doc Return true if the request attempt is still waiting for a response.
+-spec is_onwire(buf(), reference()) -> boolean().
+is_onwire(#buf{onwire = OnWire}, Ref) ->
+  lists:keymember(Ref, 1, OnWire).
 
 %%%_* Internal functions =======================================================
 

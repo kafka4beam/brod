@@ -146,7 +146,10 @@
 %%     asynchronously before receiving ACKs from broker.
 %%
 %%     NOTE: setting a number greater than 1 may cause messages being persisted
-%%           in an order different from the order they were produced.</li>
+%%           in an order different from the order they were produced.
+%%           When one message set fails with a retriable error, the producer
+%%           sends all message sets on wire again. Kafka may have already
+%%           persisted some of them, so it can persist those twice.</li>
 %%   <li>`max_batch_size' (in bytes, optional, default = 1M):
 %%
 %%     In case callers are producing faster than brokers can handle (or
@@ -360,28 +363,14 @@ handle_info({msg, Pid, #kpro_rsp{ api = produce
             #state{ connection = Pid
                   , buffer   = Buffer
                   } = State) ->
-  [TopicRsp] = kpro:find(responses, Rsp),
-  Topic = kpro:find(topic, TopicRsp),
-  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
-  Partition = kpro:find(partition, PartitionRsp),
-  ErrorCode = kpro:find(error_code, PartitionRsp),
-  Offset = kpro:find(base_offset, PartitionRsp),
-  Topic = State#state.topic, %% assert
-  Partition = State#state.partition, %% assert
-  {ok, NewState} =
-    case ?IS_ERROR(ErrorCode) of
-      true ->
-        _ = log_error_code(Topic, Partition, Offset, ErrorCode),
-        Error = {produce_response_error, Topic, Partition,
-                 Offset, ErrorCode},
-        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
-        NewBuffer = brod_producer_buffer:nack(Buffer, Ref, Error),
-        schedule_retry(State#state{buffer = NewBuffer});
-      false ->
-        NewBuffer = brod_producer_buffer:ack(Buffer, Ref, Offset),
-        maybe_produce(State#state{buffer = NewBuffer})
-    end,
-  {noreply, NewState};
+  case brod_producer_buffer:is_onwire(Buffer, Ref) of
+    true ->
+      %% Check the full active set so ack/nack still reject responses out of order.
+      handle_produce_response(Ref, Rsp, State);
+    false ->
+      %% nack_all removes old references. Their replies can arrive after a retry.
+      {noreply, State}
+  end;
 handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
@@ -430,6 +419,30 @@ format_status(#{reason := terminate, state := #state{buffer = Buffer} = State} =
 -endif.
 
 %%%_* Internal Functions =======================================================
+
+handle_produce_response(Ref, Rsp, #state{buffer = Buffer} = State) ->
+  [TopicRsp] = kpro:find(responses, Rsp),
+  Topic = kpro:find(topic, TopicRsp),
+  [PartitionRsp] = kpro:find(partition_responses, TopicRsp),
+  Partition = kpro:find(partition, PartitionRsp),
+  ErrorCode = kpro:find(error_code, PartitionRsp),
+  Offset = kpro:find(base_offset, PartitionRsp),
+  Topic = State#state.topic, %% assert
+  Partition = State#state.partition, %% assert
+  {ok, NewState} =
+    case ?IS_ERROR(ErrorCode) of
+      true ->
+        _ = log_error_code(Topic, Partition, Offset, ErrorCode),
+        Error = {produce_response_error, Topic, Partition,
+                 Offset, ErrorCode},
+        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
+        NewBuffer = brod_producer_buffer:nack(Buffer, Ref, Error),
+        schedule_retry(State#state{buffer = NewBuffer});
+      false ->
+        NewBuffer = brod_producer_buffer:ack(Buffer, Ref, Offset),
+        maybe_produce(State#state{buffer = NewBuffer})
+    end,
+  {noreply, NewState}.
 
 make_send_fun(Topic, Partition, RequiredAcks, AckTimeout, Compression) ->
   ExtraArg = {Topic, Partition, RequiredAcks, AckTimeout, Compression},

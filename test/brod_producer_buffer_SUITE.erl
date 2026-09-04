@@ -131,13 +131,29 @@ t_nack(Config) when is_list(Config) ->
   Buf3 = AddFun(AddFun(Buf2, 2), 3),
   Buf4 = MaybeSend(Buf3),
   Ref1 = ReceiveFun(?LINE, [0, 1]), %% max batch size
-  _Ref = ReceiveFun(?LINE, [2, 3]), %% max onwire is 2
+  Ref2 = ReceiveFun(?LINE, [2, 3]), %% max onwire is 2
+  ?assert(brod_producer_buffer:is_onwire(Buf4, Ref1)),
+  ?assert(brod_producer_buffer:is_onwire(Buf4, Ref2)),
+  ?assertNot(brod_producer_buffer:is_onwire(Buf4, make_ref())),
+  %% ack/nack accept only the head reference. A response that arrives
+  %% out of order must crash the caller, not be ignored.
+  ?assertError(function_clause, AckFun(Buf4, Ref2)),
+  ?assertError(function_clause, NackFun(Buf4, Ref2)),
   Buf5 = NackFun(Buf4, Ref1),       %% re-queue all
+  ?assertNot(brod_producer_buffer:is_onwire(Buf5, Ref1)),
+  ?assertNot(brod_producer_buffer:is_onwire(Buf5, Ref2)),
   Buf6 = MaybeSend(Buf5),           %% as if a scheduled retry
   Ref3 = ReceiveFun(?LINE, [0, 1]), %% receive a max batch
   Ref4 = ReceiveFun(?LINE, [2, 3]), %% another max batch (max onwire is 2)
+  ?assertNot(brod_producer_buffer:is_onwire(Buf6, Ref1)),
+  ?assertNot(brod_producer_buffer:is_onwire(Buf6, Ref2)),
+  ?assert(brod_producer_buffer:is_onwire(Buf6, Ref3)),
+  ?assert(brod_producer_buffer:is_onwire(Buf6, Ref4)),
   Buf7 = AckFun(Buf6, Ref3),
+  ?assertNot(brod_producer_buffer:is_onwire(Buf7, Ref3)),
+  ?assert(brod_producer_buffer:is_onwire(Buf7, Ref4)),
   Buf8 = AckFun(Buf7, Ref4),
+  ?assertNot(brod_producer_buffer:is_onwire(Buf8, Ref4)),
   ?assert(brod_producer_buffer:is_empty(Buf8)).
 
 t_send_fun_error(Config) when is_list(Config) ->
