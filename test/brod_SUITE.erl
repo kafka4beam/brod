@@ -20,6 +20,8 @@
 %% Test framework
 -export([ init_per_suite/1
         , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
         , all/0
         , suite/0
         ]).
@@ -51,6 +53,17 @@ init_per_suite(Config) ->
   end.
 
 end_per_suite(_Config) ->
+  ok.
+
+init_per_testcase(t_auto_start_producers_for_new_partitions, Config) ->
+  case has_create_partitions_api() of
+    true -> Config;
+    false -> {skip, "no_create_partitions_api"}
+  end;
+init_per_testcase(_Case, Config) ->
+  Config.
+
+end_per_testcase(_Case, _Config) ->
   ok.
 
 all() -> [F || {F, _A} <- module_info(exports),
@@ -86,9 +99,14 @@ t_create_update_delete_topics(Config) when is_list(Config) ->
       brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
         #{connect_timeout => ?TIMEOUT})),
 
-    ?assertEqual(ok,
-      brod:create_partitions(?HOSTS, TopicPartitionConfig, #{timeout => ?TIMEOUT},
-        #{connect_timeout => ?TIMEOUT}))
+    case has_create_partitions_api() of
+      true ->
+        ?assertEqual(ok,
+          brod:create_partitions(?HOSTS, TopicPartitionConfig, #{timeout => ?TIMEOUT},
+            #{connect_timeout => ?TIMEOUT}));
+      false ->
+        ok
+    end
   after
     ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,
                                         #{connect_timeout => ?TIMEOUT}))
@@ -145,6 +163,10 @@ t_delete_topics_not_found(Config) when is_list(Config) ->
       #{connect_timeout => ?TIMEOUT})).
 
 %%%_* Help functions ===========================================================
+
+%% CreatePartitions API was introduced in Kafka 1.0
+has_create_partitions_api() ->
+  kafka_test_helper:kafka_version() >= {1, 0}.
 
 wait_for_producer(_Client, Topic, Partition, 0) ->
   erlang:error({producer_not_started, Topic, Partition});
