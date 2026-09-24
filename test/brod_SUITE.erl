@@ -137,6 +137,7 @@ t_auto_start_producers_for_new_partitions(Config) when is_list(Config) ->
     ?assertEqual(ok,
       brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
         #{connect_timeout => ?TIMEOUT})),
+    ok = wait_for_topic(Topic, 10),
 
     ok = brod:start_client(?HOSTS, Client,
                            [{metadata_refresh_interval_seconds, 1}]),
@@ -167,6 +168,21 @@ t_delete_topics_not_found(Config) when is_list(Config) ->
 %% CreatePartitions API was introduced in Kafka 1.0
 has_create_partitions_api() ->
   kafka_test_helper:kafka_version() >= {1, 0}.
+
+%% CreateTopics returns before every broker has the new topic's metadata,
+%% and brod_client caches unknown_topic_or_partition, so wait for the topic
+%% to be visible before starting a client.
+wait_for_topic(Topic, 0) ->
+  erlang:error({topic_not_found, Topic});
+wait_for_topic(Topic, Retries) ->
+  {ok, #{topics := [TopicMetadata]}} = brod:get_metadata(?HOSTS, [Topic]),
+  case TopicMetadata of
+    #{error_code := no_error} ->
+      ok;
+    #{error_code := _} ->
+      timer:sleep(1000),
+      wait_for_topic(Topic, Retries - 1)
+  end.
 
 wait_for_producer(_Client, Topic, Partition, 0) ->
   erlang:error({producer_not_started, Topic, Partition});
