@@ -175,11 +175,10 @@ has_create_partitions_api() ->
 wait_for_topic(Topic, 0) ->
   erlang:error({topic_not_found, Topic});
 wait_for_topic(Topic, Retries) ->
-  {ok, #{topics := [TopicMetadata]}} = brod:get_metadata(?HOSTS, [Topic]),
-  case TopicMetadata of
-    #{error_code := no_error} ->
+  case brod:get_metadata(?HOSTS, [Topic]) of
+    {ok, _} ->
       ok;
-    #{error_code := _} ->
+    {error, _} ->
       timer:sleep(1000),
       wait_for_topic(Topic, Retries - 1)
   end.
