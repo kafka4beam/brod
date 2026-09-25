@@ -96,6 +96,8 @@
 %% Topic APIs
 -export([ create_topics/3
         , create_topics/4
+        , create_partitions/3
+        , create_partitions/4
         , delete_topics/3
         , delete_topics/4
         ]).
@@ -190,6 +192,7 @@
 -type endpoint() :: {hostname(), portnum()}.
 -type topic() :: kpro:topic().
 -type topic_config() :: kpro:struct().
+-type topic_partition_config() :: kpro:struct().
 -type partition() :: kpro:partition().
 -type topic_partition() :: {topic(), partition()}.
 -type offset() :: kpro:offset(). %% Physical offset (an integer)
@@ -377,6 +380,13 @@ start_client(BootstrapEndpoints, ClientId) ->
 %%   <li>`unknown_topic_cache_ttl' (optional, default=120000)
 %%
 %%     For how long unknown_topic error will be cached, in ms.</li>
+%%
+%%   <li>`metadata_refresh_interval_seconds' (optional, default=disabled)
+%%
+%%     If configured, the client periodically refreshes the metadata of
+%%     the topics it has producers running for, and automatically starts
+%%     producers for newly discovered partitions (e.g. after the number
+%%     of partitions of a topic is increased).</li>
 %%
 %% </ul>
 %%
@@ -1048,6 +1058,47 @@ create_topics(Hosts, TopicConfigs, RequestConfigs) ->
         ok | {error, any()}.
 create_topics(Hosts, TopicConfigs, RequestConfigs, Options) ->
   brod_utils:create_topics(Hosts, TopicConfigs, RequestConfigs, Options).
+
+%% @equiv create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, [])
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()}) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs) ->
+  brod_utils:create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs).
+
+%% @doc Create partitions for existing topic(s) in kafka.
+%%
+%%  <ul>
+%%    <li>`topic'
+%%
+%%      The topic name.</li>
+%%
+%%    <li>`new_partitions'
+%%
+%%      `count' is the total number of partitions the topic should have
+%%      after this request (current + new).
+%%      `assignment' is one list of preferred broker ids per new partition,
+%%      or `undefined' to let the brokers assign replicas automatically.</li>
+%%  </ul>
+%%
+%% Example:
+%% ```
+%% > TopicPartitionConfigs = [
+%%       #{
+%%         topic => <<"my_topic">>,
+%%         new_partitions => #{
+%%           count => 4,
+%%           assignment => [[1,2], [2,3], [3,1]]
+%%         }
+%%       }
+%%   ].
+%% > brod:create_partitions([{"localhost", 9092}], TopicPartitionConfigs, #{timeout => 1000}, []).
+%% ok
+%% '''
+-spec create_partitions([endpoint()], [topic_partition_config()], #{timeout => kpro:int32()},
+                    conn_config()) ->
+        ok | {error, any()}.
+create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, Options) ->
+  brod_utils:create_partitions(Hosts, TopicPartitionConfigs, RequestConfigs, Options).
 
 %% @equiv delete_topics(Hosts, Topics, Timeout, [])
 -spec delete_topics([endpoint()], [topic()], pos_integer()) ->

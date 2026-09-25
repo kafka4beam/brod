@@ -1,5 +1,10 @@
 # Changelog
 
+- 4.7.0
+  - Add `brod:create_partitions/3,4` to add partitions to an existing topic.
+  - Add optional client config `metadata_refresh_interval_seconds` to
+    periodically refresh topic metadata, so producers are started
+    automatically for newly discovered partitions.
 - 4.6.3
   - Add `fenced_member_action` for static group members. The default `retry`
     action keeps trying to take back a shared `group_instance_id`. The new

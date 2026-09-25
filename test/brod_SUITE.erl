@@ -20,12 +20,15 @@
 %% Test framework
 -export([ init_per_suite/1
         , end_per_suite/1
+        , init_per_testcase/2
+        , end_per_testcase/2
         , all/0
         , suite/0
         ]).
 
 %% Test cases
--export([ t_create_delete_topics/1
+-export([ t_create_update_delete_topics/1
+        , t_auto_start_producers_for_new_partitions/1
         , t_delete_topics_not_found/1
         ]).
 
@@ -52,6 +55,17 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
   ok.
 
+init_per_testcase(t_auto_start_producers_for_new_partitions, Config) ->
+  case has_create_partitions_api() of
+    true -> Config;
+    false -> {skip, "no_create_partitions_api"}
+  end;
+init_per_testcase(_Case, Config) ->
+  Config.
+
+end_per_testcase(_Case, _Config) ->
+  ok.
+
 all() -> [F || {F, _A} <- module_info(exports),
                   case atom_to_list(F) of
                     "t_" ++ _ -> true;
@@ -60,7 +74,7 @@ all() -> [F || {F, _A} <- module_info(exports),
 
 %%%_* Test functions ===========================================================
 
-t_create_delete_topics(Config) when is_list(Config) ->
+t_create_update_delete_topics(Config) when is_list(Config) ->
   Topic = iolist_to_binary(["test-topic-", integer_to_list(erlang:system_time())]),
   TopicConfig = [
     #{
@@ -71,11 +85,75 @@ t_create_delete_topics(Config) when is_list(Config) ->
       name => Topic
     }
   ],
+  TopicPartitionConfig = [
+    #{
+      topic => Topic,
+      new_partitions => #{
+        count => 2,
+        assignment => undefined
+      }
+    }
+  ],
   try
     ?assertEqual(ok,
       brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
-        #{connect_timeout => ?TIMEOUT}))
+        #{connect_timeout => ?TIMEOUT})),
+
+    case has_create_partitions_api() of
+      true ->
+        ?assertEqual(ok,
+          brod:create_partitions(?HOSTS, TopicPartitionConfig, #{timeout => ?TIMEOUT},
+            #{connect_timeout => ?TIMEOUT}));
+      false ->
+        ok
+    end
   after
+    ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,
+                                        #{connect_timeout => ?TIMEOUT}))
+  end.
+
+t_auto_start_producers_for_new_partitions(Config) when is_list(Config) ->
+  Topic = iolist_to_binary(["test-topic-", integer_to_list(erlang:system_time())]),
+  TopicConfig = [
+    #{
+      configs => [],
+      num_partitions => 1,
+      assignments => [],
+      replication_factor => 1,
+      name => Topic
+    }
+  ],
+  TopicPartitionConfig = [
+    #{
+      topic => Topic,
+      new_partitions => #{
+        count => 2,
+        assignment => undefined
+      }
+    }
+  ],
+  Client = ?FUNCTION_NAME,
+  try
+    ?assertEqual(ok,
+      brod:create_topics(?HOSTS, TopicConfig, #{timeout => ?TIMEOUT},
+        #{connect_timeout => ?TIMEOUT})),
+    ok = wait_for_topic(Topic, 10),
+
+    ok = brod:start_client(?HOSTS, Client,
+                           [{metadata_refresh_interval_seconds, 1}]),
+    ok = brod:start_producer(Client, Topic, []),
+    ?assertMatch({ok, _}, brod:get_producer(Client, Topic, 0)),
+    ?assertMatch({error, _}, brod:get_producer(Client, Topic, 1)),
+
+    ?assertEqual(ok,
+      brod:create_partitions(?HOSTS, TopicPartitionConfig, #{timeout => ?TIMEOUT},
+        #{connect_timeout => ?TIMEOUT})),
+
+    %% the periodic metadata refresh should discover the new partition
+    %% and start a producer for it
+    ok = wait_for_producer(Client, Topic, 1, 10)
+  after
+    _ = brod:stop_client(Client),
     ?assertEqual(ok, brod:delete_topics(?HOSTS, [Topic], ?TIMEOUT,
                                         #{connect_timeout => ?TIMEOUT}))
   end.
@@ -84,6 +162,37 @@ t_delete_topics_not_found(Config) when is_list(Config) ->
   ?assertEqual({error, unknown_topic_or_partition},
     brod:delete_topics(?HOSTS, [<<"no-such-topic">>], ?TIMEOUT,
       #{connect_timeout => ?TIMEOUT})).
+
+%%%_* Help functions ===========================================================
+
+%% CreatePartitions API was introduced in Kafka 1.0
+has_create_partitions_api() ->
+  kafka_test_helper:kafka_version() >= {1, 0}.
+
+%% CreateTopics returns before every broker has the new topic's metadata,
+%% and brod_client caches unknown_topic_or_partition, so wait for the topic
+%% to be visible before starting a client.
+wait_for_topic(Topic, 0) ->
+  erlang:error({topic_not_found, Topic});
+wait_for_topic(Topic, Retries) ->
+  case brod:get_metadata(?HOSTS, [Topic]) of
+    {ok, _} ->
+      ok;
+    {error, _} ->
+      timer:sleep(1000),
+      wait_for_topic(Topic, Retries - 1)
+  end.
+
+wait_for_producer(_Client, Topic, Partition, 0) ->
+  erlang:error({producer_not_started, Topic, Partition});
+wait_for_producer(Client, Topic, Partition, Retries) ->
+  case brod:get_producer(Client, Topic, Partition) of
+    {ok, Pid} when is_pid(Pid) ->
+      ok;
+    {error, _} ->
+      timer:sleep(1000),
+      wait_for_producer(Client, Topic, Partition, Retries - 1)
+  end.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

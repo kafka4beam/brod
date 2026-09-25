@@ -368,9 +368,14 @@ handle_continue(init, State0) ->
                       , producers_sup       = ProducersSupPid
                       , consumers_sup       = ConsumersSupPid
                       },
+  ok = maybe_schedule_metadata_refresh(State#state.config),
   {noreply, State}.
 
 %% @private
+handle_info(refresh_metadata, State0) ->
+  State = refresh_producers_metadata(State0),
+  ok = maybe_schedule_metadata_refresh(State#state.config),
+  {noreply, State};
 handle_info({'EXIT', Pid, Reason}, #state{ client_id     = ClientId
                                          , producers_sup = Pid
                                          } = State) ->
@@ -654,6 +659,38 @@ do_get_metadata(FetchMetadataFor, Topics,
                       "reason=~p",
                       [ClientId, FetchTopics, Reason]),
       {{error, Reason}, State}
+  end.
+
+%% Schedule a periodic metadata refresh if configured.
+%% Producers for newly discovered partitions are started as a side effect
+%% of the refresh, see maybe_start_partition_producer/4.
+maybe_schedule_metadata_refresh(Config) ->
+  case config(metadata_refresh_interval_seconds, Config, ?undef) of
+    ?undef ->
+      ok;
+    Seconds when is_integer(Seconds) andalso Seconds > 0 ->
+      _ = erlang:send_after(timer:seconds(Seconds), self(), refresh_metadata),
+      ok
+  end.
+
+%% Refresh metadata for the topics which have running producers.
+-spec refresh_producers_metadata(state()) -> state().
+refresh_producers_metadata(#state{ producers_sup = ProducersSup
+                                 , config = Config
+                                 } = State) ->
+  case maps:keys(brod_producers_sup:count_started_children(ProducersSup)) of
+    [] ->
+      State;
+    Topics ->
+      %% Avoid topic auto-creation in case a produced-to topic
+      %% has been deleted since the producers were started.
+      Request =
+        case config(allow_topic_auto_creation, Config, true) of
+          true  -> Topics;
+          false -> {all, Topics}
+        end,
+      {_, NewState} = do_get_metadata(Request, State),
+      NewState
   end.
 
 %% Ensure there is at least one metadata connection
