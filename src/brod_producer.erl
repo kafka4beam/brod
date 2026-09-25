@@ -146,7 +146,10 @@
 %%     asynchronously before receiving ACKs from broker.
 %%
 %%     NOTE: setting a number greater than 1 may cause messages being persisted
-%%           in an order different from the order they were produced.</li>
+%%           in an order different from the order they were produced.
+%%           When one message set fails with a retriable error, the producer
+%%           sends all message sets on wire again. Kafka may have already
+%%           persisted some of them, so it can persist those twice.</li>
 %%   <li>`max_batch_size' (in bytes, optional, default = 1M):
 %%
 %%     In case callers are producing faster than brokers can handle (or
@@ -371,15 +374,24 @@ handle_info({msg, Pid, #kpro_rsp{ api = produce
   {ok, NewState} =
     case ?IS_ERROR(ErrorCode) of
       true ->
-        _ = log_error_code(Topic, Partition, Offset, ErrorCode),
-        Error = {produce_response_error, Topic, Partition,
-                 Offset, ErrorCode},
-        is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
-        NewBuffer = brod_producer_buffer:nack(Buffer, Ref, Error),
-        schedule_retry(State#state{buffer = NewBuffer});
+        %% Check the error only if nack accepts the reference. A stale fatal
+        %% response must not stop the producer or consume another retry.
+        ReasonFun = fun() ->
+                      _ = log_error_code(Topic, Partition, Offset, ErrorCode),
+                      Error = {produce_response_error, Topic, Partition,
+                               Offset, ErrorCode},
+                      is_retriable(ErrorCode) orelse exit({not_retriable, Error}),
+                      Error
+                    end,
+        case brod_producer_buffer:nack(Buffer, Ref, ReasonFun) of
+          ignored -> {ok, State};
+          {ok, NewBuffer} -> schedule_retry(State#state{buffer = NewBuffer})
+        end;
       false ->
-        NewBuffer = brod_producer_buffer:ack(Buffer, Ref, Offset),
-        maybe_produce(State#state{buffer = NewBuffer})
+        case brod_producer_buffer:ack(Buffer, Ref, Offset) of
+          ignored -> {ok, State};
+          {ok, NewBuffer} -> maybe_produce(State#state{buffer = NewBuffer})
+        end
     end,
   {noreply, NewState};
 handle_info(_Info, #state{} = State) ->

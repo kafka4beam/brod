@@ -32,6 +32,18 @@
         , t_produce_request_telemetry/1
         , t_retry_on_same_connection/1
         , t_retry_on_kafka_storage_error/1
+        , t_stale_error_before_retry/1
+        , t_stale_success_before_retry/1
+        , t_stale_error_after_retry/1
+        , t_stale_success_after_retry/1
+        , t_stale_success_during_linger/1
+        , t_stale_fatal_error_before_retry/1
+        , t_stale_fatal_error_after_retry/1
+        , t_active_fatal_error/1
+        , t_active_fatal_error_without_retry/1
+        , t_active_success_out_of_order/1
+        , t_active_error_out_of_order/1
+        , t_retry_limit/1
         , t_connection_down_retry/1
         , t_leader_migration/1
         ]).
@@ -44,19 +56,24 @@
 -include("brod_int.hrl").
 
 -define(WAIT(Pattern, Handle, Timeout),
+        ?WAIT_AT(?LINE, Pattern, Handle, Timeout)).
+
+%% Same as ?WAIT, but reports Line on failure. Use this in helpers so the
+%% error points at the caller and not at the helper.
+-define(WAIT_AT(Line, Pattern, Handle, Timeout),
         fun() ->
           receive
             Pattern ->
               Handle;
             Msg ->
               erlang:error({unexpected,
-                            [{line, ?LINE},
+                            [{line, Line},
                              {pattern, ??Pattern},
                              {received, Msg}]})
           after
             Timeout ->
               erlang:error({timeout,
-                            [{line, ?LINE},
+                            [{line, Line},
                              {pattern, ??Pattern}]})
           end
         end()).
@@ -290,6 +307,102 @@ t_retry_on_kafka_storage_error(Config) when is_list(Config) ->
         ok, 2000),
   ok = brod_producer:stop(Producer).
 
+t_stale_error_before_retry(Config) when is_list(Config) ->
+  stale_response(?kafka_storage_error, before_retry).
+
+t_stale_success_before_retry(Config) when is_list(Config) ->
+  stale_response(?no_error, before_retry).
+
+t_stale_error_after_retry(Config) when is_list(Config) ->
+  stale_response(?kafka_storage_error, after_retry).
+
+t_stale_success_after_retry(Config) when is_list(Config) ->
+  stale_response(?no_error, after_retry).
+
+t_stale_success_during_linger(Config) when is_list(Config) ->
+  Tester = self(),
+  meck:expect(brod_client, get_leader_connection,
+              fun(client, <<"topic">>, 0) -> {ok, Tester} end),
+  meck:expect(kpro, request_async,
+              fun(Connection, Req) ->
+                  Connection ! {request_async, Req},
+                  ok
+              end),
+  ProducerConfig = [{required_acks, 1},
+                    {partition_onwire_limit, 2},
+                    {max_batch_size, 1},
+                    {max_linger_count, 2},
+                    {max_linger_ms, 60000},
+                    {retry_backoff_ms, 60000}],
+  {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0, ProducerConfig),
+  unlink(Producer),
+  try
+    lists:foreach(
+      fun(Key) ->
+          AckCb = fun(_, Offset) -> Tester ! {acked, Key, Offset} end,
+          ok = brod_producer:produce_cb(Producer, Key, Key, AckCb)
+      end, [<<"1">>, <<"2">>, <<"3">>]),
+    Ref1 = ?WAIT({request_async, #kpro_req{ref = R1}}, R1, 1000),
+    Ref2 = ?WAIT({request_async, #kpro_req{ref = R2}}, R2, 1000),
+    Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ?kafka_storage_error)},
+    {Buffer0, RetryRef} = producer_buffer_and_retry(Producer),
+    assert_buffer_counts(Buffer0, 3, 0),
+    ?assert(is_integer(erlang:cancel_timer(RetryRef))),
+    Producer ! retry,
+    NewRef1 = ?WAIT({request_async, #kpro_req{ref = R3}}, R3, 1000),
+    NewRef2 = ?WAIT({request_async, #kpro_req{ref = R4}}, R4, 1000),
+    ?assertEqual(4, length(lists:usort([Ref1, Ref2, NewRef1, NewRef2]))),
+    Producer ! {msg, Tester, fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)},
+    ?WAIT({acked, <<"1">>, 100}, ok, 1000),
+    %% One send slot is free, but the third request must keep its batch timer.
+    {state, _, _, _, _, _, Buffer1, _, undefined, {DelayRef, _}, _} =
+      sys:get_state(Producer),
+    assert_buffer_counts(Buffer1, 1, 1),
+    ?assert(is_integer(erlang:read_timer(DelayRef))),
+    assert_ignored_response(Producer, Tester,
+                            fake_rsp(Ref2, <<"topic">>, 0, ?no_error, 999)),
+    assert_ignored_response(Producer, Tester,
+                            fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)),
+    Producer ! {msg, Tester, fake_rsp(NewRef2, <<"topic">>, 0, ?no_error, 101)},
+    ?WAIT({acked, <<"2">>, 101}, ok, 1000),
+    {Buffer2, undefined} = producer_buffer_and_retry(Producer),
+    assert_buffer_counts(Buffer2, 1, 0),
+    assert_no_producer_events()
+  after
+    Monitor = erlang:monitor(process, Producer),
+    exit(Producer, kill),
+    receive {'DOWN', Monitor, process, Producer, _} -> ok end
+  end.
+
+t_stale_fatal_error_before_retry(Config) when is_list(Config) ->
+  stale_response(?topic_authorization_failed, before_retry).
+
+t_stale_fatal_error_after_retry(Config) when is_list(Config) ->
+  stale_response(?topic_authorization_failed, after_retry).
+
+t_active_fatal_error(Config) when is_list(Config) ->
+  ?assertEqual({not_retriable,
+                {produce_response_error, <<"topic">>, 0, -1, ?topic_authorization_failed}},
+               rejected_response(?topic_authorization_failed, first)).
+
+t_active_fatal_error_without_retry(Config) when is_list(Config) ->
+  ?assertEqual({not_retriable,
+                {produce_response_error, <<"topic">>, 0, -1, ?topic_authorization_failed}},
+               rejected_response(?topic_authorization_failed, first, 0)).
+
+t_active_success_out_of_order(Config) when is_list(Config) ->
+  ?assertMatch({{badmatch, true}, _Stacktrace},
+               rejected_response(?no_error, second)).
+
+t_active_error_out_of_order(Config) when is_list(Config) ->
+  ?assertMatch({{badmatch, true}, _Stacktrace},
+               rejected_response(?kafka_storage_error, second)).
+
+t_retry_limit(Config) when is_list(Config) ->
+  ?assertEqual({reached_max_retries,
+                {produce_response_error, <<"topic">>, 0, -1, ?kafka_storage_error}},
+               rejected_response(?kafka_storage_error, retry)).
+
 %% This is a typical connection restart scenario:
 %% 0. Start producer allowing two requests on wire
 %% 1. Send first request on wire, but no ack yet
@@ -450,6 +563,189 @@ t_leader_migration(Config) when is_list(Config) ->
 
 %%%_* Help functions ===========================================================
 
+rejected_response(ErrorCode, Which) ->
+  rejected_response(ErrorCode, Which, 1).
+
+rejected_response(ErrorCode, Which, MaxRetries) ->
+  Tester = self(),
+  meck:expect(brod_client, get_leader_connection,
+              fun(client, <<"topic">>, 0) -> {ok, Tester} end),
+  meck:expect(kpro, request_async,
+              fun(Connection, Req) ->
+                  Connection ! {request_async, Req},
+                  ok
+              end),
+  ProducerConfig = [{required_acks, 1},
+                    {partition_onwire_limit, 2},
+                    {max_batch_size, 1},
+                    {max_retries, MaxRetries},
+                    {retry_backoff_ms, 60000}],
+  {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0, ProducerConfig),
+  unlink(Producer),
+  Monitor = erlang:monitor(process, Producer),
+  try
+    AckCb = fun(_, _) -> Tester ! unexpected_ack end,
+    ok = brod_producer:produce_cb(Producer, <<"1">>, <<"1">>, AckCb),
+    Ref1 = ?WAIT({request_async, #kpro_req{ref = R1}}, R1, 1000),
+    ok = brod_producer:produce_cb(Producer, <<"2">>, <<"2">>, AckCb),
+    Ref2 = ?WAIT({request_async, #kpro_req{ref = R2}}, R2, 1000),
+    ?assertNotEqual(Ref1, Ref2),
+    Ref = case Which of
+            first -> Ref1;
+            second -> Ref2;
+            retry ->
+              Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ErrorCode)},
+              {Buffer, Timer} = producer_buffer_and_retry(Producer),
+              assert_buffer_counts(Buffer, 2, 0),
+              ?assert(is_integer(erlang:cancel_timer(Timer))),
+              Producer ! retry,
+              NewRef1 = ?WAIT({request_async, #kpro_req{ref = R3}}, R3, 1000),
+              NewRef2 = ?WAIT({request_async, #kpro_req{ref = R4}}, R4, 1000),
+              ?assertEqual(4, length(lists:usort([Ref1, Ref2, NewRef1, NewRef2]))),
+              NewRef1
+          end,
+    Producer ! {msg, Tester, fake_rsp(Ref, <<"topic">>, 0, ErrorCode)},
+    Reason = ?WAIT({'DOWN', Monitor, process, Producer, ExitReason}, ExitReason, 1000),
+    assert_no_producer_events(),
+    Reason
+  after
+    erlang:demonitor(Monitor, [flush]),
+    CleanupMonitor = erlang:monitor(process, Producer),
+    exit(Producer, kill),
+    receive {'DOWN', CleanupMonitor, process, Producer, _} -> ok end
+  end.
+
+stale_response(ErrorCode, When) ->
+  Tester = self(),
+  meck_module(brod_kafka_request),
+  try
+    meck:expect(brod_client, get_leader_connection,
+                fun(client, <<"topic">>, 0) -> {ok, Tester} end),
+    meck:expect(brod_kafka_request, produce,
+                fun(_, <<"topic">>, 0, Batch, 1, _, no_compression) ->
+                    #kpro_req{api = produce, ref = make_ref(), msg = Batch}
+                end),
+    meck:expect(kpro, request_async,
+                fun(Connection, Req) ->
+                    Connection ! {request_async, Req},
+                    ok
+                end),
+    ProducerConfig = [{required_acks, 1},
+                      {partition_onwire_limit, 2},
+                      {max_batch_size, 1},
+                      {max_retries, 1},
+                      %% The test cancels this timer and sends 'retry' itself.
+                      %% The suite timetrap expires before this timer can fire.
+                      {retry_backoff_ms, 60000}],
+    {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0,
+                                              ProducerConfig),
+    %% The cleanup below kills the producer. Without unlink, that kill would
+    %% also stop this test process and hide the real failure.
+    unlink(Producer),
+    try
+      Produce = fun(Key) ->
+                    AckCb = fun(Partition, Offset) ->
+                                Tester ! {acked, Key, Partition, Offset}
+                            end,
+                    ok = brod_producer:produce_cb(Producer, Key, Key, AckCb)
+                end,
+      ok = Produce(<<"1">>),
+      {Ref1, Batch1} = receive_produce_request(?LINE, <<"1">>),
+      ok = Produce(<<"2">>),
+      {Ref2, Batch2} = receive_produce_request(?LINE, <<"2">>),
+      ?assertNotEqual(Ref1, Ref2),
+      ok = Produce(<<"3">>),
+      {Buffer0, undefined} = producer_buffer_and_retry(Producer),
+      assert_buffer_counts(Buffer0, 1, 2),
+      %% A local reference that was never sent cannot change active requests.
+      assert_ignored_response(Producer, Tester,
+                              fake_rsp(make_ref(), <<"topic">>, 0, ErrorCode)),
+
+      Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ?kafka_storage_error)},
+      {Buffer1, RetryRef} = producer_buffer_and_retry(Producer),
+      assert_buffer_counts(Buffer1, 3, 0),
+      ?assert(is_reference(RetryRef)),
+      ?assert(is_integer(erlang:read_timer(RetryRef))),
+      assert_no_producer_events(),
+      StaleRsp = fake_rsp(Ref2, <<"topic">>, 0, ErrorCode, 999),
+      case When of
+        before_retry -> assert_ignored_response(Producer, Tester, StaleRsp);
+        after_retry -> ok
+      end,
+
+      ?assert(is_integer(erlang:cancel_timer(RetryRef))),
+      Producer ! retry,
+      {NewRef1, Batch1} = receive_produce_request(?LINE, <<"1">>),
+      {NewRef2, Batch2} = receive_produce_request(?LINE, <<"2">>),
+      ?assertEqual(4, length(lists:usort([Ref1, Ref2, NewRef1, NewRef2]))),
+      {Buffer2, undefined} = producer_buffer_and_retry(Producer),
+      assert_buffer_counts(Buffer2, 1, 2),
+      case When of
+        before_retry -> ok;
+        after_retry -> assert_ignored_response(Producer, Tester, StaleRsp)
+      end,
+      %% A response from another connection pid is ignored, also for a live request.
+      OtherConnection = spawn(fun() -> ok end),
+      assert_ignored_response(Producer, OtherConnection,
+                              fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)),
+
+      Producer ! {msg, Tester, fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)},
+      ?WAIT({acked, <<"1">>, 0, 100}, ok, 1000),
+      {Ref3, _Batch3} = receive_produce_request(?LINE, <<"3">>),
+      %% Other requests are still active when this duplicate arrives.
+      assert_ignored_response(Producer, Tester,
+                              fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)),
+      Producer ! {msg, Tester, fake_rsp(NewRef2, <<"topic">>, 0, ?no_error, 101)},
+      ?WAIT({acked, <<"2">>, 0, 101}, ok, 1000),
+      Producer ! {msg, Tester, fake_rsp(Ref3, <<"topic">>, 0, ?no_error, 102)},
+      ?WAIT({acked, <<"3">>, 0, 102}, ok, 1000),
+      {Buffer3, undefined} = producer_buffer_and_retry(Producer),
+      ?assert(brod_producer_buffer:is_empty(Buffer3)),
+      assert_no_producer_events(),
+      %% Duplicate acknowledgements must not call the callbacks again.
+      assert_ignored_response(Producer, Tester, fake_rsp(NewRef1, <<"topic">>, 0)),
+      assert_ignored_response(Producer, Tester, fake_rsp(NewRef2, <<"topic">>, 0)),
+      assert_ignored_response(Producer, Tester, fake_rsp(Ref3, <<"topic">>, 0)),
+      ok = brod_producer:stop(Producer)
+    after
+      MRef = erlang:monitor(process, Producer),
+      exit(Producer, kill),
+      receive {'DOWN', MRef, process, Producer, _} -> ok end
+    end
+  after
+    meck:unload(brod_kafka_request)
+  end.
+
+receive_produce_request(Line, Key) ->
+  ?WAIT_AT(Line,
+           {request_async,
+            #kpro_req{ref = Ref, msg = [#{key := Key, value := Key}] = Batch}},
+           {Ref, Batch}, 1000).
+
+%% Positions follow #state{} in brod_producer.erl (buffer, retry_tref).
+producer_buffer_and_retry(Producer) ->
+  {state, _, _, _, _, _, Buffer, _, RetryRef, _, _} = sys:get_state(Producer),
+  {Buffer, RetryRef}.
+
+%% Positions follow #buf{} in brod_producer_buffer.erl (buffer_count, onwire_count).
+assert_buffer_counts(Buffer, Buffered, OnWire) ->
+  ?assertMatch({buf, _, _, _, _, _, _, _, Buffered, OnWire, _, _, _}, Buffer).
+
+assert_ignored_response(Producer, Connection, Rsp) ->
+  State = sys:get_state(Producer),
+  Producer ! {msg, Connection, Rsp},
+  %% This call follows the response from the same sender. It is a mailbox barrier.
+  ?assertEqual(State, sys:get_state(Producer)),
+  ?assert(is_process_alive(Producer)),
+  assert_no_producer_events().
+
+assert_no_producer_events() ->
+  receive
+    Event -> erlang:error({unexpected_producer_event, Event})
+  after 0 ->
+    ok
+  end.
+
 handle_telemetry_event(Event, Measurements, Metadata, #{pid := Pid}) ->
   Pid ! {telemetry, Event, Measurements, Metadata}.
 
@@ -460,6 +756,9 @@ fake_rsp(Ref, Topic, Partition) ->
   fake_rsp(Ref, Topic, Partition, ?no_error).
 
 fake_rsp(Ref, Topic, Partition, ErrorCode) ->
+  fake_rsp(Ref, Topic, Partition, ErrorCode, -1).
+
+fake_rsp(Ref, Topic, Partition, ErrorCode, Offset) ->
   #kpro_rsp{ api = produce
            , vsn = 0
            , ref = Ref
@@ -468,7 +767,7 @@ fake_rsp(Ref, Topic, Partition, ErrorCode) ->
                       ,{partition_responses,
                         [[{partition, Partition},
                           {error_code, ErrorCode},
-                          {base_offset, -1}
+                          {base_offset, Offset}
                          ]
                         ]}
                       ]
