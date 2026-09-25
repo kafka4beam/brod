@@ -132,28 +132,33 @@ t_nack(Config) when is_list(Config) ->
   Buf4 = MaybeSend(Buf3),
   Ref1 = ReceiveFun(?LINE, [0, 1]), %% max batch size
   Ref2 = ReceiveFun(?LINE, [2, 3]), %% max onwire is 2
-  ?assert(brod_producer_buffer:is_onwire(Buf4, Ref1)),
-  ?assert(brod_producer_buffer:is_onwire(Buf4, Ref2)),
-  ?assertNot(brod_producer_buffer:is_onwire(Buf4, make_ref())),
+  UnknownRef = make_ref(),
+  assert_ignored_buffer_response(Buf4, UnknownRef),
   %% ack/nack accept only the head reference. A response that arrives
   %% out of order must crash the caller, not be ignored.
-  ?assertError(function_clause, AckFun(Buf4, Ref2)),
-  ?assertError(function_clause, NackFun(Buf4, Ref2)),
+  ?assertError({badmatch, true}, AckFun(Buf4, Ref2)),
+  ?assertError({badmatch, true}, NackFun(Buf4, Ref2)),
+  FatalReason = fun() -> exit(test_fatal_error) end,
+  ?assertError({badmatch, true},
+               brod_producer_buffer:nack(Buf4, Ref2, FatalReason)),
+  ?assertExit(test_fatal_error,
+              brod_producer_buffer:nack(Buf4, Ref1, FatalReason)),
   Buf5 = NackFun(Buf4, Ref1),       %% re-queue all
-  ?assertNot(brod_producer_buffer:is_onwire(Buf5, Ref1)),
-  ?assertNot(brod_producer_buffer:is_onwire(Buf5, Ref2)),
+  assert_ignored_buffer_response(Buf5, Ref1),
+  assert_ignored_buffer_response(Buf5, Ref2),
   Buf6 = MaybeSend(Buf5),           %% as if a scheduled retry
   Ref3 = ReceiveFun(?LINE, [0, 1]), %% receive a max batch
   Ref4 = ReceiveFun(?LINE, [2, 3]), %% another max batch (max onwire is 2)
-  ?assertNot(brod_producer_buffer:is_onwire(Buf6, Ref1)),
-  ?assertNot(brod_producer_buffer:is_onwire(Buf6, Ref2)),
-  ?assert(brod_producer_buffer:is_onwire(Buf6, Ref3)),
-  ?assert(brod_producer_buffer:is_onwire(Buf6, Ref4)),
+  assert_ignored_buffer_response(Buf6, Ref1),
+  assert_ignored_buffer_response(Buf6, Ref2),
   Buf7 = AckFun(Buf6, Ref3),
-  ?assertNot(brod_producer_buffer:is_onwire(Buf7, Ref3)),
-  ?assert(brod_producer_buffer:is_onwire(Buf7, Ref4)),
+  receive {?acked, 0} -> ok after 1000 -> erlang:error(missing_ack) end,
+  receive {?acked, 1} -> ok after 1000 -> erlang:error(missing_ack) end,
+  assert_ignored_buffer_response(Buf7, Ref3),
   Buf8 = AckFun(Buf7, Ref4),
-  ?assertNot(brod_producer_buffer:is_onwire(Buf8, Ref4)),
+  receive {?acked, 2} -> ok after 1000 -> erlang:error(missing_ack) end,
+  receive {?acked, 3} -> ok after 1000 -> erlang:error(missing_ack) end,
+  assert_ignored_buffer_response(Buf8, Ref4),
   ?assert(brod_producer_buffer:is_empty(Buf8)).
 
 t_send_fun_error(Config) when is_list(Config) ->
@@ -186,6 +191,18 @@ t_send_fun_error(Config) when is_list(Config) ->
                    MaybeSend(Buf2)).
 
 %%%_* Help functions ===========================================================
+
+assert_ignored_buffer_response(Buf, Ref) ->
+  ?assertEqual(Buf, brod_producer_buffer:ack(Buf, Ref)),
+  ?assertEqual(Buf, brod_producer_buffer:ack(Buf, Ref, 999)),
+  ?assertEqual(Buf, brod_producer_buffer:nack(Buf, Ref, test)),
+  ?assertEqual(Buf, brod_producer_buffer:nack(Buf, Ref,
+                                            fun() -> exit(stale_error) end)),
+  receive
+    {?acked, Key} -> erlang:error({unexpected_ack, Key})
+  after 0 ->
+    ok
+  end.
 
 -define(MAX_DELAY, 4).
 

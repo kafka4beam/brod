@@ -36,6 +36,13 @@
         , t_stale_success_before_retry/1
         , t_stale_error_after_retry/1
         , t_stale_success_after_retry/1
+        , t_stale_fatal_error_before_retry/1
+        , t_stale_fatal_error_after_retry/1
+        , t_active_fatal_error/1
+        , t_active_fatal_error_without_retry/1
+        , t_active_success_out_of_order/1
+        , t_active_error_out_of_order/1
+        , t_retry_limit/1
         , t_connection_down_retry/1
         , t_leader_migration/1
         ]).
@@ -311,6 +318,35 @@ t_stale_error_after_retry(Config) when is_list(Config) ->
 t_stale_success_after_retry(Config) when is_list(Config) ->
   stale_response(?no_error, after_retry).
 
+t_stale_fatal_error_before_retry(Config) when is_list(Config) ->
+  stale_response(?topic_authorization_failed, before_retry).
+
+t_stale_fatal_error_after_retry(Config) when is_list(Config) ->
+  stale_response(?topic_authorization_failed, after_retry).
+
+t_active_fatal_error(Config) when is_list(Config) ->
+  ?assertEqual({not_retriable,
+                {produce_response_error, <<"topic">>, 0, -1, ?topic_authorization_failed}},
+               rejected_response(?topic_authorization_failed, first)).
+
+t_active_fatal_error_without_retry(Config) when is_list(Config) ->
+  ?assertEqual({not_retriable,
+                {produce_response_error, <<"topic">>, 0, -1, ?topic_authorization_failed}},
+               rejected_response(?topic_authorization_failed, first, 0)).
+
+t_active_success_out_of_order(Config) when is_list(Config) ->
+  ?assertMatch({{badmatch, true}, _Stacktrace},
+               rejected_response(?no_error, second)).
+
+t_active_error_out_of_order(Config) when is_list(Config) ->
+  ?assertMatch({{badmatch, true}, _Stacktrace},
+               rejected_response(?kafka_storage_error, second)).
+
+t_retry_limit(Config) when is_list(Config) ->
+  ?assertEqual({reached_max_retries,
+                {produce_response_error, <<"topic">>, 0, -1, ?kafka_storage_error}},
+               rejected_response(?kafka_storage_error, retry)).
+
 %% This is a typical connection restart scenario:
 %% 0. Start producer allowing two requests on wire
 %% 1. Send first request on wire, but no ack yet
@@ -471,6 +507,58 @@ t_leader_migration(Config) when is_list(Config) ->
 
 %%%_* Help functions ===========================================================
 
+rejected_response(ErrorCode, Which) ->
+  rejected_response(ErrorCode, Which, 1).
+
+rejected_response(ErrorCode, Which, MaxRetries) ->
+  Tester = self(),
+  meck:expect(brod_client, get_leader_connection,
+              fun(client, <<"topic">>, 0) -> {ok, Tester} end),
+  meck:expect(kpro, request_async,
+              fun(Connection, Req) ->
+                  Connection ! {request_async, Req},
+                  ok
+              end),
+  ProducerConfig = [{required_acks, 1},
+                    {partition_onwire_limit, 2},
+                    {max_batch_size, 1},
+                    {max_retries, MaxRetries},
+                    {retry_backoff_ms, 60000}],
+  {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0, ProducerConfig),
+  unlink(Producer),
+  Monitor = erlang:monitor(process, Producer),
+  try
+    AckCb = fun(_, _) -> Tester ! unexpected_ack end,
+    ok = brod_producer:produce_cb(Producer, <<"1">>, <<"1">>, AckCb),
+    Ref1 = ?WAIT({request_async, #kpro_req{ref = R1}}, R1, 1000),
+    ok = brod_producer:produce_cb(Producer, <<"2">>, <<"2">>, AckCb),
+    Ref2 = ?WAIT({request_async, #kpro_req{ref = R2}}, R2, 1000),
+    ?assertNotEqual(Ref1, Ref2),
+    Ref = case Which of
+            first -> Ref1;
+            second -> Ref2;
+            retry ->
+              Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ErrorCode)},
+              {Buffer, Timer} = producer_buffer_and_retry(Producer),
+              assert_buffer_counts(Buffer, 2, 0),
+              ?assert(is_integer(erlang:cancel_timer(Timer))),
+              Producer ! retry,
+              NewRef1 = ?WAIT({request_async, #kpro_req{ref = R3}}, R3, 1000),
+              NewRef2 = ?WAIT({request_async, #kpro_req{ref = R4}}, R4, 1000),
+              ?assertEqual(4, length(lists:usort([Ref1, Ref2, NewRef1, NewRef2]))),
+              NewRef1
+          end,
+    Producer ! {msg, Tester, fake_rsp(Ref, <<"topic">>, 0, ErrorCode)},
+    Reason = ?WAIT({'DOWN', Monitor, process, Producer, ExitReason}, ExitReason, 1000),
+    assert_no_producer_events(),
+    Reason
+  after
+    erlang:demonitor(Monitor, [flush]),
+    CleanupMonitor = erlang:monitor(process, Producer),
+    exit(Producer, kill),
+    receive {'DOWN', CleanupMonitor, process, Producer, _} -> ok end
+  end.
+
 stale_response(ErrorCode, When) ->
   Tester = self(),
   meck_module(brod_kafka_request),
@@ -513,6 +601,9 @@ stale_response(ErrorCode, When) ->
       ok = Produce(<<"3">>),
       {Buffer0, undefined} = producer_buffer_and_retry(Producer),
       assert_buffer_counts(Buffer0, 1, 2),
+      %% A local reference that was never sent cannot change active requests.
+      assert_ignored_response(Producer, Tester,
+                              fake_rsp(make_ref(), <<"topic">>, 0, ErrorCode)),
 
       Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ?kafka_storage_error)},
       {Buffer1, RetryRef} = producer_buffer_and_retry(Producer),
@@ -545,6 +636,9 @@ stale_response(ErrorCode, When) ->
       Producer ! {msg, Tester, fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)},
       ?WAIT({acked, <<"1">>, 0, 100}, ok, 1000),
       {Ref3, _Batch3} = receive_produce_request(?LINE, <<"3">>),
+      %% Other requests are still active when this duplicate arrives.
+      assert_ignored_response(Producer, Tester,
+                              fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)),
       Producer ! {msg, Tester, fake_rsp(NewRef2, <<"topic">>, 0, ?no_error, 101)},
       ?WAIT({acked, <<"2">>, 0, 101}, ok, 1000),
       Producer ! {msg, Tester, fake_rsp(Ref3, <<"topic">>, 0, ?no_error, 102)},

@@ -5,8 +5,6 @@
   - Add optional client config `metadata_refresh_interval_seconds` to
     periodically refresh topic metadata, so producers are started
     automatically for newly discovered partitions.
-
-- 4.6.4
   - Fix a producer `function_clause` crash on stale produce responses. With
     `partition_onwire_limit` greater than 1, the first response with a retriable
     error put all requests on wire back in the buffer. The response for the next

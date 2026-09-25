@@ -27,9 +27,7 @@
         , empty_buffers/1
         ]).
 
--export([ is_empty/1
-        , is_onwire/2
-        ]).
+-export([is_empty/1]).
 
 -export_type([buf/0]).
 
@@ -146,6 +144,8 @@ ack(Buf, Ref) ->
   ack(Buf, Ref, ?BROD_PRODUCE_UNKNOWN_OFFSET).
 
 %% @doc Reply 'acked' with base offset to callers.
+%% Return the input buffer for unknown references, but reject active responses
+%% out of order.
 -spec ack(buf(), reference(), offset()) -> buf().
 ack(#buf{ onwire_count = OnWireCount
         , onwire       = [{Ref, Reqs} | Rest]
@@ -153,14 +153,27 @@ ack(#buf{ onwire_count = OnWireCount
   _ = lists:foldl(fun eval_acked/2, BaseOffset, Reqs),
   Buf#buf{ onwire_count = OnWireCount - 1
          , onwire       = Rest
-         }.
+         };
+ack(#buf{onwire = OnWire} = Buf, Ref, _BaseOffset) ->
+  false = lists:keymember(Ref, 1, OnWire), %% assert
+  Buf.
 
 %% @doc 'Negative' ack, put all sent requests back to the head of buffer.
 %% An 'exit' exception is raised if any of the negative-acked requests
 %% reached maximum retry limit.
+%% Return the input buffer for unknown references, but reject active responses
+%% out of order.
+%% A zero-arity reason function runs only for the head reference, before
+%% the retry limit check. It can raise an exception for a fatal error.
 -spec nack(buf(), reference(), any()) -> buf().
+nack(#buf{onwire = [{Ref, _Reqs} | _]} = Buf, Ref, ReasonFun)
+  when is_function(ReasonFun, 0) ->
+  nack_all(Buf, ReasonFun());
 nack(#buf{onwire = [{Ref, _Reqs} | _]} = Buf, Ref, Reason) ->
-  nack_all(Buf, Reason).
+  nack_all(Buf, Reason);
+nack(#buf{onwire = OnWire} = Buf, Ref, _Reason) ->
+  false = lists:keymember(Ref, 1, OnWire), %% assert
+  Buf.
 
 %% @doc 'Negative' ack, put all sent requests back to the head of buffer.
 %% An 'exit' exception is raised if any of the negative-acked requests
@@ -183,11 +196,6 @@ is_empty(#buf{ pending = Pending
   queue:is_empty(Pending) andalso
   queue:is_empty(Buffer) andalso
   Onwire =:= [].
-
-%% @doc Return true if the request attempt is still waiting for a response.
--spec is_onwire(buf(), reference()) -> boolean().
-is_onwire(#buf{onwire = OnWire}, Ref) ->
-  lists:keymember(Ref, 1, OnWire).
 
 %%%_* Internal functions =======================================================
 
