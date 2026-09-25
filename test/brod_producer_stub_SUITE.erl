@@ -36,6 +36,7 @@
         , t_stale_success_before_retry/1
         , t_stale_error_after_retry/1
         , t_stale_success_after_retry/1
+        , t_stale_success_during_linger/1
         , t_stale_fatal_error_before_retry/1
         , t_stale_fatal_error_after_retry/1
         , t_active_fatal_error/1
@@ -317,6 +318,61 @@ t_stale_error_after_retry(Config) when is_list(Config) ->
 
 t_stale_success_after_retry(Config) when is_list(Config) ->
   stale_response(?no_error, after_retry).
+
+t_stale_success_during_linger(Config) when is_list(Config) ->
+  Tester = self(),
+  meck:expect(brod_client, get_leader_connection,
+              fun(client, <<"topic">>, 0) -> {ok, Tester} end),
+  meck:expect(kpro, request_async,
+              fun(Connection, Req) ->
+                  Connection ! {request_async, Req},
+                  ok
+              end),
+  ProducerConfig = [{required_acks, 1},
+                    {partition_onwire_limit, 2},
+                    {max_batch_size, 1},
+                    {max_linger_count, 2},
+                    {max_linger_ms, 60000},
+                    {retry_backoff_ms, 60000}],
+  {ok, Producer} = brod_producer:start_link(client, <<"topic">>, 0, ProducerConfig),
+  unlink(Producer),
+  try
+    lists:foreach(
+      fun(Key) ->
+          AckCb = fun(_, Offset) -> Tester ! {acked, Key, Offset} end,
+          ok = brod_producer:produce_cb(Producer, Key, Key, AckCb)
+      end, [<<"1">>, <<"2">>, <<"3">>]),
+    Ref1 = ?WAIT({request_async, #kpro_req{ref = R1}}, R1, 1000),
+    Ref2 = ?WAIT({request_async, #kpro_req{ref = R2}}, R2, 1000),
+    Producer ! {msg, Tester, fake_rsp(Ref1, <<"topic">>, 0, ?kafka_storage_error)},
+    {Buffer0, RetryRef} = producer_buffer_and_retry(Producer),
+    assert_buffer_counts(Buffer0, 3, 0),
+    ?assert(is_integer(erlang:cancel_timer(RetryRef))),
+    Producer ! retry,
+    NewRef1 = ?WAIT({request_async, #kpro_req{ref = R3}}, R3, 1000),
+    NewRef2 = ?WAIT({request_async, #kpro_req{ref = R4}}, R4, 1000),
+    ?assertEqual(4, length(lists:usort([Ref1, Ref2, NewRef1, NewRef2]))),
+    Producer ! {msg, Tester, fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)},
+    ?WAIT({acked, <<"1">>, 100}, ok, 1000),
+    %% One send slot is free, but the third request must keep its batch timer.
+    {state, _, _, _, _, _, Buffer1, _, undefined, {DelayRef, _}, _} =
+      sys:get_state(Producer),
+    assert_buffer_counts(Buffer1, 1, 1),
+    ?assert(is_integer(erlang:read_timer(DelayRef))),
+    assert_ignored_response(Producer, Tester,
+                            fake_rsp(Ref2, <<"topic">>, 0, ?no_error, 999)),
+    assert_ignored_response(Producer, Tester,
+                            fake_rsp(NewRef1, <<"topic">>, 0, ?no_error, 100)),
+    Producer ! {msg, Tester, fake_rsp(NewRef2, <<"topic">>, 0, ?no_error, 101)},
+    ?WAIT({acked, <<"2">>, 101}, ok, 1000),
+    {Buffer2, undefined} = producer_buffer_and_retry(Producer),
+    assert_buffer_counts(Buffer2, 1, 0),
+    assert_no_producer_events()
+  after
+    Monitor = erlang:monitor(process, Producer),
+    exit(Producer, kill),
+    receive {'DOWN', Monitor, process, Producer, _} -> ok end
+  end.
 
 t_stale_fatal_error_before_retry(Config) when is_list(Config) ->
   stale_response(?topic_authorization_failed, before_retry).

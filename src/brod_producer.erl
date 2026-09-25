@@ -384,13 +384,13 @@ handle_info({msg, Pid, #kpro_rsp{ api = produce
                       Error
                     end,
         case brod_producer_buffer:nack(Buffer, Ref, ReasonFun) of
-          Buffer -> {ok, State};
-          NewBuffer -> schedule_retry(State#state{buffer = NewBuffer})
+          ignored -> {ok, State};
+          {ok, NewBuffer} -> schedule_retry(State#state{buffer = NewBuffer})
         end;
       false ->
         case brod_producer_buffer:ack(Buffer, Ref, Offset) of
-          Buffer -> {ok, State};
-          NewBuffer -> maybe_produce(State#state{buffer = NewBuffer})
+          ignored -> {ok, State};
+          {ok, NewBuffer} -> maybe_produce(State#state{buffer = NewBuffer})
         end
     end,
   {noreply, NewState};

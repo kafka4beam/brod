@@ -143,7 +143,7 @@ t_nack(Config) when is_list(Config) ->
                brod_producer_buffer:nack(Buf4, Ref2, FatalReason)),
   ?assertExit(test_fatal_error,
               brod_producer_buffer:nack(Buf4, Ref1, FatalReason)),
-  Buf5 = NackFun(Buf4, Ref1),       %% re-queue all
+  {ok, Buf5} = NackFun(Buf4, Ref1), %% re-queue all
   assert_ignored_buffer_response(Buf5, Ref1),
   assert_ignored_buffer_response(Buf5, Ref2),
   Buf6 = MaybeSend(Buf5),           %% as if a scheduled retry
@@ -151,11 +151,11 @@ t_nack(Config) when is_list(Config) ->
   Ref4 = ReceiveFun(?LINE, [2, 3]), %% another max batch (max onwire is 2)
   assert_ignored_buffer_response(Buf6, Ref1),
   assert_ignored_buffer_response(Buf6, Ref2),
-  Buf7 = AckFun(Buf6, Ref3),
+  {ok, Buf7} = AckFun(Buf6, Ref3),
   receive {?acked, 0} -> ok after 1000 -> erlang:error(missing_ack) end,
   receive {?acked, 1} -> ok after 1000 -> erlang:error(missing_ack) end,
   assert_ignored_buffer_response(Buf7, Ref3),
-  Buf8 = AckFun(Buf7, Ref4),
+  {ok, Buf8} = AckFun(Buf7, Ref4),
   receive {?acked, 2} -> ok after 1000 -> erlang:error(missing_ack) end,
   receive {?acked, 3} -> ok after 1000 -> erlang:error(missing_ack) end,
   assert_ignored_buffer_response(Buf8, Ref4),
@@ -193,11 +193,11 @@ t_send_fun_error(Config) when is_list(Config) ->
 %%%_* Help functions ===========================================================
 
 assert_ignored_buffer_response(Buf, Ref) ->
-  ?assertEqual(Buf, brod_producer_buffer:ack(Buf, Ref)),
-  ?assertEqual(Buf, brod_producer_buffer:ack(Buf, Ref, 999)),
-  ?assertEqual(Buf, brod_producer_buffer:nack(Buf, Ref, test)),
-  ?assertEqual(Buf, brod_producer_buffer:nack(Buf, Ref,
-                                            fun() -> exit(stale_error) end)),
+  ?assertEqual(ignored, brod_producer_buffer:ack(Buf, Ref)),
+  ?assertEqual(ignored, brod_producer_buffer:ack(Buf, Ref, 999)),
+  ?assertEqual(ignored, brod_producer_buffer:nack(Buf, Ref, test)),
+  ?assertEqual(ignored, brod_producer_buffer:nack(Buf, Ref,
+                                                fun() -> exit(stale_error) end)),
   receive
     {?acked, Key} -> erlang:error({unexpected_ack, Key})
   after 0 ->
@@ -338,7 +338,7 @@ collect_replies(#state{ buffered  = Buffered
       State = State0#state{buffered = [Key | Buffered]},
       collect_replies(State, Timeout);
     {ack_from_kafka, Ref} ->
-      Buf1 = brod_producer_buffer:ack(Buf0, Ref),
+      {ok, Buf1} = brod_producer_buffer:ack(Buf0, Ref),
       State1 = State0#state{buf = Buf1},
       State = maybe_send(State1),
       collect_replies(State, Timeout);
