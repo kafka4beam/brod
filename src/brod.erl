@@ -1173,15 +1173,32 @@ get_metadata(Hosts, Topics) ->
 get_metadata(Hosts, Topics, Options) ->
   brod_utils:get_metadata(Hosts, Topics, Options).
 
-%% @equiv resolve_offset(Hosts, Topic, Partition, latest, [])
--spec resolve_offset([endpoint()], topic(), partition()) ->
+%% @equiv resolve_offset(ConnOrHosts, Topic, Partition, latest)
+-spec resolve_offset(connection() | [endpoint()], topic(), partition()) ->
         {ok, offset()} | {error, any()}.
-resolve_offset(Hosts, Topic, Partition) ->
-  resolve_offset(Hosts, Topic, Partition, ?OFFSET_LATEST).
+resolve_offset(ConnOrHosts, Topic, Partition) ->
+  resolve_offset(ConnOrHosts, Topic, Partition, ?OFFSET_LATEST).
 
-%% @equiv resolve_offset(Hosts, Topic, Partition, Time, [])
--spec resolve_offset([endpoint()], topic(), partition(), offset_time()) ->
+%% @doc Resolve semantic offset or timestamp to real offset.
+%%
+%% The first arg is either an established connection to the partition
+%% leader, or a list of endpoints to connect to for the lookup. A started
+%% client's leader connection can be obtained with
+%% {@link brod_client:get_leader_connection/3}.
+%%
+%% See {@link resolve_offset/6} for the meaning of `Time' and the result.
+%%
+%% Example:
+%% ```
+%% > {ok, Conn} = brod_client:get_leader_connection(my_client, <<"my_topic">>, 0).
+%% > brod:resolve_offset(Conn, <<"my_topic">>, 0, latest).
+%% {ok,4}
+%% '''
+-spec resolve_offset(connection() | [endpoint()],
+                     topic(), partition(), offset_time()) ->
         {ok, offset()} | {error, any()}.
+resolve_offset(Conn, Topic, Partition, Time) when is_pid(Conn) ->
+  brod_utils:resolve_offset(Conn, Topic, Partition, Time);
 resolve_offset(Hosts, Topic, Partition, Time) ->
   resolve_offset(Hosts, Topic, Partition, Time, []).
 
