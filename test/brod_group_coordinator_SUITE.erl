@@ -34,10 +34,13 @@
 %% brod coordinator callbacks
 -export([ assignments_revoked/1
         , assignments_received/4
+        , init/2
+        , handle_message/4
         ]).
 
 %% Test cases
 -export([ t_acks_during_revoke/1
+        , t_handler_commit_during_revoke/1
         , t_commit_offsets_without_connection/1
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
@@ -94,7 +97,69 @@ assignments_received({Pid, Count}, _MemberId, GenerationId, TopicAssignments) ->
   Pid ! {assignments_received, Count, GenerationId, TopicAssignments},
   ok.
 
+init(_GroupId, Parent) ->
+  {ok, Parent}.
+
+handle_message(Topic, Partition, #kafka_message{offset = Offset}, Parent) ->
+  Parent ! {commit_handler, self()},
+  receive
+    {commit, Coordinator} ->
+      Result = brod_group_coordinator:commit_offsets(
+                 Coordinator, [{{Topic, Partition}, Offset}]),
+      Parent ! {handler_commit_result, Result}
+  end,
+  {ok, ack, Parent}.
+
 %%%_* Test functions ===========================================================
+
+t_handler_commit_during_revoke(Config) when is_list(Config) ->
+  GroupId = list_to_binary(
+              "handler-commit-" ++ integer_to_list(erlang:system_time(microsecond))),
+  {ok, Subscriber} = brod_group_subscriber:start_link(
+    ?CLIENT_ID, GroupId, [?TOPIC],
+    [{group_instance_id, null}, {offset_commit_interval_seconds, 60}],
+    [{begin_offset, latest}], ?MODULE, self()),
+  unlink(Subscriber),
+  Coordinator = element(7, sys:get_state(Subscriber)),
+  try
+    wait_for_revoke_race(fun() ->
+      Consumers = element(8, sys:get_state(Subscriber)),
+      Consumers =/= [] andalso
+        lists:all(fun(Consumer) -> is_pid(element(3, Consumer)) end, Consumers)
+    end, 500),
+    ok = brod:produce_sync(?CLIENT_ID, ?TOPIC, ?PARTITION, <<>>, <<"commit">>),
+    ?assert_receive({commit_handler, Subscriber}, ok),
+    ok = sys:suspend(Coordinator),
+    brod_group_coordinator:update_topics(Coordinator, [?TOPIC]),
+    Subscriber ! {commit, Coordinator},
+    wait_for_revoke_race(fun() ->
+      case process_info(Subscriber, current_function) of
+        {current_function, {gen, do_call, _}} -> true;
+        _ -> false
+      end
+    end, 100),
+    ok = sys:resume(Coordinator),
+    receive
+      {handler_commit_result, Result} -> ?assertEqual(ok, Result)
+    after 7000 ->
+      ct:fail(handler_commit_blocked_by_revocation)
+    end,
+    ?assert(is_process_alive(Subscriber)),
+    ?assert(is_process_alive(Coordinator))
+  after
+    exit(Subscriber, kill),
+    exit(Coordinator, kill)
+  end.
+
+wait_for_revoke_race(_Ready, 0) ->
+  ct:fail(revocation_race_setup_timed_out);
+wait_for_revoke_race(Ready, Attempts) ->
+  case Ready() of
+    true -> ok;
+    false ->
+      timer:sleep(20),
+      wait_for_revoke_race(Ready, Attempts - 1)
+  end.
 
 t_acks_during_revoke(Config) when is_list(Config) ->
   {ok, GroupCoordinator1Pid} =

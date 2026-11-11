@@ -510,19 +510,17 @@ handle_info(_Info, #state{} = State) ->
   {noreply, State}.
 
 handle_call({commit_offsets, ExtraOffsets}, From, State) ->
-  Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
-  StateWithOffsets = State#state{acked_offsets = Offsets},
-  try
-    {ok, NewState} = do_commit_offsets(StateWithOffsets),
-    {reply, ok, NewState}
-  catch
-    throw : ?fenced_instance_id ->
-      gen_server:reply(From, {error, ?fenced_instance_id}),
+  case commit_requested_offsets(State, ExtraOffsets) of
+    {ok, CommittedState} ->
+      {ok, NewState} = start_offset_commit_timer(CommittedState),
+      {reply, ok, NewState};
+    {{error, ?fenced_instance_id} = Error, NewState} ->
+      gen_server:reply(From, Error),
       handle_stabilize_result(
-        handle_fencing(StateWithOffsets, 0, preparation_required));
-    throw : Reason ->
-      gen_server:reply(From, {error, Reason}),
-      handle_stabilize_result(stabilize(StateWithOffsets, 0, Reason))
+        handle_fencing(NewState, 0, preparation_required));
+    {{error, Reason} = Error, NewState} ->
+      gen_server:reply(From, Error),
+      handle_stabilize_result(stabilize(NewState, 0, Reason))
   end;
 handle_call(Call, _From, State) ->
   {reply, {error, {unknown_call, Call}}, State}.
@@ -616,13 +614,16 @@ stabilize(State, AttemptNo, Reason) ->
   stabilize(State, AttemptNo, Reason, preparation_required).
 
 stabilize(State, AttemptNo, Reason, Preparation) ->
-  #state{rejoin_delay_seconds = RejoinDelaySeconds} = State,
   Reason =/= ?undef andalso
     log(State, info, "re-joining group, reason:~p", [Reason]),
 
-  %% 1-2. Stop periodic commits, revoke current assignments, and collect
-  %% final acknowledgements once per stabilization cycle.
-  State1 = maybe_prepare_for_stabilization(State, AttemptNo, Preparation),
+  case maybe_prepare_for_stabilization(State, AttemptNo, Preparation) of
+    {State1, true} -> handle_fencing(State1, AttemptNo, prepared);
+    {State1, false} -> stabilize_prepared(State1, AttemptNo, Reason)
+  end.
+
+stabilize_prepared(State1, AttemptNo, Reason) ->
+  #state{rejoin_delay_seconds = RejoinDelaySeconds} = State1,
 
   %% 3. try to commit current offsets before re-joinning the group.
   %%    try only on the first re-join attempt
@@ -681,19 +682,55 @@ continue_stabilization({ok, State2}, AttemptNo, Reason,
 maybe_prepare_for_stabilization(State, 0, preparation_required) ->
   prepare_for_stabilization(State);
 maybe_prepare_for_stabilization(State, _AttemptNo, _Preparation) ->
-  State.
+  {State, false}.
 
 prepare_for_stabilization(
-  #state{ member_module       = MemberModule
-        , member_pid          = MemberPid
-        , offset_commit_timer = Timer
-        } = State0
+  #state{offset_commit_timer = Timer} = State0
 ) ->
   is_reference(Timer) andalso erlang:cancel_timer(Timer),
-  ?CALL_MEMBER(MemberPid, MemberModule:assignments_revoked(MemberPid)),
+  {State, Fenced} = revoke_assignments(State0#state{offset_commit_timer = ?undef}),
   %% Some members wait for in-flight messages before returning from the revoke
   %% callback. Collect their final acknowledgements after the callback returns.
-  receive_pending_acks(State0#state{offset_commit_timer = ?undef}).
+  {receive_pending_acks(State), Fenced}.
+
+revoke_assignments(#state{member_module = Module, member_pid = Member} = State) ->
+  {module, Module} = code:ensure_loaded(Module),
+  case erlang:function_exported(Module, assignments_revoked_async, 1) of
+    false ->
+      ?CALL_MEMBER(Member, Module:assignments_revoked(Member)),
+      {State, false};
+    true ->
+      Ref = ?CALL_MEMBER(Member, Module:assignments_revoked_async(Member)),
+      await_revocation(Ref, State, false)
+  end.
+
+await_revocation(Ref, State, Fenced) ->
+  receive
+    {[alias | Ref], _Reply} = Response ->
+      finish_revocation(Response, Ref, State, Fenced);
+    {'DOWN', Ref, process, _Member, _Reason} = Response ->
+      finish_revocation(Response, Ref, State, Fenced);
+    {ack, GenerationId, Topic, Partition, Offset} ->
+      NewState = handle_ack(State, GenerationId, Topic, Partition, Offset),
+      await_revocation(Ref, NewState, Fenced);
+    {'$gen_call', From, {commit_offsets, ExtraOffsets}} when Fenced =:= true ->
+      Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
+      gen_server:reply(From, {error, ?fenced_instance_id}),
+      await_revocation(Ref, State#state{acked_offsets = Offsets}, true);
+    {'$gen_call', From, {commit_offsets, ExtraOffsets}} ->
+      %% Other commit errors retain offsets for the post-revocation commit attempt.
+      {Result, NewState} = commit_requested_offsets(State, ExtraOffsets),
+      gen_server:reply(From, Result),
+      NewFenced = Result =:= {error, ?fenced_instance_id},
+      await_revocation(Ref, NewState, NewFenced)
+  end.
+
+finish_revocation(Response, Ref, State, Fenced) ->
+  ?CALL_MEMBER(State#state.member_pid,
+    case gen_server:check_response(Response, Ref) of
+      {reply, _} -> {State, Fenced};
+      {error, {Failure, Member}} -> exit({Failure, {revocation, Member}})
+    end).
 
 is_commit_possible(?illegal_generation) -> false;
 is_commit_possible(?unknown_member_id) -> false;
@@ -708,11 +745,8 @@ handle_fencing(#state{fenced_member_action = stop} = State,
   stop_after_fencing(State, Preparation).
 
 retry_after_fencing(State0, AttemptNo, Preparation) ->
-  State1 =
-    case Preparation of
-      preparation_required -> prepare_for_stabilization(State0);
-      prepared -> State0
-    end,
+  {State1, _Fenced} =
+    maybe_prepare_for_stabilization(State0, 0, Preparation),
   schedule_retry_after_fencing(State1, AttemptNo).
 
 schedule_retry_after_fencing(
@@ -736,11 +770,8 @@ stop_after_fencing(State, Preparation) ->
       "Static member was fenced by another member using the same "
       "group_instance_id; check for duplicate group member configuration. "
       "Stopping group coordinator.", []),
-  PreparedState =
-    case Preparation of
-      preparation_required -> prepare_for_stabilization(State);
-      prepared -> State
-    end,
+  {PreparedState, _Fenced} =
+    maybe_prepare_for_stabilization(State, 0, Preparation),
   {stop, ?fenced_instance_id,
    PreparedState#state{is_in_group = false, hb_ref = ?undef}}.
 
@@ -969,6 +1000,15 @@ try_commit_offsets_before_rejoin(#state{} = State) ->
       end;
     _ : _ ->
       {ok, State}
+  end.
+
+commit_requested_offsets(State, ExtraOffsets) ->
+  Offsets = merge_acked_offsets(State#state.acked_offsets, ExtraOffsets),
+  StateWithOffsets = State#state{acked_offsets = Offsets},
+  try do_commit_offsets_(StateWithOffsets) of
+    {ok, CommittedState} -> {ok, CommittedState}
+  catch
+    throw:Reason -> {{error, Reason}, StateWithOffsets}
   end.
 
 %% Commit collected offsets, stop old commit timer, start new timer.
@@ -1581,6 +1621,310 @@ is_commit_possible_test() ->
   ?assertNot(is_commit_possible(?unknown_member_id)),
   ?assertNot(is_commit_possible(?fenced_instance_id)),
   ?assert(is_commit_possible(?not_coordinator)).
+
+commit_during_revocation_test() ->
+  commit_during_revocation(consumer_managed, ok).
+
+kafka_commit_during_revocation_test() ->
+  meck:new(brod_kafka_request, [passthrough]),
+  meck:new(brod_utils, [passthrough]),
+  try
+    meck:expect(brod_kafka_request, offset_commit,
+                fun(_, Body) ->
+                  [Topic] = proplists:get_value(topics, Body),
+                  [Partition] = proplists:get_value(partitions, Topic),
+                  ?assertEqual(<<"group">>, proplists:get_value(group_id, Body)),
+                  ?assertEqual(1, proplists:get_value(generation_id, Body)),
+                  ?assertEqual(<<"topic">>, proplists:get_value(name, Topic)),
+                  ?assertEqual(0, proplists:get_value(partition_index, Partition)),
+                  ?assertEqual(43, proplists:get_value(committed_offset, Partition)),
+                  test_commit_request
+                end),
+    meck:expect(brod_utils, request_sync,
+                fun(_, test_commit_request, _) ->
+                  successful_commit_response()
+                end),
+    commit_during_revocation(commit_to_kafka_v2, ok, ?undef, self()),
+    ?assertEqual(1, meck:num_calls(brod_utils, request_sync, ['_', '_', '_'])),
+    ?assert(meck:validate(brod_kafka_request))
+  after
+    meck:unload(brod_utils),
+    meck:unload(brod_kafka_request)
+  end.
+
+revocation_exception_test_() ->
+  [?_test(revocation_exception(Class)) || Class <- [error, throw, exit]].
+
+revocation_exception(Class) ->
+  MemberModule = brod_group_member_commit_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  meck:expect(MemberModule, assignments_revoked,
+              fun(_) -> erlang:raise(Class, revocation_failed, []) end),
+  try
+    State = #state{member_module = MemberModule, member_pid = self()},
+    Result = revocation_result(State),
+    ?assertEqual({Class, revocation_failed}, Result)
+  after
+    meck:unload(MemberModule)
+  end.
+
+revocation_result(State) ->
+  try prepare_for_stabilization(State) of
+    _ -> unexpected_success
+  catch
+    Class:Reason -> {Class, Reason}
+  end.
+
+sync_only_revocation_callback_context_test() ->
+  Parent = self(),
+  MemberModule = brod_group_member_context_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  meck:expect(MemberModule, assignments_revoked,
+              fun(_) ->
+                Parent ! {revoking, self()},
+                receive continue -> ok end
+              end),
+  {Coordinator, Ref} = spawn_monitor(fun() ->
+    process_flag(trap_exit, true),
+    State = #state{member_module = MemberModule, member_pid = Parent},
+    Parent ! {prepared, prepare_for_stabilization(State)}
+  end),
+  try
+    ?assertNot(erlang:function_exported(MemberModule, assignments_revoked_async, 1)),
+    receive
+      {revoking, CallbackPid} -> ?assertEqual(Coordinator, CallbackPid)
+    after 1000 ->
+      error(revocation_not_started)
+    end,
+    Coordinator ! continue,
+    receive
+      {prepared, {_State, false}} ->
+        ?assertEqual(1, meck:num_calls(MemberModule, assignments_revoked, ['_']))
+    after 1000 ->
+      error(revocation_did_not_receive_continue)
+    end
+  after
+    exit(Coordinator, kill),
+    erlang:demonitor(Ref, [flush]),
+    meck:unload(MemberModule)
+  end.
+
+commit_error_during_revocation_test() ->
+  commit_during_revocation(commit_to_kafka_v2, {error, {connection_down, noproc}}).
+
+commit_error_retried_after_revocation_test() ->
+  meck:new(brod_kafka_request, [passthrough]),
+  meck:new(brod_utils, [passthrough]),
+  try
+    meck:expect(brod_kafka_request, offset_commit,
+                fun(_, _) -> test_commit_request end),
+    meck:expect(brod_utils, request_sync, 3,
+                meck:seq([{error, request_timed_out}, successful_commit_response()])),
+    State = commit_during_revocation(commit_to_kafka_v2,
+                                     {error, request_timed_out}, ?undef, self()),
+    ?assertEqual(1, meck:num_calls(brod_utils, request_sync, ['_', '_', '_'])),
+    {ok, CommittedState} = try_commit_offsets_before_rejoin(State),
+    erlang:cancel_timer(CommittedState#state.offset_commit_timer),
+    ?assertEqual([], CommittedState#state.acked_offsets),
+    ?assertEqual(2, meck:num_calls(brod_utils, request_sync, ['_', '_', '_']))
+  after
+    meck:unload(brod_utils),
+    meck:unload(brod_kafka_request)
+  end.
+
+successful_commit_response() ->
+  {ok, [{topics, [[{partitions, [[{error_code, no_error}]]}]]}]}.
+
+commit_exit_during_revocation_test() ->
+  MemberModule = brod_group_member_commit_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  meck:new(brod_kafka_request, [passthrough]),
+  meck:new(brod_utils, [passthrough]),
+  try
+    ExitReason = {timeout, {gen_server, call, [broker, request]}},
+    meck:expect(MemberModule, assignments_revoked_async,
+                fun(_) -> make_ref() end),
+    meck:expect(brod_kafka_request, offset_commit,
+                fun(_, _) -> test_commit_request end),
+    meck:expect(brod_utils, request_sync,
+                fun(_, _, _) -> exit(ExitReason) end),
+    State = #state{ member_module = MemberModule
+                  , member_pid = self()
+                  , connection = self()
+                  , offset_commit_policy = commit_to_kafka_v2
+                  },
+    self() ! {'$gen_call', {self(), make_ref()},
+              {commit_offsets, [{{<<"topic">>, 0}, 42}]}},
+    ?assertEqual({exit, ExitReason}, revocation_result(State))
+  after
+    meck:unload(brod_utils),
+    meck:unload(brod_kafka_request),
+    meck:unload(MemberModule)
+  end.
+
+fenced_commit_during_revocation_test_() ->
+  [?_test(fenced_commit_during_revocation(Action)) || Action <- [stop, retry]].
+
+fenced_commit_during_revocation(Action) ->
+  meck:new(brod_kafka_request, [passthrough]),
+  meck:new(brod_client, [passthrough]),
+  try
+    meck:expect(brod_kafka_request, offset_commit,
+                fun(_, _) -> throw(?fenced_instance_id) end),
+    meck:expect(brod_client, get_group_coordinator,
+                fun(_, _) -> {error, no_broker} end),
+    commit_during_revocation(commit_to_kafka_v2,
+                             {error, ?fenced_instance_id}, Action),
+    ?assertEqual(1, meck:num_calls(brod_kafka_request, offset_commit, ['_', '_'])),
+    ?assertEqual(0, meck:num_calls(brod_client, get_group_coordinator, ['_', '_']))
+  after
+    meck:unload(brod_client),
+    meck:unload(brod_kafka_request)
+  end.
+
+commit_during_revocation(Policy, ExpectedResult) ->
+  commit_during_revocation(Policy, ExpectedResult, ?undef).
+
+commit_during_revocation(Policy, ExpectedResult, Action) ->
+  Connection = case Action of ?undef -> ?undef; _ -> self() end,
+  commit_during_revocation(Policy, ExpectedResult, Action, Connection).
+
+commit_during_revocation(Policy, ExpectedResult, Action, Connection) ->
+  Parent = self(),
+  MemberModule = brod_group_member_commit_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  meck:expect(MemberModule, assignments_revoked_async,
+              fun(Pid) -> gen_server:send_request(Pid, revoke) end),
+  Member = spawn(fun() ->
+    receive
+      {commit, Coordinator} ->
+        Coordinator ! {ack, 1, <<"topic">>, 0, 42},
+        Parent ! {commit_result, commit_offsets(Coordinator)},
+        case {Policy, ExpectedResult} of
+          {commit_to_kafka_v2, ok} ->
+            ok = commit_offsets(Coordinator);
+          {_, {error, ?fenced_instance_id}} ->
+            ?assertEqual(ExpectedResult,
+                         commit_offsets(Coordinator, [{{<<"topic">>, 1}, 7}]));
+          _ -> ok
+        end,
+        receive
+          {'$gen_call', From, revoke} ->
+            Coordinator ! {ack, 1, <<"topic">>, 0, 43},
+            gen_server:reply(From, ok)
+        end
+    end
+  end),
+  Coordinator = spawn(fun() ->
+    process_flag(trap_exit, true),
+    receive prepare -> ok end,
+    Timer = erlang:send_after(60000, self(), ?LO_CMD_COMMIT_OFFSETS),
+    State = #state{ member_pid = Member
+                  , member_module = MemberModule
+                  , groupId = <<"group">>
+                  , generationId = 1
+                  , offset_commit_timer = Timer
+                  , offset_commit_policy = Policy
+                  , offset_commit_interval_seconds = 60
+                  , connection = Connection
+                  , fenced_member_action = Action
+                  , rejoin_delay_seconds = 1
+                  , is_in_group = true
+                  , hb_ref = {make_ref(), os:timestamp()}
+                  },
+    {Status, NewState} = case Action of
+      ?undef ->
+        {S, false} = prepare_for_stabilization(State),
+        {prepared, S};
+      _ ->
+        case stabilize(State, 0, ?illegal_generation) of
+          {stop, Reason, S} -> {{stop, Reason}, S};
+          {ok, S} -> {retry, S}
+        end
+    end,
+    Parent ! {prepared, Status, NewState, erlang:read_timer(Timer)}
+  end),
+  try
+    Member ! {commit, Coordinator},
+    Coordinator ! prepare,
+    receive
+      {commit_result, Result} -> ?assertEqual(ExpectedResult, Result)
+    after 1000 ->
+      error(commit_blocked_by_revocation)
+    end,
+    receive
+      {prepared, Status, NewState, TimerStatus} ->
+        ExpectedOffsets = case ExpectedResult of
+          {error, ?fenced_instance_id} -> [{{<<"topic">>, 0}, 43}, {{<<"topic">>, 1}, 7}];
+          _ -> [{{<<"topic">>, 0}, 43}]
+        end,
+        ?assertEqual(ExpectedOffsets, NewState#state.acked_offsets),
+        ?assertEqual(?undef, NewState#state.offset_commit_timer),
+        ?assertEqual(false, TimerStatus),
+        case Action of
+          ?undef -> ?assertEqual(prepared, Status);
+          _ ->
+            ExpectedStatus = case Action of
+              stop -> {stop, ?fenced_instance_id};
+              retry -> retry
+            end,
+            ?assertEqual(ExpectedStatus, Status),
+            ?assertNot(NewState#state.is_in_group),
+            ?assertEqual(?undef, NewState#state.hb_ref)
+        end,
+        ?assertEqual(1, meck:num_calls(MemberModule, assignments_revoked_async, ['_'])),
+        NewState
+    after 1000 ->
+      error(revocation_blocked_by_commit)
+    end
+  after
+    exit(Coordinator, kill),
+    exit(Member, kill),
+    meck:unload(MemberModule)
+  end.
+
+stopping_member_commit_during_revocation_test() ->
+  Parent = self(),
+  MemberModule = brod_group_member_commit_test_stub,
+  meck:new(MemberModule, [non_strict]),
+  meck:expect(MemberModule, assignments_revoked_async,
+              fun(Pid) -> gen_server:send_request(Pid, revoke) end),
+  Member = spawn(fun() ->
+    receive
+      {commit, Coordinator} ->
+        Parent ! {commit_result, commit_offsets(Coordinator)},
+        exit(shutdown)
+    end
+  end),
+  {Coordinator, Ref} = spawn_monitor(fun() ->
+    process_flag(trap_exit, true),
+    receive prepare -> ok end,
+    State = #state{ member_pid = Member
+                  , member_module = MemberModule
+                  , offset_commit_policy = consumer_managed
+                  },
+    prepare_for_stabilization(State)
+  end),
+  try
+    Member ! {commit, Coordinator},
+    Coordinator ! prepare,
+    receive
+      {commit_result, Result} -> ?assertEqual(ok, Result)
+    after 1000 ->
+      error(shutdown_commit_blocked_by_revocation)
+    end,
+    receive
+      {'DOWN', Ref, process, Coordinator, Reason} ->
+        ?assertMatch({shutdown, _}, Reason)
+    after 1000 ->
+      error(revocation_blocked_by_stopping_member)
+    end
+  after
+    exit(Coordinator, kill),
+    erlang:demonitor(Ref, [flush]),
+    exit(Member, kill),
+    meck:unload(MemberModule)
+  end.
 
 -endif. % TEST
 

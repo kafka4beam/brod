@@ -36,6 +36,7 @@
 -export([ get_committed_offsets/2
         , assignments_received/4
         , assignments_revoked/1
+        , assignments_revoked_async/1
         , assign_partitions/3
         ]).
 
@@ -129,6 +130,11 @@ assignments_received(Pid, MemberId, GenerationId, TopicAssignments) ->
 -spec assignments_revoked(pid()) -> ok.
 assignments_revoked(Pid) ->
   gen_server:call(Pid, unsubscribe_all_partitions, infinity).
+
+%% @doc Request revocation without waiting; returns a gen_server request ID.
+-spec assignments_revoked_async(pid()) -> gen_server:request_id().
+assignments_revoked_async(Pid) ->
+  gen_server:send_request(Pid, unsubscribe_all_partitions).
 
 %% @doc This function is called only when `partition_assignment_strategy'
 %% is set for `callback_implemented' in group config.
