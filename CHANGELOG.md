@@ -1,5 +1,10 @@
 # Changelog
 
+- 4.8.0
+  - Add optional group config `group_client_id` to customize the client ID sent
+    on consumer group requests. It accepts up to 32730 bytes; leaving it unset
+    preserves the default identifier.
+
 - 4.7.0
   - Add `brod:create_partitions/3,4` to add partitions to an existing topic.
   - Add optional client config `metadata_refresh_interval_seconds` to

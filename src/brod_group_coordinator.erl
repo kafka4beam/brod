@@ -80,6 +80,10 @@
 
 -define(INITIAL_MEMBER_ID, <<>>).
 -define(MIN_FENCED_RETRY_DELAY_SECONDS, 10).
+%% Kafka derives a dynamic member ID by appending "-" and a 36-byte UUID to the
+%% client ID it sees on JoinGroup. Member IDs are 16-bit length prefixed
+%% strings, so a longer client ID cannot be used for dynamic membership.
+-define(MAX_GROUP_CLIENT_ID_LEN, 32730).
 %% KIP-345 introduced static membership in Kafka 2.3. These are the minimum
 %% API versions whose requests carry the static member's group instance ID.
 -define(STATIC_MEMBERSHIP_MIN_API_VERSIONS,
@@ -172,6 +176,9 @@
         , static_membership_requested    :: boolean()
           %% True when the broker supports every KIP-345 request version.
         , static_membership              :: boolean()
+          %% Client ID used on the group coordinator connection.
+          %% `undefined' keeps the historical `node()/pid()' identifier.
+        , group_client_id                :: ?undef | binary()
         }).
 
 -type state() :: #state{}.
@@ -314,6 +321,15 @@
 %%      shutdown if the broker supports all required KIP-345 API versions,
 %%      so a replacement can take over the same ID without a rebalance.
 %%  </li>
+%%
+%%  <li>`group_client_id' (optional, default = `undefined')
+%%      The client ID sent in Kafka request headers on the group coordinator
+%%      connection. When `undefined', the coordinator keeps using the existing
+%%      `node()/pid()' identifier. This does not change the brod client ID, the
+%%      group member ID, the group instance ID, or the offset commit metadata.
+%%      The value may be at most 32730 bytes, keeping room for the 37-byte
+%%      suffix Kafka appends when it derives a dynamic member ID.
+%%  </li>
 %% </ul>
 -spec start_link(brod:client(), brod:group_id(), [brod:topic()],
                  config(), module(), pid()) -> {ok, pid()} | {error, any()}.
@@ -396,6 +412,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
   OffsetCommitIntervalSeconds = GetCfg(offset_commit_interval_seconds,
                                        ?OFFSET_COMMIT_INTERVAL_SECONDS),
   ProtocolName = GetCfg(protocol_name, bin(PaStrategy)),
+  GroupClientId = get_group_client_id(Config),
   %% `null' is the explicit user opt-out — sends a null group_instance_id on
   %% the wire (dynamic membership). `undefined' falls back to the default
   %% static id derived from node()/pid.
@@ -424,6 +441,7 @@ init({Client, GroupId, Topics, Config, CbModule, MemberPid}) ->
           , offset_commit_policy           = OffsetCommitPolicy
           , offset_commit_interval_seconds = OffsetCommitIntervalSeconds
           , protocol_name                  = ProtocolName
+          , group_client_id                = GroupClientId
           , group_instance_id              = StaticMemberID
           , static_membership_requested     = StaticMembershipRequested
           , static_membership               = false
@@ -533,8 +551,17 @@ handle_cast({update_topics, Topics}, State) ->
 handle_cast(_Cast, #state{} = State) ->
   {noreply, State}.
 
-code_change(_OldVsn, #state{} = State, _Extra) ->
-  {ok, State}.
+code_change(_OldVsn, State, _Extra) when is_tuple(State) ->
+  NewSize = record_info(size, state),
+  case tuple_size(State) of
+    NewSize ->
+      {ok, State};
+    OldSize when OldSize =:= NewSize - 1 ->
+      %% `group_client_id' was appended to #state{}; migrate a running process.
+      {ok, erlang:append_element(State, ?undef)};
+    _ ->
+      {ok, State}
+  end.
 
 terminate(Reason, State) ->
   _ = try_commit_offsets(State),
@@ -573,7 +600,7 @@ discover_coordinator(#state{ client     = Client
       {ok, State};
     false ->
       is_pid(Connection0) andalso kpro:close_connection(Connection0),
-      ClientId = make_group_connection_client_id(),
+      ClientId = make_group_connection_client_id(State),
       ConnConfig = ConnConfig0#{client_id => ClientId},
       Connection = ?ESCALATE(kpro:connect(Endpoint, ConnConfig)),
       {ok, update_static_membership(State, Connection)}
@@ -1399,11 +1426,26 @@ user_data(Module, Pid) ->
   brod_utils:optional_callback(Module, user_data, [Pid], <<>>).
 
 %% Make a client ID to be used in the requests sent over the group
-%% coordinator's connection (group coordinator broker on the other end),
-%% this id will be displayed when describing the group status with admin
-%% client/script. e.g. brod@localhost/<0.45.0>_/172.18.0.1
--spec make_group_connection_client_id() -> binary().
-make_group_connection_client_id() -> coordinator_id().
+%% coordinator's connection (group coordinator broker on the other end).
+%% `group_client_id' overrides the default value, which is displayed when
+%% describing the group status with an admin client/script,
+%% e.g. brod@localhost/<0.45.0>_/172.18.0.1
+-spec make_group_connection_client_id(state()) -> binary().
+make_group_connection_client_id(#state{group_client_id = ?undef}) ->
+  coordinator_id();
+make_group_connection_client_id(#state{group_client_id = ClientId}) ->
+  ClientId.
+
+-spec get_group_client_id(config()) -> ?undef | binary().
+get_group_client_id(Config) ->
+  case proplists:get_value(group_client_id, Config, ?undef) of
+    ?undef ->
+      ?undef;
+    Id when is_binary(Id), byte_size(Id) =< ?MAX_GROUP_CLIENT_ID_LEN ->
+      Id;
+    Bad ->
+      erlang:error({invalid_group_client_id, Bad})
+  end.
 
 %% Use 'node()/pid()' as unique identifier of each group coordinator.
 -spec coordinator_id() -> binary().
