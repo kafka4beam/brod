@@ -100,6 +100,7 @@
 -record(state, { client_pid          :: ?IGNORE | pid()
                , bootstrap           :: ?IGNORE | ?GET_FROM_CLIENT | brod:bootstrap()
                , connection          :: ?undef | pid()
+               , leader_epoch = -1   :: kpro:leader_epoch()
                , topic               :: binary()
                , partition           :: integer()
                , begin_offset        :: offset_time()
@@ -507,7 +508,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%%_* Internal Functions =======================================================
 
 handle_conn_down(State0) ->
-  State = State0#state{connection = ?undef, connection_mref = ?undef},
+  State = State0#state{ connection = ?undef
+                      , connection_mref = ?undef
+                      , leader_epoch = -1
+                      },
   ok = maybe_send_init_connection(State),
   State.
 
@@ -688,6 +692,11 @@ err_op(?offset_out_of_range)        -> reset_offset;
 err_op(?leader_not_available)       -> reset_connection;
 err_op(?not_leader_for_partition)   -> reset_connection;
 err_op(?unknown_topic_or_partition) -> reset_connection;
+%% The broker has a newer leader epoch than the one in our metadata.
+err_op(?fenced_leader_epoch)        -> reset_connection;
+%% Our metadata has a newer leader epoch than the broker,
+%% e.g. a stale leader that missed a leader change.
+err_op(?unknown_leader_epoch)       -> reset_connection;
 err_op(_)                           -> restart.
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
@@ -710,6 +719,7 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       ok = close_linked_connection(State),
       NewState = State#state{ connection = ?undef
                             , connection_mref = ?undef
+                            , leader_epoch = -1
                             },
       ok = maybe_send_init_connection(NewState),
       {noreply, NewState};
@@ -821,7 +831,8 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                              State#state.max_wait_time,
                              State#state.min_bytes,
                              MaxBytes,
-                             State#state.isolation_level),
+                             State#state.isolation_level,
+                             State#state.leader_epoch),
   case kpro:request_async(Connection, Request) of
     ok ->
       State#state{last_req_ref = Request#kpro_req.ref};
@@ -944,16 +955,19 @@ maybe_init_connection(
   %% Lookup, or maybe (re-)establish a connection to partition leader
   {MonitorOrLink, Result} = connect_leader(ClientPid, Bootstrap, Topic, Partition),
   case Result of
-    {ok, Connection} ->
+    {ok, {Connection, LeaderEpoch}} ->
       Mref = case MonitorOrLink of
                monitor -> erlang:monitor(process, Connection);
                linked -> ?undef
              end,
       %% Switching to a new connection
       %% the response for last_req_ref will be lost forever
+      %% Send the leader epoch from the same metadata response that
+      %% named the leader, so a stale leader fences our fetch requests.
       State = State0#state{ last_req_ref = ?undef
                           , connection = Connection
                           , connection_mref = Mref
+                          , leader_epoch = LeaderEpoch
                           },
       {ok, State};
     {error, Reason} ->
@@ -963,7 +977,8 @@ maybe_init_connection(State) ->
   {ok, State}.
 
 connect_leader(ClientPid, ?IGNORE, Topic, Partition) when is_pid(ClientPid) ->
-  {monitor, brod_client:get_leader_connection(ClientPid, Topic, Partition)};
+  {monitor,
+   brod_client:get_leader_connection_and_epoch(ClientPid, Topic, Partition)};
 connect_leader(ClientPid, ?GET_FROM_CLIENT, Topic, Partition) when is_pid(ClientPid) ->
   case brod_client:get_bootstrap(ClientPid) of
     {ok, Bootstrap} ->
@@ -978,7 +993,8 @@ link_connect_leader(Endpoints, Topic, Partition) when is_list(Endpoints) ->
   link_connect_leader({Endpoints, []}, Topic, Partition);
 link_connect_leader({Endpoints, ConnCfg}, Topic, Partition) ->
   %% connection pid is linked to self()
-  {linked, kpro:connect_partition_leader(Endpoints, ConnCfg, Topic, Partition)}.
+  {linked, kpro:connect_partition_leader_with_epoch(Endpoints, ConnCfg,
+                                                    Topic, Partition)}.
 
 %% Send a ?INIT_CONNECTION delayed loopback message to re-init.
 -spec maybe_send_init_connection(state()) -> ok.
@@ -1002,6 +1018,18 @@ pending_acks_to_offset_list(#pending_acks{count = C, bytes = B, queue = Q}) ->
   ?assertEqual(C, length(All)),
   ?assertEqual(B, Size),
   [O || {O, _} <- All].
+
+err_op_test_() ->
+  [ ?_assertEqual(reset_connection, err_op(?fenced_leader_epoch))
+  , ?_assertEqual(reset_connection, err_op(?unknown_leader_epoch))
+  , ?_assertEqual(reset_connection, err_op(?not_leader_for_partition))
+  , ?_assertEqual(reset_connection, err_op(?leader_not_available))
+  , ?_assertEqual(reset_connection, err_op(?unknown_topic_or_partition))
+  , ?_assertEqual(reset_offset, err_op(?offset_out_of_range))
+  , ?_assertEqual(retry, err_op(?request_timed_out))
+  , ?_assertEqual(stop, err_op(?invalid_topic_exception))
+  , ?_assertEqual(restart, err_op(?unknown_server_error))
+  ].
 
 pending_acks_test() ->
   Offsets = [1, 2, 3, 5, 6, 7, 9, 100],

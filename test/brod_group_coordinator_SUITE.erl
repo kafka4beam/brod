@@ -223,9 +223,9 @@ t_offset_fetch_minus_one_falls_back_to_reset_policy(Config) when is_list(Config)
   %% Capture the offset arg of the first Kafka Fetch request per partition.
   Self = self(),
   meck:expect(brod_kafka_request, fetch,
-    fun(Pid, T, P, Offset, WT, MinB, MaxB, IL) ->
+    fun(Pid, T, P, Offset, WT, MinB, MaxB, IL, LeaderEpoch) ->
         Self ! {fetch, T, P, Offset},
-        meck:passthrough([Pid, T, P, Offset, WT, MinB, MaxB, IL])
+        meck:passthrough([Pid, T, P, Offset, WT, MinB, MaxB, IL, LeaderEpoch])
     end),
   %% Start a real v2 subscriber with reset_to_earliest. A unique group id is
   %% not strictly required (the OffsetFetch meck overrides), but it avoids

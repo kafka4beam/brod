@@ -21,6 +21,7 @@
         , create_partitions/3
         , delete_topics/3
         , fetch/8
+        , fetch/9
         , heartbeat/2
         , list_groups/1
         , list_offsets/4
@@ -86,19 +87,36 @@ delete_topics(Connection, Topics, Timeout) when is_pid(Connection) ->
 delete_topics(Vsn, Topics, Timeout) ->
   kpro_req_lib:delete_topics(Vsn, Topics, #{timeout => Timeout}).
 
-%% @doc Make a fetch request, If the first arg is a connection pid, call
-%% `brod_kafka_apis:pick_version/2' to resolve version.
+%% @equiv fetch(Pid, Topic, Partition, Offset, WaitTime, MinBytes, MaxBytes, IsolationLevel, -1)
 -spec fetch(conn(), topic(), partition(), offset(),
             kpro:wait(), kpro:count(), kpro:count(),
             kpro:isolation_level()) -> kpro:req().
 fetch(Pid, Topic, Partition, Offset,
       WaitTime, MinBytes, MaxBytes, IsolationLevel) ->
+  fetch(Pid, Topic, Partition, Offset,
+        WaitTime, MinBytes, MaxBytes, IsolationLevel, -1).
+
+%% @doc Make a fetch request, If the first arg is a connection pid, call
+%% `brod_kafka_apis:pick_version/2' to resolve version.
+%%
+%% `LeaderEpoch' is sent as `current_leader_epoch' from Fetch v9
+%% (Kafka 2.1) onwards, so that a broker with a different leader epoch
+%% rejects the request with `fenced_leader_epoch' or
+%% `unknown_leader_epoch'. Older versions do not have the field and the
+%% encoder leaves it out. Pass `-1' when the epoch is unknown: brokers
+%% skip the check then.
+-spec fetch(conn(), topic(), partition(), offset(),
+            kpro:wait(), kpro:count(), kpro:count(),
+            kpro:isolation_level(), kpro:leader_epoch()) -> kpro:req().
+fetch(Pid, Topic, Partition, Offset,
+      WaitTime, MinBytes, MaxBytes, IsolationLevel, LeaderEpoch) ->
   Vsn = pick_version(fetch, Pid),
   kpro_req_lib:fetch(Vsn, Topic, Partition, Offset,
                      #{ max_wait_time => WaitTime
                       , min_bytes => MinBytes
                       , max_bytes => MaxBytes
                       , isolation_level => IsolationLevel
+                      , leader_epoch => LeaderEpoch
                       }).
 
 %% @doc Make a `list_offsets' request message for offset resolution.

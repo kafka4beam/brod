@@ -1,5 +1,22 @@
 # Changelog
 
+- 4.8.0
+  - `brod_consumer` sends the partition leader epoch in Fetch requests
+    (KIP-320). It takes the epoch from the same Metadata response that
+    names the partition leader. A broker whose leader epoch differs from
+    the consumer's answers `fenced_leader_epoch` or `unknown_leader_epoch`
+    instead of serving the fetch. This covers a broker that still acts as
+    leader after the controller has moved leadership away from it. Before,
+    such a broker could answer `offset_out_of_range` and trigger the
+    consumer's `offset_reset_policy`. The consumer now handles both errors
+    like `not_leader_for_partition`: it finds the leader again and
+    reconnects, keeping its offset. Before, both errors restarted the
+    consumer. The epoch is sent from Fetch v9 and Metadata v7 onwards,
+    i.e. Kafka 2.1 and later. Older brokers keep getting `-1`, which turns
+    the check off.
+  - Add `brod_client:get_leader_connection_and_epoch/3` and
+    `brod_kafka_request:fetch/9`.
+
 - 4.7.1
   - Close `brod_client`'s metadata connection when a request on it times
     out, so the next call opens a new one. Before, every later call reused

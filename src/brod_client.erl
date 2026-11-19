@@ -30,6 +30,7 @@
         , get_group_coordinator/2
         , get_transactional_coordinator/2
         , get_leader_connection/3
+        , get_leader_connection_and_epoch/3
         , get_bootstrap/1
         , get_metadata/2
         , get_metadata_safe/2
@@ -227,6 +228,18 @@ stop_consumer(Client, TopicName) ->
 -spec get_leader_connection(client(), topic(), partition()) ->
         {ok, pid()} | {error, any()}.
 get_leader_connection(Client, Topic, Partition) ->
+  case get_leader_connection_and_epoch(Client, Topic, Partition) of
+    {ok, {Pid, _LeaderEpoch}} -> {ok, Pid};
+    {error, Reason} -> {error, Reason}
+  end.
+
+%% @doc Like {@link get_leader_connection/3}, but also return the partition
+%% leader epoch from the metadata response used to find the leader.
+%%
+%% The epoch is `-1' when the broker does not send it (Kafka before 2.1).
+-spec get_leader_connection_and_epoch(client(), topic(), partition()) ->
+        {ok, {pid(), kpro:leader_epoch()}} | {error, any()}.
+get_leader_connection_and_epoch(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
 -spec get_bootstrap(client()) -> {ok, brod:bootstrap()} | {error, any()}.
@@ -717,8 +730,13 @@ do_get_leader_connection(State0, Topic, Partition) ->
   State = ensure_metadata_connection(State0),
   MetaConn = get_metadata_connection(State),
   Timeout = timeout(State),
-  case kpro:discover_partition_leader(MetaConn, Topic, Partition, Timeout) of
-    {ok, Endpoint} -> maybe_connect(State, Endpoint);
+  case kpro:discover_partition_leader_with_epoch(MetaConn, Topic, Partition,
+                                                Timeout) of
+    {ok, {Endpoint, LeaderEpoch}} ->
+      case maybe_connect(State, Endpoint) of
+        {{ok, Pid}, NewState} -> {{ok, {Pid, LeaderEpoch}}, NewState};
+        {{error, Reason}, NewState} -> {{error, Reason}, NewState}
+      end;
     {error, Reason} ->
       {{error, Reason}, maybe_close_metadata_connection(State, Reason)}
   end.
