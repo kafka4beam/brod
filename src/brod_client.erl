@@ -31,6 +31,7 @@
         , get_transactional_coordinator/2
         , get_leader_connection/3
         , get_leader_connection_and_epoch/3
+        , get_leader_epochs/1
         , get_bootstrap/1
         , get_metadata/2
         , get_metadata_safe/2
@@ -84,6 +85,7 @@
         {consumer, Topic, Partition}).
 -define(TOPIC_METADATA_KEY(Topic),
         {topics, Topic}).
+-define(LEADER_EPOCHS_KEY, leader_epochs).
 -define(PRODUCER(Topic, Partition, Pid),
         {?PRODUCER_KEY(Topic, Partition), Pid}).
 -define(CONSUMER(Topic, Partition, Pid),
@@ -242,6 +244,29 @@ get_leader_connection(Client, Topic, Partition) ->
 get_leader_connection_and_epoch(Client, Topic, Partition) ->
   safe_gen_call(Client, {get_leader_connection, Topic, Partition}, infinity).
 
+%% @private Get the table of leader epochs of the partitions consumed
+%% through this client, see `brod_leader_epochs'.
+-spec get_leader_epochs(client()) ->
+        {ok, brod_leader_epochs:table()} | {error, any()}.
+get_leader_epochs(ClientPid) when is_pid(ClientPid),
+                                  node(ClientPid) =/= node() ->
+  %% The table is local to the client's node
+  {error, remote_client};
+get_leader_epochs(ClientPid) when is_pid(ClientPid) ->
+  case erlang:process_info(ClientPid, registered_name) of
+    {registered_name, ClientId} when is_atom(ClientId) ->
+      get_leader_epochs(ClientId);
+    _ ->
+      safe_gen_call(ClientPid, get_leader_epochs, infinity)
+  end;
+get_leader_epochs(ClientId) when is_atom(ClientId) ->
+  try ets:lookup(?ETS(ClientId), ?LEADER_EPOCHS_KEY) of
+    [{_, Tab}] -> {ok, Tab};
+    [] -> {error, client_down}
+  catch
+    error : badarg -> {error, client_down}
+  end.
+
 -spec get_bootstrap(client()) -> {ok, brod:bootstrap()} | {error, any()}.
 get_bootstrap(Client) ->
   safe_gen_call(Client, get_bootstrap, infinity).
@@ -365,6 +390,7 @@ init({BootstrapEndpoints, ClientId, Config}) ->
   erlang:process_flag(trap_exit, true),
   Tab = ets:new(?ETS(ClientId),
                 [named_table, protected, {read_concurrency, true}]),
+  true = ets:insert(Tab, {?LEADER_EPOCHS_KEY, brod_leader_epochs:new()}),
   {ok, #state{ client_id           = ClientId
              , bootstrap_endpoints = BootstrapEndpoints
              , config              = Config
@@ -450,6 +476,9 @@ handle_call({auto_start_producer, Topic}, _From, State) ->
   end;
 handle_call(get_workers_table, _From, State) ->
   {reply, {ok, State#state.workers_tab}, State};
+handle_call(get_leader_epochs, _From, State) ->
+  [{_, Tab}] = ets:lookup(State#state.workers_tab, ?LEADER_EPOCHS_KEY),
+  {reply, {ok, Tab}, State};
 handle_call(get_producers_sup_pid, _From, State) ->
   {reply, {ok, State#state.producers_sup}, State};
 handle_call(get_consumers_sup_pid, _From, State) ->

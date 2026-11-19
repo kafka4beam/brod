@@ -100,7 +100,15 @@
 -record(state, { client_pid          :: ?IGNORE | pid()
                , bootstrap           :: ?IGNORE | ?GET_FROM_CLIENT | brod:bootstrap()
                , connection          :: ?undef | pid()
+                 %% The latest leader epoch seen for the partition (KIP-320),
+                 %% from metadata and the committed offset.
+                 %% Never decreases, so a stale leader can not serve fetches.
                , leader_epoch = -1   :: kpro:leader_epoch()
+                 %% Leader epochs shared with other processes of the client
+               , leader_epochs       :: ?undef | brod_leader_epochs:table()
+                 %% {LookupEpoch, SeenEpoch} of the last stale leader warning
+               , stale_leader_epoch  :: ?undef | {kpro:leader_epoch(),
+                                                  kpro:leader_epoch()}
                , topic               :: binary()
                , partition           :: integer()
                , begin_offset        :: offset_time()
@@ -508,10 +516,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%_* Internal Functions =======================================================
 
 handle_conn_down(State0) ->
-  State = State0#state{ connection = ?undef
-                      , connection_mref = ?undef
-                      , leader_epoch = -1
-                      },
+  State = State0#state{connection = ?undef, connection_mref = ?undef},
   ok = maybe_send_init_connection(State),
   State.
 
@@ -617,7 +622,8 @@ handle_batches(Header, Batches,
   StableOffset = brod_utils:get_stable_offset(Header),
   {NewBeginOffset, Messages} =
     brod_utils:flatten_batches(BeginOffset, Header, Batches),
-  State1 = State0#state{begin_offset = NewBeginOffset},
+  State1 = handle_batch_leader_epochs(
+             Batches, State0#state{begin_offset = NewBeginOffset}),
   State =
     case Messages =:= [] of
       true ->
@@ -719,7 +725,6 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       ok = close_linked_connection(State),
       NewState = State#state{ connection = ?undef
                             , connection_mref = ?undef
-                            , leader_epoch = -1
                             },
       ok = maybe_send_init_connection(NewState),
       {noreply, NewState};
@@ -855,7 +860,10 @@ handle_subscribe_call(Pid, Options,
       %% always reset buffer to fetch again
       State3 = reset_buffer(State2),
       State4 = State3#state{is_suspended = false},
-      State  = maybe_send_fetch_request(State4),
+      %% The group coordinator may have learned a newer leader epoch
+      %% from the committed offset of a new assignment.
+      State5 = update_leader_epoch_from_client(State4),
+      State  = maybe_send_fetch_request(State5),
       {reply, ok, State};
     {error, Reason} ->
       {reply, {error, Reason}, State0}
@@ -962,14 +970,16 @@ maybe_init_connection(
              end,
       %% Switching to a new connection
       %% the response for last_req_ref will be lost forever
-      %% Send the leader epoch from the same metadata response that
-      %% named the leader, so a stale leader fences our fetch requests.
-      State = State0#state{ last_req_ref = ?undef
-                          , connection = Connection
-                          , connection_mref = Mref
-                          , leader_epoch = LeaderEpoch
-                          },
-      {ok, State};
+      State1 = State0#state{ last_req_ref = ?undef
+                           , connection = Connection
+                           , connection_mref = Mref
+                           },
+      State2 = log_stale_leader_epoch(State1, LeaderEpoch),
+      {ok, update_leader_epoch(State2, LeaderEpoch)};
+    {error, ?unknown_topic_or_partition = Reason} ->
+      %% The topic may have been deleted and created again, with leader
+      %% epochs from 0. Forget the epochs of the old topic.
+      {{error, {connect_leader, Reason}}, forget_leader_epochs(State0)};
     {error, Reason} ->
       {{error, {connect_leader, Reason}}, State0}
   end;
@@ -995,6 +1005,84 @@ link_connect_leader({Endpoints, ConnCfg}, Topic, Partition) ->
   %% connection pid is linked to self()
   {linked, kpro:connect_partition_leader_with_epoch(Endpoints, ConnCfg,
                                                     Topic, Partition)}.
+
+%% Record the leader epochs of fetched batches (magic v2), for the group
+%% coordinator to commit with the offsets.
+-spec handle_batch_leader_epochs([kpro:batch()], state()) -> state().
+handle_batch_leader_epochs(Batches, State0) ->
+  case ensure_leader_epochs(State0) of
+    #state{leader_epochs = ?undef} = State ->
+      State;
+    #state{ leader_epochs = Tab
+          , topic         = Topic
+          , partition     = Partition
+          } = State ->
+      lists:foreach(
+        fun({#{leader_epoch := Epoch}, [#kafka_message{offset = Offset} | _]})
+              when Epoch >= 0 ->
+            brod_leader_epochs:fetched(Tab, Topic, Partition, Offset, Epoch);
+           (_) ->
+            ok
+        end, Batches),
+      State
+  end.
+
+%% Take the leader epoch of the committed offset, if the client knows it.
+-spec update_leader_epoch_from_client(state()) -> state().
+update_leader_epoch_from_client(State0) ->
+  case ensure_leader_epochs(State0) of
+    #state{leader_epochs = ?undef} = State ->
+      State;
+    #state{leader_epochs = Tab, topic = Topic, partition = Partition} = State ->
+      update_leader_epoch(State,
+                          brod_leader_epochs:committed_epoch(Tab, Topic,
+                                                            Partition))
+  end.
+
+-spec update_leader_epoch(state(), kpro:leader_epoch()) -> state().
+update_leader_epoch(#state{leader_epoch = Epoch0} = State, Epoch) ->
+  State#state{leader_epoch = max(Epoch0, Epoch)}.
+
+-spec forget_leader_epochs(state()) -> state().
+forget_leader_epochs(State0) ->
+  #state{ leader_epochs = Tab
+        , topic         = Topic
+        , partition     = Partition
+        } = State = ensure_leader_epochs(State0),
+  Tab =/= ?undef andalso brod_leader_epochs:forget(Tab, Topic, Partition),
+  State#state{leader_epoch = -1}.
+
+%% Find the leader epochs table of the client, if any.
+-spec ensure_leader_epochs(state()) -> state().
+ensure_leader_epochs(#state{ leader_epochs = ?undef
+                           , client_pid    = ClientPid
+                           } = State) when is_pid(ClientPid) ->
+  case brod_client:get_leader_epochs(ClientPid) of
+    {ok, Tab} -> State#state{leader_epochs = Tab};
+    {error, _} -> State
+  end;
+ensure_leader_epochs(State) ->
+  State.
+
+%% A leader found in metadata with an older leader epoch than already seen
+%% is a stale leader, or the metadata comes from a broker which has not
+%% learned about the latest leader yet. Fetch requests are rejected with
+%% unknown_leader_epoch until the leader catches up.
+%% The consumer retries every second, so warn only once per epoch pair.
+-spec log_stale_leader_epoch(state(), kpro:leader_epoch()) -> state().
+log_stale_leader_epoch(#state{ leader_epoch       = Seen
+                             , stale_leader_epoch = {LeaderEpoch, Seen}
+                             } = State, LeaderEpoch) ->
+  State;
+log_stale_leader_epoch(#state{leader_epoch = Seen} = State, LeaderEpoch)
+  when LeaderEpoch >= 0 andalso LeaderEpoch < Seen ->
+  ?BROD_LOG_WARNING("~s-~p leader epoch ~p from metadata is older than ~p, "
+                    "waiting for the partition leader to catch up",
+                    [State#state.topic, State#state.partition,
+                     LeaderEpoch, Seen]),
+  State#state{stale_leader_epoch = {LeaderEpoch, Seen}};
+log_stale_leader_epoch(State, _LeaderEpoch) ->
+  State#state{stale_leader_epoch = ?undef}.
 
 %% Send a ?INIT_CONNECTION delayed loopback message to re-init.
 -spec maybe_send_init_connection(state()) -> ok.

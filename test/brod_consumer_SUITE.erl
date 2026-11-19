@@ -51,8 +51,10 @@
         , t_stop_kill/1
         , t_smoke_list_groups/1
         , t_check_connectivity/1
-        , t_stale_leader_epoch_shared_conn/1
-        , t_stale_leader_epoch_own_conn/1
+        , t_fenced_leader_epoch_shared_conn/1
+        , t_fenced_leader_epoch_own_conn/1
+        , t_stale_leader_shared_conn/1
+        , t_stale_leader_own_conn/1
         ]).
 
 %% logger handler callback
@@ -1152,84 +1154,175 @@ connect_txn_coordinator(TxnId, Config, RetriesLeft, _LastError) ->
       connect_txn_coordinator(TxnId, Config, RetriesLeft - 1, Reason)
   end.
 
-%% @doc A partition leader with another leader epoch than the consumer's
-%% metadata rejects the fetch requests. The consumer then looks up the
-%% leader again and continues from the same offset, without a restart
-%% and without an offset reset.
+%% @doc A partition leader rejects fetch requests with an older leader epoch
+%% than its own (fenced_leader_epoch), e.g. from a consumer with stale
+%% metadata. The consumer looks up the leader again and continues from the
+%% same offset, without a restart and without an offset reset.
 %% Covers the case when the connection is shared with other partition workers.
-t_stale_leader_epoch_shared_conn(kafka_version_match) ->
-  has_leader_epoch();
-t_stale_leader_epoch_shared_conn(Config) when is_list(Config) ->
-  stale_leader_epoch(Config, true).
+t_fenced_leader_epoch_shared_conn(kafka_version_match) ->
+  can_move_leader();
+t_fenced_leader_epoch_shared_conn(Config) when is_list(Config) ->
+  fenced_leader_epoch(Config, true).
 
-%% @doc Same as t_stale_leader_epoch_shared_conn, but the consumer
+%% @doc Same as t_fenced_leader_epoch_shared_conn, but the consumer
 %% has its own connection to the partition leader.
-t_stale_leader_epoch_own_conn(kafka_version_match) ->
-  has_leader_epoch();
-t_stale_leader_epoch_own_conn(Config) when is_list(Config) ->
-  stale_leader_epoch(Config, false).
+t_fenced_leader_epoch_own_conn(kafka_version_match) ->
+  can_move_leader();
+t_fenced_leader_epoch_own_conn(Config) when is_list(Config) ->
+  fenced_leader_epoch(Config, false).
 
-stale_leader_epoch(Config, ShareConn) ->
+fenced_leader_epoch(Config, ShareConn) ->
+  ct:timetrap({seconds, 60}),
   Client = ?config(client),
-  Topic = ?TOPIC,
-  Partition = 0,
-  {ok, {_, Epoch}} =
-    brod_client:get_leader_connection_and_epoch(Client, Topic, Partition),
-  %% Fetch v9 and Metadata v7 (Kafka 2.1) carry the leader epoch
-  ?assert(Epoch >= 0),
-  %% Produce before the mock, so the producer finds its leader as usual
-  ProduceFun =
-    fun(I) ->
-        Value = Key = integer_to_binary(I),
-        {ok, Offset} =
-          brod:produce_sync_offset(Client, Topic, Partition, Key, Value),
-        Offset
-    end,
-  Offsets = lists:map(ProduceFun, lists:seq(1, 5)),
-  %% The first leader lookup returns a newer epoch than the broker has,
-  %% like a consumer fetching from a stale leader that missed a leader
-  %% change. When the real epoch is above 0, the second lookup returns
-  %% an older one, like a consumer with stale metadata.
-  {StaleEpochs, ExpectedErrors} =
-    case Epoch > 0 of
-      true -> {[Epoch + 1, Epoch - 1],
-               [?unknown_leader_epoch, ?fenced_leader_epoch]};
-      false -> {[Epoch + 1], [?unknown_leader_epoch]}
-    end,
-  ok = mock_leader_epochs(ShareConn, StaleEpochs),
+  {Topic, Offsets} = prepare_leader_epoch_topic(Client),
+  %% Move the leader, so that there is an older leader epoch to use
+  Epoch = move_leader(Client, Topic),
+  ?assert(Epoch > 0),
+  %% The first leader lookup returns the old leader epoch
+  ok = mock_leader_epochs(ShareConn, [Epoch - 1]),
   LogLevel = capture_fetch_errors(),
   try
-    ConsumerCfg = [{share_leader_conn, ShareConn} | consumer_config()],
-    {ok, ConsumerPid} =
-      brod_consumer:start_link(whereis(Client), Topic, Partition, ConsumerCfg),
-    ok = brod_consumer:subscribe(ConsumerPid, self(),
-                                 [{begin_offset, hd(Offsets)}]),
-    lists:foreach(
-      fun(ErrorCode) ->
-          ?WAIT({fetch_error, Topic, Partition, ErrorCode}, ok)
-      end, ExpectedErrors),
+    ConsumerPid = start_consumer(Client, Topic, ShareConn, hd(Offsets)),
+    ?WAIT({fetch_error, Topic, 0, ?fenced_leader_epoch}, ok),
     %% The consumer is linked to this process: a restart fails the test.
     %% All messages arrive from the subscribed offset on: no offset reset.
     ?assertEqual(Offsets, receive_offsets(ConsumerPid, length(Offsets))),
-    %% The fetch errors never reach the subscriber: no offset reset
-    receive
-      {ConsumerPid, #kafka_fetch_error{} = FetchError} ->
-        ct:fail("unexpected fetch error: ~p", [FetchError])
-    after 0 ->
-      ok
-    end,
-    %% One lookup per stale epoch, then one that returns the real epoch
+    ok = assert_no_fetch_error(ConsumerPid),
+    %% One lookup with the old epoch, then one that returns the real epoch
     ?assertEqual([], ets:lookup_element(?MODULE, stale_epochs, 2)),
     ok = brod_consumer:stop(ConsumerPid)
   after
-    ok = logger:remove_handler(?MODULE),
-    ok = logger:set_primary_config(level, LogLevel),
+    stop_capture_fetch_errors(LogLevel),
     meck:unload(kpro),
     ets:delete(?MODULE)
   end.
 
-has_leader_epoch() ->
-  kafka_test_helper:kafka_version() >= {2, 1}.
+%% @doc A stale partition leader, which has not learned that another broker
+%% has become the leader, rejects fetch requests with a newer leader epoch
+%% than its own (unknown_leader_epoch). Here the newer epoch comes from a
+%% committed offset: the group coordinator records it in the client.
+%% The consumer keeps its offset and waits until it finds the new leader,
+%% even when the leader lookup returns the stale leader with its old epoch.
+%% Covers the case when the connection is shared with other partition workers.
+t_stale_leader_shared_conn(kafka_version_match) ->
+  can_move_leader();
+t_stale_leader_shared_conn(Config) when is_list(Config) ->
+  stale_leader(Config, true).
+
+%% @doc Same as t_stale_leader_shared_conn, but the consumer
+%% has its own connection to the partition leader.
+t_stale_leader_own_conn(kafka_version_match) ->
+  can_move_leader();
+t_stale_leader_own_conn(Config) when is_list(Config) ->
+  stale_leader(Config, false).
+
+stale_leader(Config, ShareConn) ->
+  ct:timetrap({seconds, 60}),
+  Client = ?config(client),
+  {Topic, Offsets} = prepare_leader_epoch_topic(Client),
+  Epoch = leader_epoch(Client, Topic),
+  %% Another group member consumed from a newer leader and committed
+  %% an offset with the newer leader epoch.
+  {ok, Tab} = brod_client:get_leader_epochs(Client),
+  ok = brod_leader_epochs:committed(Tab, Topic, 0, Epoch + 1),
+  LogLevel = capture_fetch_errors(),
+  try
+    ConsumerPid = start_consumer(Client, Topic, ShareConn, hd(Offsets)),
+    %% The leader lookup keeps finding the old leader with the old epoch,
+    %% the consumer keeps sending the newer one.
+    ?WAIT({fetch_error, Topic, 0, ?unknown_leader_epoch}, ok),
+    ?WAIT({fetch_error, Topic, 0, ?unknown_leader_epoch}, ok),
+    ?WAIT({fetch_error, Topic, 0, ?unknown_leader_epoch}, ok),
+    %% Reconnecting does not leak connections owned by the consumer
+    {links, Links} = erlang:process_info(ConsumerPid, links),
+    ?assert(length(Links -- [self()]) =< 1),
+    receive
+      {ConsumerPid, Msg} -> ct:fail("unexpected message: ~p", [Msg])
+    after 0 ->
+      ok
+    end,
+    %% The new leader takes over
+    ?assert(move_leader(Client, Topic) > Epoch),
+    %% All messages arrive from the subscribed offset on: no offset reset.
+    ?assertEqual(Offsets, receive_offsets(ConsumerPid, length(Offsets))),
+    ok = assert_no_fetch_error(ConsumerPid),
+    ok = brod_consumer:stop(ConsumerPid)
+  after
+    stop_capture_fetch_errors(LogLevel)
+  end.
+
+%% Leader epochs are in Kafka 2.1 and later (Fetch v9, Metadata v7),
+%% AlterPartitionReassignments in 2.4 and later.
+can_move_leader() ->
+  kafka_test_helper:kafka_version() >= {2, 4}.
+
+%% Create a topic with one partition and one replica,
+%% and produce some messages to it.
+prepare_leader_epoch_topic(Client) ->
+  Topic = iolist_to_binary(["brod_consumer_SUITE_leader_epoch_",
+                            integer_to_list(rand())]),
+  0 = kafka_test_helper:create_topic(Topic, 1, 1),
+  ok = brod:start_producer(Client, Topic, []),
+  ProduceFun =
+    fun(I) ->
+        Value = Key = integer_to_binary(I),
+        {ok, Offset} = ?RETRY(brod:produce_sync_offset(Client, Topic, 0,
+                                                       Key, Value), 10),
+        Offset
+    end,
+  {Topic, lists:map(ProduceFun, lists:seq(1, 5))}.
+
+start_consumer(Client, Topic, ShareConn, BeginOffset) ->
+  ConsumerCfg = [{share_leader_conn, ShareConn} | consumer_config()],
+  {ok, ConsumerPid} =
+    brod_consumer:start_link(whereis(Client), Topic, 0, ConsumerCfg),
+  ok = brod_consumer:subscribe(ConsumerPid, self(),
+                               [{begin_offset, BeginOffset}]),
+  ConsumerPid.
+
+leader_epoch(Client, Topic) ->
+  {ok, {_Conn, Epoch}} =
+    brod_client:get_leader_connection_and_epoch(Client, Topic, 0),
+  Epoch.
+
+%% Move partition 0 of the topic to another broker.
+%% Return the new leader epoch.
+move_leader(Client, Topic) ->
+  {ok, Metadata} = brod_client:get_metadata(Client, Topic),
+  [TopicMetadata] = kpro:find(topics, Metadata),
+  [PartitionMetadata] = kpro:find(partitions, TopicMetadata),
+  Leader = kpro:find(leader_id, PartitionMetadata),
+  NewLeader = hd([kpro:find(node_id, B) || B <- kpro:find(brokers, Metadata),
+                                           kpro:find(node_id, B) =/= Leader]),
+  Epoch0 = leader_epoch(Client, Topic),
+  Body = #{ timeout_ms => 10000
+          , topics => [#{ name => Topic
+                        , partitions => [#{ partition_index => 0
+                                          , replicas => [NewLeader]
+                                          }]
+                        }]
+          },
+  Req = kpro:make_request(alter_partition_reassignments, 0, Body),
+  {ok, Controller} = kpro:connect_controller(?HOSTS, #{}),
+  try
+    {ok, #kpro_rsp{msg = Rsp}} = kpro:request_sync(Controller, Req, 10000),
+    ?assertMatch(#{ error_code := no_error
+                  , responses := [#{partitions := [#{error_code := no_error}]}]
+                  }, Rsp)
+  after
+    kpro:close_connection(Controller)
+  end,
+  WaitFun =
+    fun() ->
+        case brod_client:get_leader_connection_and_epoch(Client, Topic, 0) of
+          {ok, {_, Epoch}} when Epoch > Epoch0 -> {ok, Epoch};
+          _ -> {error, Epoch0}
+        end
+    end,
+  {ok, Epoch} = ?RETRY(WaitFun(), 30),
+  ct:pal("~s-0 moved from broker ~p to ~p, leader epoch ~p -> ~p",
+         [Topic, Leader, NewLeader, Epoch0, Epoch]),
+  Epoch.
 
 %% Replace the leader epoch in the next leader lookups with the given ones.
 mock_leader_epochs(ShareConn, StaleEpochs) ->
@@ -1266,6 +1359,15 @@ use_stale_epoch({ok, {LeaderOrConn, Epoch}}) ->
 use_stale_epoch(Error) ->
   Error.
 
+%% Fetch errors handled by the consumer never reach the subscriber.
+assert_no_fetch_error(ConsumerPid) ->
+  receive
+    {ConsumerPid, #kafka_fetch_error{} = FetchError} ->
+      ct:fail("unexpected fetch error: ~p", [FetchError])
+  after 0 ->
+    ok
+  end.
+
 %% Send the consumer's fetch errors to this process.
 %% Return the previous primary log level.
 capture_fetch_errors() ->
@@ -1274,6 +1376,10 @@ capture_fetch_errors() ->
   ok = logger:add_handler(?MODULE, ?MODULE,
                           #{config => #{pid => self()}, level => info}),
   Level.
+
+stop_capture_fetch_errors(LogLevel) ->
+  ok = logger:remove_handler(?MODULE),
+  ok = logger:set_primary_config(level, LogLevel).
 
 log(#{msg := {"Fetch error ~s-~p: ~p", [Topic, Partition, ErrorCode]}},
     #{config := #{pid := Pid}}) ->

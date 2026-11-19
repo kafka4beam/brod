@@ -46,6 +46,7 @@
         , t_static_member_does_not_leave_group/1
         , t_fenced_static_member_retries_by_default/1
         , t_fenced_static_member_stops/1
+        , t_commit_leader_epoch/1
         ]).
 
 -define(assert_receive(Pattern, Return),
@@ -453,6 +454,65 @@ t_fenced_static_member_stops(Config) when is_list(Config) ->
         is_process_alive(Coordinator1) andalso exit(Coordinator1, shutdown)
       end
   end.
+
+%% The leader epoch of the last consumed record is committed with the
+%% offset (KIP-320), and the next member of the group learns it from the
+%% committed offset. Its partition consumers then do not accept a leader
+%% with an older leader epoch.
+t_commit_leader_epoch(Config) when is_list(Config) ->
+  %% committed_leader_epoch is in offset_commit v6 and offset_fetch v5
+  case kafka_test_helper:kafka_version() of
+    Vsn when Vsn < {2, 1} -> {skip, "no leader epochs"};
+    _ -> commit_leader_epoch()
+  end.
+
+commit_leader_epoch() ->
+  GroupId = unique_group_id("leader-epoch"),
+  {ok, {_, LeaderEpoch}} =
+    brod_client:get_leader_connection_and_epoch(?CLIENT_ID, ?TOPIC, ?PARTITION),
+  ?assert(LeaderEpoch >= 0),
+  {ok, Offset} =
+    brod:produce_sync_offset(?CLIENT_ID, ?TOPIC, ?PARTITION, <<>>, <<"v">>),
+  %% Consume the message through the client, which records the leader epoch
+  %% of the fetched batch.
+  ok = brod:start_consumer(?CLIENT_ID, ?TOPIC, []),
+  {ok, ConsumerPid} =
+    brod:subscribe(?CLIENT_ID, self(), ?TOPIC, ?PARTITION,
+                   [{begin_offset, Offset}]),
+  ?assert_receive({ConsumerPid, #kafka_message_set{
+                                   messages = [#kafka_message{offset = Offset}
+                                               | _]}}, ok),
+  ok = brod:unsubscribe(?CLIENT_ID, ?TOPIC, ?PARTITION, self()),
+  {ok, Coordinator1} =
+    brod_group_coordinator:start_link(?CLIENT_ID, GroupId, [?TOPIC],
+                                      [], ?MODULE, {self(), 1}),
+  ?assert_receive({assignments_revoked, 1}, ok),
+  Coordinator1 ! continue,
+  ?assert_receive({assignments_received, 1, _, _}, ok),
+  ok = brod_group_coordinator:commit_offsets(Coordinator1,
+                                             [{{?TOPIC, ?PARTITION}, Offset}]),
+  unlink(Coordinator1),
+  ok = brod_group_coordinator:stop(Coordinator1),
+  %% The committed offset has the leader epoch of the consumed message
+  {ok, Committed} = brod:fetch_committed_offsets(?CLIENT_ID, GroupId),
+  [#{partitions := Partitions}] =
+    [T || #{name := ?TOPIC} = T <- Committed],
+  [Partition] = [P || #{partition_index := ?PARTITION} = P <- Partitions],
+  ?assertMatch(#{ committed_offset := Next
+                , committed_leader_epoch := LeaderEpoch
+                } when Next =:= Offset + 1, Partition),
+  %% A new member of the group (with another client) learns the leader epoch
+  {ok, Tab} = brod_client:get_leader_epochs(?OTHER_CLIENT_ID),
+  ?assertEqual(-1, brod_leader_epochs:committed_epoch(Tab, ?TOPIC, ?PARTITION)),
+  {ok, Coordinator2} =
+    brod_group_coordinator:start_link(?OTHER_CLIENT_ID, GroupId, [?TOPIC],
+                                      [], ?MODULE, {self(), 2}),
+  ?assert_receive({assignments_revoked, 2}, ok),
+  Coordinator2 ! continue,
+  ?assert_receive({assignments_received, 2, _, _}, ok),
+  ?assertEqual(LeaderEpoch, brod_leader_epochs:committed_epoch(Tab, ?TOPIC, ?PARTITION)),
+  unlink(Coordinator2),
+  ok = brod_group_coordinator:stop(Coordinator2).
 
 unique_group_id(Suffix) ->
   list_to_binary(

@@ -1,21 +1,40 @@
 # Changelog
 
 - 4.8.0
+  - Requires the next `kafka_protocol` release (KIP-320 support:
+    `kpro:connect_partition_leader_with_epoch/4,5`, `leader_epoch` in batch
+    meta, `offset_fetch` up to v6). TODO: pin it in `rebar.config`.
   - `brod_consumer` sends the partition leader epoch in Fetch requests
-    (KIP-320). It takes the epoch from the same Metadata response that
-    names the partition leader. A broker whose leader epoch differs from
-    the consumer's answers `fenced_leader_epoch` or `unknown_leader_epoch`
-    instead of serving the fetch. This covers a broker that still acts as
-    leader after the controller has moved leadership away from it. Before,
-    such a broker could answer `offset_out_of_range` and trigger the
-    consumer's `offset_reset_policy`. The consumer now handles both errors
-    like `not_leader_for_partition`: it finds the leader again and
-    reconnects, keeping its offset. Before, both errors restarted the
-    consumer. The epoch is sent from Fetch v9 and Metadata v7 onwards,
-    i.e. Kafka 2.1 and later. Older brokers keep getting `-1`, which turns
-    the check off.
+    (KIP-320), so a broker that still acts as leader after the controller
+    has moved leadership away from it no longer serves the consumer.
+    Before, such a stale leader could answer `offset_out_of_range` for an
+    offset the new leader has, and trigger the consumer's
+    `offset_reset_policy`.
+    - The consumer sends the latest leader epoch it knows for the partition:
+      from the Metadata response that names the leader, and from the
+      committed offset of the group. It never sends an older epoch than one
+      it has seen, also when a stale broker answers the leader lookup.
+    - A broker whose leader epoch differs from the consumer's answers
+      `fenced_leader_epoch` or `unknown_leader_epoch`. The consumer handles
+      both like `not_leader_for_partition`: it finds the leader again and
+      reconnects, keeping its offset. Before, both errors restarted the
+      consumer. While a stale leader is the only one found, the consumer
+      logs a warning and retries.
+    - Known limitation: a topic deleted and created again under the same
+      name, while consumed, starts again at leader epoch 0. The consumer
+      keeps the old epoch and gets `unknown_leader_epoch` until its client
+      restarts, unless its leader lookup saw the topic missing in between.
+    - Group coordinators commit the leader epoch of the last consumed record
+      as `committed_leader_epoch` (OffsetCommit v6+), and read it back
+      (OffsetFetch v5+), when the partition consumers and the coordinator use
+      the same client. `brod:fetch_committed_offsets/2,3` results now include
+      `committed_leader_epoch` too.
+    - Leader epochs need Kafka 2.1 or later (Fetch v9, Metadata v7,
+      OffsetCommit v6, OffsetFetch v5). Older brokers keep getting `-1`,
+      which turns the check off.
   - Add `brod_client:get_leader_connection_and_epoch/3` and
     `brod_kafka_request:fetch/9`.
+  - Raise the supported `offset_fetch` API version range from 1-2 to 1-6.
 
 - 4.7.1
   - Close `brod_client`'s metadata connection when a request on it times
