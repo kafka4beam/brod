@@ -55,6 +55,7 @@
         , t_fenced_leader_epoch_own_conn/1
         , t_stale_leader_shared_conn/1
         , t_stale_leader_own_conn/1
+        , t_resubscribe_without_committed_leader_epoch/1
         ]).
 
 %% logger handler callback
@@ -1215,6 +1216,35 @@ t_stale_leader_own_conn(kafka_version_match) ->
   can_move_leader();
 t_stale_leader_own_conn(Config) when is_list(Config) ->
   stale_leader(Config, false).
+
+%% @doc A consumer keeps its connection across subscriptions.
+%% Without a committed leader epoch to fence a stale leader with,
+%% it looks up the partition leader again on subscribe.
+t_resubscribe_without_committed_leader_epoch(Config) when is_list(Config) ->
+  Client = ?config(client),
+  {Topic, [Offset | _]} = prepare_leader_epoch_topic(Client),
+  ConsumerPid = start_consumer(Client, Topic, false, Offset),
+  Resubscribe =
+    fun() ->
+        ok = brod_consumer:unsubscribe(ConsumerPid, self()),
+        ok = brod_consumer:subscribe(ConsumerPid, self(),
+                                     [{begin_offset, Offset}]),
+        brod_consumer:get_connection(ConsumerPid)
+    end,
+  Conn1 = brod_consumer:get_connection(ConsumerPid),
+  Mref = erlang:monitor(process, Conn1),
+  %% no committed leader epoch: a new connection to the leader
+  Conn2 = Resubscribe(),
+  ?assert(is_pid(Conn2)),
+  ?assertNotEqual(Conn1, Conn2),
+  %% the old connection, owned by the consumer, is closed
+  ?WAIT({'DOWN', Mref, process, Conn1, _}, ok),
+  %% committed leader epoch known: the connection is kept
+  {ok, Tab} = brod_client:get_leader_epochs(Client),
+  ok = brod_leader_epochs:committed(Tab, Topic, 0,
+                                    max(0, leader_epoch(Client, Topic))),
+  ?assertEqual(Conn2, Resubscribe()),
+  ok = brod_consumer:stop(ConsumerPid).
 
 stale_leader(Config, ShareConn) ->
   ct:timetrap({seconds, 60}),

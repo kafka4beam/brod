@@ -444,7 +444,8 @@ handle_call({subscribe, Pid, Options}, _From,
       %% Ensure connection is established before replying this call
       %% because we may need the connection
       %% to resolve begin offset (latest/earliest)
-      case maybe_init_connection(State0) of
+      State1 = maybe_reset_connection_on_subscribe(State0),
+      case maybe_init_connection(State1) of
         {ok, State} ->
           handle_subscribe_call(Pid, Options, State);
         {{error, Reason}, State} ->
@@ -1027,17 +1028,42 @@ handle_batch_leader_epochs(Batches, State0) ->
       State
   end.
 
+%% The connection kept from an earlier subscription may be to a stale
+%% leader. The leader epoch of the committed offset fences it, see
+%% update_leader_epoch_from_client/1. Without a committed leader epoch
+%% (committed by an older client, set by a tool, or a broker before
+%% Kafka 2.1), look up the partition leader again instead.
+-spec maybe_reset_connection_on_subscribe(state()) -> state().
+maybe_reset_connection_on_subscribe(#state{connection = ?undef} = State) ->
+  State;
+maybe_reset_connection_on_subscribe(State0) ->
+  State = ensure_leader_epochs(State0),
+  case committed_leader_epoch(State) < 0 of
+    true ->
+      %% A shared connection is left to the client,
+      %% a connection owned by this consumer is closed.
+      #state{connection_mref = MRef} = State,
+      is_reference(MRef) andalso erlang:demonitor(MRef, [flush]),
+      ok = close_linked_connection(State),
+      State#state{connection = ?undef, connection_mref = ?undef};
+    false ->
+      State
+  end.
+
+-spec committed_leader_epoch(state()) -> kpro:leader_epoch().
+committed_leader_epoch(#state{leader_epochs = ?undef}) ->
+  -1;
+committed_leader_epoch(#state{ leader_epochs = Tab
+                             , topic         = Topic
+                             , partition     = Partition
+                             }) ->
+  brod_leader_epochs:committed_epoch(Tab, Topic, Partition).
+
 %% Take the leader epoch of the committed offset, if the client knows it.
 -spec update_leader_epoch_from_client(state()) -> state().
 update_leader_epoch_from_client(State0) ->
-  case ensure_leader_epochs(State0) of
-    #state{leader_epochs = ?undef} = State ->
-      State;
-    #state{leader_epochs = Tab, topic = Topic, partition = Partition} = State ->
-      update_leader_epoch(State,
-                          brod_leader_epochs:committed_epoch(Tab, Topic,
-                                                            Partition))
-  end.
+  State = ensure_leader_epochs(State0),
+  update_leader_epoch(State, committed_leader_epoch(State)).
 
 -spec update_leader_epoch(state(), kpro:leader_epoch()) -> state().
 update_leader_epoch(#state{leader_epoch = Epoch0} = State, Epoch) ->

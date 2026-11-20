@@ -35,6 +35,12 @@
   - Add `brod_client:get_leader_connection_and_epoch/3` and
     `brod_kafka_request:fetch/9`.
   - Raise the supported `offset_fetch` API version range from 1-2 to 1-6.
+  - On subscribe, a `brod_consumer` that keeps a connection from an earlier
+    subscription looks up the partition leader again when no leader epoch
+    is known for the committed offset: committed by an older client (e.g.
+    during a rolling upgrade), set by a tool or MirrorMaker 2, or with
+    brokers before Kafka 2.1. The kept connection may be to a stale leader,
+    which only a committed leader epoch can fence.
 
 - 4.7.1
   - Close `brod_client`'s metadata connection when a request on it times
