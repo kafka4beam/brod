@@ -658,7 +658,7 @@ do_get_metadata(FetchMetadataFor, Topics,
       ?BROD_LOG_ERROR("~p failed to fetch metadata for topics: ~p\n"
                       "reason=~p",
                       [ClientId, FetchTopics, Reason]),
-      {{error, Reason}, State}
+      {{error, Reason}, maybe_close_metadata_connection(State, Reason)}
   end.
 
 %% Schedule a periodic metadata refresh if configured.
@@ -715,7 +715,8 @@ do_get_leader_connection(State0, Topic, Partition) ->
   Timeout = timeout(State),
   case kpro:discover_partition_leader(MetaConn, Topic, Partition, Timeout) of
     {ok, Endpoint} -> maybe_connect(State, Endpoint);
-    {error, Reason} -> {{error, Reason}, State}
+    {error, Reason} ->
+      {{error, Reason}, maybe_close_metadata_connection(State, Reason)}
   end.
 
 -spec do_get_group_coordinator(state(), group_id()) ->
@@ -728,7 +729,7 @@ do_get_group_coordinator(State0, GroupId) ->
     {ok, Endpoint} ->
       {{ok, {Endpoint, conn_config(State)}}, State};
     {error, Reason} ->
-      {{error, Reason}, State}
+      {{error, Reason}, maybe_close_metadata_connection(State, Reason)}
   end.
 
 -spec do_get_transactional_coordinator(state(), transactional_id()) ->
@@ -741,8 +742,26 @@ do_get_transactional_coordinator(State0, TransactionId) ->
     {ok, Endpoint} ->
       {{ok, {Endpoint, conn_config(State)}}, State};
     {error, Reason} ->
-      {{error, Reason}, State}
+      {{error, Reason}, maybe_close_metadata_connection(State, Reason)}
   end.
+
+%% A request on the metadata connection got no response in time. The
+%% connection may never answer again, for example after a network path
+%% silently stopped delivering packets, and every later call would wait on
+%% it in turn until kafka_protocol's request_timeout closes it (4 minutes by
+%% default). Close it so that the next call opens a new one.
+%% Not `kpro:close_connection/1': it waits for the connection process to
+%% reply, with no timeout.
+-spec maybe_close_metadata_connection(state(), any()) -> state().
+maybe_close_metadata_connection(#state{ client_id = ClientId
+                                      , meta_conn = Pid
+                                      } = State, timeout) when is_pid(Pid) ->
+  ?BROD_LOG_WARNING("client ~p: metadata request timed out, "
+                    "closing metadata connection ~p", [ClientId, Pid]),
+  ok = shutdown_pid(Pid),
+  State#state{meta_conn = ?undef};
+maybe_close_metadata_connection(State, _Reason) ->
+  State.
 
 timeout(#state{config = Config}) ->
   timeout(Config);

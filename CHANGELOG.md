@@ -1,5 +1,13 @@
 # Changelog
 
+- 4.7.1
+  - Close `brod_client`'s metadata connection when a request on it times
+    out, so the next call opens a new one. Before, every later call reused
+    the connection that did not answer until kafka_protocol's
+    `request_timeout` closed it (4 minutes by default). A group member
+    stuck this way failed each rejoin on `FindCoordinator` and could stop
+    with `max_rejoin_attempts`.
+
 - 4.7.0
   - Add `brod:create_partitions/3,4` to add partitions to an existing topic.
   - Add optional client config `metadata_refresh_interval_seconds` to
