@@ -220,8 +220,8 @@ t_metadata_connection_timeout(Config) when is_list(Config) ->
   Group = <<"brod-client-SUITE-group">>,
   ?assertEqual({error, timeout},
                brod_client:get_group_coordinator(Client, Group)),
-  %% the client closes the connection that did not answer
-  ?WAIT({'DOWN', MRef, process, Connection, shutdown}, ok, 5000),
+  %% the client kills the connection that did not answer
+  ?WAIT({'DOWN', MRef, process, Connection, killed}, ok, 5000),
   %% and the next call opens a new one
   ?assertMatch({ok, _}, brod_client:get_group_coordinator(Client, Group)),
   Connection2 = ?WAIT({connection_pid, Ref, Pid}, Pid, 5000),

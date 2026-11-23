@@ -494,6 +494,10 @@ shutdown_pid(Pid) when is_pid(Pid) ->
 shutdown_pid(_) ->
   ok.
 
+kill_pid(Pid) ->
+  exit(Pid, kill),
+  ok.
+
 -spec get_partition_worker(client(), partition_worker_key()) ->
         {ok, pid()} | {error, get_worker_error()}.
 get_partition_worker(ClientPid, Key) when is_pid(ClientPid) ->
@@ -749,16 +753,14 @@ do_get_transactional_coordinator(State0, TransactionId) ->
 %% connection may never answer again, for example after a network path
 %% silently stopped delivering packets, and every later call would wait on
 %% it in turn until kafka_protocol's request_timeout closes it (4 minutes by
-%% default). Close it so that the next call opens a new one.
-%% Not `kpro:close_connection/1': it waits for the connection process to
-%% reply, with no timeout.
+%% default). Kill it so that the next call opens a new one.
 -spec maybe_close_metadata_connection(state(), any()) -> state().
 maybe_close_metadata_connection(#state{ client_id = ClientId
                                       , meta_conn = Pid
                                       } = State, timeout) when is_pid(Pid) ->
   ?BROD_LOG_WARNING("client ~p: metadata request timed out, "
                     "closing metadata connection ~p", [ClientId, Pid]),
-  ok = shutdown_pid(Pid),
+  ok = kill_pid(Pid),
   State#state{meta_conn = ?undef};
 maybe_close_metadata_connection(State, _Reason) ->
   State.
