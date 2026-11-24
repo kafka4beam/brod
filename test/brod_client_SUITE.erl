@@ -33,6 +33,7 @@
         , t_no_reachable_endpoint/1
         , t_call_bad_client_id/1
         , t_metadata_connection_restart/1
+        , t_metadata_connection_timeout/1
         , t_payload_connection_restart/1
         , t_auto_start_producers/1
         , t_auto_start_producer_for_unknown_topic/1
@@ -195,6 +196,36 @@ t_metadata_connection_restart(Config) when is_list(Config) ->
   %% expect the connection pid get restarted
   Connection2 = ?WAIT({connection_pid, Ref, Pid}, Pid, 5000),
   ?assert(is_process_alive(ClientPid)),
+  ?assert(is_process_alive(Connection2)),
+  ok.
+
+t_metadata_connection_timeout({init, Config}) ->
+  meck:new(kpro_connection, [passthrough, no_passthrough_cover, no_history]),
+  Config;
+t_metadata_connection_timeout({'end', Config}) ->
+  brod:stop_client(t_metadata_connection_timeout),
+  meck:validate(kpro_connection),
+  meck:unload(kpro_connection),
+  Config;
+t_metadata_connection_timeout(Config) when is_list(Config) ->
+  Ref = mock_connection(hd(?HOSTS)),
+  Client = t_metadata_connection_timeout,
+  ok = start_client(?HOSTS, Client, [{get_metadata_timeout_seconds, 1}]),
+  Connection = ?WAIT({connection_pid, Ref, Pid}, Pid, 5000),
+  %% Stop delivering the broker's responses to the connection process:
+  %% requests still go out, but no response ever comes back.
+  {ok, Sock} = kpro_connection:get_tcp_sock(Connection),
+  ok = inet:setopts(Sock, [{active, false}]),
+  MRef = erlang:monitor(process, Connection),
+  Group = <<"brod-client-SUITE-group">>,
+  ?assertEqual({error, timeout},
+               brod_client:get_group_coordinator(Client, Group)),
+  %% the client kills the connection that did not answer
+  ?WAIT({'DOWN', MRef, process, Connection, killed}, ok, 5000),
+  %% and the next call opens a new one
+  ?assertMatch({ok, _}, brod_client:get_group_coordinator(Client, Group)),
+  Connection2 = ?WAIT({connection_pid, Ref, Pid}, Pid, 5000),
+  ?assertNotEqual(Connection, Connection2),
   ?assert(is_process_alive(Connection2)),
   ok.
 
