@@ -51,3 +51,41 @@ assert_offset_commit_request(Vsn) ->
     true -> ?assertMatch({_, _}, binary:match(Encoded, GroupInstanceID));
     false -> ?assertEqual(nomatch, binary:match(Encoded, GroupInstanceID))
   end.
+
+fetch_request_leader_epoch_test_() ->
+  [ {lists:flatten(io_lib:format("version ~p", [Vsn])),
+     fun() -> assert_fetch_request_leader_epoch(Vsn) end}
+    || Vsn <- lists:seq(0, 10)
+  ].
+
+%% Fetch v9 (Kafka 2.1, KIP-320) added current_leader_epoch.
+%% It is right after the partition index, and right before the fetch offset.
+assert_fetch_request_leader_epoch(Vsn) ->
+  Partition = 22,
+  Offset = 6600000,
+  Fetch =
+    fun(LeaderEpoch) ->
+        Req = brod_kafka_request:fetch(Vsn, <<"topic">>, Partition, Offset,
+                                       1000, 0, 1048576,
+                                       ?kpro_read_committed, LeaderEpoch),
+        ?assertMatch(#kpro_req{api = fetch, vsn = Vsn}, Req),
+        iolist_to_binary(Req#kpro_req.msg)
+    end,
+  WithEpoch = Fetch(153),
+  NoEpoch = Fetch(-1),
+  %% fetch/8 sends the "unknown epoch" -1
+  Legacy = brod_kafka_request:fetch(Vsn, <<"topic">>, Partition, Offset,
+                                    1000, 0, 1048576, ?kpro_read_committed),
+  ?assertEqual(NoEpoch, iolist_to_binary(Legacy#kpro_req.msg)),
+  case Vsn >= 9 of
+    true ->
+      ?assertMatch({_, _},
+                   binary:match(WithEpoch,
+                                <<Partition:32, 153:32/signed, Offset:64>>)),
+      ?assertMatch({_, _},
+                   binary:match(NoEpoch,
+                                <<Partition:32, -1:32/signed, Offset:64>>));
+    false ->
+      %% the field does not exist, the encoder leaves it out
+      ?assertEqual(NoEpoch, WithEpoch)
+  end.
