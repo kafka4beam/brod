@@ -511,6 +511,19 @@ handle_conn_down(State0) ->
   ok = maybe_send_init_connection(State),
   State.
 
+close_linked_connection(#state{ connection = Connection
+                              , connection_mref = ?undef
+                              }) when is_pid(Connection) ->
+  true = erlang:unlink(Connection),
+  _ = kpro:close_connection(Connection),
+  receive
+    {'EXIT', Connection, _} -> ok
+  after 0 ->
+    ok
+  end;
+close_linked_connection(#state{}) ->
+  ok.
+
 do_debug(Pid, Debug) ->
   {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
   ok.
@@ -693,6 +706,8 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       %% Worst case scenario, kafka will close the connection after it
       %% idles for a few minutes.
       is_reference(MRef) andalso erlang:demonitor(MRef),
+      %% A connection linked to this consumer is not shared, so close it.
+      ok = close_linked_connection(State),
       NewState = State#state{ connection = ?undef
                             , connection_mref = ?undef
                             },

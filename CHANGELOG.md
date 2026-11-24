@@ -1,5 +1,15 @@
 # Changelog
 
+- 4.7.1
+  - Fix `brod_consumer` leaving the connection to the old partition leader open
+    when the leader migrates and the connection is not shared
+    (`share_leader_conn = false`, the default since 4.2.0). The connection
+    stayed linked to the consumer until Kafka closed the idle socket, and the
+    consumer then logged
+    `got unexpected info: {'EXIT', Pid, {shutdown, tcp_closed}}`.
+    The consumer now closes a connection it owns before connecting to the new
+    leader. A shared connection is left to `brod_client`, as before.
+
 - 4.7.0
   - Add `brod:create_partitions/3,4` to add partitions to an existing topic.
   - Add optional client config `metadata_refresh_interval_seconds` to

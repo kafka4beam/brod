@@ -41,6 +41,8 @@
         , t_consumer_connection_restart_0/1
         , t_consumer_connection_restart_1/1
         , t_consumer_connection_restart_2/1
+        , t_consumer_leader_migration_0/1
+        , t_consumer_leader_migration_1/1
         , t_consumer_resubscribe/1
         , t_consumer_resubscribe_earliest/1
         , t_subscriber_restart/1
@@ -58,6 +60,7 @@
 
 -define(HOSTS, [{"localhost", 9092}]).
 -define(TOPIC, list_to_binary(atom_to_list(?MODULE))).
+-define(REPLICATED_TOPIC, <<"brod_consumer_SUITE_replicated">>).
 
 -define(config(Name), proplists:get_value(Name, Config)).
 
@@ -758,6 +761,74 @@ t_consumer_connection_restart_2(Config) ->
   Wait(),
   ok.
 
+%% @doc Consumer should follow the partition leader to another broker,
+%% consumers of other partitions should not notice a thing.
+%% Covers the case when connection is shared with other partition leaders,
+%% the connection to the old leader is kept.
+t_consumer_leader_migration_0(kafka_version_match) ->
+  has_leader_election_cli();
+t_consumer_leader_migration_0({init, Config}) ->
+  init_replicated_topic(Config);
+t_consumer_leader_migration_0(Config) when is_list(Config) ->
+  ConsumerConfig = [{share_leader_conn, true} | consumer_config()],
+  consumer_leader_migration(Config, ConsumerConfig).
+
+%% @doc Consumer should follow the partition leader to another broker,
+%% consumers of other partitions should not notice a thing.
+%% Covers the case when connection is NOT shared with other partition leaders,
+%% the connection to the old leader is closed.
+t_consumer_leader_migration_1(kafka_version_match) ->
+  has_leader_election_cli();
+t_consumer_leader_migration_1({init, Config}) ->
+  init_replicated_topic(Config);
+t_consumer_leader_migration_1(Config) when is_list(Config) ->
+  %% share_leader_conn is not set, not shared is the default
+  consumer_leader_migration(Config, consumer_config()).
+
+consumer_leader_migration(Config, ConsumerConfig) ->
+  Client = ?config(client),
+  Topic = ?REPLICATED_TOPIC,
+  IsShared = proplists:get_bool(share_leader_conn, ConsumerConfig),
+  ok = brod:start_producer(Client, Topic, []),
+  StartConsumer =
+    fun(Partition) ->
+        {ok, Pid} = brod_consumer:start_link(whereis(Client), Topic,
+                                             Partition, ConsumerConfig),
+        ok = brod_consumer:subscribe(Pid, self(), [{begin_offset, latest}]),
+        Pid
+    end,
+  Endpoint = fun(Conn) ->
+                 {ok, Ep} = kpro_connection:get_endpoint(Conn),
+                 Ep
+             end,
+  ProduceAndReceive =
+    fun(Consumer, Partition) ->
+        {ok, Offset} =
+          brod:produce_sync_offset(Client, Topic, Partition, <<"k">>, <<"v">>),
+        ?WAIT({Consumer, #kafka_message_set{messages = [#kafka_message{offset = Offset}]}}, ok)
+    end,
+  Consumer0 = StartConsumer(0),
+  Consumer1 = StartConsumer(1),
+  Conn0 = brod_consumer:get_connection(Consumer0),
+  Conn1 = brod_consumer:get_connection(Consumer1),
+  OldLeader = Endpoint(Conn0),
+  ?assertEqual(OldLeader, Endpoint(Conn1)),
+  %% one connection to the leader when shared,
+  %% otherwise each consumer is linked to its own
+  ?assertEqual(IsShared, Conn0 =:= Conn1),
+  ?assertEqual(not IsShared, is_linked(Consumer0, Conn0)),
+  ?assertEqual(not IsShared, is_linked(Consumer1, Conn1)),
+  _ = kafka_test_helper:migrate_partition_leader(Topic, 0),
+  NewConn0 = wait_for_consumer_connection(Consumer0, Conn0),
+  ?assertNotEqual(OldLeader, Endpoint(NewConn0)),
+  ?assertEqual(Conn1, brod_consumer:get_connection(Consumer1)),
+  ok = ProduceAndReceive(Consumer0, 0),
+  ok = ProduceAndReceive(Consumer1, 1),
+  ?assertEqual(IsShared, is_process_alive(Conn0)),
+  ?assertNot(is_linked(Consumer0, Conn0)),
+  ok = brod_consumer:stop(Consumer0),
+  ok = brod_consumer:stop(Consumer1).
+
 %% @doc Data stream should resume after re-subscribe starting from the
 %% the last acked offset
 t_consumer_resubscribe(Config) when is_list(Config) ->
@@ -1093,6 +1164,29 @@ wait_for_consumer_connection(Consumer, OldConn) ->
           Pid =/= undefined andalso Pid =/= OldConn andalso Pid
       end,
   retry(F, 5).
+
+is_linked(Pid, OtherPid) ->
+  {links, Links} = process_info(Pid, links),
+  lists:member(OtherPid, Links).
+
+has_leader_election_cli() ->
+  {Major, _} = kafka_test_helper:kafka_version(),
+  Major >= 3.
+
+%% Partition 0 and 1 get the same leader
+init_replicated_topic(Config) ->
+  Topic = ?REPLICATED_TOPIC,
+  _ = kafka_test_helper:delete_topic(Topic),
+  0 = kafka_test_helper:create_topic(Topic, 2, 2),
+  Leader0 = kafka_test_helper:partition_leader(Topic, 0),
+  case kafka_test_helper:partition_leader(Topic, 1) of
+    Leader0 ->
+      ok;
+    _ ->
+      {_, Leader0} = kafka_test_helper:migrate_partition_leader(Topic, 1),
+      ok
+  end,
+  Config.
 
 has_txn() ->
   case kafka_test_helper:kafka_version() of
