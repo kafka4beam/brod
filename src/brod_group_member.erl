@@ -53,6 +53,7 @@
 -include("brod_int.hrl").
 
 -optional_callbacks([assign_partitions/3,
+                     assignments_revoked_async/1,
                      user_data/1
                     ]).
 
@@ -85,6 +86,15 @@
 %% Called before group re-balancing, the member should call
 %% brod:unsubscribe/3 to unsubscribe from all currently subscribed partitions.
 -callback assignments_revoked(pid()) -> ok.
+
+%% Optional nonblocking variant, called in the coordinator process.
+%% Return the plain request ID from gen_server:send_request/2 without waiting,
+%% not a request ID collection from gen_server:send_request/4.
+%% The member must reply only after all assignments have been revoked.
+%% The coordinator waits without a timeout, serving acknowledgements and commits.
+%% Other messages stay queued until revocation completes.
+%% When absent, assignments_revoked/1 runs synchronously in the coordinator.
+-callback assignments_revoked_async(pid()) -> gen_server:request_id().
 
 %% Called when making join request. This metadata is to let group leader know
 %% more details about the member. e.g. its location and or capacity etc.
