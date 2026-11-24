@@ -100,6 +100,15 @@
 -record(state, { client_pid          :: ?IGNORE | pid()
                , bootstrap           :: ?IGNORE | ?GET_FROM_CLIENT | brod:bootstrap()
                , connection          :: ?undef | pid()
+                 %% The latest leader epoch seen for the partition (KIP-320),
+                 %% from metadata and the committed offset.
+                 %% Never decreases, so a stale leader can not serve fetches.
+               , leader_epoch = -1   :: kpro:leader_epoch()
+                 %% Leader epochs shared with other processes of the client
+               , leader_epochs       :: ?undef | brod_leader_epochs:table()
+                 %% {LookupEpoch, SeenEpoch} of the last stale leader warning
+               , stale_leader_epoch  :: ?undef | {kpro:leader_epoch(),
+                                                  kpro:leader_epoch()}
                , topic               :: binary()
                , partition           :: integer()
                , begin_offset        :: offset_time()
@@ -435,7 +444,8 @@ handle_call({subscribe, Pid, Options}, _From,
       %% Ensure connection is established before replying this call
       %% because we may need the connection
       %% to resolve begin offset (latest/earliest)
-      case maybe_init_connection(State0) of
+      State1 = maybe_reset_connection_on_subscribe(State0),
+      case maybe_init_connection(State1) of
         {ok, State} ->
           handle_subscribe_call(Pid, Options, State);
         {{error, Reason}, State} ->
@@ -510,6 +520,19 @@ handle_conn_down(State0) ->
   State = State0#state{connection = ?undef, connection_mref = ?undef},
   ok = maybe_send_init_connection(State),
   State.
+
+close_linked_connection(#state{ connection = Connection
+                              , connection_mref = ?undef
+                              }) when is_pid(Connection) ->
+  true = erlang:unlink(Connection),
+  _ = kpro:close_connection(Connection),
+  receive
+    {'EXIT', Connection, _} -> ok
+  after 0 ->
+    ok
+  end;
+close_linked_connection(#state{}) ->
+  ok.
 
 do_debug(Pid, Debug) ->
   {ok, _} = gen:call(Pid, system, {debug, Debug}, infinity),
@@ -600,7 +623,8 @@ handle_batches(Header, Batches,
   StableOffset = brod_utils:get_stable_offset(Header),
   {NewBeginOffset, Messages} =
     brod_utils:flatten_batches(BeginOffset, Header, Batches),
-  State1 = State0#state{begin_offset = NewBeginOffset},
+  State1 = handle_batch_leader_epochs(
+             Batches, State0#state{begin_offset = NewBeginOffset}),
   State =
     case Messages =:= [] of
       true ->
@@ -675,6 +699,11 @@ err_op(?offset_out_of_range)        -> reset_offset;
 err_op(?leader_not_available)       -> reset_connection;
 err_op(?not_leader_for_partition)   -> reset_connection;
 err_op(?unknown_topic_or_partition) -> reset_connection;
+%% The broker has a newer leader epoch than the one in our metadata.
+err_op(?fenced_leader_epoch)        -> reset_connection;
+%% Our metadata has a newer leader epoch than the broker,
+%% e.g. a stale leader that missed a leader change.
+err_op(?unknown_leader_epoch)       -> reset_connection;
 err_op(_)                           -> restart.
 
 handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
@@ -693,6 +722,8 @@ handle_fetch_error(#kafka_fetch_error{error_code = ErrorCode} = Error,
       %% Worst case scenario, kafka will close the connection after it
       %% idles for a few minutes.
       is_reference(MRef) andalso erlang:demonitor(MRef),
+      %% A connection linked to this consumer is not shared, so close it.
+      ok = close_linked_connection(State),
       NewState = State#state{ connection = ?undef
                             , connection_mref = ?undef
                             },
@@ -806,7 +837,8 @@ send_fetch_request(#state{ begin_offset = BeginOffset
                              State#state.max_wait_time,
                              State#state.min_bytes,
                              MaxBytes,
-                             State#state.isolation_level),
+                             State#state.isolation_level,
+                             State#state.leader_epoch),
   case kpro:request_async(Connection, Request) of
     ok ->
       State#state{last_req_ref = Request#kpro_req.ref};
@@ -829,7 +861,10 @@ handle_subscribe_call(Pid, Options,
       %% always reset buffer to fetch again
       State3 = reset_buffer(State2),
       State4 = State3#state{is_suspended = false},
-      State  = maybe_send_fetch_request(State4),
+      %% The group coordinator may have learned a newer leader epoch
+      %% from the committed offset of a new assignment.
+      State5 = update_leader_epoch_from_client(State4),
+      State  = maybe_send_fetch_request(State5),
       {reply, ok, State};
     {error, Reason} ->
       {reply, {error, Reason}, State0}
@@ -929,18 +964,23 @@ maybe_init_connection(
   %% Lookup, or maybe (re-)establish a connection to partition leader
   {MonitorOrLink, Result} = connect_leader(ClientPid, Bootstrap, Topic, Partition),
   case Result of
-    {ok, Connection} ->
+    {ok, {Connection, LeaderEpoch}} ->
       Mref = case MonitorOrLink of
                monitor -> erlang:monitor(process, Connection);
                linked -> ?undef
              end,
       %% Switching to a new connection
       %% the response for last_req_ref will be lost forever
-      State = State0#state{ last_req_ref = ?undef
-                          , connection = Connection
-                          , connection_mref = Mref
-                          },
-      {ok, State};
+      State1 = State0#state{ last_req_ref = ?undef
+                           , connection = Connection
+                           , connection_mref = Mref
+                           },
+      State2 = log_stale_leader_epoch(State1, LeaderEpoch),
+      {ok, update_leader_epoch(State2, LeaderEpoch)};
+    {error, ?unknown_topic_or_partition = Reason} ->
+      %% The topic may have been deleted and created again, with leader
+      %% epochs from 0. Forget the epochs of the old topic.
+      {{error, {connect_leader, Reason}}, forget_leader_epochs(State0)};
     {error, Reason} ->
       {{error, {connect_leader, Reason}}, State0}
   end;
@@ -948,7 +988,8 @@ maybe_init_connection(State) ->
   {ok, State}.
 
 connect_leader(ClientPid, ?IGNORE, Topic, Partition) when is_pid(ClientPid) ->
-  {monitor, brod_client:get_leader_connection(ClientPid, Topic, Partition)};
+  {monitor,
+   brod_client:get_leader_connection_and_epoch(ClientPid, Topic, Partition)};
 connect_leader(ClientPid, ?GET_FROM_CLIENT, Topic, Partition) when is_pid(ClientPid) ->
   case brod_client:get_bootstrap(ClientPid) of
     {ok, Bootstrap} ->
@@ -963,7 +1004,111 @@ link_connect_leader(Endpoints, Topic, Partition) when is_list(Endpoints) ->
   link_connect_leader({Endpoints, []}, Topic, Partition);
 link_connect_leader({Endpoints, ConnCfg}, Topic, Partition) ->
   %% connection pid is linked to self()
-  {linked, kpro:connect_partition_leader(Endpoints, ConnCfg, Topic, Partition)}.
+  {linked, kpro:connect_partition_leader_with_epoch(Endpoints, ConnCfg,
+                                                    Topic, Partition)}.
+
+%% Record the leader epochs of fetched batches (magic v2), for the group
+%% coordinator to commit with the offsets.
+-spec handle_batch_leader_epochs([kpro:batch()], state()) -> state().
+handle_batch_leader_epochs(Batches, State0) ->
+  case ensure_leader_epochs(State0) of
+    #state{leader_epochs = ?undef} = State ->
+      State;
+    #state{ leader_epochs = Tab
+          , topic         = Topic
+          , partition     = Partition
+          } = State ->
+      lists:foreach(
+        fun({#{leader_epoch := Epoch}, [#kafka_message{offset = Offset} | _]})
+              when Epoch >= 0 ->
+            brod_leader_epochs:fetched(Tab, Topic, Partition, Offset, Epoch);
+           (_) ->
+            ok
+        end, Batches),
+      State
+  end.
+
+%% The connection kept from an earlier subscription may be to a stale
+%% leader. The leader epoch of the committed offset fences it, see
+%% update_leader_epoch_from_client/1. Without a committed leader epoch
+%% (committed by an older client, set by a tool, or a broker before
+%% Kafka 2.1), look up the partition leader again instead.
+-spec maybe_reset_connection_on_subscribe(state()) -> state().
+maybe_reset_connection_on_subscribe(#state{connection = ?undef} = State) ->
+  State;
+maybe_reset_connection_on_subscribe(State0) ->
+  State = ensure_leader_epochs(State0),
+  case committed_leader_epoch(State) < 0 of
+    true ->
+      %% A shared connection is left to the client,
+      %% a connection owned by this consumer is closed.
+      #state{connection_mref = MRef} = State,
+      is_reference(MRef) andalso erlang:demonitor(MRef, [flush]),
+      ok = close_linked_connection(State),
+      State#state{connection = ?undef, connection_mref = ?undef};
+    false ->
+      State
+  end.
+
+-spec committed_leader_epoch(state()) -> kpro:leader_epoch().
+committed_leader_epoch(#state{leader_epochs = ?undef}) ->
+  -1;
+committed_leader_epoch(#state{ leader_epochs = Tab
+                             , topic         = Topic
+                             , partition     = Partition
+                             }) ->
+  brod_leader_epochs:committed_epoch(Tab, Topic, Partition).
+
+%% Take the leader epoch of the committed offset, if the client knows it.
+-spec update_leader_epoch_from_client(state()) -> state().
+update_leader_epoch_from_client(State0) ->
+  State = ensure_leader_epochs(State0),
+  update_leader_epoch(State, committed_leader_epoch(State)).
+
+-spec update_leader_epoch(state(), kpro:leader_epoch()) -> state().
+update_leader_epoch(#state{leader_epoch = Epoch0} = State, Epoch) ->
+  State#state{leader_epoch = max(Epoch0, Epoch)}.
+
+-spec forget_leader_epochs(state()) -> state().
+forget_leader_epochs(State0) ->
+  #state{ leader_epochs = Tab
+        , topic         = Topic
+        , partition     = Partition
+        } = State = ensure_leader_epochs(State0),
+  Tab =/= ?undef andalso brod_leader_epochs:forget(Tab, Topic, Partition),
+  State#state{leader_epoch = -1}.
+
+%% Find the leader epochs table of the client, if any.
+-spec ensure_leader_epochs(state()) -> state().
+ensure_leader_epochs(#state{ leader_epochs = ?undef
+                           , client_pid    = ClientPid
+                           } = State) when is_pid(ClientPid) ->
+  case brod_client:get_leader_epochs(ClientPid) of
+    {ok, Tab} -> State#state{leader_epochs = Tab};
+    {error, _} -> State
+  end;
+ensure_leader_epochs(State) ->
+  State.
+
+%% A leader found in metadata with an older leader epoch than already seen
+%% is a stale leader, or the metadata comes from a broker which has not
+%% learned about the latest leader yet. Fetch requests are rejected with
+%% unknown_leader_epoch until the leader catches up.
+%% The consumer retries every second, so warn only once per epoch pair.
+-spec log_stale_leader_epoch(state(), kpro:leader_epoch()) -> state().
+log_stale_leader_epoch(#state{ leader_epoch       = Seen
+                             , stale_leader_epoch = {LeaderEpoch, Seen}
+                             } = State, LeaderEpoch) ->
+  State;
+log_stale_leader_epoch(#state{leader_epoch = Seen} = State, LeaderEpoch)
+  when LeaderEpoch >= 0 andalso LeaderEpoch < Seen ->
+  ?BROD_LOG_WARNING("~s-~p leader epoch ~p from metadata is older than ~p, "
+                    "waiting for the partition leader to catch up",
+                    [State#state.topic, State#state.partition,
+                     LeaderEpoch, Seen]),
+  State#state{stale_leader_epoch = {LeaderEpoch, Seen}};
+log_stale_leader_epoch(State, _LeaderEpoch) ->
+  State#state{stale_leader_epoch = ?undef}.
 
 %% Send a ?INIT_CONNECTION delayed loopback message to re-init.
 -spec maybe_send_init_connection(state()) -> ok.
@@ -987,6 +1132,18 @@ pending_acks_to_offset_list(#pending_acks{count = C, bytes = B, queue = Q}) ->
   ?assertEqual(C, length(All)),
   ?assertEqual(B, Size),
   [O || {O, _} <- All].
+
+err_op_test_() ->
+  [ ?_assertEqual(reset_connection, err_op(?fenced_leader_epoch))
+  , ?_assertEqual(reset_connection, err_op(?unknown_leader_epoch))
+  , ?_assertEqual(reset_connection, err_op(?not_leader_for_partition))
+  , ?_assertEqual(reset_connection, err_op(?leader_not_available))
+  , ?_assertEqual(reset_connection, err_op(?unknown_topic_or_partition))
+  , ?_assertEqual(reset_offset, err_op(?offset_out_of_range))
+  , ?_assertEqual(retry, err_op(?request_timed_out))
+  , ?_assertEqual(stop, err_op(?invalid_topic_exception))
+  , ?_assertEqual(restart, err_op(?unknown_server_error))
+  ].
 
 pending_acks_test() ->
   Offsets = [1, 2, 3, 5, 6, 7, 9, 100],

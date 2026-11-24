@@ -993,13 +993,16 @@ do_commit_offsets_(#state{ groupId                  = GroupId
                          } = State) ->
   StaticMemberID = request_group_instance_id(State),
   Metadata = make_offset_commit_metadata(),
+  LeaderEpochFun = leader_epoch_fun(State),
   TopicOffsets0 =
     brod_utils:group_per_key(
       fun({{Topic, Partition}, Offset}) ->
         PartitionOffset =
           [ {partition_index, Partition}
           , {committed_offset, Offset + 1} %% +1 since roundrobin_v2 protocol
-          , {committed_leader_epoch, -1} %% -1 = unknown leader epoch
+            %% The leader epoch of the last consumed record (KIP-320),
+            %% sent in offset_commit v6 or later. -1 = unknown.
+          , {committed_leader_epoch, LeaderEpochFun(Topic, Partition, Offset)}
           , {committed_metadata, Metadata}
           ],
         {Topic, PartitionOffset}
@@ -1030,6 +1033,22 @@ do_commit_offsets_(#state{ groupId                  = GroupId
   ok = assert_commit_response(Topics),
   NewState = State#state{acked_offsets = []},
   {ok, NewState}.
+
+%% Return a function to look up the leader epoch of a consumed record.
+%% The partition consumers of the client record the leader epochs of the
+%% batches they fetch.
+-spec leader_epoch_fun(state()) ->
+        fun((brod:topic(), brod:partition(), brod:offset()) ->
+               kpro:leader_epoch()).
+leader_epoch_fun(#state{client = Client}) ->
+  case brod_client:get_leader_epochs(Client) of
+    {ok, Tab} ->
+      fun(Topic, Partition, Offset) ->
+          brod_leader_epochs:epoch_at(Tab, Topic, Partition, Offset)
+      end;
+    {error, _} ->
+      fun(_Topic, _Partition, _Offset) -> -1 end
+  end.
 
 %% Check commit response. If no error returns ok,
 %% if all error codes are the same, raise throw, otherwise error.
@@ -1211,6 +1230,7 @@ get_committed_offsets(#state{ offset_commit_policy = consumer_managed
 get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                             , groupId              = GroupId
                             , connection           = Conn
+                            , client               = Client
                             }, TopicPartitions) ->
   GrouppedPartitions = brod_utils:group_per_key(TopicPartitions),
   Req = brod_kafka_request:offset_fetch(Conn, GroupId, GrouppedPartitions),
@@ -1218,6 +1238,16 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
   %% error_code is introduced in version 2
   ?ESCALATE_EC(kpro:find(error_code, RspBody, ?no_error)),
   TopicOffsets = kpro:find(topics, RspBody),
+  %% Leader epochs of committed offsets (offset_fetch v5 or later) are
+  %% recorded in the client, so that the partition consumers do not
+  %% fetch with an older leader epoch than the one the group has seen.
+  RecordEpochFun =
+    case brod_client:get_leader_epochs(Client) of
+      {ok, Tab} ->
+        fun(T, P, Epoch) -> brod_leader_epochs:committed(Tab, T, P, Epoch) end;
+      {error, _} ->
+        fun(_T, _P, _Epoch) -> ok end
+    end,
   CommittedOffsets0 =
     lists:map(
       fun(TopicOffset) ->
@@ -1240,6 +1270,9 @@ get_committed_offsets(#state{ offset_commit_policy = commit_to_kafka_v2
                 [{{Topic, Partition}, ?undef} | Acc];
               false ->
                 Offset = maybe_upgrade_from_roundrobin_v1(Offset0, Metadata),
+                LeaderEpoch =
+                  kpro:find(committed_leader_epoch, PartitionOffset, -1),
+                ok = RecordEpochFun(Topic, Partition, LeaderEpoch),
                 [{{Topic, Partition}, Offset} | Acc]
             end
           end, [], PartitionOffsets)

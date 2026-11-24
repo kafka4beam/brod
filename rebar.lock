@@ -1,0 +1,15 @@
+{"1.2.0",
+[{<<"crc32cer">>,{pkg,<<"crc32cer">>,<<"1.1.4">>},1},
+ {<<"kafka_protocol">>,
+  {git,"https://github.com/kivra/kafka_protocol.git",
+       {ref,"6a7a1f9a10d502828359a0eff94bfce9556b8334"}},
+  0},
+ {<<"telemetry">>,{pkg,<<"telemetry">>,<<"1.4.3">>},0}]}.
+[
+{pkg_hash,[
+ {<<"crc32cer">>, <<"A68DB8211C672A8B9AAE2EABA8054B87758230AB0C0FDAEC98C3FA84DA27436D">>},
+ {<<"telemetry">>, <<"D0333FA869361E6833D6FF8E806FF4D8553FE1332FCCE0AF86C7381951A1DC2F">>}]},
+{pkg_hash_ext,[
+ {<<"crc32cer">>, <<"C3EF862A426E5F90AF8518DC8B327BDD1D1D32B7CA58FB8025103D826D710837">>},
+ {<<"telemetry">>, <<"17A63581CF2E832A238287F5FE6811E8CA1F333249F1376AD653164A3C4770D4">>}]}
+].
