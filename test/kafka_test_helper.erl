@@ -20,6 +20,8 @@
         , kafka_version/0
         , increase_topic_partition/2
         , delete_topic/1
+        , migrate_partition_leader/2
+        , partition_leader/2
         ]).
 
 -include("brod_test_macros.hrl").
@@ -136,6 +138,46 @@ increase_topic_partition(Name, NumPartitions) ->
     " --alter --partitions ~p --topic ~s",
   0 = exec_in_kafka_container(Increase, [NumPartitions, Name]),
   wait_for_topic_by_describe(Name).
+
+%% Make another replica the preferred one, then elect the preferred leader.
+%% Returns `{OldLeader, NewLeader}' broker IDs.
+migrate_partition_leader(Topic, Partition) ->
+  {OldLeader, Replicas} = partition_leader_and_replicas(Topic, Partition),
+  [NewLeader | _] = NewReplicas = (Replicas -- [OldLeader]) ++ [OldLeader],
+  true = NewLeader =/= OldLeader,
+  Reassign =
+    "echo \"{\\\"version\\\":1,\\\"partitions\\\":[{\\\"topic\\\":\\\"~s\\\","
+    "\\\"partition\\\":~p,\\\"replicas\\\":~w}]}\" > /tmp/brod-reassign.json"
+    " && /opt/kafka/bin/kafka-reassign-partitions.sh " ++ maybe_zookeeper() ++
+    " --reassignment-json-file /tmp/brod-reassign.json --execute",
+  0 = exec_in_kafka_container(Reassign, [Topic, Partition, NewReplicas]),
+  ok = elect_preferred_leader(Topic, Partition, NewLeader, 10),
+  {OldLeader, NewLeader}.
+
+elect_preferred_leader(Topic, Partition, NewLeader, 0) ->
+  error({leader_not_migrated, Topic, Partition, NewLeader});
+elect_preferred_leader(Topic, Partition, NewLeader, Attempts) ->
+  Elect = "/opt/kafka/bin/kafka-leader-election.sh " ++ maybe_zookeeper() ++
+    " --election-type PREFERRED --topic ~s --partition ~p",
+  _ = exec_in_kafka_container(Elect, [Topic, Partition]),
+  case partition_leader_and_replicas(Topic, Partition) of
+    {NewLeader, _} ->
+      ok;
+    _ ->
+      timer:sleep(1000),
+      elect_preferred_leader(Topic, Partition, NewLeader, Attempts - 1)
+  end.
+
+partition_leader(Topic, Partition) ->
+  {Leader, _Replicas} = partition_leader_and_replicas(Topic, Partition),
+  Leader.
+
+partition_leader_and_replicas(Topic, Partition) ->
+  {ok, Meta} = brod:get_metadata(bootstrap_hosts(), [Topic], client_config()),
+  [TopicMeta] = kpro:find(topics, Meta),
+  [PartitionMeta] = [P || P <- kpro:find(partitions, TopicMeta),
+                          kpro:find(partition_index, P) =:= Partition],
+  {kpro:find(leader_id, PartitionMeta), kpro:find(replica_nodes, PartitionMeta)}.
 
 exec_in_kafka_container(FMT, Args) ->
   CMD0 = lists:flatten(io_lib:format(FMT, Args)),
