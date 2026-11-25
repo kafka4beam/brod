@@ -1,5 +1,12 @@
 # Changelog
 
+- 4.7.2
+  - Start `brod_group_subscriber_v2` from `earliest` when a partition's
+    committed Kafka offset is 0. The worker turned the committed offset
+    into an acked offset by subtracting 1, and -1 means `latest`, so a
+    group reset to the start of a partition that still begins at offset 0
+    skipped every message already in it.
+
 - 4.7.1
   - Close `brod_client`'s metadata connection when a request on it times
     out, so the next call opens a new one. Before, every later call reused

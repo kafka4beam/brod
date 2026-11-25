@@ -122,6 +122,13 @@ resolve_committed_offsets(_T, _P, ?undef) ->
   [];
 resolve_committed_offsets(_T, Partition, Offset) when ?IS_SPECIAL_OFFSET(Offset) ->
   [{Partition, Offset}];
+resolve_committed_offsets(_T, Partition, 0) ->
+  %% A committed offset of 0 cannot be returned as an acked offset: 0 - 1 is
+  %% -1, which brod_topic_subscriber reads as 'latest'. Nothing is earlier
+  %% than 0, so start from 'earliest' instead (as
+  %% brod_group_coordinator:resolve_special_offset/1 does for
+  %% consumer-managed offsets).
+  [{Partition, ?OFFSET_EARLIEST}];
 resolve_committed_offsets(_T, Partition, Offset) when is_integer(Offset) andalso Offset >= 0 ->
   %% Note: brod_topic_subscriber expects
   %% _acked_ offset rather than _begin_ offset

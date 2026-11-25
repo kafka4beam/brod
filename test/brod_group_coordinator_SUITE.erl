@@ -41,6 +41,7 @@
         , t_commit_offsets_without_connection/1
         , t_update_topics_triggers_rebalance/1
         , t_offset_fetch_minus_one_falls_back_to_reset_policy/1
+        , t_committed_offset_zero_starts_from_earliest/1
         , t_member_id_required_dynamic_member/1
         , t_static_member_falls_back_on_old_broker/1
         , t_static_member_does_not_leave_group/1
@@ -255,6 +256,64 @@ t_offset_fetch_minus_one_falls_back_to_reset_policy(Config) when is_list(Config)
     %% Pre-fix: would have been the HWM (>=1) since "latest" is the consumer
     %% default begin_offset.
     ?assertEqual(0, FetchOffset)
+  after
+    ok = brod_group_subscriber_v2:stop(SubscriberPid)
+  end.
+
+%% A committed offset of 0 (e.g. after an external reset to the start of a
+%% partition that still begins at offset 0) must start the v2 subscriber at
+%% the start of the partition. The worker turns a committed offset into an
+%% acked offset by subtracting 1, and -1 is read as 'latest', so before the
+%% fix the subscriber silently skipped everything already in the partition.
+t_committed_offset_zero_starts_from_earliest({init, Config}) ->
+  meck:new(brod_kafka_request, [passthrough]),
+  Config;
+t_committed_offset_zero_starts_from_earliest({'end', _Config}) ->
+  meck:unload(brod_kafka_request),
+  ok;
+t_committed_offset_zero_starts_from_earliest(Config) when is_list(Config) ->
+  Topic = ?TOPIC,
+  %% A message in the partition makes 'latest' differ from its start.
+  {ok, _} = brod:produce_sync_offset(?CLIENT_ID, Topic, ?PARTITION,
+                                     <<>>, <<"msg">>),
+  GroupId = list_to_binary(
+              "brod-grp-coord-commit-zero-" ++
+              integer_to_list(erlang:unique_integer([positive]))),
+  %% Commit offset 0 to Kafka, as an external reset to earliest does.
+  ok = brod_cg_commits:run(?CLIENT_ID, [ {id, GroupId}
+                                       , {topic, Topic}
+                                       , {offsets, [{?PARTITION, 0}]}
+                                       ]),
+  Self = self(),
+  meck:expect(brod_kafka_request, fetch,
+    fun(Pid, T, P, Offset, WT, MinB, MaxB, IL) ->
+        Self ! {fetch, T, P, Offset},
+        meck:passthrough([Pid, T, P, Offset, WT, MinB, MaxB, IL])
+    end),
+  %% No begin_offset in consumer config: the consumer default is 'latest',
+  %% which is where the subscriber started before the fix.
+  {ok, SubscriberPid} =
+    brod:start_link_group_subscriber_v2(
+      #{ client          => ?CLIENT_ID
+       , group_id        => GroupId
+       , topics          => [Topic]
+       , group_config    => []
+       , consumer_config => []
+       , cb_module       => brod_test_group_subscriber
+       , message_type    => message
+       , init_data       => #{}
+       }),
+  try
+    FetchOffset = receive
+                    {fetch, Topic, ?PARTITION, O} -> O
+                  after 30000 ->
+                    ct:fail({no_fetch_observed,
+                             erlang:process_info(self(), messages)})
+                  end,
+    {ok, Earliest} = brod:resolve_offset(kafka_test_helper:bootstrap_hosts(),
+                                         Topic, ?PARTITION, earliest,
+                                         client_config()),
+    ?assertEqual(Earliest, FetchOffset)
   after
     ok = brod_group_subscriber_v2:stop(SubscriberPid)
   end.
